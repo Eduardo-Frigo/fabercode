@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: file:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Faber Code</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="../node_modules/codemirror/lib/codemirror.css" />
+    <link rel="stylesheet" href="../node_modules/codemirror/theme/material-darker.css" />
+  </head>
+  <body>
+    <div id="startup-preloader" class="startup-preloader" aria-label="Carregando Faber Code">
+      <div class="startup-preloader__content">
+        <div class="startup-preloader__logo-wrap">
+        <img class="startup-preloader__logo-img" src="./assets/Faber-Code-Logo-horizontal.png" alt="Faber Code" />
+      </div>
+        <div class="startup-preloader__bar"><span></span></div>
+      </div>
+    </div>
+    <div id="app-drag-region" class="app-drag-region" aria-hidden="true"></div>
+    <div class="app-shell">
+      <aside class="panel panel-left">
+        <div class="left-actions-row">
+          <button id="btn-add-project" class="left-action-btn">
+            <span class="action-icon">+</span>
+            <span>Novo projeto</span>
+          </button>
+        </div>
+<div class="left-search-row">
+          <span class="search-icon" aria-hidden="true"></span>
+          <input id="projects-search" type="text" placeholder="Pesquisa" />
+        </div>
+
+        <div class="left-section-title">Projetos</div>
+        <div id="projects-list" class="projects-list projects-tree"></div>
+        <div class="left-bottom-actions">
+          <button id="btn-cortex-mode" class="left-mini-action left-memory-action" title="Regras e memória" aria-label="Regras e memória">
+            <img src="./assets/icons/brain.svg" alt="" aria-hidden="true"/>
+          </button>
+          <button id="btn-archived-projects" class="left-mini-action" title="Projetos arquivados" aria-label="Projetos arquivados">
+            <img src="./assets/icons/archive.svg" alt="" aria-hidden="true"/>
+          </button>
+          <button id="btn-trash-projects" class="left-mini-action" title="Lixeira" aria-label="Lixeira">
+            <img src="./assets/icons/bin.svg" alt="" aria-hidden="true"/>
+          </button>
+        
+          <button id="btn-project-settings" class="left-mini-action" title="Configurações" aria-label="Configurações">
+            <img src="./assets/icons/settings.svg" alt="" aria-hidden="true"/>
+          </button>
+        </div>
+      </aside>
+
+      <div id="splitter-left" class="panel-splitter panel-splitter-left" role="separator" tabindex="0" aria-orientation="vertical" aria-label="Redimensionar painel de projetos"></div>
+
+      <main class="panel panel-center">
+        <div class="panel-header">
+          <h2 id="center-title" class="center-title-hidden" aria-hidden="true"></h2>
+          <span class="status-pill" id="status-pill">Aguardando projeto</span>
+        </div>
+
+        <section id="welcome-panel" class="welcome-panel hidden" aria-label="Começar no Faber Code">
+          <div class="welcome-panel__content">
+            <img class="welcome-panel__logo" src="./assets/Faber-Code-Logo-02.png" alt="Faber Code" />
+            <div class="welcome-panel__actions" aria-label="Ações iniciais">
+              <button id="welcome-start-conversation" class="welcome-action welcome-action--primary" type="button">
+                <span>Iniciar conversa</span>
+                <small>Escolha um projeto e descreva a próxima tarefa.</small>
+              </button>
+              <button id="welcome-new-project" class="welcome-action" type="button">
+                <span>Novo projeto</span>
+                <small>Crie ou selecione uma pasta para começar.</small>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <div id="chat-log" class="chat-log"></div>
+
+        <div id="pending-action" class="pending-action hidden">
+          <p id="pending-text"></p>
+          <div class="action-row">
+            <button id="btn-confirm" class="btn btn-success">Confirmar e Executar</button>
+            <button id="btn-cancel" class="btn btn-muted">Cancelar</button>
+          </div>
+        </div>
+
+        <div id="job-progress" class="job-progress hidden">
+          <div class="job-progress-head">
+            <strong id="job-progress-title">Processando</strong>
+            <span id="job-progress-status">Aguardando</span>
+          </div>
+          <div id="job-progress-detail" class="job-progress-detail"></div>
+        </div>
+
+        <div class="composer">
+          <div class="composer-surface">
+            <div class="input-shell">
+              <textarea
+                id="user-input"
+                placeholder="Descreva o que você precisa. A IA sempre vai confirmar antes de editar qualquer arquivo."
+              ></textarea>
+              <button id="btn-attach" class="icon-btn attach-btn" title="Anexar imagem" aria-label="Anexar imagem">+</button>
+              <select id="composer-provider" class="composer-provider" title="Selecionar IA do projeto" aria-label="Selecionar IA do projeto">
+                <option value="mock">Mock Local</option>
+                <option value="rwkv">RWKV Local</option>
+                <option value="gemini">Gemini API</option>
+                <option value="sambanova">SambaNova API</option>
+              </select>
+              <button id="btn-send" class="icon-btn send-btn" title="Enviar prompt" aria-label="Enviar prompt">
+                <span>&uarr;</span>
+              </button>
+            </div>
+            <div id="attachment-list" class="attachment-list hidden"></div>
+            <input id="image-input" type="file" accept=".pdf,.txt,.md,.markdown,image/*" multiple hidden />
+          </div>
+        </div>
+      </main>
+
+      <div id="splitter-right" class="panel-splitter panel-splitter-right" role="separator" tabindex="0" aria-orientation="vertical" aria-label="Redimensionar painel de arquivos"></div>
+
+      <aside class="panel panel-right">
+        <div class="panel-header">
+          <h2 id="right-panel-title">Arquivos</h2>
+          <span id="incremental-mode-badge" class="incremental-mode-badge hidden" aria-live="polite"></span>
+        </div>
+
+        <div id="modification-alert" class="modification-alert hidden"></div>
+
+        <div class="next-steps-box">
+          <div id="project-files-tree" class="project-files-tree"></div>
+          <ul id="next-steps-list" class="hidden"></ul>
+          
+        </div>
+
+        <div id="cortex-learning-box" class="next-steps-box hidden">
+          <h3>Regras e contexto</h3>
+          <p class="cortex-memory-copy">
+            Registre preferências, decisões, referências e restrições que a Persona e o Executor devem considerar neste projeto.
+          </p>
+          <div class="cortex-memory-scope" aria-label="Escopos de memória">
+            <div>
+              <strong>Projeto</strong>
+              <span>Stack, objetivo, identidade visual e decisões atuais.</span>
+            </div>
+            <div>
+              <strong>Execução</strong>
+              <span>Cuidados técnicos, padrões de edição e aprendizados de falhas.</span>
+            </div>
+          </div>
+          <h3>Memória registrada</h3>
+          <div id="cortex-learning-content" class="meta-box">
+            Ainda não há regras ou memórias registradas nesta sessão.
+          </div>
+        </div>
+      
+        <div class="panel-right-footer">
+          <div class="project-panel-footer">
+            <button id="btn-project-git" class="project-panel-btn" type="button" title="Publicar no GitHub">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h8l5 5v8l-5 5H8l-5-5V8l5-5Zm4 5v8m-3-5h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span>Git</span>
+            </button>
+            <button id="btn-project-deploy" class="project-panel-btn" type="button" title="Executar projeto localmente">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span>Executar</span>
+            </button>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div id="project-context-menu" class="project-context-menu hidden" role="menu" aria-hidden="true">
+      <button type="button" data-action="rename">Renomear</button>
+      <button type="button" data-action="archive">Arquivar</button>
+      <button type="button" data-action="trash">Excluir</button>
+    </div>
+
+    <div id="welcome-project-modal" class="welcome-project-modal hidden" aria-hidden="true">
+      <div id="welcome-project-backdrop" class="welcome-project-modal__backdrop" data-close="1"></div>
+      <div class="welcome-project-modal__dialog" role="dialog" aria-modal="true" aria-label="Escolher projeto">
+        <div class="welcome-project-modal__head">
+          <div>
+            <strong id="welcome-project-title">Escolha um projeto</strong>
+            <span id="welcome-project-subtitle">A conversa será criada no projeto selecionado.</span>
+          </div>
+          <button id="welcome-project-close" type="button" class="welcome-project-modal__close" aria-label="Fechar">×</button>
+        </div>
+        <div id="welcome-project-list" class="welcome-project-modal__list"></div>
+        <div class="welcome-project-modal__footer">
+          <button id="welcome-project-create" type="button" class="btn btn-success">Criar novo projeto</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="project-state-modal" class="project-state-modal hidden" aria-hidden="true">
+      <div class="project-state-modal__backdrop" data-close="1"></div>
+      <div class="project-state-modal__dialog" role="dialog" aria-modal="true" aria-label="Projetos">
+        <div class="project-state-modal__head">
+          <strong id="project-state-modal-title">Projetos</strong>
+          <button id="project-state-modal-close" type="button" class="project-state-modal__close">×</button>
+        </div>
+        <div id="project-state-modal-list" class="project-state-modal__list"></div>
+        <div id="project-state-modal-footer" class="project-state-modal__footer"></div>
+      </div>
+    </div>
+
+    <div id="cortex-modal" class="cortex-modal hidden" aria-hidden="true">
+      <div id="cortex-modal-backdrop" class="cortex-modal__backdrop"></div>
+      <div class="cortex-modal__dialog" role="dialog" aria-modal="true" aria-label="Cortex: regras, memória e referências">
+        <div class="cortex-modal__head">
+          <div class="cortex-modal__title">
+            <span class="cortex-modal__icon" aria-hidden="true">
+              <img src="./assets/icons/brain.svg" alt="" />
+            </span>
+            <div>
+              <strong>Cortex</strong>
+              <span>Regras, memória e referências</span>
+            </div>
+          </div>
+          <button id="cortex-modal-close" type="button" class="cortex-modal__close" aria-label="Fechar Cortex">×</button>
+        </div>
+
+        <div class="cortex-modal__body">
+          <section class="cortex-card cortex-chat-card" aria-label="Chat do Cortex">
+            <div class="cortex-card__head">
+              <strong>Conversar com o Cortex</strong>
+              <span>Contexto que orienta Persona e Executor</span>
+            </div>
+            <div class="cortex-topic-row">
+              <label for="cortex-topic-select">Assunto</label>
+              <select id="cortex-topic-select">
+                <option value="geral">Geral</option>
+                <option value="produto">Produto</option>
+                <option value="design">UI/UX e identidade visual</option>
+                <option value="codigo">Código e arquitetura</option>
+                <option value="deploy">Deploy e infraestrutura</option>
+                <option value="integracoes">Integrações</option>
+              </select>
+              <div class="cortex-topic-actions" aria-label="Ações de assunto do Cortex">
+                <button id="cortex-topic-add" type="button" class="cortex-icon-action" title="Criar assunto" aria-label="Criar assunto">+</button>
+                <button id="cortex-topic-rename" type="button" class="cortex-icon-action" title="Renomear assunto" aria-label="Renomear assunto">✎</button>
+              </div>
+            </div>
+            <div id="cortex-chat-log" class="cortex-chat-log" aria-live="polite"></div>
+            <div class="cortex-composer">
+              <textarea id="cortex-input" placeholder="Explique uma regra, decisão, referência ou aprendizado para o Faber Code considerar."></textarea>
+              <div class="cortex-composer__actions">
+                <button id="cortex-attach" type="button" class="btn btn-muted">Anexar Markdown</button>
+                <button id="cortex-send" type="button" class="btn btn-success">Salvar no Cortex</button>
+              </div>
+              <div id="cortex-attachment-list" class="cortex-attachment-list"></div>
+              <input id="cortex-file-input" type="file" accept=".md,.markdown,.txt,.pdf" multiple hidden />
+            </div>
+          </section>
+
+          <section class="cortex-card cortex-memory-card" aria-label="Biblioteca do Cortex">
+            <div class="cortex-card__head">
+              <div>
+                <strong>Biblioteca</strong>
+                <span>Markdowns, PDFs e textos organizados por assunto</span>
+              </div>
+              <button id="cortex-library-attach" type="button" class="cortex-library-upload" title="Anexar Markdown" aria-label="Anexar Markdown">
+                <img src="./assets/icons/paperclip.svg" alt="" aria-hidden="true" />
+                <span>.md</span>
+              </button>
+            </div>
+            <div id="cortex-runtime-status" class="cortex-runtime-status" aria-live="polite"></div>
+            <div id="cortex-topic-list" class="cortex-topic-list"></div>
+            <div id="cortex-library-list" class="cortex-library-list"></div>
+          </section>
+
+          <section class="cortex-card cortex-rules-card" aria-label="Regras ativas do Cortex">
+            <div class="cortex-card__head">
+              <strong>Regras ativas</strong>
+              <span>O que entra no contexto dos próximos pedidos</span>
+            </div>
+            <div id="cortex-rules-list" class="cortex-rules-list"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div id="project-file-context-menu" class="project-file-context-menu hidden" role="menu" aria-hidden="true">
+      <button type="button" data-action="open">Abrir</button>
+      <button type="button" data-action="reveal">Mostrar na pasta</button>
+    </div>
+
+    <div id="project-file-modal" class="project-file-modal hidden" aria-hidden="true">
+      <div class="project-file-modal__backdrop" data-close="1"></div>
+      <div class="project-file-modal__dialog" role="dialog" aria-modal="true" aria-label="Visualizador de arquivo">
+        <div class="project-file-modal__head">
+          <strong id="project-file-modal-title">Arquivo</strong>
+          <button id="project-file-modal-close" type="button" class="project-file-modal__close">×</button>
+        </div>
+        <div class="project-file-modal__tools">
+          <button id="project-file-save" type="button" class="project-file-save" disabled>Salvar</button>
+          <span id="project-file-status" class="project-file-status">Sem alterações</span>
+        </div>
+        <div class="project-file-editor-wrap">
+          <pre id="project-file-lines" class="project-file-lines" aria-hidden="true"></pre>
+          <div class="project-file-code-layer">
+            <pre id="project-file-modal-content" class="project-file-modal__content"></pre>
+            <textarea id="project-file-editor" class="project-file-editor" spellcheck="false"></textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <div id="ai-settings-modal" class="ai-settings-modal hidden" aria-hidden="true">
+      <div id="ai-settings-backdrop" class="ai-settings-modal__backdrop"></div>
+      <div class="ai-settings-modal__dialog" role="dialog" aria-modal="true" aria-label="Configurações">
+        <div class="ai-settings-modal__head">
+          <strong>Configurações</strong>
+          <button id="ai-settings-close" type="button" class="ai-settings-modal__close">×</button>
+        </div>
+
+        <div class="ai-settings-modal__body">
+          <div id="ai-settings-home-panel" class="ai-settings-panel">
+            <button id="ai-settings-open-language" type="button" class="ai-settings-home-btn">
+              <strong>Idioma</strong>
+              <span>Português, inglês ou espanhol para a experiência da ferramenta</span>
+            </button>
+            <button id="ai-settings-open-apis" type="button" class="ai-settings-home-btn">
+              <strong>Configurar APIs</strong>
+              <span>Veja chaves salvas, edite somente ao clicar em editar e adicione novos serviços</span>
+            </button>
+          </div>
+
+          <div id="ai-settings-language-panel" class="ai-settings-panel hidden">
+            <div class="ai-settings-panel-head">
+              <button id="ai-settings-back-home" type="button" class="btn btn-muted">Voltar</button>
+              <span>Idioma</span>
+            </div>
+            <label class="ai-settings-field">
+              <span>Idioma da interface</span>
+              <select id="ai-settings-language">
+                <option value="pt-BR">Português (Brasil) - padrão</option>
+                <option value="en-US">English</option>
+                <option value="es-ES">Español</option>
+              </select>
+            </label>
+            <p class="ai-settings-help">
+              A preferência fica salva no projeto da ferramenta. A tradução completa dos rótulos será evoluída por etapas.
+            </p>
+          </div>
+
+          <div id="ai-settings-apis-panel" class="ai-settings-panel hidden">
+            <div class="ai-settings-panel-head">
+              <button id="ai-settings-back-home-apis" type="button" class="btn btn-muted">Voltar</button>
+              <span>APIs de IA</span>
+            </div>
+
+            <p id="ai-settings-current" class="ai-settings-current">Nenhuma chave detectada ainda.</p>
+
+            <div class="ai-settings-add-api-row">
+              <select id="ai-settings-add-provider">
+                <option value="gemini">Gemini</option>
+                <option value="sambanova">SambaNova</option>
+                <option value="openai">OpenAI</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="custom">Outro serviço</option>
+              </select>
+              <button id="ai-settings-add-api" type="button" class="btn btn-muted">Adicionar API</button>
+            </div>
+
+            <div id="ai-settings-api-list" class="ai-settings-api-list"></div>
+
+            <div id="ai-settings-api-editor" class="ai-settings-api-editor hidden">
+              <input id="ai-settings-editor-id" type="hidden" />
+              <input id="ai-settings-editor-kind" type="hidden" />
+
+              <label class="ai-settings-field">
+                <span>Serviço</span>
+                <input id="ai-settings-editor-provider" type="text" placeholder="Ex: OpenAI" autocomplete="off" />
+              </label>
+
+              <label class="ai-settings-field">
+                <span>Nome/Identificação</span>
+                <input id="ai-settings-editor-label" type="text" placeholder="Ex: Produção, Homologação, Pessoal" autocomplete="off" />
+              </label>
+
+              <label class="ai-settings-field">
+                <span>Modelo</span>
+                <input id="ai-settings-editor-model" type="text" placeholder="Ex: gpt-4.1-mini / gemini-2.0-flash" autocomplete="off" />
+              </label>
+
+              <label class="ai-settings-field">
+                <span>API Key</span>
+                <input id="ai-settings-editor-key" type="password" placeholder="Cole a chave (deixe vazio para manter a atual)" autocomplete="off" />
+              </label>
+
+              <label class="ai-settings-field">
+                <span>Site oficial (opcional)</span>
+                <input id="ai-settings-editor-website" type="text" placeholder="https://..." autocomplete="off" />
+              </label>
+
+              <div class="ai-settings-editor-actions">
+                <button id="ai-settings-editor-cancel" type="button" class="btn btn-muted">Cancelar edição</button>
+                <button id="ai-settings-editor-save" type="button" class="btn btn-success">Salvar edição</button>
+              </div>
+            </div>
+
+            <p id="ai-settings-provider-help" class="ai-settings-help hidden">
+              <span id="ai-settings-provider-help-text">Não tem sua API ainda?</span>
+              <a id="ai-settings-provider-help-link" href="#" target="_blank" rel="noopener noreferrer">Adquira no site oficial clicando aqui</a>.
+            </p>
+          </div>
+        </div>
+
+        <div class="ai-settings-modal__actions">
+          <button id="ai-settings-cancel" type="button" class="btn btn-muted">Cancelar</button>
+          <button id="ai-settings-save" type="button" class="btn btn-success">Salvar</button>
+        </div>
+      </div>
+    </div>
+
+
+<div id="unsaved-exit-modal" class="unsaved-exit-modal hidden" aria-hidden="true">
+      <div id="unsaved-exit-backdrop" class="unsaved-exit-modal__backdrop"></div>
+      <div class="unsaved-exit-modal__dialog" role="dialog" aria-modal="true" aria-label="Confirmação de saída sem salvar">
+        <p class="unsaved-exit-modal__text">Você alterou o projeto, deseja sair sem salvar?</p>
+        <div class="unsaved-exit-modal__actions">
+          <button id="unsaved-exit-no" type="button" class="unsaved-exit-btn unsaved-exit-btn--primary">Não</button>
+          <button id="unsaved-exit-yes" type="button" class="unsaved-exit-btn unsaved-exit-btn--ghost">Sim</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="../node_modules/codemirror/lib/codemirror.js"></script>
+    <script src="../node_modules/codemirror/mode/javascript/javascript.js"></script>
+    <script src="../node_modules/codemirror/mode/css/css.js"></script>
+    <script src="../node_modules/codemirror/mode/xml/xml.js"></script>
+    <script src="../node_modules/codemirror/mode/htmlmixed/htmlmixed.js"></script>
+    <script src="../node_modules/codemirror/mode/markdown/markdown.js"></script>
+    <script src="../node_modules/codemirror/mode/meta.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.local
+*.local.*
+.auth-admin.local.php
+auth-admin.local.php
+
+# Local runtime, memory and private project context
+private_context/
+mempalace.yaml
+entities.json
+.venv-mempalace/
+models
+models/
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.log
+
+# Generated application output
+release/
+dist/
+out/
+.next/
+coverage/
+tmp/
+temp/
+
+# Electron/Icon generation artifacts
+build/icon.iconset/
+*.icns
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# User-generated workspaces can contain client code and secrets.
+projects/
+workspace/
+workspaces/
+generated-projects/

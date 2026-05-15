@@ -1,0 +1,96 @@
+{
+  "name": "localcode-studio",
+  "productName": "Faber Code",
+  "version": "0.1.0",
+  "description": "Etapa 1 - App visual local para fluxo com confirmação antes de edição.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "test:mock": "node tests/mock-provider.test.js",
+    "test:automata": "node tests/automata-executor.test.js",
+    "test:tools": "node tests/tool-registry.test.js",
+    "test:security": "node tests/security.test.js",
+    "test:command-runner": "node tests/command-runner.test.js",
+    "test:stack-registry": "node tests/stack-registry-service.test.js",
+    "test:project-scanner": "node tests/project-scanner.test.js",
+    "test:git-service": "node tests/git-service.test.js",
+    "test:github-integration": "node tests/github-integration-service.test.js",
+    "test:platform-guidance": "node tests/platform-guidance-service.test.js",
+    "test:deterministic-edit": "node tests/deterministic-edit-service.test.js",
+    "test:project-preview": "node tests/project-preview-service.test.js",
+    "test:project-preview-runtime": "node tests/project-preview-runtime-service.test.js",
+    "test:project-verification": "node tests/project-verification-service.test.js",
+    "test:local-diagnostics": "node tests/local-diagnostics-service.test.js",
+    "test:post-execution-quality": "node tests/post-execution-quality-service.test.js",
+    "test:ipc": "node tests/ipc-handlers.test.js",
+    "test:ai": "node tests/ai-handlers.test.js",
+    "test:runtime-settings": "node tests/runtime-settings.test.js",
+    "test:runtime-status": "node tests/runtime-status.test.js",
+    "test:remote-clients": "node tests/remote-clients.test.js",
+    "test:rwkv-client": "node tests/rwkv-client.test.js",
+    "test:execution-intent": "node tests/execution-intent.test.js",
+    "test:briefing-contract": "node tests/briefing-contract-service.test.js",
+    "test:project-blueprint": "node tests/project-blueprint-service.test.js",
+    "test:artifact-quality": "node tests/artifact-quality-service.test.js",
+    "test:knowledge-runtime": "node tests/knowledge-runtime-service.test.js",
+    "test:knowledge-runtime-ipc": "node tests/knowledge-runtime-handlers.test.js",
+    "test:cortex-memory-sync": "node tests/cortex-memory-sync-service.test.js",
+    "test:memory-adapter": "node tests/memory-adapter.test.js",
+    "test:mempalace-ipc": "node tests/mempalace-handlers.test.js",
+    "test:render-runtime-state": "node tests/render-runtime-state.test.js",
+    "test:runtime-budget": "node tests/runtime-budget.test.js",
+    "test:briefing-service": "node tests/briefing-service.test.js",
+    "test:render-pass-service": "node tests/render-pass-service.test.js",
+    "test:validation-service": "node tests/validation-service.test.js",
+    "test:repair-validation-service": "node tests/repair-validation-service.test.js",
+    "test:orchestration-state": "node tests/orchestration-state.test.js",
+    "test:orchestration-ipc": "node tests/orchestration-handlers.test.js",
+    "test:architecture": "npm run test:mock && npm run test:automata && npm run test:tools && npm run test:security && npm run test:command-runner && npm run test:stack-registry && npm run test:project-scanner && npm run test:git-service && npm run test:github-integration && npm run test:platform-guidance && npm run test:deterministic-edit && npm run test:project-preview && npm run test:project-preview-runtime && npm run test:project-verification && npm run test:local-diagnostics && npm run test:post-execution-quality && npm run test:ipc && npm run test:ai && npm run test:runtime-settings && npm run test:runtime-status && npm run test:remote-clients && npm run test:rwkv-client && npm run test:execution-intent && npm run test:briefing-contract && npm run test:project-blueprint && npm run test:artifact-quality && npm run test:knowledge-runtime && npm run test:knowledge-runtime-ipc && npm run test:cortex-memory-sync && npm run test:memory-adapter && npm run test:mempalace-ipc && npm run test:render-runtime-state && npm run test:runtime-budget && npm run test:briefing-service && npm run test:render-pass-service && npm run test:validation-service && npm run test:repair-validation-service && npm run test:orchestration-state && npm run test:orchestration-ipc",
+    "audit:public": "node scripts/audit-public-safety.js",
+    "pack:mac": "electron-builder --mac dir"
+  },
+  "keywords": [
+    "electron",
+    "persona",
+    "local-ai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "build": {
+    "appId": "com.faber.code",
+    "productName": "Faber Code",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "assets/**/*",
+      "package.json",
+      ".env.example",
+      "cortex/**/*",
+      "main/**/*",
+      "plugins/**/*",
+      "node_modules/**/*"
+    ],
+    "mac": {
+      "target": "dir",
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png"
+    },
+    "icon": "build/icon.png"
+  },
+  "devDependencies": {
+    "electron": "^38.3.0",
+    "electron-builder": "^24.13.3",
+    "pngjs": "^7.0.0",
+    "sharp": "^0.34.5"
+  },
+  "dependencies": {
+    "codemirror": "^5.65.21",
+    "dotenv": "^17.4.2"
+  }
+}
