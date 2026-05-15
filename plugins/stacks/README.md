@@ -1,8 +1,8 @@
 # Faber Code Stack Profiles
 
-Esta pasta recebe perfis declarativos de stack em JSON. Eles permitem que o Faber Code reconheca arquiteturas adicionais sem executar codigo de terceiros.
+This folder contains declarative stack profiles in JSON. Stack profiles let Faber Code recognize additional project architectures without executing third-party code.
 
-Exemplo minimo:
+Minimal example:
 
 ```json
 {
@@ -40,13 +40,15 @@ Exemplo minimo:
 }
 ```
 
-Tambem e possivel adicionar perfis por projeto em `.faber/stacks/*.json`. O registry le apenas JSON, limita quantidade/tamanho dos arquivos e ignora perfis invalidos ou que tentem sobrescrever IDs built-in.
+Project-level profiles can also be added in `.faber/stacks/*.json`. The registry reads JSON only, limits file count and file size, and ignores invalid profiles or profiles that try to override built-in IDs.
 
-Campos de blueprint aceitos nesta etapa:
+Supported blueprint fields at this stage:
 
-- `operations`: lista declarativa com `write_file`, `append_file` ou `mkdir`.
-- `targetFile`: arquivo principal exibido na acao.
-- `requiredFiles`: arquivos esperados para validar cobertura minima do blueprint.
-- `promptGuidance`: orientacao textual adicional para a IA.
+- `operations`: declarative list using `write_file`, `append_file` or `mkdir`.
+- `targetFile`: main file displayed for the action.
+- `requiredFiles`: expected files used to validate minimum blueprint coverage.
+- `promptGuidance`: additional text guidance for the AI.
 
-Templates simples em `content`: `{{brand}}`, `{{brandHtml}}`, `{{brandJson}}` e `{{brandSlug}}`.
+Simple templates supported in `content`: `{{brand}}`, `{{brandHtml}}`, `{{brandJson}}` and `{{brandSlug}}`.
+
+Stack profiles are intentionally constrained. They describe detection, preview and baseline generation behavior; they must not contain arbitrary shell commands, API keys or environment-specific secrets.

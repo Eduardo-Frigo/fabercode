@@ -1,5 +1,10 @@
 # Playbook: Next.js + React + Tailwind (Cortex Bootstrap)
 
+## Scope and Status
+This playbook is guidance for Faber Code's planning and generation flow. It is not a framework guarantee, security certification or replacement for project-specific review.
+
+When user requirements conflict with this playbook, prefer the user's explicit architecture and document the tradeoff in the generated plan.
+
 ## Objective
 Provide deterministic guidance for building maintainable Next.js applications with React and Tailwind CSS, optimized for low-memory environments and progressive delivery.
 
@@ -69,3 +74,4 @@ For complex features, decompose into:
 - No secret is exposed in client code
 - Empty/loading/error states exist
 - Output is production-extendable, not a throwaway scaffold
+- Manual platform steps are listed when the project needs external services such as GitHub, Supabase, Vercel or another deployment target
