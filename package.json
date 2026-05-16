@@ -58,6 +58,9 @@
   "author": "",
   "license": "Apache-2.0",
   "type": "commonjs",
+  "engines": {
+    "node": ">=24.15.0 <25"
+  },
   "build": {
     "appId": "com.faber.code",
     "productName": "Faber Code",
