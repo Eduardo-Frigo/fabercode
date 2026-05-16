@@ -79,6 +79,12 @@ Avoid editing project files directly in the GitHub web UI unless it is an emerge
 
 This repository intentionally excludes private project history, client-specific knowledge bases, local model files, memory stores and runtime secrets.
 
+## License and Brand
+
+The source code in this repository is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+The Faber Code name, logos, icons and brand assets identify the official project. The Apache License, Version 2.0 does not grant trademark rights, and use of the Faber Code marks in a way that implies endorsement, official distribution or affiliation requires prior permission.
+
 Before publishing or pushing changes, run:
 
 ```bash

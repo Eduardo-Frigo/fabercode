@@ -144,7 +144,33 @@ async function testServerPreviewSpawnsCommandAndStops(tempRoot) {
   assert.strictEqual(afterStop.running, false);
 }
 
-async function testNextPreviewInstallsDependenciesAndStarts(tempRoot) {
+async function testNextPreviewBlocksDependencyInstallWithoutExplicitOptIn(tempRoot) {
+  const rootPath = path.join(tempRoot, 'next-install-blocked');
+  writeJson(path.join(rootPath, 'package.json'), {
+    scripts: {
+      dev: 'next dev',
+    },
+    dependencies: {
+      next: '^16.0.0',
+      react: '^19.0.0',
+    },
+  });
+
+  const { spawn, calls } = createFakeSpawn();
+  const runtime = createRuntime(spawn);
+
+  const result = await runtime.startProjectPreview(createProjectInfo(rootPath, ['package.json'], ['Next.js']), {
+    port: 41232,
+  });
+
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.started, false);
+  assert.strictEqual(result.install, null);
+  assert.strictEqual(calls.length, 0);
+  assert.strictEqual(fs.existsSync(path.join(rootPath, 'node_modules')), false);
+}
+
+async function testNextPreviewInstallsDependenciesAndStartsWhenExplicitlyEnabled(tempRoot) {
   const rootPath = path.join(tempRoot, 'next-auto-install');
   writeJson(path.join(rootPath, 'package.json'), {
     scripts: {
@@ -160,6 +186,7 @@ async function testNextPreviewInstallsDependenciesAndStarts(tempRoot) {
   const runtime = createRuntime(spawn);
 
   const result = await runtime.startProjectPreview(createProjectInfo(rootPath, ['package.json'], ['Next.js']), {
+    autoInstallDependencies: true,
     port: 41232,
   });
 
@@ -190,6 +217,7 @@ async function testDependencyInstallFailureDoesNotStartServer(tempRoot) {
   const runtime = createRuntime(spawn);
 
   const result = await runtime.startProjectPreview(createProjectInfo(rootPath, ['package.json'], ['Next.js']), {
+    autoInstallDependencies: true,
     port: 41232,
   });
 
@@ -259,7 +287,8 @@ async function main() {
   try {
     await testStaticPreviewCreatesReadySession(tempRoot);
     await testServerPreviewSpawnsCommandAndStops(tempRoot);
-    await testNextPreviewInstallsDependenciesAndStarts(tempRoot);
+    await testNextPreviewBlocksDependencyInstallWithoutExplicitOptIn(tempRoot);
+    await testNextPreviewInstallsDependenciesAndStartsWhenExplicitlyEnabled(tempRoot);
     await testDependencyInstallFailureDoesNotStartServer(tempRoot);
     await testElectronAppPreviewSpawnsWithoutPortProbe(tempRoot);
     await testStartingNewPreviewStopsPrevious(tempRoot);

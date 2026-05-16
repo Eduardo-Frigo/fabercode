@@ -5542,11 +5542,7 @@ async function bootstrap() {
     if (composerProviderEl) composerProviderEl.value = normalizeKnownProvider(state.selectedAiProvider);
   }
 
-  try {
-    state.mempalaceStatus = await window.localcodeApi.getMempalaceStatus(null);
-  } catch {
-    state.mempalaceStatus = null;
-  }
+  state.mempalaceStatus = null;
 
   renderWelcomePanel();
 }

@@ -1,5 +1,9 @@
 const ALLOWED_EXTERNAL_URL_HOSTS = new Set([
+  'aistudio.google.com',
+  'cloud.sambanova.ai',
   'github.com',
+  'platform.deepseek.com',
+  'platform.openai.com',
   'www.github.com',
 ]);
 

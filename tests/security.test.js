@@ -21,6 +21,10 @@ function run() {
   assert.strictEqual(secretStore.unprotectSecret(protectedValue), 'abc123');
   assert.strictEqual(secretStore.unprotectSecret('legacy-key'), 'legacy-key');
   assert.strictEqual(normalizeExternalUrl('https://github.com/example/repo').ok, true);
+  assert.strictEqual(normalizeExternalUrl('https://aistudio.google.com/app/apikey').ok, true);
+  assert.strictEqual(normalizeExternalUrl('https://cloud.sambanova.ai/').ok, true);
+  assert.strictEqual(normalizeExternalUrl('https://platform.openai.com/api-keys').ok, true);
+  assert.strictEqual(normalizeExternalUrl('https://platform.deepseek.com/api_keys').ok, true);
   assert.strictEqual(normalizeExternalUrl('file:///tmp/x').ok, false);
   assert.strictEqual(normalizeExternalUrl('https://example.com').ok, false);
 

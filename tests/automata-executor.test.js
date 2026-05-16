@@ -108,6 +108,43 @@ async function run() {
     assert.strictEqual(outsidePatch.ok, false);
     assert.match(outsidePatch.message, /fora da raiz/);
 
+    const outsideRoot = path.join(tempRoot, 'outside');
+    fs.mkdirSync(outsideRoot, { recursive: true });
+    fs.writeFileSync(path.join(outsideRoot, 'secret.txt'), 'secret', 'utf8');
+    try {
+      fs.symlinkSync(outsideRoot, path.join(projectRoot, 'external-link'), 'dir');
+    } catch {
+      // Some environments do not allow symlinks; the remaining guardrails still run.
+    }
+    if (fs.existsSync(path.join(projectRoot, 'external-link'))) {
+      const symlinkBatch = executor.executeOperationBatchAction({
+        rootPath: projectRoot,
+        operations: [
+          { op: 'write_file', path: 'external-link/secret.txt', content: 'leaked' },
+        ],
+      });
+      assert.strictEqual(symlinkBatch.ok, false);
+      assert.match(symlinkBatch.message, /caminho físico fora da raiz/);
+      assert.strictEqual(fs.readFileSync(path.join(outsideRoot, 'secret.txt'), 'utf8'), 'secret');
+
+      const symlinkPatch = executor.executePatchAction({
+        type: 'apply_file_patch',
+        rootPath: projectRoot,
+        targetFile: 'external-link/secret.txt',
+        previousContentHash: hashText('secret'),
+        nextContent: 'leaked',
+      });
+      assert.strictEqual(symlinkPatch.ok, false);
+      assert.match(symlinkPatch.message, /caminho físico fora da raiz/);
+
+      const symlinkSearch = executor.executeSearchTextAction({
+        rootPath: projectRoot,
+        targetText: 'secret',
+      });
+      assert.strictEqual(symlinkSearch.ok, true);
+      assert.strictEqual(symlinkSearch.searchResults.length, 0);
+    }
+
     const commandPatch = executor.execute({
       rootPath: projectRoot,
       targetFile: 'contract.txt',

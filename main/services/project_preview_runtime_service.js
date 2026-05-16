@@ -106,7 +106,7 @@ function createProjectPreviewRuntimeService(dependencies = {}) {
   }
 
   function shouldAutoInstallPreviewDependencies(plan = {}, options = {}) {
-    if (options.autoInstallDependencies === false) return false;
+    if (options.autoInstallDependencies !== true) return false;
     const dependencyStep = findPreviewDependencyStep(plan);
     if (!dependencyStep) return false;
 

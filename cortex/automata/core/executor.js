@@ -47,6 +47,46 @@ function createAutomataExecutor(dependencies = {}) {
     return candidate === root || candidate.startsWith(root + path.sep);
   }
 
+  function getRealPathIfExists(candidatePath) {
+    try {
+      return fs.realpathSync(candidatePath);
+    } catch {
+      return '';
+    }
+  }
+
+  function findNearestExistingParent(candidatePath, rootPath) {
+    let current = path.resolve(path.dirname(candidatePath));
+    const root = path.resolve(rootPath);
+
+    while (current && isInsideRoot(root, current)) {
+      if (fs.existsSync(current)) return current;
+      const next = path.dirname(current);
+      if (next === current) break;
+      current = next;
+    }
+
+    return fs.existsSync(root) ? root : '';
+  }
+
+  function resolvePhysicalPathForWrite(rootPath, candidatePath) {
+    const rootRealPath = getRealPathIfExists(rootPath);
+    if (!rootRealPath) {
+      return { ok: false, message: 'A pasta do projeto não está acessível fisicamente.' };
+    }
+
+    const absolutePath = path.resolve(candidatePath);
+    const physicalPath = fs.existsSync(absolutePath)
+      ? getRealPathIfExists(absolutePath)
+      : getRealPathIfExists(findNearestExistingParent(absolutePath, rootPath));
+
+    if (!physicalPath || !isInsideRoot(rootRealPath, physicalPath)) {
+      return { ok: false, message: 'Operação bloqueada: caminho físico fora da raiz do projeto.' };
+    }
+
+    return { ok: true, physicalPath, rootRealPath };
+  }
+
   function getPathKind(candidatePath) {
     if (!fs.existsSync(candidatePath)) return 'missing';
     try {
@@ -97,6 +137,10 @@ function createAutomataExecutor(dependencies = {}) {
       const absolutePath = path.join(rootPath, normalizedPath);
       if (!isInsideRoot(rootPath, absolutePath)) {
         return { ok: false, message: `Operação bloqueada fora da raiz do projeto: ${normalizedPath}` };
+      }
+      const physicalCheck = resolvePhysicalPathForWrite(rootPath, absolutePath);
+      if (!physicalCheck.ok) {
+        return { ok: false, message: `${physicalCheck.message} (${normalizedPath})` };
       }
 
       if (operation.op === 'mkdir') {
@@ -221,6 +265,12 @@ function createAutomataExecutor(dependencies = {}) {
     }
     if (action.rootPath && !isInsideRoot(action.rootPath, absoluteTarget)) {
       return { ok: false, message: 'Ação bloqueada: arquivo alvo fora da raiz do projeto.' };
+    }
+    if (action.rootPath) {
+      const physicalCheck = resolvePhysicalPathForWrite(action.rootPath, absoluteTarget);
+      if (!physicalCheck.ok) {
+        return { ok: false, message: physicalCheck.message };
+      }
     }
 
     const dir = path.dirname(absoluteTarget);
@@ -390,6 +440,7 @@ function createAutomataExecutor(dependencies = {}) {
           walk(fullPath);
           continue;
         }
+        if (!entry.isFile()) continue;
 
         const ext = path.extname(entry.name).toLowerCase();
         if (!isTextLikeExtension(ext)) continue;
