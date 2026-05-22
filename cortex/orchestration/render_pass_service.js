@@ -1,4 +1,5 @@
 const { createProjectBlueprintService } = require('./project_blueprint_service');
+const { hasApplicationSurfaceFiles } = require('./execution_intent');
 
 const defaultProjectBlueprintService = createProjectBlueprintService();
 
@@ -127,6 +128,15 @@ function buildRenderArtifactContextText(userMessage = '', workGraph = null) {
   return parts.filter(Boolean).join('\n');
 }
 
+function getProductRouteMode(productRouteDecision = null) {
+  if (!productRouteDecision || typeof productRouteDecision !== 'object') return '';
+  if (productRouteDecision.productRoute && productRouteDecision.productRoute.mode) {
+    return String(productRouteDecision.productRoute.mode || '').trim().toLowerCase();
+  }
+  if (productRouteDecision.mode) return String(productRouteDecision.mode || '').trim().toLowerCase();
+  return '';
+}
+
 function createCortexRenderPassService(dependencies = {}) {
   const {
     AI_REQUEST_TIMEOUT_MS = 420000,
@@ -150,6 +160,7 @@ function createCortexRenderPassService(dependencies = {}) {
     getRuntimeProfileSettings,
     hasRequiredProjectBlueprintFiles = defaultProjectBlueprintService.hasRequiredProjectBlueprintFiles,
     normalizeRequestedRelativePath = defaultNormalizeRequestedRelativePath,
+    resolveBlueprintMediaAssets = async () => ({}),
     shouldPreferProjectBlueprint = defaultProjectBlueprintService.shouldPreferProjectBlueprint,
     shouldUseProjectBlueprintFallback = defaultProjectBlueprintService.shouldUseProjectBlueprintFallback,
     tryParseJsonObject = (raw) => {
@@ -184,6 +195,9 @@ function createCortexRenderPassService(dependencies = {}) {
     repairContext = null,
     artifactContext = '',
     executionIntent = 'edit_project',
+    productRouteDecision = null,
+    workingBrief = null,
+    buildModeRoute = null,
   }) {
     requireDependency('buildRuntimeBudget', buildRuntimeBudget);
     requireDependency('callPersonaProviderChat', callPersonaProviderChat);
@@ -236,17 +250,44 @@ function createCortexRenderPassService(dependencies = {}) {
       contextText: artifactQualityContext,
       workGraph,
       attachments,
+      workingBrief,
     });
 
     const initMode = executionIntent === 'init_project';
+    const hasApplicationFilesInProject = hasApplicationSurfaceFiles(projectInfo);
     const blueprintOptions = {
       userMessage,
       executionIntent,
       contextText: artifactQualityContext,
       workGraph,
       attachments,
+      workingBrief,
     };
-    const projectBlueprint = (scaffoldUserMessage = userMessage, options = {}) => buildProjectBlueprintOperationBatch({
+    const resolveProjectBlueprintMediaAssets = async (scaffoldUserMessage = userMessage, options = {}) => {
+      if (options.mediaAssets) return options.mediaAssets;
+      try {
+        return await resolveBlueprintMediaAssets({
+          projectInfo,
+          userMessage: scaffoldUserMessage,
+          contextText: artifactQualityContext,
+          workGraph,
+          productRouteDecision,
+          workingBrief,
+          buildModeRoute,
+          mediaIntent: workingBrief && Array.isArray(workingBrief.mediaIntent) ? workingBrief.mediaIntent : [],
+          contract: workingBrief && workingBrief.product
+            ? {
+                domain: workingBrief.product.domain || '',
+                stack: workingBrief.product.stack || '',
+                palette: workingBrief.style && workingBrief.style.palette ? workingBrief.style.palette : {},
+              }
+            : {},
+        });
+      } catch {
+        return {};
+      }
+    };
+    const projectBlueprint = async (scaffoldUserMessage = userMessage, options = {}) => buildProjectBlueprintOperationBatch({
       projectInfo,
       userMessage: scaffoldUserMessage,
       attachments,
@@ -255,13 +296,36 @@ function createCortexRenderPassService(dependencies = {}) {
       contextText: artifactQualityContext,
       workGraph,
       force: Boolean(options.force),
+      mediaAssets: await resolveProjectBlueprintMediaAssets(scaffoldUserMessage, options),
+      workingBrief,
+      buildModeRoute,
     });
-    const projectBlueprintFallback = (scaffoldUserMessage = userMessage) => {
+    const projectBlueprintFallback = async (scaffoldUserMessage = userMessage) => {
+      if (hasApplicationFilesInProject) return null;
       if (!shouldUseProjectBlueprintFallback(blueprintOptions)) return null;
       return projectBlueprint(scaffoldUserMessage, { force: true });
     };
-    if (initMode && shouldPreferProjectBlueprint(blueprintOptions)) {
-      const blueprint = projectBlueprint();
+    const productRouteMode = getProductRouteMode(productRouteDecision);
+    const buildModeName = buildModeRoute && buildModeRoute.mode ? String(buildModeRoute.mode).toLowerCase() : '';
+    const requiresAdaptiveBlueprint =
+      initMode &&
+      !hasApplicationFilesInProject &&
+      (productRouteMode === 'adaptive_blueprint' || buildModeName === 'adaptive_blueprint');
+    if (requiresAdaptiveBlueprint) {
+      const blueprint = await projectBlueprint(userMessage, { force: true });
+      if (blueprint) {
+        blueprint.raw = blueprint.raw || 'adaptive_blueprint_contract';
+        return blueprint;
+      }
+      return {
+        ok: false,
+        message:
+          'O modo adaptive_blueprint foi selecionado, mas o renderer local não conseguiu montar um lote de arquivos coerente. Nenhuma chamada remota foi usada para substituir esse contrato.',
+        raw: 'adaptive_blueprint_contract_unresolved',
+      };
+    }
+    if (initMode && !hasApplicationFilesInProject && shouldPreferProjectBlueprint(blueprintOptions)) {
+      const blueprint = await projectBlueprint();
       if (blueprint) return blueprint;
     }
     if (!initMode) {
@@ -273,6 +337,14 @@ function createCortexRenderPassService(dependencies = {}) {
         localDiagnostics,
       });
       if (deterministicPatch) return deterministicPatch;
+      if (productRouteMode === 'deterministic_patch') {
+        return {
+          ok: false,
+          message:
+            'A rota determinística foi selecionada, mas nenhum micro-contrato local conseguiu produzir um patch seguro para este pedido.',
+          raw: 'deterministic_patch_contract_unresolved',
+        };
+      }
     }
     const systemPrompt =
       'Você é o Executor técnico da Persona. Sua única função é produzir um plano executável de arquivos/pastas. ' +
@@ -349,15 +421,39 @@ function createCortexRenderPassService(dependencies = {}) {
       .filter(Boolean)
       .join('\n');
 
-    const raw = await callPersonaProviderChat(
-      PERSONA_MODEL_ENGINE,
-      [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      AI_REQUEST_TIMEOUT_MS,
-      { runtimeBudget: activeRuntimeBudget, options: { num_predict: engineNumPredict } }
-    );
+    let raw = '';
+    try {
+      raw = await callPersonaProviderChat(
+        PERSONA_MODEL_ENGINE,
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        AI_REQUEST_TIMEOUT_MS,
+        { runtimeBudget: activeRuntimeBudget, options: { num_predict: engineNumPredict } }
+      );
+    } catch (error) {
+      const deterministicPatch = buildDeterministicPatchOperationBatch({
+        projectInfo,
+        userMessage,
+        attachments,
+        executionIntent,
+        localDiagnostics,
+      });
+      if (deterministicPatch) return deterministicPatch;
+
+      const blueprint = await projectBlueprintFallback();
+      if (blueprint) {
+        blueprint.providerFailure = {
+          provider: 'persona_engine',
+          message: error && error.message ? error.message : String(error || ''),
+        };
+        blueprint.raw = `project_blueprint_after_provider_failure:${blueprint.providerFailure.message}`;
+        return blueprint;
+      }
+
+      throw error;
+    }
 
     let parsed = tryParseJsonObject(raw);
     let repairedRaw = null;
@@ -376,7 +472,7 @@ function createCortexRenderPassService(dependencies = {}) {
         localDiagnostics,
       });
       if (deterministicPatch) return deterministicPatch;
-      const blueprint = projectBlueprintFallback();
+      const blueprint = await projectBlueprintFallback();
       if (blueprint) return blueprint;
 
       repairedRaw = await callPersonaProviderChat(
@@ -416,7 +512,7 @@ function createCortexRenderPassService(dependencies = {}) {
         localDiagnostics,
       });
       if (deterministicPatch) return deterministicPatch;
-      const blueprint = projectBlueprintFallback();
+      const blueprint = await projectBlueprintFallback();
       if (blueprint) return blueprint;
       return {
         ok: false,
@@ -441,7 +537,7 @@ function createCortexRenderPassService(dependencies = {}) {
         localDiagnostics,
       });
       if (deterministicPatch) return deterministicPatch;
-      const blueprint = projectBlueprintFallback();
+      const blueprint = await projectBlueprintFallback();
       if (blueprint) return blueprint;
       return {
         ok: false,
@@ -476,12 +572,13 @@ function createCortexRenderPassService(dependencies = {}) {
     const artifactQualityContextForPrompt = formatArtifactQualityForPrompt(artifactQuality);
     const shouldUseBlueprintForWeakInit =
       initMode &&
+      !hasApplicationFilesInProject &&
       artifactQuality &&
       artifactQuality.enabled &&
       !artifactQuality.passesMinimum &&
       shouldUseProjectBlueprintFallback(blueprintOptions);
     if (shouldUseBlueprintForWeakInit) {
-      const blueprint = projectBlueprint(userMessage, { force: true });
+      const blueprint = await projectBlueprint(userMessage, { force: true });
       if (blueprint) {
         blueprint.artifactQuality = artifactQuality;
         blueprint.raw = `project_blueprint_after_artifact_quality:${artifactQuality.score}`;
@@ -491,10 +588,11 @@ function createCortexRenderPassService(dependencies = {}) {
 
     if (
       initMode &&
+      !hasApplicationFilesInProject &&
       shouldUseProjectBlueprintFallback(blueprintOptions) &&
       !hasRequiredProjectBlueprintFiles({ operations, userMessage, contextText: artifactQualityContext, workGraph })
     ) {
-      const blueprint = projectBlueprint(userMessage, { force: true });
+      const blueprint = await projectBlueprint(userMessage, { force: true });
       if (blueprint) return blueprint;
     }
 

@@ -68,11 +68,12 @@ function buildDefaultScaffoldPrompt(userMessage = '', contextHint = {}) {
 
   if (isInstitutionalOrSite || isPlatform) {
     return [
-      isLamp ? `criar site institucional em arquitetura LAMP${domainLabel}` : `criar site institucional completo${domainLabel}`,
+      isLamp ? `criar site modular em arquitetura LAMP${domainLabel}` : `criar site com composição modular completa${domainLabel}`,
       'usuário autorizou defaults e placeholders; não pedir novas clarificações',
       'não entregar projeto mínimo ou página vazia',
-      'definir estrutura com páginas e seções completas',
-      'incluir hero, serviços, sobre, depoimentos, faq e contato',
+      'definir estrutura como peças editáveis: header, hero, seções do body e footer',
+      'variar a receita visual conforme o domínio e o pedido, em vez de repetir sempre o mesmo template',
+      'incluir seções coerentes com o negócio, objetivo, CTA e nível de conteúdo disponível',
       'gerar copy real para cada seção com ctas claros',
       contract.guidance || '',
       'usar nome, imagens, textos, cores e ctas placeholder quando faltarem dados específicos',
@@ -106,22 +107,23 @@ function getCortexBriefingClarificationQuestions() {
 
 function buildCortexBriefingClarificationResponse(userMessage, attempts = 0, customQuestions = []) {
   const intro = attempts > 0
-    ? 'Estamos quase lá. Para evitar briefing raso, preciso fechar alguns detalhes antes de gerar.'
-    : 'Perfeito. Antes de gerar, vou alinhar o briefing para entregar um projeto realmente completo.';
+    ? 'Estamos quase lá. Falta só escolher o nível de autonomia antes de gerar.'
+    : 'Perfeito. Posso seguir sem transformar isso em questionário.';
 
   const questions = Array.isArray(customQuestions) && customQuestions.length
     ? customQuestions.slice(0, 5)
     : getCortexBriefingClarificationQuestions();
 
-  const numbered = questions.map((q, idx) => `${idx + 1}. ${q}`);
+  const mainQuestion = questions[0] || 'Você prefere que eu use placeholders agora ou espere detalhes específicos?';
 
   return [
     intro,
     '',
-    'Me confirme estes pontos objetivos:',
-    ...numbered,
+    'Escolha um caminho curto:',
+    '- "composição modular": eu gero agora com placeholders bem estruturados e peças editáveis.',
+    '- ou me responda em uma frase o objetivo, as seções indispensáveis e o CTA principal.',
     '',
-    'Se preferir, responda "placeholder rápido" ou "padrão institucional premium" e eu monto a configuração completa.',
+    `Ponto principal se quiser detalhar: ${mainQuestion}`,
   ].join('\n');
 }
 
@@ -143,6 +145,26 @@ function hasMinimumInstitutionalBriefingDetails(userMessage) {
   }
   const hasStructureHints = /\b(hero|header|cabe[cç]alho|body|footer|rodap[eé]|cta|sess[aã]o|bloco)\b/.test(normalized);
   return matched >= 2 && (hasStructureHints || normalized.length >= 180);
+}
+
+function hasEnoughInitialScaffoldDetails(userMessage) {
+  const normalized = normalizeBriefingIntentText(userMessage);
+  if (!normalized) return false;
+
+  const hasPlatform = hasScaffoldPlatformDetails(userMessage);
+  const hasDomain =
+    /\b(advocacia|advogad[oa]|juridic[oa]|direito|cl[ií]nica|dentista|odontologia|veterin[aá]ri|aqu[aá]rio|aquario|imobili[aá]ria|imoveis|restaurante|portfolio|fotografia|arquitetura|empresa|neg[oó]cio)\b/.test(
+      normalized
+    );
+  const hasStyle =
+    /\b(cor|cores|paleta|azul|branco|offwhite|off white|verde|vermelh|preto|claro|escuro|premium|minimalista|moderno|imagem|imagens|foto|fotos|fonte|tipografia)\b/.test(
+      normalized
+    );
+  const hasStructure = /\b(hero|header|footer|rodape|rodap[eé]|cta|menu|se[cç][aã]o|servi[cç]os|sobre|contato)\b/.test(
+    normalized
+  );
+
+  return Boolean(hasPlatform && (hasDomain || hasStyle || hasStructure));
 }
 
 function defaultHasScaffoldIntent(userMessage) {
@@ -167,6 +189,10 @@ function shouldAskCortexBriefingClarification(userMessage, contextHint = {}, opt
   if (awaitingClarification && shortGenericReply) return true;
 
   if (!hasScaffoldPlatformDetails(text)) return true;
+
+  if (hasEnoughInitialScaffoldDetails(text)) {
+    return false;
+  }
 
   if (institutionalLike && !hasMinimumInstitutionalBriefingDetails(text)) {
     return true;
@@ -217,7 +243,7 @@ function normalizeBrainSiteSpec(rawSiteSpec, userMessage = '') {
     .slice(0, 10);
 
   const sourcePrompt = String(userMessage || '').toLowerCase();
-  const inferredType = /\b(plataforma|sistema|painel|dashboard|portal|saas)\b/.test(sourcePrompt) ? 'platform' : 'institutional_site';
+  const inferredType = /\b(plataforma|sistema|painel|dashboard|portal|saas)\b/.test(sourcePrompt) ? 'platform' : 'modular_site';
   const siteType = asText(rawSiteSpec.siteType, inferredType);
 
   let pages = pagesRaw;
@@ -285,6 +311,32 @@ function createCortexBriefingService(dependencies = {}) {
     return shouldAskCortexBriefingClarification(userMessage, contextHint, { hasScaffoldIntent });
   }
 
+  function buildLocalFallbackBriefing(userMessage = '', raw = '', extra = {}) {
+    const fallbackBrief = [
+      'Briefing normalizado localmente pelo Cortex a partir do pedido do usuário.',
+      `Pedido: ${compactPromptPart(userMessage, 900)}`,
+      shouldUseDefaultScaffoldConfiguration(userMessage)
+        ? 'Defaults/placeholders autorizados; prosseguir sem nova clarificação.'
+        : '',
+    ].filter(Boolean).join(' ');
+
+    return {
+      brief: sanitizeAssistantText(fallbackBrief, 'Briefing criado pelo Cortex a partir do pedido do usuário.'),
+      briefSpec: normalizeBrainSiteSpec({ siteType: 'modular_site' }, userMessage),
+      acceptanceCriteria: ['Gerar artefatos executáveis e verificáveis para o pedido.'],
+      risks: [
+        extra && extra.providerError
+          ? 'A Persona remota falhou nesta etapa; o Cortex continuou com briefing local para não bloquear uma rota válida.'
+          : 'A Persona não retornou JSON estruturado ou completo; briefing foi normalizado pelo Cortex.',
+      ],
+      suggestedPasses: ['render_operations'],
+      needsClarification: false,
+      clarificationQuestions: [],
+      raw,
+      providerFallback: Boolean(extra && extra.providerError),
+    };
+  }
+
   async function requestCortexBrainBriefing({
     projectInfo,
     userMessage,
@@ -304,7 +356,7 @@ function createCortexBriefingService(dependencies = {}) {
           `Pedido consolidado: ${compactPromptPart(userMessage, 900)}`,
           'Prosseguir sem nova clarificação e gerar artefatos base conectados.',
         ].join(' '),
-        briefSpec: normalizeBrainSiteSpec({ siteType: 'institutional_site' }, userMessage),
+        briefSpec: normalizeBrainSiteSpec({ siteType: 'modular_site' }, userMessage),
         acceptanceCriteria: [
           'Gerar entrada executável do projeto.',
           'Conectar CSS e JavaScript ao arquivo principal.',
@@ -402,7 +454,7 @@ ${compactPromptPart(cortexContext.contextText, 900)}`
       '  "needsClarification": false,',
       '  "clarificationQuestions": ["pergunta objetiva"],',
       '  "siteSpec": {',
-      '    "siteType": "institutional_site|platform",',
+      '    "siteType": "modular_site|platform",',
       '    "brandName": "nome da marca",',
       '    "audience": "público principal",',
       '    "tone": "tom de comunicação",',
@@ -432,34 +484,24 @@ ${compactPromptPart(cortexContext.contextText, 900)}`
       'Se houver incerteza real, não invente: use needsClarification=true e perguntas curtas.',
     ].join('\n');
 
-    const raw = await callPersonaProviderChat(
-      PERSONA_MODEL_BRAIN,
-      [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      BRAIN_BRIEFING_TIMEOUT_MS,
-      { runtimeBudget, options: { num_predict: Math.min(700, runtimeBudget.generationOptions.num_predict || 700) } }
-    );
+    let raw = '';
+    try {
+      raw = await callPersonaProviderChat(
+        PERSONA_MODEL_BRAIN,
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        BRAIN_BRIEFING_TIMEOUT_MS,
+        { runtimeBudget, options: { num_predict: Math.min(700, runtimeBudget.generationOptions.num_predict || 700) } }
+      );
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error || '');
+      return buildLocalFallbackBriefing(userMessage, `provider_error:${message}`, { providerError: true });
+    }
     const parsed = tryParseJsonObject(raw);
     if (!parsed) {
-      const fallbackBrief = [
-        'Briefing normalizado pelo Cortex a partir do pedido do usuário.',
-        `Pedido: ${compactPromptPart(userMessage, 900)}`,
-        shouldUseDefaultScaffoldConfiguration(userMessage)
-          ? 'Defaults/placeholders autorizados; prosseguir sem nova clarificação.'
-          : '',
-      ].filter(Boolean).join(' ');
-      return {
-        brief: sanitizeAssistantText(fallbackBrief, 'Briefing criado pelo Cortex a partir do pedido do usuário.'),
-        briefSpec: normalizeBrainSiteSpec({ siteType: 'institutional_site' }, userMessage),
-        acceptanceCriteria: ['Gerar artefatos executáveis e verificáveis para o pedido.'],
-        risks: ['A Persona não retornou JSON estruturado ou completo; briefing foi normalizado pelo Cortex.'],
-        suggestedPasses: ['render_operations'],
-        needsClarification: false,
-        clarificationQuestions: [],
-        raw,
-      };
+      return buildLocalFallbackBriefing(userMessage, raw);
     }
 
     return {
@@ -499,6 +541,7 @@ module.exports = {
   createCortexBriefingService,
   getCortexBriefingClarificationQuestions,
   hasMinimumInstitutionalBriefingDetails,
+  hasEnoughInitialScaffoldDetails,
   hasScaffoldPlatformDetails,
   normalizeBrainSiteSpec,
   shouldAskCortexBriefingClarification,

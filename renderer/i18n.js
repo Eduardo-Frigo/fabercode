@@ -1,0 +1,753 @@
+(function () {
+  let getLocale = () => 'pt-BR';
+
+const UI_TRANSLATIONS = {
+  'pt-BR': {
+    addProject: 'Novo projeto',
+    search: 'Pesquisa',
+    projects: 'Projetos',
+    rulesMemory: 'Regras e memória',
+    archivedProjects: 'Projetos arquivados',
+    trash: 'Lixeira',
+    settings: 'Configurações',
+    waitingProject: 'Aguardando projeto',
+    confirmExecute: 'Confirmar e Executar',
+    cancel: 'Cancelar',
+    processing: 'Processando',
+    waiting: 'Aguardando',
+    composerPlaceholder: 'Descreva a tarefa para este projeto.',
+    cortexComposerPlaceholder: 'Adicione regras, referências ou contexto para orientar a IA neste projeto.',
+    attachImage: 'Anexar imagem',
+    selectProjectAi: 'Selecionar IA do projeto',
+    sendPrompt: 'Enviar prompt',
+    files: 'Arquivos',
+    contextConversation: 'Contexto e Conversa',
+    rename: 'Renomear',
+    archive: 'Arquivar',
+    delete: 'Excluir',
+    open: 'Abrir',
+    revealInFolder: 'Mostrar na pasta',
+    projectModalTitle: 'Projetos',
+    cortexTitle: 'Cortex',
+    cortexSubtitle: 'Regras, memória e referências',
+    closeCortex: 'Fechar Cortex',
+    cortexChatTitle: 'Conversar com o Cortex',
+    cortexChatSubtitle: 'Contexto que orienta Persona e Executor',
+    subject: 'Assunto',
+    createSubject: 'Criar assunto',
+    renameSubject: 'Renomear assunto',
+    cortexInputPlaceholder: 'Explique uma regra, decisão, referência ou aprendizado para o Faber Code considerar.',
+    attachMarkdown: 'Anexar Markdown',
+    attachMarkdownShort: '.md',
+    saveCortex: 'Salvar no Cortex',
+    library: 'Biblioteca',
+    librarySubtitle: 'Markdowns, PDFs e textos organizados por assunto',
+    activeRules: 'Regras ativas',
+    activeRulesSubtitle: 'O que entra no contexto dos próximos pedidos',
+    cortexPanelRules: 'Regras e contexto',
+    cortexPanelCopy: 'Registre preferências, decisões, referências e restrições que a Persona e o Executor devem considerar neste projeto.',
+    memoryScopes: 'Escopos de memória',
+    projectScope: 'Projeto',
+    projectScopeCopy: 'Stack, objetivo, identidade visual e decisões atuais.',
+    executionScope: 'Execução',
+    executionScopeCopy: 'Cuidados técnicos, padrões de edição e aprendizados de falhas.',
+    registeredMemory: 'Memória registrada',
+    file: 'Arquivo',
+    save: 'Salvar',
+    noChanges: 'Sem alterações',
+    fileViewer: 'Visualizador de arquivo',
+    language: 'Idioma',
+    languageDesc: 'Português, inglês ou espanhol para a experiência da ferramenta',
+    appearance: 'Aparência',
+    appearanceDesc: 'Tema claro/escuro, logos e tamanho da fonte dos painéis',
+    account: 'Conta',
+    accountDesc: 'Login com email ou Google para liberar serviços de plataforma',
+    configureApis: 'Configurar APIs',
+    configureApisDesc: 'Veja chaves salvas, edite somente ao clicar em editar e adicione novos serviços',
+    back: 'Voltar',
+    interfaceLanguage: 'Idioma da interface',
+    languageHelp: 'A preferência é aplicada à interface e fica salva nas configurações da ferramenta.',
+    theme: 'Tema',
+    themeDark: 'Escuro',
+    themeLight: 'Claro',
+    panelFontSize: 'Tamanho da fonte dos painéis',
+    panelFontHelp: 'Ajuste visual aplicado à interface do Faber Code neste dispositivo.',
+    userAccount: 'Conta',
+    accountNotConnected: 'Conta ainda não conectada.',
+    accountConnected: 'Conta conectada',
+    accountBackendMissing: 'Backend incompleto: {items}',
+    googleUnavailable: 'Google OAuth ainda não configurado.',
+    googleBrowserOpened: 'Abra o navegador para concluir o login Google.',
+    emailCodeSent: 'Código enviado. Confira seu email ou modo dev.',
+    emailCodeSentDev: 'Código gerado para desenvolvimento: {code}',
+    emailLoginComplete: 'Login concluído.',
+    accountSignedOut: 'Conta desconectada.',
+    googleLogin: 'Entrar com Google',
+    signOut: 'Sair',
+    email: 'Email',
+    emailPlaceholder: 'voce@email.com',
+    sendCode: 'Enviar código',
+    accessCode: 'Código de acesso',
+    accessCodePlaceholder: '000000',
+    confirmEmail: 'Confirmar email',
+    accountHelp: 'O login registra o usuário no backend do Faber Code e libera serviços de plataforma, como mídia contextual para blueprints.',
+    aiApis: 'APIs de IA',
+    noKeyDetected: 'Nenhuma chave detectada ainda.',
+    addApi: 'Adicionar API',
+    service: 'Serviço',
+    servicePlaceholder: 'Ex: OpenAI',
+    apiName: 'Nome/Identificação',
+    apiNamePlaceholder: 'Ex: Produção, Homologação, Pessoal',
+    model: 'Modelo',
+    modelPreset: 'Modelo recomendado',
+    modelCustom: 'Modelo customizado',
+    modelPlaceholder: 'Ex: gpt-5-codex / gemini-2.0-flash',
+    apiKey: 'API Key',
+    apiKeyPlaceholder: 'Cole a chave (deixe vazio para manter a atual)',
+    officialSite: 'Site oficial (opcional)',
+    cancelEdit: 'Cancelar edição',
+    saveEdit: 'Salvar edição',
+    providerHelp: 'Abra a página oficial para criar ou revisar sua chave.',
+    openProviderSite: 'Abrir site do provedor',
+    languagePt: 'Português (Brasil) - padrão',
+    languageEn: 'English',
+    languageEs: 'Español',
+    noMemory: 'Ainda não há regras ou memórias registradas nesta sessão.',
+    selectProjectNextSteps: 'Selecione um projeto para exibir recomendações de deploy e validação.',
+    updatedAt: 'Atualizado em:',
+    noUpdate: 'sem atualização',
+    personaRules: 'Regras para Persona:',
+    executorRules: 'Regras para Executor:',
+    noRulesYet: '- Sem regras registradas ainda.',
+    unknownSize: 'tamanho desconhecido',
+    cortexIntro: 'Use este espaço para guardar regras, decisões e documentos que o Faber Code deve considerar nos próximos trabalhos.',
+    noAttachmentUpdate: 'Nenhum documento anexado nesta atualização.',
+    removeCortexDoc: 'Remover documento do Cortex',
+    noLibraryDocs: 'Nenhum Markdown, PDF ou TXT registrado ainda.',
+    document: 'Documento',
+    docRegistered: 'Documento registrado para consulta do Cortex.',
+    noActiveRules: 'Sem regras ativas registradas ainda.',
+    localMemoryReady: 'memória local pronta',
+    persistenceActive: 'persistência ativa',
+    semanticSearchActive: 'busca semântica ativa',
+    runtimeNotFound: 'runtime não localizado',
+    ingestionPending: 'ingestão pendente',
+    searchReadyIngestionPending: 'busca pronta, ingestão pendente',
+    disconnected: 'sem conexão',
+    noResponse: 'sem resposta',
+    cortexCounts: '{rules} regras, {documents} documentos',
+    selectProjectForCortex: 'Selecione um projeto antes de salvar regras ou documentos no Cortex.',
+    projectContextError: 'Não consegui atualizar o contexto do projeto antes de salvar no Cortex.',
+    attachedDocs: '[Documentos anexados]',
+    cortexSaved: 'Memória registrada no Cortex.',
+    cortexSaveFailed: 'Não consegui salvar essa memória no Cortex.',
+    memoryUpdated: 'Memória atualizada',
+    topicNewPrompt: 'Nome do novo assunto:',
+    topicRenamePrompt: 'Novo nome para este assunto:',
+    topicSaved: 'Assunto salvo no Cortex.',
+    topicRenamed: 'Assunto renomeado no Cortex.',
+    topicSaveFailed: 'Não consegui salvar este assunto no Cortex.',
+    topicNeedsProject: 'Selecione um projeto antes de organizar os assuntos do Cortex.',
+    defaultTopicGeral: 'Geral',
+    defaultTopicProduto: 'Produto',
+    defaultTopicDesign: 'UI/UX e identidade visual',
+    defaultTopicCodigo: 'Código e arquitetura',
+    defaultTopicDeploy: 'Deploy e infraestrutura',
+    defaultTopicIntegracoes: 'Integrações',
+    keyNotConfigured: 'chave não configurada',
+    keySaved: 'chave salva',
+    keySavedEnding: 'chave salva final {tail}',
+    notConfigured: 'Não configurada',
+    ready: 'Pronta',
+    needsConfig: 'Precisa configurar',
+    local: 'Local',
+    native: 'Nativa',
+    custom: 'Custom',
+    assets: 'Assets',
+    nativeLocalProviders: 'Provedores nativos e locais',
+    assetProviders: 'Imagens e vídeos para blueprints',
+    pexelsAssetSubtitle: 'Busca imagens e vídeos placeholder coerentes para sites gerados',
+    assetUsage: 'uso: imagens/vídeos placeholder',
+    customApis: 'APIs customizadas',
+    noCustomApi: 'Nenhuma API customizada adicionada.',
+    active: 'Ativa',
+    use: 'Usar',
+    edit: 'Editar',
+    configure: 'Configurar',
+    remove: 'Remover',
+    noActiveAi: 'Nenhuma IA ativa selecionada',
+    chooseReadyApi: 'Escolha uma opção pronta ou configure uma API customizada.',
+    noLabel: 'Sem identificação',
+    customProfile: 'Perfil customizado',
+    defaultLocalModel: 'modelo: padrão/local',
+    modelPrefix: 'modelo: {model}',
+    activeAiProject: 'IA ativa no projeto: {name}',
+    readyStart: 'Pronto para começar. Selecione um projeto e me diga o que você precisa.',
+    welcomeAria: 'Começar no Faber Code',
+    welcomeActions: 'Ações iniciais',
+    welcomeStart: 'Iniciar conversa',
+    welcomeStartHint: 'Escolha um projeto e descreva a próxima tarefa.',
+    welcomeNewProject: 'Novo projeto',
+    welcomeNewProjectHint: 'Crie ou selecione uma pasta para começar.',
+    chooseProject: 'Escolha um projeto',
+    chooseProjectHint: 'A conversa será criada no projeto selecionado.',
+    startInProject: 'Iniciar',
+    noProjectsForWelcome: 'Nenhum projeto disponível ainda.',
+    createProject: 'Criar novo projeto',
+    close: 'Fechar',
+  },
+  'en-US': {
+    addProject: 'New project',
+    search: 'Search',
+    projects: 'Projects',
+    rulesMemory: 'Rules and memory',
+    archivedProjects: 'Archived projects',
+    trash: 'Trash',
+    settings: 'Settings',
+    waitingProject: 'Waiting for project',
+    confirmExecute: 'Confirm and Run',
+    cancel: 'Cancel',
+    processing: 'Processing',
+    waiting: 'Waiting',
+    composerPlaceholder: 'Describe the task for this project.',
+    cortexComposerPlaceholder: 'Add rules, references, or context to guide the AI in this project.',
+    attachImage: 'Attach image',
+    selectProjectAi: 'Select project AI',
+    sendPrompt: 'Send prompt',
+    files: 'Files',
+    contextConversation: 'Context and Conversation',
+    rename: 'Rename',
+    archive: 'Archive',
+    delete: 'Delete',
+    open: 'Open',
+    revealInFolder: 'Show in folder',
+    projectModalTitle: 'Projects',
+    cortexTitle: 'Cortex',
+    cortexSubtitle: 'Rules, memory, and references',
+    closeCortex: 'Close Cortex',
+    cortexChatTitle: 'Talk to Cortex',
+    cortexChatSubtitle: 'Context that guides Persona and Executor',
+    subject: 'Topic',
+    createSubject: 'Create topic',
+    renameSubject: 'Rename topic',
+    cortexInputPlaceholder: 'Explain a rule, decision, reference, or lesson for Faber Code to consider.',
+    attachMarkdown: 'Attach Markdown',
+    attachMarkdownShort: '.md',
+    saveCortex: 'Save to Cortex',
+    library: 'Library',
+    librarySubtitle: 'Markdowns, PDFs, and notes organized by topic',
+    activeRules: 'Active rules',
+    activeRulesSubtitle: 'What enters the context for upcoming requests',
+    cortexPanelRules: 'Rules and context',
+    cortexPanelCopy: 'Register preferences, decisions, references, and constraints that Persona and Executor should consider in this project.',
+    memoryScopes: 'Memory scopes',
+    projectScope: 'Project',
+    projectScopeCopy: 'Stack, goal, visual identity, and current decisions.',
+    executionScope: 'Execution',
+    executionScopeCopy: 'Technical care, editing standards, and lessons from failures.',
+    registeredMemory: 'Registered memory',
+    file: 'File',
+    save: 'Save',
+    noChanges: 'No changes',
+    fileViewer: 'File viewer',
+    language: 'Language',
+    languageDesc: 'Portuguese, English, or Spanish for the tool experience',
+    appearance: 'Appearance',
+    appearanceDesc: 'Light/dark theme, logos, and panel font size',
+    account: 'Account',
+    accountDesc: 'Sign in with email or Google to unlock platform services',
+    configureApis: 'Configure APIs',
+    configureApisDesc: 'Review saved keys, edit only after clicking edit, and add new services',
+    back: 'Back',
+    interfaceLanguage: 'Interface language',
+    languageHelp: 'The preference is applied to the interface and saved in the tool settings.',
+    theme: 'Theme',
+    themeDark: 'Dark',
+    themeLight: 'Light',
+    panelFontSize: 'Panel font size',
+    panelFontHelp: 'Visual adjustment applied to the Faber Code interface on this device.',
+    userAccount: 'Account',
+    accountNotConnected: 'No account connected yet.',
+    accountConnected: 'Account connected',
+    accountBackendMissing: 'Backend incomplete: {items}',
+    googleUnavailable: 'Google OAuth is not configured yet.',
+    googleBrowserOpened: 'Open the browser to complete Google sign-in.',
+    emailCodeSent: 'Code sent. Check your email or dev mode.',
+    emailCodeSentDev: 'Development code generated: {code}',
+    emailLoginComplete: 'Sign-in complete.',
+    accountSignedOut: 'Account signed out.',
+    googleLogin: 'Sign in with Google',
+    signOut: 'Sign out',
+    email: 'Email',
+    emailPlaceholder: 'you@email.com',
+    sendCode: 'Send code',
+    accessCode: 'Access code',
+    accessCodePlaceholder: '000000',
+    confirmEmail: 'Confirm email',
+    accountHelp: 'Sign-in registers the user in the Faber Code backend and unlocks platform services, such as contextual media for blueprints.',
+    aiApis: 'AI APIs',
+    noKeyDetected: 'No key detected yet.',
+    addApi: 'Add API',
+    service: 'Service',
+    servicePlaceholder: 'Ex: OpenAI',
+    apiName: 'Name/Identifier',
+    apiNamePlaceholder: 'Ex: Production, Staging, Personal',
+    model: 'Model',
+    modelPreset: 'Recommended model',
+    modelCustom: 'Custom model',
+    modelPlaceholder: 'Ex: gpt-5-codex / gemini-2.0-flash',
+    apiKey: 'API Key',
+    apiKeyPlaceholder: 'Paste the key (leave empty to keep the current one)',
+    officialSite: 'Official site (optional)',
+    cancelEdit: 'Cancel edit',
+    saveEdit: 'Save edit',
+    providerHelp: 'Open the official page to create or review your key.',
+    openProviderSite: 'Open provider site',
+    languagePt: 'Português (Brasil) - default',
+    languageEn: 'English',
+    languageEs: 'Español',
+    noMemory: 'There are no rules or memories registered in this session yet.',
+    selectProjectNextSteps: 'Select a project to show deployment and validation recommendations.',
+    updatedAt: 'Updated at:',
+    noUpdate: 'no update',
+    personaRules: 'Rules for Persona:',
+    executorRules: 'Rules for Executor:',
+    noRulesYet: '- No rules registered yet.',
+    unknownSize: 'unknown size',
+    cortexIntro: 'Use this space to store rules, decisions, and documents Faber Code should consider in future work.',
+    noAttachmentUpdate: 'No document attached in this update.',
+    removeCortexDoc: 'Remove document from Cortex',
+    noLibraryDocs: 'No Markdown, PDF, or TXT registered yet.',
+    document: 'Document',
+    docRegistered: 'Document registered for Cortex lookup.',
+    noActiveRules: 'No active rules registered yet.',
+    localMemoryReady: 'local memory ready',
+    persistenceActive: 'persistence active',
+    semanticSearchActive: 'semantic search active',
+    runtimeNotFound: 'runtime not found',
+    ingestionPending: 'ingestion pending',
+    searchReadyIngestionPending: 'search ready, ingestion pending',
+    disconnected: 'disconnected',
+    noResponse: 'no response',
+    cortexCounts: '{rules} rules, {documents} documents',
+    selectProjectForCortex: 'Select a project before saving rules or documents in Cortex.',
+    projectContextError: 'I could not refresh the project context before saving to Cortex.',
+    attachedDocs: '[Attached documents]',
+    cortexSaved: 'Memory saved to Cortex.',
+    cortexSaveFailed: 'I could not save this memory to Cortex.',
+    memoryUpdated: 'Memory updated',
+    topicNewPrompt: 'New topic name:',
+    topicRenamePrompt: 'New name for this topic:',
+    topicSaved: 'Topic saved in Cortex.',
+    topicRenamed: 'Topic renamed in Cortex.',
+    topicSaveFailed: 'I could not save this topic in Cortex.',
+    topicNeedsProject: 'Select a project before organizing Cortex topics.',
+    defaultTopicGeral: 'General',
+    defaultTopicProduto: 'Product',
+    defaultTopicDesign: 'UI/UX and visual identity',
+    defaultTopicCodigo: 'Code and architecture',
+    defaultTopicDeploy: 'Deploy and infrastructure',
+    defaultTopicIntegracoes: 'Integrations',
+    keyNotConfigured: 'key not configured',
+    keySaved: 'saved key',
+    keySavedEnding: 'saved key ending in {tail}',
+    notConfigured: 'Not configured',
+    ready: 'Ready',
+    needsConfig: 'Needs setup',
+    local: 'Local',
+    native: 'Native',
+    custom: 'Custom',
+    assets: 'Assets',
+    nativeLocalProviders: 'Native and local providers',
+    assetProviders: 'Images and videos for blueprints',
+    pexelsAssetSubtitle: 'Finds coherent placeholder images and videos for generated sites',
+    assetUsage: 'use: placeholder images/videos',
+    customApis: 'Custom APIs',
+    noCustomApi: 'No custom API added.',
+    active: 'Active',
+    use: 'Use',
+    edit: 'Edit',
+    configure: 'Configure',
+    remove: 'Remove',
+    noActiveAi: 'No active AI selected',
+    chooseReadyApi: 'Choose a ready option or configure a custom API.',
+    noLabel: 'No identifier',
+    customProfile: 'Custom profile',
+    defaultLocalModel: 'model: default/local',
+    modelPrefix: 'model: {model}',
+    activeAiProject: 'Active AI in project: {name}',
+    readyStart: 'Ready to start. Select a project and tell me what you need.',
+    welcomeAria: 'Start in Faber Code',
+    welcomeActions: 'Initial actions',
+    welcomeStart: 'Start conversation',
+    welcomeStartHint: 'Choose a project and describe the next task.',
+    welcomeNewProject: 'New project',
+    welcomeNewProjectHint: 'Create or select a folder to begin.',
+    chooseProject: 'Choose a project',
+    chooseProjectHint: 'The conversation will be created in the selected project.',
+    startInProject: 'Start',
+    noProjectsForWelcome: 'No project available yet.',
+    createProject: 'Create new project',
+    close: 'Close',
+  },
+  'es-ES': {
+    addProject: 'Nuevo proyecto',
+    search: 'Buscar',
+    projects: 'Proyectos',
+    rulesMemory: 'Reglas y memoria',
+    archivedProjects: 'Proyectos archivados',
+    trash: 'Papelera',
+    settings: 'Configuración',
+    waitingProject: 'Esperando proyecto',
+    confirmExecute: 'Confirmar y ejecutar',
+    cancel: 'Cancelar',
+    processing: 'Procesando',
+    waiting: 'Esperando',
+    composerPlaceholder: 'Describe la tarea para este proyecto.',
+    cortexComposerPlaceholder: 'Agrega reglas, referencias o contexto para orientar la IA en este proyecto.',
+    attachImage: 'Adjuntar imagen',
+    selectProjectAi: 'Seleccionar IA del proyecto',
+    sendPrompt: 'Enviar prompt',
+    files: 'Archivos',
+    contextConversation: 'Contexto y conversación',
+    rename: 'Renombrar',
+    archive: 'Archivar',
+    delete: 'Eliminar',
+    open: 'Abrir',
+    revealInFolder: 'Mostrar en carpeta',
+    projectModalTitle: 'Proyectos',
+    cortexTitle: 'Cortex',
+    cortexSubtitle: 'Reglas, memoria y referencias',
+    closeCortex: 'Cerrar Cortex',
+    cortexChatTitle: 'Hablar con Cortex',
+    cortexChatSubtitle: 'Contexto que orienta Persona y Executor',
+    subject: 'Tema',
+    createSubject: 'Crear tema',
+    renameSubject: 'Renombrar tema',
+    cortexInputPlaceholder: 'Explica una regla, decisión, referencia o aprendizaje para que Faber Code lo considere.',
+    attachMarkdown: 'Adjuntar Markdown',
+    attachMarkdownShort: '.md',
+    saveCortex: 'Guardar en Cortex',
+    library: 'Biblioteca',
+    librarySubtitle: 'Markdowns, PDFs y textos organizados por tema',
+    activeRules: 'Reglas activas',
+    activeRulesSubtitle: 'Lo que entra en el contexto de las próximas solicitudes',
+    cortexPanelRules: 'Reglas y contexto',
+    cortexPanelCopy: 'Registra preferencias, decisiones, referencias y restricciones que Persona y Executor deben considerar en este proyecto.',
+    memoryScopes: 'Ámbitos de memoria',
+    projectScope: 'Proyecto',
+    projectScopeCopy: 'Stack, objetivo, identidad visual y decisiones actuales.',
+    executionScope: 'Ejecución',
+    executionScopeCopy: 'Cuidados técnicos, patrones de edición y aprendizajes de fallas.',
+    registeredMemory: 'Memoria registrada',
+    file: 'Archivo',
+    save: 'Guardar',
+    noChanges: 'Sin cambios',
+    fileViewer: 'Visor de archivo',
+    language: 'Idioma',
+    languageDesc: 'Portugués, inglés o español para la experiencia de la herramienta',
+    appearance: 'Apariencia',
+    appearanceDesc: 'Tema claro/oscuro, logos y tamaño de fuente de los paneles',
+    account: 'Cuenta',
+    accountDesc: 'Login con email o Google para liberar servicios de plataforma',
+    configureApis: 'Configurar APIs',
+    configureApisDesc: 'Revisa claves guardadas, edita solo al hacer clic en editar y agrega nuevos servicios',
+    back: 'Volver',
+    interfaceLanguage: 'Idioma de la interfaz',
+    languageHelp: 'La preferencia se aplica a la interfaz y queda guardada en la configuración de la herramienta.',
+    theme: 'Tema',
+    themeDark: 'Oscuro',
+    themeLight: 'Claro',
+    panelFontSize: 'Tamaño de fuente de los paneles',
+    panelFontHelp: 'Ajuste visual aplicado a la interfaz de Faber Code en este dispositivo.',
+    userAccount: 'Cuenta',
+    accountNotConnected: 'Cuenta todavía no conectada.',
+    accountConnected: 'Cuenta conectada',
+    accountBackendMissing: 'Backend incompleto: {items}',
+    googleUnavailable: 'Google OAuth todavía no está configurado.',
+    googleBrowserOpened: 'Abre el navegador para concluir el login con Google.',
+    emailCodeSent: 'Código enviado. Revisa tu email o modo dev.',
+    emailCodeSentDev: 'Código generado para desarrollo: {code}',
+    emailLoginComplete: 'Login concluido.',
+    accountSignedOut: 'Cuenta desconectada.',
+    googleLogin: 'Entrar con Google',
+    signOut: 'Salir',
+    email: 'Email',
+    emailPlaceholder: 'tu@email.com',
+    sendCode: 'Enviar código',
+    accessCode: 'Código de acceso',
+    accessCodePlaceholder: '000000',
+    confirmEmail: 'Confirmar email',
+    accountHelp: 'El login registra el usuario en el backend de Faber Code y libera servicios de plataforma, como medios contextuales para blueprints.',
+    aiApis: 'APIs de IA',
+    noKeyDetected: 'Todavía no se detectó ninguna clave.',
+    addApi: 'Agregar API',
+    service: 'Servicio',
+    servicePlaceholder: 'Ej: OpenAI',
+    apiName: 'Nombre/Identificación',
+    apiNamePlaceholder: 'Ej: Producción, Homologación, Personal',
+    model: 'Modelo',
+    modelPreset: 'Modelo recomendado',
+    modelCustom: 'Modelo personalizado',
+    modelPlaceholder: 'Ej: gpt-5-codex / gemini-2.0-flash',
+    apiKey: 'API Key',
+    apiKeyPlaceholder: 'Pega la clave (déjala vacía para mantener la actual)',
+    officialSite: 'Sitio oficial (opcional)',
+    cancelEdit: 'Cancelar edición',
+    saveEdit: 'Guardar edición',
+    providerHelp: 'Abre la página oficial para crear o revisar tu clave.',
+    openProviderSite: 'Abrir sitio del proveedor',
+    languagePt: 'Português (Brasil) - predeterminado',
+    languageEn: 'English',
+    languageEs: 'Español',
+    noMemory: 'Todavía no hay reglas o memorias registradas en esta sesión.',
+    selectProjectNextSteps: 'Selecciona un proyecto para ver recomendaciones de deploy y validación.',
+    updatedAt: 'Actualizado el:',
+    noUpdate: 'sin actualización',
+    personaRules: 'Reglas para Persona:',
+    executorRules: 'Reglas para Executor:',
+    noRulesYet: '- Todavía no hay reglas registradas.',
+    unknownSize: 'tamaño desconocido',
+    cortexIntro: 'Usa este espacio para guardar reglas, decisiones y documentos que Faber Code debe considerar en próximos trabajos.',
+    noAttachmentUpdate: 'Ningún documento adjunto en esta actualización.',
+    removeCortexDoc: 'Quitar documento de Cortex',
+    noLibraryDocs: 'Todavía no hay Markdown, PDF o TXT registrado.',
+    document: 'Documento',
+    docRegistered: 'Documento registrado para consulta de Cortex.',
+    noActiveRules: 'Todavía no hay reglas activas registradas.',
+    localMemoryReady: 'memoria local lista',
+    persistenceActive: 'persistencia activa',
+    semanticSearchActive: 'búsqueda semántica activa',
+    runtimeNotFound: 'runtime no localizado',
+    ingestionPending: 'ingesta pendiente',
+    searchReadyIngestionPending: 'búsqueda lista, ingesta pendiente',
+    disconnected: 'sin conexión',
+    noResponse: 'sin respuesta',
+    cortexCounts: '{rules} reglas, {documents} documentos',
+    selectProjectForCortex: 'Selecciona un proyecto antes de guardar reglas o documentos en Cortex.',
+    projectContextError: 'No pude actualizar el contexto del proyecto antes de guardar en Cortex.',
+    attachedDocs: '[Documentos adjuntos]',
+    cortexSaved: 'Memoria guardada en Cortex.',
+    cortexSaveFailed: 'No pude guardar esta memoria en Cortex.',
+    memoryUpdated: 'Memoria actualizada',
+    topicNewPrompt: 'Nombre del nuevo tema:',
+    topicRenamePrompt: 'Nuevo nombre para este tema:',
+    topicSaved: 'Tema guardado en Cortex.',
+    topicRenamed: 'Tema renombrado en Cortex.',
+    topicSaveFailed: 'No pude guardar este tema en Cortex.',
+    topicNeedsProject: 'Selecciona un proyecto antes de organizar los temas de Cortex.',
+    defaultTopicGeral: 'General',
+    defaultTopicProduto: 'Producto',
+    defaultTopicDesign: 'UI/UX e identidad visual',
+    defaultTopicCodigo: 'Código y arquitectura',
+    defaultTopicDeploy: 'Deploy e infraestructura',
+    defaultTopicIntegracoes: 'Integraciones',
+    keyNotConfigured: 'clave no configurada',
+    keySaved: 'clave guardada',
+    keySavedEnding: 'clave guardada termina en {tail}',
+    notConfigured: 'No configurada',
+    ready: 'Lista',
+    needsConfig: 'Necesita configuración',
+    local: 'Local',
+    native: 'Nativa',
+    custom: 'Custom',
+    assets: 'Assets',
+    nativeLocalProviders: 'Proveedores nativos y locales',
+    assetProviders: 'Imágenes y videos para blueprints',
+    pexelsAssetSubtitle: 'Busca imágenes y videos placeholder coherentes para sitios generados',
+    assetUsage: 'uso: imágenes/videos placeholder',
+    customApis: 'APIs customizadas',
+    noCustomApi: 'No se agregó ninguna API customizada.',
+    active: 'Activa',
+    use: 'Usar',
+    edit: 'Editar',
+    configure: 'Configurar',
+    remove: 'Eliminar',
+    noActiveAi: 'Ninguna IA activa seleccionada',
+    chooseReadyApi: 'Elige una opción lista o configura una API customizada.',
+    noLabel: 'Sin identificación',
+    customProfile: 'Perfil customizado',
+    defaultLocalModel: 'modelo: predeterminado/local',
+    modelPrefix: 'modelo: {model}',
+    activeAiProject: 'IA activa en el proyecto: {name}',
+    readyStart: 'Listo para empezar. Selecciona un proyecto y dime qué necesitas.',
+    welcomeAria: 'Empezar en Faber Code',
+    welcomeActions: 'Acciones iniciales',
+    welcomeStart: 'Iniciar conversación',
+    welcomeStartHint: 'Elige un proyecto y describe la próxima tarea.',
+    welcomeNewProject: 'Nuevo proyecto',
+    welcomeNewProjectHint: 'Crea o selecciona una carpeta para empezar.',
+    chooseProject: 'Elige un proyecto',
+    chooseProjectHint: 'La conversación se creará en el proyecto seleccionado.',
+    startInProject: 'Iniciar',
+    noProjectsForWelcome: 'Todavía no hay proyectos disponibles.',
+    createProject: 'Crear nuevo proyecto',
+    close: 'Cerrar',
+  },
+};
+
+function t(key, fallback = '') {
+  const locale = getLocale() || 'pt-BR';
+  const table = UI_TRANSLATIONS[locale] || UI_TRANSLATIONS['pt-BR'];
+  const pt = UI_TRANSLATIONS['pt-BR'];
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : pt[key] || fallback || key;
+}
+
+function setNodeText(selector, key, fallback) {
+  const node = document.querySelector(selector);
+  if (node) node.textContent = t(key, fallback);
+}
+
+function setNodeAttribute(selector, attribute, key, fallback) {
+  const node = document.querySelector(selector);
+  if (node) node.setAttribute(attribute, t(key, fallback));
+}
+
+function applyStaticTranslations() {
+  setNodeText('#btn-add-project span:last-child', 'addProject');
+  setNodeAttribute('#projects-search', 'placeholder', 'search');
+  setNodeText('.left-section-title', 'projects');
+  setNodeAttribute('#btn-cortex-mode', 'title', 'rulesMemory');
+  setNodeAttribute('#btn-cortex-mode', 'aria-label', 'rulesMemory');
+  setNodeAttribute('#btn-archived-projects', 'title', 'archivedProjects');
+  setNodeAttribute('#btn-archived-projects', 'aria-label', 'archivedProjects');
+  setNodeAttribute('#btn-trash-projects', 'title', 'trash');
+  setNodeAttribute('#btn-trash-projects', 'aria-label', 'trash');
+  setNodeAttribute('#btn-project-settings', 'title', 'settings');
+  setNodeAttribute('#btn-project-settings', 'aria-label', 'settings');
+  setNodeText('#btn-confirm', 'confirmExecute');
+  setNodeText('#btn-cancel', 'cancel');
+  setNodeText('#job-progress-title', 'processing');
+  setNodeText('#job-progress-status', 'waiting');
+  setNodeAttribute('#welcome-panel', 'aria-label', 'welcomeAria');
+  setNodeAttribute('.welcome-panel__actions', 'aria-label', 'welcomeActions');
+  setNodeText('#welcome-start-conversation span', 'welcomeStart');
+  setNodeText('#welcome-start-conversation small', 'welcomeStartHint');
+  setNodeText('#welcome-new-project span', 'welcomeNewProject');
+  setNodeText('#welcome-new-project small', 'welcomeNewProjectHint');
+  setNodeAttribute('#welcome-project-modal .welcome-project-modal__dialog', 'aria-label', 'chooseProject');
+  setNodeText('#welcome-project-title', 'chooseProject');
+  setNodeText('#welcome-project-subtitle', 'chooseProjectHint');
+  setNodeText('#welcome-project-create', 'createProject');
+  setNodeAttribute('#welcome-project-close', 'aria-label', 'close');
+  setNodeAttribute('#btn-attach', 'title', 'attachImage');
+  setNodeAttribute('#btn-attach', 'aria-label', 'attachImage');
+  setNodeAttribute('#composer-provider', 'title', 'selectProjectAi');
+  setNodeAttribute('#composer-provider', 'aria-label', 'selectProjectAi');
+  setNodeAttribute('#btn-send', 'title', 'sendPrompt');
+  setNodeAttribute('#btn-send', 'aria-label', 'sendPrompt');
+  setNodeText('#project-context-menu button[data-action="rename"]', 'rename');
+  setNodeText('#project-context-menu button[data-action="archive"]', 'archive');
+  setNodeText('#project-context-menu button[data-action="trash"]', 'delete');
+  setNodeText('#project-file-context-menu button[data-action="open"]', 'open');
+  setNodeText('#project-file-context-menu button[data-action="reveal"]', 'revealInFolder');
+  setNodeText('#project-state-modal-title', 'projectModalTitle');
+  setNodeText('#cortex-modal .cortex-modal__title strong', 'cortexTitle');
+  setNodeText('#cortex-modal .cortex-modal__title span:last-child', 'cortexSubtitle');
+  setNodeAttribute('#cortex-modal-close', 'aria-label', 'closeCortex');
+  setNodeText('.cortex-chat-card .cortex-card__head strong', 'cortexChatTitle');
+  setNodeText('.cortex-chat-card .cortex-card__head span', 'cortexChatSubtitle');
+  setNodeText('.cortex-topic-row label', 'subject');
+  setNodeAttribute('#cortex-topic-add', 'title', 'createSubject');
+  setNodeAttribute('#cortex-topic-add', 'aria-label', 'createSubject');
+  setNodeAttribute('#cortex-topic-rename', 'title', 'renameSubject');
+  setNodeAttribute('#cortex-topic-rename', 'aria-label', 'renameSubject');
+  setNodeAttribute('#cortex-input', 'placeholder', 'cortexInputPlaceholder');
+  setNodeText('#cortex-attach', 'attachMarkdown');
+  setNodeText('#cortex-send', 'saveCortex');
+  setNodeText('.cortex-memory-card .cortex-card__head strong', 'library');
+  setNodeText('.cortex-memory-card .cortex-card__head span', 'librarySubtitle');
+  setNodeAttribute('#cortex-library-attach', 'title', 'attachMarkdown');
+  setNodeAttribute('#cortex-library-attach', 'aria-label', 'attachMarkdown');
+  setNodeText('#cortex-library-attach span', 'attachMarkdownShort');
+  setNodeText('.cortex-rules-card .cortex-card__head strong', 'activeRules');
+  setNodeText('.cortex-rules-card .cortex-card__head span', 'activeRulesSubtitle');
+  setNodeText('#cortex-learning-box h3:first-child', 'cortexPanelRules');
+  setNodeText('.cortex-memory-copy', 'cortexPanelCopy');
+  setNodeAttribute('.cortex-memory-scope', 'aria-label', 'memoryScopes');
+  setNodeText('.cortex-memory-scope > div:first-child strong', 'projectScope');
+  setNodeText('.cortex-memory-scope > div:first-child span', 'projectScopeCopy');
+  setNodeText('.cortex-memory-scope > div:last-child strong', 'executionScope');
+  setNodeText('.cortex-memory-scope > div:last-child span', 'executionScopeCopy');
+  setNodeText('#cortex-learning-box h3:nth-of-type(2)', 'registeredMemory');
+  setNodeAttribute('#project-file-modal .project-file-modal__dialog', 'aria-label', 'fileViewer');
+  setNodeText('#project-file-modal-title', 'file');
+  setNodeText('#project-file-save', 'save');
+  setNodeText('#project-file-status', 'noChanges');
+  setNodeText('#ai-settings-modal .ai-settings-modal__head strong', 'settings');
+  setNodeText('#ai-settings-open-language strong', 'language');
+  setNodeText('#ai-settings-open-language span', 'languageDesc');
+  setNodeText('#ai-settings-open-appearance strong', 'appearance');
+  setNodeText('#ai-settings-open-appearance span', 'appearanceDesc');
+  setNodeText('#ai-settings-open-account strong', 'account');
+  setNodeText('#ai-settings-open-account span', 'accountDesc');
+  setNodeText('#ai-settings-open-apis strong', 'configureApis');
+  setNodeText('#ai-settings-open-apis span', 'configureApisDesc');
+  setNodeText('#ai-settings-back-home', 'back');
+  setNodeText('#ai-settings-language-panel .ai-settings-panel-head span', 'language');
+  setNodeText('#ai-settings-language-panel .ai-settings-field span', 'interfaceLanguage');
+  setNodeText('#ai-settings-language option[value="pt-BR"]', 'languagePt');
+  setNodeText('#ai-settings-language option[value="en-US"]', 'languageEn');
+  setNodeText('#ai-settings-language option[value="es-ES"]', 'languageEs');
+  setNodeText('#ai-settings-language-panel .ai-settings-help', 'languageHelp');
+  setNodeText('#ai-settings-back-home-appearance', 'back');
+  setNodeText('#ai-settings-appearance-panel .ai-settings-panel-head span', 'appearance');
+  setNodeText('#ai-settings-theme-field span', 'theme');
+  setNodeText('#ai-settings-theme option[value="dark"]', 'themeDark');
+  setNodeText('#ai-settings-theme option[value="light"]', 'themeLight');
+  setNodeText('#ai-settings-font-field span:first-child', 'panelFontSize');
+  setNodeText('#ai-settings-appearance-help', 'panelFontHelp');
+  setNodeText('#ai-settings-back-home-account', 'back');
+  setNodeText('#ai-settings-account-panel .ai-settings-panel-head span', 'userAccount');
+  setNodeText('#ai-settings-account-status', 'accountNotConnected');
+  setNodeText('#ai-settings-google-login', 'googleLogin');
+  setNodeText('#ai-settings-sign-out', 'signOut');
+  setNodeText('label[for="ai-settings-account-email"] span', 'email');
+  setNodeAttribute('#ai-settings-account-email', 'placeholder', 'emailPlaceholder');
+  setNodeText('#ai-settings-email-start', 'sendCode');
+  setNodeText('label[for="ai-settings-account-code"] span', 'accessCode');
+  setNodeAttribute('#ai-settings-account-code', 'placeholder', 'accessCodePlaceholder');
+  setNodeText('#ai-settings-email-complete', 'confirmEmail');
+  setNodeText('#ai-settings-account-help', 'accountHelp');
+  setNodeText('#ai-settings-back-home-apis', 'back');
+  setNodeText('#ai-settings-apis-panel .ai-settings-panel-head span', 'aiApis');
+  setNodeText('#ai-settings-current', 'noKeyDetected');
+  setNodeText('#ai-settings-add-api', 'addApi');
+  setNodeText('label[for="ai-settings-editor-provider"] span', 'service');
+  setNodeText('label[for="ai-settings-editor-label"] span', 'apiName');
+  setNodeText('label[for="ai-settings-editor-model-preset"] span', 'modelPreset');
+  setNodeText('label[for="ai-settings-editor-model"] span', 'modelCustom');
+  setNodeText('label[for="ai-settings-editor-key"] span', 'apiKey');
+  setNodeText('label[for="ai-settings-editor-website"] span', 'officialSite');
+  setNodeAttribute('#ai-settings-editor-provider', 'placeholder', 'servicePlaceholder');
+  setNodeAttribute('#ai-settings-editor-label', 'placeholder', 'apiNamePlaceholder');
+  setNodeAttribute('#ai-settings-editor-model', 'placeholder', 'modelPlaceholder');
+  setNodeAttribute('#ai-settings-editor-key', 'placeholder', 'apiKeyPlaceholder');
+  setNodeText('#ai-settings-editor-cancel', 'cancelEdit');
+  setNodeText('#ai-settings-editor-save', 'saveEdit');
+  setNodeText('#ai-settings-provider-help-text', 'providerHelp');
+  setNodeText('#ai-settings-provider-help-link', 'openProviderSite');
+  setNodeText('#ai-settings-cancel', 'cancel');
+  setNodeText('#ai-settings-save', 'save');
+  const editorFieldKeys = ['service', 'apiName', 'modelPreset', 'modelCustom', 'apiKey', 'officialSite'];
+  document.querySelectorAll('#ai-settings-api-editor .ai-settings-field > span').forEach((node, index) => {
+    node.textContent = t(editorFieldKeys[index] || 'service');
+  });
+}
+
+
+function createI18nController(options = {}) {
+  getLocale = typeof options.getLocale === 'function' ? options.getLocale : () => 'pt-BR';
+  return {
+    translate: t,
+    t,
+    applyStaticTranslations,
+    translations: UI_TRANSLATIONS,
+  };
+}
+
+window.FaberI18n = {
+  createI18nController,
+  UI_TRANSLATIONS,
+};
+})();

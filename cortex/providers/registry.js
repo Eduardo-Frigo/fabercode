@@ -4,9 +4,11 @@ function createProviderRegistry(dependencies = {}) {
     callCustomProviderChat,
     callGeminiChat,
     callMockPersonaProviderChat,
+    callOpenAiChat,
     callRwkvProviderChat,
     callSambaNovaChat,
     getEffectiveGeminiModel = () => '',
+    getEffectiveOpenAiModel = () => '',
     getEffectiveSambaNovaModel = () => '',
     getSelectedAiProvider = () => 'rwkv',
     rwkvEnabled = true,
@@ -34,6 +36,15 @@ function createProviderRegistry(dependencies = {}) {
     if (selectedProvider === 'gemini') {
       return withAudit('gemini', () =>
         callGeminiChat(getEffectiveGeminiModel() || model, messages, timeoutMs, requestOptions)
+      );
+    }
+
+    if (selectedProvider === 'openai') {
+      if (typeof callOpenAiChat !== 'function') {
+        throw new Error('openai_provider_missing: provedor OpenAI sem handler registrado.');
+      }
+      return withAudit('openai', () =>
+        callOpenAiChat(getEffectiveOpenAiModel() || model, messages, timeoutMs, requestOptions)
       );
     }
 

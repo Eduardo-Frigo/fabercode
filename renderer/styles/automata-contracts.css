@@ -1,0 +1,270 @@
+.automata-contracts-btn {
+  position: relative;
+}
+
+.automata-contracts-btn.has-staged-contracts {
+  border-color: rgba(96, 205, 150, 0.66);
+  background: rgba(33, 92, 59, 0.28);
+  color: rgba(220, 255, 235, 0.96);
+}
+
+.automata-contracts-count {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  background: rgba(24, 192, 122, 0.92);
+  color: #06140d;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 17px;
+  text-align: center;
+}
+
+.automata-contract-preview {
+  align-self: flex-start;
+  width: min(720px, 92%);
+  margin: 6px 0;
+  padding: 14px;
+  border: 1px solid rgba(118, 215, 162, 0.34);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(18, 28, 24, 0.92), rgba(16, 18, 18, 0.92));
+  color: var(--text);
+}
+
+.automata-contract-preview__head,
+.automata-contract-ledger__head,
+.automata-ledger-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.automata-contract-preview__head {
+  justify-content: space-between;
+}
+
+.automata-contract-preview__head > div,
+.automata-contract-ledger__head > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.automata-contract-preview__eyebrow,
+.automata-contract-ledger__head span,
+.automata-ledger-row__body span {
+  color: var(--text-soft);
+  font-size: 0.74rem;
+}
+
+.automata-contract-preview__status {
+  flex: 0 0 auto;
+  border: 1px solid rgba(112, 224, 169, 0.46);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: rgba(199, 255, 226, 0.96);
+  font-size: 0.72rem;
+}
+
+.automata-contract-preview__copy {
+  margin: 10px 0;
+  color: rgba(232, 228, 223, 0.86);
+  line-height: 1.45;
+}
+
+.automata-contract-preview__details,
+.automata-ledger-row__details {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.automata-contract-preview__details summary,
+.automata-ledger-row__details summary {
+  cursor: pointer;
+  padding: 8px 10px;
+  color: rgba(226, 237, 255, 0.9);
+  font-size: 0.82rem;
+}
+
+.automata-contract-preview__details pre,
+.automata-ledger-row__details pre {
+  max-height: 240px;
+  margin: 0;
+  overflow: auto;
+  padding: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(231, 245, 238, 0.9);
+  font-size: 0.74rem;
+  line-height: 1.48;
+  white-space: pre-wrap;
+}
+
+.automata-contract-preview__actions,
+.automata-contract-ledger__footer,
+.automata-ledger-row__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.automata-contract-preview__actions {
+  margin-top: 12px;
+}
+
+.automata-contract-preview__primary,
+.automata-contract-preview__ghost,
+.automata-contract-ledger__push,
+.automata-ledger-row__actions button {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  font: inherit;
+  font-size: 0.78rem;
+}
+
+.automata-contract-preview__primary,
+.automata-contract-ledger__push {
+  border-color: rgba(92, 218, 151, 0.56);
+  background: rgba(45, 143, 91, 0.7);
+  color: #07140d;
+  font-weight: 800;
+}
+
+.automata-contract-preview__ghost:hover,
+.automata-ledger-row__actions button:hover,
+.automata-contract-preview__primary:hover,
+.automata-contract-ledger__push:hover {
+  filter: brightness(1.08);
+}
+
+.automata-contract-preview__primary:disabled,
+.automata-contract-preview__ghost:disabled,
+.automata-ledger-row__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.automata-contract-preview__note {
+  min-height: 18px;
+  color: rgba(188, 202, 194, 0.88);
+  font-size: 0.76rem;
+}
+
+.automata-contract-ledger {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+}
+
+.automata-contract-ledger.hidden {
+  display: none;
+}
+
+.automata-contract-ledger__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.42);
+}
+
+.automata-contract-ledger__dialog {
+  position: absolute;
+  right: 28px;
+  bottom: 90px;
+  width: min(620px, calc(100vw - 56px));
+  max-height: min(680px, calc(100vh - 130px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(16, 17, 18, 0.98);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+  overflow: hidden;
+}
+
+.automata-contract-ledger__head {
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.automata-contract-ledger__close {
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 1rem;
+}
+
+.automata-contract-ledger__empty {
+  margin: 16px;
+  padding: 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  color: var(--text-soft);
+}
+
+.automata-contract-ledger__list {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  padding: 14px 16px;
+}
+
+.automata-ledger-row {
+  align-items: flex-start;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.automata-ledger-row__check {
+  margin-top: 5px;
+}
+
+.automata-ledger-row__body {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.automata-ledger-row__actions {
+  justify-content: flex-end;
+  width: 150px;
+}
+
+.automata-contract-ledger__footer {
+  justify-content: flex-end;
+  padding: 12px 16px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+body[data-theme='light'] .automata-contract-preview,
+body[data-theme='light'] .automata-contract-ledger__dialog {
+  background: rgba(250, 250, 248, 0.98);
+  color: #16191a;
+}
+
+body[data-theme='light'] .automata-contract-preview__details pre,
+body[data-theme='light'] .automata-ledger-row__details pre {
+  color: #1d2a25;
+}

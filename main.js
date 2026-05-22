@@ -11,8 +11,10 @@ const { createMemoryContextAdapter } = require('./cortex/memory/context_adapter'
 const { createCortexMemorySyncService } = require('./cortex/memory/cortex_memory_sync_service');
 const { createKnowledgeRuntimeService } = require('./cortex/memory/knowledge_runtime_service');
 const { createAssistantFlow } = require('./cortex/orchestration/assistant_flow');
+const { createAutomataContractLedgerService } = require('./cortex/orchestration/automata_contract_ledger_service');
 const { createArtifactQualityService } = require('./cortex/orchestration/artifact_quality_service');
 const {
+  hasApplicationSurfaceFiles: hasApplicationSurfaceFilesForBlueprintGuard,
   resolveExecutionIntentFromContext,
 } = require('./cortex/orchestration/execution_intent');
 const {
@@ -23,6 +25,7 @@ const {
   setPassStatus,
 } = require('./cortex/orchestration/render_runtime_state');
 const { createCortexBriefingService } = require('./cortex/orchestration/briefing_service');
+const { createProductOrchestratorService } = require('./cortex/orchestration/product_orchestrator_service');
 const { createProjectBlueprintService } = require('./cortex/orchestration/project_blueprint_service');
 const { createCortexRenderPassService } = require('./cortex/orchestration/render_pass_service');
 const { createCortexRepairValidationService } = require('./cortex/orchestration/repair_validation_service');
@@ -37,7 +40,9 @@ const { createAiRuntimeSettingsService, normalizeAiProviderName } = require('./c
 const { createAiRuntimeStatusService } = require('./cortex/providers/runtime_status');
 const { createAutomataTools } = require('./cortex/tools/automata_tools');
 const { createToolRegistry } = require('./cortex/tools/registry');
+const { registerAccountHandlers } = require('./main/ipc/account_handlers');
 const { registerAiHandlers } = require('./main/ipc/ai_handlers');
+const { registerAutomataContractHandlers } = require('./main/ipc/automata_contract_handlers');
 const { registerFileHandlers } = require('./main/ipc/file_handlers');
 const { registerGithubHandlers } = require('./main/ipc/github_handlers');
 const { registerKnowledgeRuntimeHandlers } = require('./main/ipc/knowledge_runtime_handlers');
@@ -45,11 +50,20 @@ const { registerMempalaceHandlers } = require('./main/ipc/mempalace_handlers');
 const { registerOrchestrationHandlers } = require('./main/ipc/orchestration_handlers');
 const { registerPreviewHandlers } = require('./main/ipc/preview_handlers');
 const { registerProjectHandlers } = require('./main/ipc/project_handlers');
+const { registerTerminalHandlers } = require('./main/ipc/terminal_handlers');
 const { createIpcSecurity } = require('./main/security/ipc_security');
 const { createProjectAccess } = require('./main/security/project_access');
 const { createSecretStore } = require('./main/security/secret_store');
 const { normalizeExternalUrl } = require('./main/security/url_policy');
 const { createCommandRunner } = require('./main/services/command_runner');
+const { createCssRuntimeRepairService } = require('./main/services/css_runtime_repair_service');
+const {
+  buildCortexPexelsContractFromPersonaBrief,
+  resolveCortexProductRuntimeContract,
+  resolveCortexProductRouteDecisionFromContextHint,
+  resolveCortexBuildModeRouteFromProductRoute,
+  resolvePersonaWorkingBriefFromProductRoute,
+} = require('./main/services/cortex_product_runtime_contract_service');
 const { createProjectGitService } = require('./main/services/git_service');
 const {
   createDeterministicEditService,
@@ -57,16 +71,32 @@ const {
   isButtonColorEditRequest,
   isFooterInsertRequest,
   isHydrationMismatchRepairRequest,
+  isLiteralColorReplacementRequest,
+  isThemeColorEditRequest,
 } = require('./main/services/deterministic_edit_service');
 const { createGithubIntegrationService } = require('./main/services/github_integration_service');
 const { createLocalDiagnosticsService } = require('./main/services/local_diagnostics_service');
+const { createPlatformAccountService } = require('./main/services/platform_account_service');
+const { createPlatformBackendService } = require('./main/services/platform_backend_service');
 const { createPlatformGuidanceService } = require('./main/services/platform_guidance_service');
+const { createPlatformMediaService } = require('./main/services/platform_media_service');
+const { createPexelsAssetService } = require('./main/services/pexels_asset_service');
+const { createPostgresUserStore } = require('./main/services/postgres_user_store');
 const { createPostExecutionQualityService } = require('./main/services/post_execution_quality_service');
 const { createProjectPreviewRuntimeService } = require('./main/services/project_preview_runtime_service');
 const { createProjectPreviewService } = require('./main/services/project_preview_service');
 const { createProjectScanner } = require('./main/services/project_scanner');
+const { createProjectTerminalService } = require('./main/services/project_terminal_service');
 const { createProjectVerificationService } = require('./main/services/project_verification_service');
 const { createStackRegistryService } = require('./main/services/stack_registry_service');
+const { createAttachmentContextService } = require('./main/runtime/attachment_context');
+const { buildOperationBatchDiffPreview } = require('./main/runtime/diff_preview');
+const { createFileTextUtils } = require('./main/runtime/file_text_utils');
+const { createProjectContextService } = require('./main/runtime/project_context');
+const { createProjectStore } = require('./main/runtime/project_store');
+const { createMainRuntimeConfig } = require('./main/runtime/runtime_config');
+const { createProviderRateLimiter } = require('./main/runtime/provider_rate_limiter');
+const { createRuntimeProfileService } = require('./main/runtime/runtime_profile');
 
 function loadEnvFromCandidates(candidates) {
   const loadedPaths = [];
@@ -108,367 +138,183 @@ const {
   collectProjectFilesTree,
   scanProject,
 } = projectScanner;
-const MAX_AUDIT_EVENTS = 300;
-const MAX_CONVERSATION_MESSAGES = 200;
-const MAX_CORTEX_LEARNING_EVENTS = 80;
-const MAX_CORTEX_CONTEXT_ITEMS = 10;
-const MAX_JOB_EVENTS = 120;
-const MAX_JOBS_STORED = 180;
-const AI_PROVIDER_OPTIONS = ['mock', 'rwkv', 'gemini', 'sambanova'];
-const AI_PROVIDER_ENV = normalizeAiProviderName(process.env.AI_PROVIDER || 'rwkv');
-const GEMINI_API_BASE_URL = process.env.GEMINI_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta';
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
-const GEMINI_MODEL_BRAIN_ENV = process.env.GEMINI_MODEL_BRAIN || 'gemini-2.0-flash';
-const GEMINI_MAX_REQUESTS_PER_MINUTE = Number.parseInt(
-  process.env.GEMINI_MAX_REQUESTS_PER_MINUTE || '6',
-  10
-);
-const SAMBANOVA_API_BASE_URL = process.env.SAMBANOVA_API_BASE_URL || 'https://api.sambanova.ai/v1';
-const SAMBANOVA_API_KEY = process.env.SAMBANOVA_API_KEY || '';
-const SAMBANOVA_MODEL_BRAIN_ENV = String(process.env.SAMBANOVA_MODEL_BRAIN || '').trim();
-const SAMBANOVA_MIN_REQUEST_INTERVAL_MS = Number.parseInt(
-  process.env.SAMBANOVA_MIN_REQUEST_INTERVAL_MS || '10000',
-  10
-);
-const SAMBANOVA_MAX_REQUESTS_PER_MINUTE = Number.parseInt(
-  process.env.SAMBANOVA_MAX_REQUESTS_PER_MINUTE || '3',
-  10
-);
-const PERSONA_MODEL_ENGINE = process.env.PERSONA_MODEL_ENGINE || 'rwkv-local';
-const PERSONA_MODEL_BRAIN = process.env.PERSONA_MODEL_BRAIN || 'rwkv-local';
-const AI_REQUEST_TIMEOUT_MS = Number.parseInt(
-  process.env.AI_REQUEST_TIMEOUT_MS || '420000',
-  10
-);
-const BRAIN_BRIEFING_TIMEOUT_MS = Number.parseInt(
-  process.env.BRAIN_BRIEFING_TIMEOUT_MS || String(Math.max(AI_REQUEST_TIMEOUT_MS, 600000)),
-  10
-);
-const GEMINI_MIN_REQUEST_INTERVAL_MS = Number.parseInt(
-  process.env.GEMINI_MIN_REQUEST_INTERVAL_MS || '8000',
-  10
-);
-const GEMINI_429_BASE_BACKOFF_MS = Number.parseInt(
-  process.env.GEMINI_429_BASE_BACKOFF_MS || '60000',
-  10
-);
-const GEMINI_429_MAX_BACKOFF_MS = Number.parseInt(
-  process.env.GEMINI_429_MAX_BACKOFF_MS || '300000',
-  10
-);
-const SAMBANOVA_429_BASE_BACKOFF_MS = Number.parseInt(
-  process.env.SAMBANOVA_429_BASE_BACKOFF_MS || '12000',
-  10
-);
-const SAMBANOVA_429_MAX_BACKOFF_MS = Number.parseInt(
-  process.env.SAMBANOVA_429_MAX_BACKOFF_MS || '120000',
-  10
-);
-const RWKV_ENABLED = String(process.env.RWKV_ENABLED || 'true').toLowerCase() === 'true';
-const RWKV_MODEL_PATH =
-  process.env.RWKV_MODEL_PATH ||
-  path.join(process.cwd(), 'models', 'rwkv', 'RWKV-x070-World-0.4B-v2.9-20250107-ctx4096');
-const RWKV_TOKENIZER_PATH =
-  process.env.RWKV_TOKENIZER_PATH ||
-  path.join(process.cwd(), 'models', 'rwkv', 'tokenizer.json');
-const RWKV_STRATEGY = process.env.RWKV_STRATEGY || 'cpu fp16';
-const RWKV_MAX_NEW_TOKENS = Number.parseInt(process.env.RWKV_MAX_NEW_TOKENS || '80', 10);
-const RWKV_TEMPERATURE = Number.parseFloat(process.env.RWKV_TEMPERATURE || '0.2');
-const RWKV_TOP_P = Number.parseFloat(process.env.RWKV_TOP_P || '0.9');
-const RWKV_V7_ON = String(process.env.RWKV_V7_ON || '0');
-const RWKV_PROVIDER_SCRIPT = path.join(__dirname, 'cortex', 'rwkv', 'rwkv_provider.py');
-const AUTOMATA_BUNDLE_ROOT = process.env.AUTOMATA_BUNDLE_ROOT || path.resolve(__dirname, '..', 'Automata');
-const CORTEX_RAG_ENABLED = String(process.env.CORTEX_RAG_ENABLED || 'true').toLowerCase() === 'true';
-const CORTEX_RAG_PROVIDER = String(process.env.CORTEX_RAG_PROVIDER || 'r2r').trim().toLowerCase();
-const R2R_BASE_URL = String(process.env.R2R_BASE_URL || 'http://127.0.0.1:7272').trim().replace(/\/+$/, '');
-const R2R_API_KEY = String(process.env.R2R_API_KEY || '').trim();
-const R2R_CORTEX_INGEST_ENDPOINT = String(process.env.R2R_CORTEX_INGEST_ENDPOINT || '').trim();
-const R2R_SEARCH_LIMIT = Number.parseInt(process.env.R2R_SEARCH_LIMIT || '6', 10);
-const R2R_STATUS_TIMEOUT_MS = Number.parseInt(process.env.R2R_STATUS_TIMEOUT_MS || '3500', 10);
-const R2R_TIMEOUT_MS = Number.parseInt(process.env.R2R_TIMEOUT_MS || '12000', 10);
-const TIME_AS_COMPUTE_PROFILE = String(process.env.TIME_AS_COMPUTE_PROFILE || 'auto').toLowerCase();
-const BRAIN_PLAN_MAX_ATTEMPTS_ENV = Number.parseInt(process.env.BRAIN_PLAN_MAX_ATTEMPTS || '2', 10);
-const BRAIN_PLAN_MAX_ELAPSED_MS_ENV = Number.parseInt(process.env.BRAIN_PLAN_MAX_ELAPSED_MS || '480000', 10);
-const SCAFFOLD_MAX_CLARIFICATIONS_ENV = Number.parseInt(process.env.SCAFFOLD_MAX_CLARIFICATIONS || '1', 10);
-const PERSONA_PROTOCOL_VERSION = 'persona.v1';
-const SUPPORTED_EXEC_PROTOCOLS = new Set([PERSONA_PROTOCOL_VERSION, 'a2.v1']);
-const JOB_RETRY_STAGNATION_LIMIT = Number.parseInt(process.env.JOB_RETRY_STAGNATION_LIMIT || '12', 10);
-const JOB_RETRY_NO_PROGRESS_MS = Number.parseInt(process.env.JOB_RETRY_NO_PROGRESS_MS || '1800000', 10);
-const JOB_PROGRESS_MIN_DELTA = Number.parseInt(process.env.JOB_PROGRESS_MIN_DELTA || '1', 10);
-const JOB_SOFT_TIMEOUT_MS = Number.parseInt(process.env.JOB_SOFT_TIMEOUT_MS || '3600000', 10);
-const JOB_RETRY_SAME_REASON_LIMIT = Number.parseInt(process.env.JOB_RETRY_SAME_REASON_LIMIT || '6', 10);
-const JOB_RETRY_SAME_FINGERPRINT_LIMIT = Number.parseInt(process.env.JOB_RETRY_SAME_FINGERPRINT_LIMIT || '3', 10);
-const CORTEX_VALIDATION_MIN_SCORE = Number.parseInt(process.env.CORTEX_VALIDATION_MIN_SCORE || '55', 10);
-const CORTEX_VALIDATION_REQUIRE_CORE = String(process.env.CORTEX_VALIDATION_REQUIRE_CORE || 'true').toLowerCase() === 'true';
-const CORTEX_VALIDATION_STALL_LIMIT = Number.parseInt(process.env.CORTEX_VALIDATION_STALL_LIMIT || '2', 10);
-const CORTEX_VALIDATION_REPAIR_MIN_IMPROVEMENT = Number.parseInt(
-  process.env.CORTEX_VALIDATION_REPAIR_MIN_IMPROVEMENT || '2',
-  10
-);
-const CORTEX_VALIDATION_REPAIR_STALL_LIMIT = Number.parseInt(
-  process.env.CORTEX_VALIDATION_REPAIR_STALL_LIMIT || '1',
-  10
-);
-const CORTEX_VALIDATION_MAX_RETRIES = Number.parseInt(process.env.CORTEX_VALIDATION_MAX_RETRIES || '8', 10);
-const CORTEX_BRIEFING_MAX_RETRIES = Number.parseInt(process.env.CORTEX_BRIEFING_MAX_RETRIES || '8', 10);
-const AUTOMATA_ENABLED = String(process.env.AUTOMATA_ENABLED || 'true').toLowerCase() === 'true';
-const AUTOMATA_STRICT_EXECUTION = String(process.env.AUTOMATA_STRICT_EXECUTION || 'true').toLowerCase() === 'true';
-const AIDER_MAIN_ROOT = process.env.AIDER_MAIN_ROOT || path.join(AUTOMATA_BUNDLE_ROOT, 'aider-main');
-const POST_EXEC_QUALITY_ENABLED = String(process.env.POST_EXEC_QUALITY_ENABLED || 'true').toLowerCase() === 'true';
-const POST_EXEC_QUALITY_MAX_FILES = Number.parseInt(process.env.POST_EXEC_QUALITY_MAX_FILES || '20', 10);
-const POST_EXEC_QUALITY_MAX_ISSUES = Number.parseInt(process.env.POST_EXEC_QUALITY_MAX_ISSUES || '40', 10);
-const POST_EXEC_QUALITY_TIMEOUT_MS = Number.parseInt(process.env.POST_EXEC_QUALITY_TIMEOUT_MS || '30000', 10);
-const POST_EXEC_QUALITY_ENFORCE_ERRORS = String(process.env.POST_EXEC_QUALITY_ENFORCE_ERRORS || 'true').toLowerCase() === 'true';
-const POST_EXEC_QUALITY_ENFORCE_WARNINGS = String(process.env.POST_EXEC_QUALITY_ENFORCE_WARNINGS || 'false').toLowerCase() === 'true';
-const EXECUTION_ENFORCE_EFFECT_GATE = String(process.env.EXECUTION_ENFORCE_EFFECT_GATE || 'true').toLowerCase() === 'true';
-const EXECUTION_ENFORCE_NONZERO_DIFF_ON_EDIT = String(
-  process.env.EXECUTION_ENFORCE_NONZERO_DIFF_ON_EDIT || 'true'
-).toLowerCase() === 'true';
-const AUTO_REPAIR_ENABLED = String(process.env.AUTO_REPAIR_ENABLED || 'true').toLowerCase() === 'true';
-const AUTO_REPAIR_MAX_PASSES = Number.parseInt(process.env.AUTO_REPAIR_MAX_PASSES || '2', 10);
-const AIDER_LINT_TIMEOUT_MS = Number.parseInt(process.env.AIDER_LINT_TIMEOUT_MS || '15000', 10);
-const MEMPALACE_LOCAL_VENV_PYTHON = path.join(
-  __dirname,
-  '.venv-mempalace',
-  process.platform === 'win32' ? 'Scripts' : 'bin',
-  process.platform === 'win32' ? 'python.exe' : 'python3'
-);
-const MEMPALACE_PYTHON_BIN =
-  process.env.MEMPALACE_PYTHON_BIN ||
-  (fs.existsSync(MEMPALACE_LOCAL_VENV_PYTHON) ? MEMPALACE_LOCAL_VENV_PYTHON : 'python3');
-const MEMPALACE_COMMAND_TIMEOUT_MS = Number.parseInt(
-  process.env.MEMPALACE_COMMAND_TIMEOUT_MS || '12000',
-  10
-);
-const MEMPALACE_REPO_CANDIDATES = [
-  process.env.MEMPALACE_REPO_PATH || null,
-  path.join(__dirname, '..', 'mempalace-develop'),
-  path.join(process.cwd(), '..', 'mempalace-develop'),
-  path.join(process.cwd(), 'mempalace-develop'),
-].filter(Boolean);
+const {
+  MAX_AUDIT_EVENTS,
+  MAX_CONVERSATION_MESSAGES,
+  MAX_CORTEX_LEARNING_EVENTS,
+  MAX_CORTEX_CONTEXT_ITEMS,
+  MAX_JOB_EVENTS,
+  MAX_JOBS_STORED,
+  AI_PROVIDER_OPTIONS,
+  AI_PROVIDER_ENV,
+  OPENAI_API_BASE_URL,
+  OPENAI_API_KEY,
+  OPENAI_MODEL_BRAIN_ENV,
+  PEXELS_API_KEY,
+  FABER_DATABASE_URL,
+  FABER_SESSION_SECRET,
+  FABER_APP_BASE_URL,
+  FABER_BACKEND_HOST,
+  FABER_BACKEND_PORT,
+  FABER_POSTGRES_SSL,
+  FABER_AUTH_DEV_CODES,
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+  GOOGLE_REDIRECT_URI,
+  OPENAI_MIN_REQUEST_INTERVAL_MS,
+  OPENAI_MAX_REQUESTS_PER_MINUTE,
+  GEMINI_API_BASE_URL,
+  GEMINI_API_KEY,
+  GEMINI_MODEL_BRAIN_ENV,
+  GEMINI_MAX_REQUESTS_PER_MINUTE,
+  SAMBANOVA_API_BASE_URL,
+  SAMBANOVA_API_KEY,
+  SAMBANOVA_MODEL_BRAIN_ENV,
+  SAMBANOVA_MIN_REQUEST_INTERVAL_MS,
+  SAMBANOVA_MAX_REQUESTS_PER_MINUTE,
+  PERSONA_MODEL_ENGINE,
+  PERSONA_MODEL_BRAIN,
+  AI_REQUEST_TIMEOUT_MS,
+  BRAIN_BRIEFING_TIMEOUT_MS,
+  GEMINI_MIN_REQUEST_INTERVAL_MS,
+  GEMINI_429_BASE_BACKOFF_MS,
+  GEMINI_429_MAX_BACKOFF_MS,
+  OPENAI_429_BASE_BACKOFF_MS,
+  OPENAI_429_MAX_BACKOFF_MS,
+  SAMBANOVA_429_BASE_BACKOFF_MS,
+  SAMBANOVA_429_MAX_BACKOFF_MS,
+  RWKV_ENABLED,
+  RWKV_MODEL_PATH,
+  RWKV_TOKENIZER_PATH,
+  RWKV_STRATEGY,
+  RWKV_MAX_NEW_TOKENS,
+  RWKV_TEMPERATURE,
+  RWKV_TOP_P,
+  RWKV_V7_ON,
+  RWKV_PROVIDER_SCRIPT,
+  AUTOMATA_BUNDLE_ROOT,
+  CORTEX_RAG_ENABLED,
+  CORTEX_RAG_PROVIDER,
+  R2R_BASE_URL,
+  R2R_API_KEY,
+  R2R_CORTEX_INGEST_ENDPOINT,
+  R2R_SEARCH_LIMIT,
+  R2R_STATUS_TIMEOUT_MS,
+  R2R_TIMEOUT_MS,
+  TIME_AS_COMPUTE_PROFILE,
+  BRAIN_PLAN_MAX_ATTEMPTS_ENV,
+  BRAIN_PLAN_MAX_ELAPSED_MS_ENV,
+  SCAFFOLD_MAX_CLARIFICATIONS_ENV,
+  PERSONA_PROTOCOL_VERSION,
+  SUPPORTED_EXEC_PROTOCOLS,
+  JOB_RETRY_STAGNATION_LIMIT,
+  JOB_RETRY_NO_PROGRESS_MS,
+  JOB_PROGRESS_MIN_DELTA,
+  JOB_SOFT_TIMEOUT_MS,
+  JOB_RETRY_SAME_REASON_LIMIT,
+  JOB_RETRY_SAME_FINGERPRINT_LIMIT,
+  CORTEX_VALIDATION_MIN_SCORE,
+  CORTEX_VALIDATION_REQUIRE_CORE,
+  CORTEX_VALIDATION_STALL_LIMIT,
+  CORTEX_VALIDATION_REPAIR_MIN_IMPROVEMENT,
+  CORTEX_VALIDATION_REPAIR_STALL_LIMIT,
+  CORTEX_VALIDATION_MAX_RETRIES,
+  CORTEX_BRIEFING_MAX_RETRIES,
+  AUTOMATA_ENABLED,
+  AUTOMATA_STRICT_EXECUTION,
+  AIDER_MAIN_ROOT,
+  POST_EXEC_QUALITY_ENABLED,
+  POST_EXEC_QUALITY_MAX_FILES,
+  POST_EXEC_QUALITY_MAX_ISSUES,
+  POST_EXEC_QUALITY_TIMEOUT_MS,
+  POST_EXEC_QUALITY_ENFORCE_ERRORS,
+  POST_EXEC_QUALITY_ENFORCE_WARNINGS,
+  EXECUTION_ENFORCE_EFFECT_GATE,
+  EXECUTION_ENFORCE_NONZERO_DIFF_ON_EDIT,
+  AUTO_REPAIR_ENABLED,
+  AUTO_REPAIR_MAX_PASSES,
+  AIDER_LINT_TIMEOUT_MS,
+  MEMPALACE_LOCAL_VENV_PYTHON,
+  MEMPALACE_PYTHON_BIN,
+  MEMPALACE_COMMAND_TIMEOUT_MS,
+  MEMPALACE_REPO_CANDIDATES,
+  COMMUNICATION_STYLE_GUIDE,
+  PROVIDER_REQUEST_WINDOW_MS,
+  PERSONA_HUMANIZATION_PROTOCOL,
+  CORTEX_STOPWORDS,
+} = createMainRuntimeConfig({
+  cwd: process.cwd(),
+  dirname: __dirname,
+  env: process.env,
+  fs,
+  normalizeAiProviderName,
+  path,
+  platform: process.platform,
+});
 
-const COMMUNICATION_STYLE_GUIDE = [
-  'Use PT-BR formal, claro e cordial.',
-  'Priorize resposta curta e objetiva no chat.',
-  'Evite jargão técnico quando não for necessário.',
-  'Não use emojis.',
-  'Se a pergunta for informativa, não proponha edição.',
-  'Se for necessário aprofundar tecnicamente, sugira a geração de PDF técnico.',
-].join(' ');
+const providerRateLimiter = createProviderRateLimiter({
+  computeRetryBackoffMs,
+  isTransientTooManyRequestsReason,
+  maxRequestsPerMinute: {
+    gemini: GEMINI_MAX_REQUESTS_PER_MINUTE,
+    openai: OPENAI_MAX_REQUESTS_PER_MINUTE,
+    sambanova: SAMBANOVA_MAX_REQUESTS_PER_MINUTE,
+  },
+  providerRequestWindowMs: PROVIDER_REQUEST_WINDOW_MS,
+});
+const {
+  applyProviderCooldownFromReason,
+  clearProviderCooldown,
+  delayMs,
+  enforceProviderCooldown,
+  enforceProviderRequestsPerMinute,
+  getProviderRequestsPerMinuteLimit,
+  normalizeProviderKey,
+} = providerRateLimiter;
 
-const PROVIDER_REQUEST_WINDOW_MS = 60000;
-const providerRequestTimestampsMs = { gemini: [], sambanova: [] };
-const providerCooldownUntilMs = { gemini: 0, sambanova: 0 };
-
-const PERSONA_HUMANIZATION_PROTOCOL = [
-  'Compreenda a intenção do usuário antes da literalidade do comando.',
-  'Conduza diálogo iterativo com perguntas curtas de clarificação quando houver ambiguidade.',
-  'Se houver múltiplas abordagens, proponha alternativas com prós e contras breves.',
-  'Confirme entendimento antes de iniciar execução técnica.',
-  'Se detectar repetição/loop, mude a estratégia: ofereça opção padrão segura para destravar o fluxo.',
-  'Após cada resposta, sugira próximo passo lógico em linguagem simples.',
-  'Adapte profundidade técnica ao nível de usuário leigo por padrão.',
-  'Evite repetir exatamente o mesmo bloco de perguntas em turnos consecutivos.',
-].join(' ');
-
-const CORTEX_STOPWORDS = new Set([
-  'a',
-  'ao',
-  'aos',
-  'as',
-  'com',
-  'como',
-  'da',
-  'das',
-  'de',
-  'do',
-  'dos',
-  'e',
-  'em',
-  'eu',
-  'na',
-  'nas',
-  'no',
-  'nos',
-  'o',
-  'os',
-  'ou',
-  'para',
-  'por',
-  'que',
-  'se',
-  'sem',
-  'um',
-  'uma',
-  'vou',
-]);
-
-function delayMs(ms) {
-  const wait = Number.isFinite(Number(ms)) ? Math.max(0, Number(ms)) : 0;
-  if (wait <= 0) return Promise.resolve();
-  return new Promise((resolve) => setTimeout(resolve, wait));
-}
-
-function getProviderRequestsPerMinuteLimit(provider) {
-  const normalized = normalizeProviderKey(provider) || String(provider || '').toLowerCase();
-  if (normalized === 'sambanova') {
-    return Math.max(
-      1,
-      Number.isFinite(Number(SAMBANOVA_MAX_REQUESTS_PER_MINUTE)) ? Number(SAMBANOVA_MAX_REQUESTS_PER_MINUTE) : 3
-    );
-  }
-  if (normalized === 'gemini') {
-    return Math.max(
-      1,
-      Number.isFinite(Number(GEMINI_MAX_REQUESTS_PER_MINUTE)) ? Number(GEMINI_MAX_REQUESTS_PER_MINUTE) : 6
-    );
-  }
-  return 0;
-}
-
-async function enforceProviderRequestsPerMinute(provider) {
-  const key = provider === 'sambanova' ? 'sambanova' : 'gemini';
-  const maxPerMinute = getProviderRequestsPerMinuteLimit(provider);
-  if (!Number.isFinite(maxPerMinute) || maxPerMinute <= 0) return;
-
-  while (true) {
-    const now = Date.now();
-    const history = Array.isArray(providerRequestTimestampsMs[key]) ? providerRequestTimestampsMs[key] : [];
-    const alive = history.filter((ts) => Number.isFinite(ts) && now - ts < PROVIDER_REQUEST_WINDOW_MS);
-    providerRequestTimestampsMs[key] = alive;
-
-    if (alive.length < maxPerMinute) {
-      alive.push(now);
-      providerRequestTimestampsMs[key] = alive;
-      return;
-    }
-
-    const oldest = alive[0];
-    const waitMs = Math.max(250, PROVIDER_REQUEST_WINDOW_MS - (now - oldest) + 25);
-    await delayMs(waitMs);
-  }
-}
-
-function normalizeProviderKey(provider) {
-  const raw = String(provider || '').trim().toLowerCase();
-  if (!raw) return null;
-  if (raw.includes('sambanova')) return 'sambanova';
-  if (raw.includes('gemini') || raw.includes('google')) return 'gemini';
-  return null;
-}
-
-async function enforceProviderCooldown(provider) {
-  const key = normalizeProviderKey(provider);
-  if (!key) return;
-  const until = Number(providerCooldownUntilMs[key] || 0);
-  const waitMs = until - Date.now();
-  if (waitMs > 0) await delayMs(waitMs);
-}
-
-function applyProviderCooldownFromReason(provider, reason, attemptFactor = 1) {
-  const key = normalizeProviderKey(provider);
-  if (!key) return;
-  if (!isTransientTooManyRequestsReason(reason)) return;
-  const backoffMs = computeRetryBackoffMs(reason, Math.max(1, Number(attemptFactor) || 1));
-  const nextUntil = Date.now() + Math.max(1000, backoffMs);
-  providerCooldownUntilMs[key] = Math.max(Number(providerCooldownUntilMs[key] || 0), nextUntil);
-}
-
-function clearProviderCooldown(provider) {
-  const key = normalizeProviderKey(provider);
-  if (!key) return;
-  providerCooldownUntilMs[key] = 0;
-}
-
-function resolveTimeAsComputeProfile() {
-  if (['rapido', 'balanceado', 'profundo'].includes(TIME_AS_COMPUTE_PROFILE)) {
-    return TIME_AS_COMPUTE_PROFILE;
-  }
-
-  const ramGb = os.totalmem() / 1024 / 1024 / 1024;
-  if (ramGb <= 10) return 'rapido';
-  if (ramGb <= 24) return 'balanceado';
-  return 'profundo';
-}
-
-function getRuntimeProfileSettings() {
-  const profile = resolveTimeAsComputeProfile();
-  if (profile === 'rapido') {
-    return {
-      profile,
-      brainSampleFilesLimit: 14,
-      engineSampleFilesLimit: 24,
-      memoryContextChars: 1200,
-      maxPromptCharsPerPass: 4200,
-      maxOperationsPerPass: 6,
-      maxRepairPasses: 1,
-      keepAlive: '0s',
-      generationOptions: {
-        num_ctx: 2048,
-        num_batch: 64,
-        num_predict: 700,
-        num_thread: 2,
-        num_gpu: 0,
-        temperature: 0.2,
-      },
-    };
-  }
-  if (profile === 'balanceado') {
-    return {
-      profile,
-      brainSampleFilesLimit: 28,
-      engineSampleFilesLimit: 40,
-      memoryContextChars: 1800,
-      maxPromptCharsPerPass: 7000,
-      maxOperationsPerPass: 8,
-      maxRepairPasses: 1,
-      keepAlive: '30s',
-      generationOptions: {
-        num_ctx: 4096,
-        num_batch: 128,
-        num_predict: 1100,
-        num_thread: 4,
-        temperature: 0.2,
-      },
-    };
-  }
-  return {
-    profile,
-    brainSampleFilesLimit: 40,
-    engineSampleFilesLimit: 60,
-    memoryContextChars: 2400,
-    maxPromptCharsPerPass: 11000,
-    maxOperationsPerPass: 10,
-    maxRepairPasses: 2,
-    keepAlive: '2m',
-    generationOptions: {
-      num_ctx: 8192,
-      num_batch: 256,
-      num_predict: 1800,
-      num_thread: 6,
-      temperature: 0.2,
-    },
-  };
-}
-
-function sanitizePositiveInt(value, fallback) {
-  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
-}
-
-function getBrainBudgetSettings(runtimeSettings) {
-  const defaultAttemptsByProfile = runtimeSettings.profile === 'rapido' ? 1 : 2;
-  const maxAttempts = sanitizePositiveInt(BRAIN_PLAN_MAX_ATTEMPTS_ENV, defaultAttemptsByProfile);
-  const maxElapsedMs = sanitizePositiveInt(BRAIN_PLAN_MAX_ELAPSED_MS_ENV, 480000);
-  const maxClarifications = sanitizePositiveInt(SCAFFOLD_MAX_CLARIFICATIONS_ENV, 1);
-  return {
-    maxAttempts,
-    maxElapsedMs,
-    maxClarifications,
-  };
-}
+const runtimeProfileService = createRuntimeProfileService({
+  brainPlanMaxAttemptsEnv: BRAIN_PLAN_MAX_ATTEMPTS_ENV,
+  brainPlanMaxElapsedMsEnv: BRAIN_PLAN_MAX_ELAPSED_MS_ENV,
+  os,
+  scaffoldMaxClarificationsEnv: SCAFFOLD_MAX_CLARIFICATIONS_ENV,
+  timeAsComputeProfile: TIME_AS_COMPUTE_PROFILE,
+});
+const {
+  getBrainBudgetSettings,
+  getRuntimeProfileSettings,
+  resolveTimeAsComputeProfile,
+  sanitizePositiveInt,
+} = runtimeProfileService;
 
 const commandRunner = createCommandRunner({ spawn });
 const { runCommand } = commandRunner;
+
+const fileTextUtils = createFileTextUtils({ crypto });
+const {
+  clipText,
+  clipTextPreserveLines,
+  hashText,
+  isTextLikeExtension,
+} = fileTextUtils;
+
+const attachmentContextService = createAttachmentContextService({
+  clipTextPreserveLines,
+  fs,
+  isTextLikeExtension,
+  path,
+  runCommand,
+});
+
+const {
+  buildAttachmentsPromptContext,
+  extractAttachmentText,
+} = attachmentContextService;
+
+const projectTerminalService = createProjectTerminalService({
+  fs,
+  path,
+  spawn,
+});
 
 const localDiagnosticsService = createLocalDiagnosticsService({ fs, path });
 const {
@@ -496,6 +342,8 @@ const {
 
 const projectPreviewRuntimeService = createProjectPreviewRuntimeService({
   buildProjectPreviewPlan,
+  fs,
+  path,
   spawn,
 });
 const {
@@ -645,6 +493,26 @@ const {
   shouldUseDefaultScaffoldConfiguration,
 } = cortexBriefingService;
 
+const productOrchestratorService = createProductOrchestratorService({
+  extractRequestedTitle,
+  getSelectedAiProvider,
+  hasEditIntent,
+  hasScaffoldIntent,
+  hasSearchIntent,
+  isButtonColorEditRequest,
+  isFooterInsertRequest,
+  isHydrationMismatchRepairRequest,
+  isLiteralColorReplacementRequest,
+  isThemeColorEditRequest,
+  requestAiProductRouteDecision,
+  resolveExecutionIntent,
+  shouldPreferProjectBlueprint,
+  shouldUseDefaultScaffoldConfiguration,
+});
+const {
+  resolveProductRoute,
+} = productOrchestratorService;
+
 const cortexRenderPassService = createCortexRenderPassService({
   AI_REQUEST_TIMEOUT_MS,
   PERSONA_MODEL_ENGINE,
@@ -667,6 +535,7 @@ const cortexRenderPassService = createCortexRenderPassService({
   getRuntimeProfileSettings,
   hasRequiredProjectBlueprintFiles,
   normalizeRequestedRelativePath,
+  resolveBlueprintMediaAssets: (options) => resolveBlueprintMediaAssets(options),
   shouldPreferProjectBlueprint,
   shouldUseProjectBlueprintFallback,
   tryParseJsonObject,
@@ -723,7 +592,10 @@ const aiRuntimeSettings = createAiRuntimeSettingsService({
   geminiApiKey: GEMINI_API_KEY,
   geminiModelBrain: GEMINI_MODEL_BRAIN_ENV,
   getUserDataPath: () => app.getPath('userData'),
+  openaiApiKey: OPENAI_API_KEY,
+  openaiModelBrain: OPENAI_MODEL_BRAIN_ENV,
   path,
+  pexelsApiKey: PEXELS_API_KEY,
   protectSecret: (value) => getSecretStore().protectSecret(value),
   sambanovaApiKey: SAMBANOVA_API_KEY,
   sambanovaModelBrain: SAMBANOVA_MODEL_BRAIN_ENV,
@@ -731,6 +603,9 @@ const aiRuntimeSettings = createAiRuntimeSettingsService({
 });
 
 const {
+  getEffectiveOpenAiApiKey,
+  getEffectiveOpenAiModel,
+  getEffectivePexelsApiKey,
   getEffectiveGeminiApiKey,
   getEffectiveGeminiModel,
   getEffectiveSambaNovaApiKey,
@@ -738,11 +613,69 @@ const {
   listCustomApiProfiles,
   readSettings: readAiRuntimeSettings,
   sanitizeCustomApiProfiles,
+  sanitizeOpenAiModelName,
   sanitizeGeminiModelName,
   sanitizeSambaNovaModelName,
   setSelectedProvider: setSelectedAiProvider,
   writeSettings: writeAiRuntimeSettings,
 } = aiRuntimeSettings;
+
+const postgresUserStore = createPostgresUserStore({
+  databaseUrl: FABER_DATABASE_URL,
+  ssl: FABER_POSTGRES_SSL ? { rejectUnauthorized: false } : null,
+});
+
+const platformAccountService = createPlatformAccountService({
+  allowDevEmailCodes: FABER_AUTH_DEV_CODES,
+  appBaseUrl: FABER_APP_BASE_URL,
+  databaseUrl: FABER_DATABASE_URL,
+  fetchFn: fetch,
+  googleClientId: GOOGLE_CLIENT_ID,
+  googleClientSecret: GOOGLE_CLIENT_SECRET,
+  googleRedirectUri: GOOGLE_REDIRECT_URI,
+  pexelsApiKey: PEXELS_API_KEY,
+  protectSecret: (value) => getSecretStore().protectSecret(value),
+  sessionSecret: FABER_SESSION_SECRET,
+  store: postgresUserStore,
+  unprotectSecret: (value) => getSecretStore().unprotectSecret(value),
+});
+
+const pexelsAssetService = createPexelsAssetService({
+  fetchFn: fetch,
+  getApiKey: () => {
+    if (platformAccountService.getCurrentSession()) {
+      const platformKey = platformAccountService.getPlatformPexelsApiKey();
+      if (platformKey) return platformKey;
+    }
+    return getEffectivePexelsApiKey();
+  },
+});
+
+const platformMediaService = createPlatformMediaService({
+  accountService: platformAccountService,
+  getLocalPexelsApiKey: () => getEffectivePexelsApiKey(),
+  localAssetService: pexelsAssetService,
+});
+
+const platformBackendService = createPlatformBackendService({
+  accountService: platformAccountService,
+  appendAuditEvent: (...args) => appendAuditEvent(...args),
+  host: FABER_BACKEND_HOST,
+  mediaService: platformMediaService,
+  onAuthCompleted: () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.send('account:event', { type: 'signed-in' });
+    }
+  },
+  port: Number.isFinite(FABER_BACKEND_PORT) ? FABER_BACKEND_PORT : 37418,
+});
+
+const {
+  resolveBlueprintMediaAssets,
+} = platformMediaService;
 
 function resolveCustomProviderKind(rawName = '') {
   const value = String(rawName || '').trim().toLowerCase();
@@ -793,6 +726,8 @@ const remoteProviderClients = createRemoteProviderClients({
   AI_REQUEST_TIMEOUT_MS,
   GEMINI_API_BASE_URL,
   GEMINI_MIN_REQUEST_INTERVAL_MS,
+  OPENAI_API_BASE_URL,
+  OPENAI_MIN_REQUEST_INTERVAL_MS,
   RWKV_TEMPERATURE,
   RWKV_TOP_P,
   SAMBANOVA_API_BASE_URL,
@@ -805,17 +740,21 @@ const remoteProviderClients = createRemoteProviderClients({
   fetchFn: fetch,
   getEffectiveGeminiApiKey,
   getEffectiveGeminiModel,
+  getEffectiveOpenAiApiKey,
+  getEffectiveOpenAiModel,
   getEffectiveSambaNovaApiKey,
   getEffectiveSambaNovaModel,
   getSelectedCustomApiProfile,
   resolveCustomApiEndpoint,
   resolveCustomProviderKind,
+  sanitizeOpenAiModelName,
   sanitizeSambaNovaModelName,
 });
 
 const {
   callCustomProviderChat,
   callGeminiChat,
+  callOpenAiChat,
   callSambaNovaChat,
 } = remoteProviderClients;
 
@@ -838,65 +777,20 @@ const rwkvProviderClient = createRwkvProviderClient({
 
 const { callRwkvProviderChat } = rwkvProviderClient;
 
-function ensureProjectsStore() {
-  const storeDir = app.getPath('userData');
-  const storePath = path.join(storeDir, 'projects.json');
+const projectStore = createProjectStore({
+  fs,
+  getUserDataPath: () => app.getPath('userData'),
+  path,
+});
 
-  if (!fs.existsSync(storeDir)) {
-    fs.mkdirSync(storeDir, { recursive: true });
-  }
-
-  if (!fs.existsSync(storePath)) {
-    fs.writeFileSync(storePath, JSON.stringify({ projects: [] }, null, 2), 'utf8');
-  }
-
-  return storePath;
-}
-
-function normalizeProjectRecord(project = {}) {
-  return {
-    id: project.id,
-    name: project.name || 'Projeto',
-    rootPath: project.rootPath || '',
-    createdAt: project.createdAt || new Date().toISOString(),
-    state: ['active', 'archived', 'deleted'].includes(project.state) ? project.state : 'active',
-    summary: typeof project.summary === 'string' ? project.summary : '',
-    archivedAt: project.archivedAt || null,
-    deletedAt: project.deletedAt || null,
-  };
-}
-
-function readProjectsSnapshot() {
-  const storePath = ensureProjectsStore();
-  const raw = fs.readFileSync(storePath, 'utf8');
-  const parsed = JSON.parse(raw);
-  const projects = Array.isArray(parsed.projects) ? parsed.projects.map(normalizeProjectRecord) : [];
-  return { projects };
-}
-
-function writeProjectsSnapshot(snapshot) {
-  const storePath = ensureProjectsStore();
-  const projects = Array.isArray(snapshot && snapshot.projects) ? snapshot.projects.map(normalizeProjectRecord) : [];
-  fs.writeFileSync(storePath, JSON.stringify({ projects }, null, 2), 'utf8');
-}
-
-function readProjectsByState(state = 'active') {
-  const snap = readProjectsSnapshot();
-  return snap.projects.filter((p) => p.state === state);
-}
-
-function readProjects() {
-  return readProjectsByState('active');
-}
-
-function writeProjects(projects) {
-  const snap = readProjectsSnapshot();
-  const nonActive = snap.projects.filter((p) => p.state !== 'active');
-  const nextActive = Array.isArray(projects)
-    ? projects.map((p) => normalizeProjectRecord({ ...p, state: 'active', archivedAt: null, deletedAt: null }))
-    : [];
-  writeProjectsSnapshot({ projects: [...nonActive, ...nextActive] });
-}
+const {
+  normalizeProjectRecord,
+  readProjects,
+  readProjectsByState,
+  readProjectsSnapshot,
+  writeProjects,
+  writeProjectsSnapshot,
+} = projectStore;
 
 const orchestrationStateStore = createOrchestrationStateStore({
   CORTEX_BRIEFING_MAX_RETRIES,
@@ -946,6 +840,22 @@ const {
   upsertCortexTopic,
 } = orchestrationStateStore;
 
+const projectContextService = createProjectContextService({
+  CORTEX_STOPWORDS,
+  MAX_CORTEX_CONTEXT_ITEMS,
+  clipText,
+  clipTextPreserveLines,
+  fs,
+  getCortexLearning,
+  path,
+});
+
+const {
+  buildCortexPromptContext,
+  buildProjectEvolutionContext,
+  extractIntentTerms,
+} = projectContextService;
+
 const cortexMemorySyncService = createCortexMemorySyncService({
   appendAuditEvent,
   clipText,
@@ -956,6 +866,12 @@ const cortexMemorySyncService = createCortexMemorySyncService({
 const {
   syncCortexMemory,
 } = cortexMemorySyncService;
+
+const automataContractLedgerService = createAutomataContractLedgerService({
+  fs,
+  path,
+  getUserDataPath: () => app.getPath('userData'),
+});
 
 const knowledgeRuntimeService = createKnowledgeRuntimeService({
   appendAuditEvent,
@@ -972,241 +888,6 @@ const {
   searchKnowledge,
   syncKnowledgeFromCortex,
 } = knowledgeRuntimeService;
-
-function extractIntentTerms(text) {
-  const tokens = String(text || '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && !CORTEX_STOPWORDS.has(token));
-  return [...new Set(tokens)];
-}
-
-function scoreKnowledgeLine(line, intentTerms, recencyBoost = 0) {
-  const normalized = String(line || '').toLowerCase();
-  if (!normalized) return 0;
-  let score = recencyBoost;
-  for (const term of intentTerms) {
-    if (normalized.includes(term)) score += 2;
-  }
-  return score;
-}
-
-function buildCortexPromptContext(projectId, userMessage, runtimeSettings) {
-  if (!projectId) {
-    return {
-      available: false,
-      reason: 'missing_project_id',
-      contextText: '',
-    };
-  }
-
-  const learningResult = getCortexLearning(projectId);
-  if (!learningResult.ok || !learningResult.learning) {
-    return {
-      available: false,
-      reason: 'learning_unavailable',
-      contextText: '',
-    };
-  }
-
-  const learning = learningResult.learning;
-  const items = [];
-  const personaEntries = Array.isArray(learning.persona)
-    ? learning.persona
-    : Array.isArray(learning.ia2)
-      ? learning.ia2
-      : [];
-  const executorEntries = Array.isArray(learning.executor)
-    ? learning.executor
-    : Array.isArray(learning.ia1)
-      ? learning.ia1
-      : [];
-  const eventEntries = Array.isArray(learning.events) ? learning.events : [];
-  const intentTerms = extractIntentTerms(userMessage);
-
-  personaEntries.forEach((text, index) => {
-    items.push({
-      source: 'persona',
-      text: String(text || ''),
-      recency: index + 1,
-    });
-  });
-  executorEntries.forEach((text, index) => {
-    items.push({
-      source: 'executor',
-      text: String(text || ''),
-      recency: index + 1,
-    });
-  });
-  eventEntries.forEach((event, index) => {
-    const base = event && (event.summary || event.text || event.type) ? event.summary || event.text || event.type : '';
-    items.push({
-      source: 'event',
-      text: String(base || ''),
-      recency: index + 1,
-    });
-  });
-
-  const scored = items
-    .map((item) => {
-      const recencyBoost = Math.max(0, item.recency) * 0.02;
-      return {
-        ...item,
-        score: scoreKnowledgeLine(item.text, intentTerms, recencyBoost),
-      };
-    })
-    .filter((item) => item.text.length > 0)
-    .sort((a, b) => b.score - a.score);
-
-  if (!scored.length) {
-    return {
-      available: false,
-      reason: 'learning_empty',
-      contextText: '',
-    };
-  }
-
-  const limit = Math.min(MAX_CORTEX_CONTEXT_ITEMS, runtimeSettings.profile === 'rapido' ? 6 : 10);
-  const selected = scored.slice(0, limit);
-  const contextText = selected.map((item) => `[${item.source}] ${clipText(item.text, 260)}`).join('\n');
-
-  return {
-    available: true,
-    reason: null,
-    selectedCount: selected.length,
-    contextText,
-  };
-}
-
-function clipTextPreserveLines(input, max = 2600) {
-  const normalized = String(input || '')
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    .replace(/\u0000/g, '')
-    .replace(/[\u2012\u2013\u2014\u2015]/g, '-')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-  if (normalized.length <= max) return normalized;
-  return `${normalized.slice(0, Math.max(0, max - 14)).trim()}\n\n[...truncado]`;
-}
-
-
-function isProjectContextCandidateFile(relPath = '') {
-  const lower = String(relPath || '').toLowerCase();
-  return /(^|\/)index\.(html|php)$/.test(lower) ||
-    /(^|\/)(style|styles)\.(css|scss)$/.test(lower) ||
-    /(^|\/)(script|main|app)\.(js|ts|jsx|tsx)$/.test(lower) ||
-    /(^|\/)(readme\.md|package\.json|composer\.json|vite\.config\.(js|ts)|next\.config\.(js|ts)|tailwind\.config\.(js|ts))$/.test(lower) ||
-    /\.(html|css|scss|js|ts|jsx|tsx|php|json|md)$/i.test(lower);
-}
-
-function tokenizeProjectIntentKeywords(message = '') {
-  const base = String(message || '').toLowerCase();
-  const words = base
-    .replace(/[^a-z0-9à-ÿ\s_-]/gi, ' ')
-    .split(/\s+/)
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .filter((entry) => entry.length >= 4)
-    .slice(0, 40);
-  const seeded = [
-    'index',
-    'style',
-    'css',
-    'script',
-    'javascript',
-    'html',
-    'landing',
-    'faq',
-    'plano',
-    'planos',
-    'whatsapp',
-    'contato',
-    'sobre',
-    'servicos',
-    'depoimentos',
-    'responsivo',
-    'mobile',
-    'layout',
-    'header',
-    'footer',
-    'cta',
-    'formulario',
-    'agendamento',
-  ];
-  return Array.from(new Set([...seeded, ...words]));
-}
-
-function scoreProjectContextFile(relPath = '', keywords = []) {
-  const lower = String(relPath || '').toLowerCase();
-  let score = 0;
-  if (/^index\.(html|php)$/.test(lower)) score += 40;
-  if (/(^|\/)(style|styles)\.(css|scss)$/.test(lower)) score += 34;
-  if (/(^|\/)(script|main|app)\.(js|ts|jsx|tsx)$/.test(lower)) score += 30;
-  if (/readme\.md$/.test(lower)) score += 26;
-  if (/\/pages\//.test(lower)) score += 20;
-  if (/\.(html|php)$/.test(lower)) score += 14;
-  if (/\.(css|scss)$/.test(lower)) score += 12;
-  if (/\.(js|ts|jsx|tsx)$/.test(lower)) score += 10;
-
-  for (const key of keywords || []) {
-    if (!key) continue;
-    if (lower.includes(String(key).toLowerCase())) score += 5;
-  }
-
-  if (lower.includes('node_modules/') || lower.includes('/dist/') || lower.includes('/build/')) score -= 100;
-  return score;
-}
-
-function buildProjectEvolutionContext(projectInfo, userMessage, { maxFiles = 8, maxCharsPerFile = 900, totalMaxChars = 5200 } = {}) {
-  if (!projectInfo || !projectInfo.rootPath || !Array.isArray(projectInfo.files) || !projectInfo.files.length) return '';
-
-  const keywords = tokenizeProjectIntentKeywords(userMessage);
-  const candidates = projectInfo.files
-    .map((entry) => String(entry || '').replace(/\\/g, '/'))
-    .filter(Boolean)
-    .filter((entry) => isProjectContextCandidateFile(entry))
-    .map((entry) => ({
-      relPath: entry,
-      score: scoreProjectContextFile(entry, keywords),
-    }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, Math.max(maxFiles * 3, maxFiles));
-
-  const blocks = [];
-  let usedChars = 0;
-
-  for (const candidate of candidates) {
-    if (blocks.length >= maxFiles || usedChars >= totalMaxChars) break;
-    const absPath = path.join(projectInfo.rootPath, candidate.relPath);
-    if (!fs.existsSync(absPath)) continue;
-
-    let content = '';
-    try {
-      const stat = fs.statSync(absPath);
-      if (!stat.isFile() || stat.size > 220000) continue;
-      content = fs.readFileSync(absPath, 'utf8');
-    } catch {
-      continue;
-    }
-
-    const excerpt = clipTextPreserveLines(content, maxCharsPerFile);
-    if (!excerpt) continue;
-
-    const block = `[${candidate.relPath}]\n${excerpt}`;
-    const blockLen = block.length + 2;
-    if (usedChars + blockLen > totalMaxChars && blocks.length > 0) break;
-
-    blocks.push(block);
-    usedChars += blockLen;
-  }
-
-  return blocks.join('\n\n');
-}
 
 function normalizeRequestedRelativePath(rawPath) {
   if (!rawPath) return null;
@@ -1270,154 +951,6 @@ function wantsTechnicalPdf(userMessage, contextHint = {}) {
   if (!contextHint.awaitingTechnicalPdfConfirmation) return false;
   return isAffirmativeShortReply(normalized) || isDocumentFollowUp(normalized);
 }
-
-function hashText(text) {
-  return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
-}
-
-function isTextLikeExtension(ext) {
-  return [
-    '.txt',
-    '.md',
-    '.markdown',
-    '.js',
-    '.ts',
-    '.tsx',
-    '.jsx',
-    '.json',
-    '.py',
-    '.php',
-    '.java',
-    '.yml',
-    '.yaml',
-    '.xml',
-    '.html',
-    '.css',
-    '.scss',
-    '.log',
-  ].includes(ext);
-}
-
-function clipText(input, max = 4000) {
-  const normalized = String(input || '').replace(/\s+/g, ' ').trim();
-  if (normalized.length <= max) return normalized;
-  return `${normalized.slice(0, max - 3).trim()}...`;
-}
-
-const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.heic', '.heif', '.tiff', '.tif']);
-
-function isImageLikeExtension(ext) {
-  return IMAGE_EXTENSIONS.has(String(ext || '').toLowerCase());
-}
-
-async function extractImageTextViaMdls(filePath) {
-  const mdlsResult = await runCommand('mdls', ['-name', 'kMDItemTextContent', '-raw', filePath], {
-    timeoutMs: 8000,
-  });
-  if (!mdlsResult.ok) return '';
-  const text = String(mdlsResult.stdout || '').trim();
-  if (!text || text === '(null)') return '';
-  return clipTextPreserveLines(text, 12000);
-}
-
-async function extractImageTextViaVision(filePath) {
-  const swiftScript = [
-    'import Foundation',
-    'import Vision',
-    'import AppKit',
-    'let path = CommandLine.arguments.last ?? ""',
-    'if path.isEmpty { exit(2) }',
-    'let url = URL(fileURLWithPath: path)',
-    'guard let image = NSImage(contentsOf: url) else { exit(3) }',
-    'var rect = CGRect(origin: .zero, size: image.size)',
-    'guard let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { exit(4) }',
-    'let request = VNRecognizeTextRequest()',
-    'request.recognitionLevel = .accurate',
-    'request.usesLanguageCorrection = true',
-    'request.recognitionLanguages = ["pt-BR", "en-US"]',
-    'let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])',
-    'do {',
-    '  try handler.perform([request])',
-    '  let items = (request.results as? [VNRecognizedTextObservation] ?? [])',
-    '    .compactMap { $0.topCandidates(1).first?.string }',
-    '    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }',
-    '    .filter { !$0.isEmpty }',
-    '  print(items.joined(separator: "\n"))',
-    '} catch {',
-    '  exit(5)',
-    '}',
-  ].join('\n');
-
-  const swiftResult = await runCommand('xcrun', ['swift', '-e', swiftScript, filePath], {
-    timeoutMs: 22000,
-  });
-  if (!swiftResult.ok) return '';
-  const text = String(swiftResult.stdout || '').trim();
-  if (!text) return '';
-  return clipTextPreserveLines(text, 12000);
-}
-
-async function extractAttachmentText(filePath) {
-  const ext = path.extname(filePath || '').toLowerCase();
-  if (!filePath || !fs.existsSync(filePath)) return '';
-
-  if (isTextLikeExtension(ext)) {
-    const raw = fs.readFileSync(filePath, 'utf8');
-    return clipTextPreserveLines(raw, 12000);
-  }
-
-  if (ext === '.pdf') {
-    const text = await extractImageTextViaMdls(filePath);
-    if (text) return text;
-  }
-
-  if (isImageLikeExtension(ext)) {
-    const mdlsText = await extractImageTextViaMdls(filePath);
-    if (mdlsText) return mdlsText;
-
-    const visionText = await extractImageTextViaVision(filePath);
-    if (visionText) return visionText;
-  }
-
-  return '';
-}
-
-async function buildAttachmentsPromptContext(attachments = [], { maxAttachments = 4, maxCharsPerAttachment = 1200, totalMaxChars = 4200 } = {}) {
-  if (!Array.isArray(attachments) || !attachments.length) return '';
-
-  const selected = attachments
-    .filter((entry) => entry && typeof entry === 'object')
-    .filter((entry) => typeof entry.path === 'string' && entry.path.trim())
-    .slice(0, Math.max(1, maxAttachments));
-
-  if (!selected.length) return '';
-
-  const blocks = [];
-  let usedChars = 0;
-
-  for (const attachment of selected) {
-    const filePath = String(attachment.path || '').trim();
-    if (!filePath) continue;
-
-    const extracted = await extractAttachmentText(filePath);
-    if (!extracted) continue;
-
-    const name = attachment.name || path.basename(filePath);
-    const type = attachment.type || path.extname(filePath).slice(1) || 'anexo';
-    const excerpt = clipTextPreserveLines(extracted, Math.max(240, maxCharsPerAttachment));
-    if (!excerpt) continue;
-
-    const block = `[${name} | ${type}]\n${excerpt}`;
-    const blockLen = block.length + 2;
-    if (usedChars + blockLen > totalMaxChars && blocks.length > 0) break;
-
-    blocks.push(block);
-    usedChars += blockLen;
-  }
-
-  return blocks.join('\n\n');
-}
-
 
 async function processCortexLearningPayload({ projectId, userMessage, attachments = [], projectInfo, topic = 'geral' }) {
   if (!projectId) {
@@ -1536,59 +1069,6 @@ function buildVisibleReportsDir(projectInfo) {
   return fallback;
 }
 
-function buildAppendDiffPreview(targetFile, previousContent, appendedBlock) {
-  const previousLinesCount = previousContent.length ? previousContent.split('\n').length : 0;
-  const addedLines = appendedBlock.split('\n');
-  const header = [
-    `--- a/${targetFile}`,
-    `+++ b/${targetFile}`,
-    `@@ -${previousLinesCount},0 +${previousLinesCount + 1},${addedLines.length} @@`,
-  ];
-  const body = addedLines.map((line) => `+${line}`);
-  return [...header, ...body].join('\n');
-}
-
-function buildWriteFileDiffPreview(targetFile, previousContent, nextContent) {
-  const previousLines = previousContent.length ? previousContent.split('\n') : [];
-  const nextLines = nextContent.split('\n');
-  const header = [
-    `--- a/${targetFile}`,
-    `+++ b/${targetFile}`,
-    `@@ -1,${previousLines.length} +1,${nextLines.length} @@`,
-  ];
-  const body = [
-    ...previousLines.map((line) => `-${line}`),
-    ...nextLines.map((line) => `+${line}`),
-  ];
-  return [...header, ...body].join('\n');
-}
-
-function buildOperationBatchDiffPreview(operations = []) {
-  const chunks = [];
-  for (const operation of operations) {
-    if (operation.op === 'mkdir') {
-      chunks.push(`+++ dir/${operation.path}`);
-      continue;
-    }
-
-    if (operation.op === 'append_file') {
-      const lines = String(operation.content || '').split('\n');
-      const header = [`--- a/${operation.path}`, `+++ b/${operation.path}`, '@@ append @@'];
-      const body = lines.map((line) => `+${line}`).slice(0, 120);
-      chunks.push([...header, ...body].join('\n'));
-      continue;
-    }
-
-    if (operation.op === 'write_file') {
-      const lines = String(operation.content || '').split('\n').slice(0, 120);
-      const header = [`--- a/${operation.path}`, `+++ b/${operation.path}`, `@@ -0,0 +1,${lines.length} @@`];
-      const body = lines.map((line) => `+${line}`);
-      chunks.push([...header, ...body].join('\n'));
-    }
-  }
-  return chunks.join('\n');
-}
-
 function hasScaffoldIntent(userMessage) {
   const normalized = String(userMessage || '').toLowerCase();
   const buildVerb = /\b(crie|criar|gere|gerar|monte|montar|construa|construir|implemente|implementar|desenvolva|desenvolver|faca|fa[cç]a|produza|produzir)\b/.test(
@@ -1687,6 +1167,7 @@ function buildConversationOnlyPlan(userMessage = '') {
 
 function formatProviderDisplayName(provider) {
   const key = String(provider || '').toLowerCase();
+  if (key === 'openai') return 'OpenAI API';
   if (key === 'gemini') return 'Gemini API';
   if (key === 'sambanova') return 'SambaNova API';
   if (key === 'rwkv') return 'RWKV Local';
@@ -1700,6 +1181,12 @@ function buildAiProviderUnavailableMessage(status = {}) {
 
   if (reason === 'gemini_api_key_missing') {
     return 'A Persona não respondeu porque o Gemini está selecionado, mas nenhuma chave Gemini válida está configurada.';
+  }
+  if (reason === 'openai_api_key_missing') {
+    return 'A Persona não respondeu porque a OpenAI está selecionada, mas nenhuma chave OpenAI válida está configurada.';
+  }
+  if (reason === 'openai_model_missing') {
+    return 'A Persona não respondeu porque a OpenAI está selecionada, mas nenhum modelo OpenAI válido está configurado.';
   }
   if (reason === 'sambanova_api_key_missing') {
     return 'A Persona não respondeu porque a SambaNova está selecionada, mas nenhuma chave SambaNova válida está configurada.';
@@ -1778,6 +1265,67 @@ function looksLikeInvalidPersonaText(text) {
   return repeatedTinyPattern || mostlySymbols;
 }
 
+function looksLikeRouteDecisionJson(text) {
+  const normalized = String(text || '').trim();
+  return /^\s*[{`]/.test(normalized) && /"decision"\s*:/i.test(normalized);
+}
+
+function readLooseJsonStringValue(text, key) {
+  const source = String(text || '');
+  const keyPattern = new RegExp(`"${key}"\\s*:\\s*"`, 'i');
+  const match = keyPattern.exec(source);
+  if (!match) return '';
+
+  let value = '';
+  let escaped = false;
+  for (let index = match.index + match[0].length; index < source.length; index += 1) {
+    const char = source[index];
+    if (escaped) {
+      value += `\\${char}`;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') break;
+    value += char;
+  }
+
+  if (!value) return '';
+  try {
+    return JSON.parse(`"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
+  } catch {
+    return value
+      .replace(/\\n/g, '\n')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\')
+      .trim();
+  }
+}
+
+function tryRecoverPersonaRouteDecisionFromText(rawText, userMessage = '') {
+  const text = String(rawText || '').trim();
+  if (!looksLikeRouteDecisionJson(text)) return null;
+
+  const decision =
+    readLooseJsonStringValue(text, 'decision') ||
+    ((text.match(/"decision"\s*:\s*("?)(chat|clarify|execute)\1/i) || [])[2] || '');
+  const normalizedDecision = String(decision || '').trim().toLowerCase();
+  if (!['chat', 'clarify', 'execute'].includes(normalizedDecision)) return null;
+
+  return normalizePersonaRouteDecision({
+    decision: normalizedDecision,
+    response: readLooseJsonStringValue(text, 'response'),
+    executionMessage:
+      readLooseJsonStringValue(text, 'executionMessage') ||
+      readLooseJsonStringValue(text, 'execution_request') ||
+      userMessage,
+    confidence: Number((text.match(/"confidence"\s*:\s*([0-9.]+)/i) || [])[1]),
+  }, userMessage);
+}
+
 function formatConversationMessagesForPrompt(messages = []) {
   if (!Array.isArray(messages) || !messages.length) return 'Histórico recente: indisponível.';
   const lines = messages
@@ -1824,6 +1372,148 @@ function normalizePersonaRouteDecision(rawRoute, userMessage = '') {
   };
 }
 
+function formatProductContractForPrompt(productContract = {}) {
+  const capabilities = productContract && productContract.capabilities ? productContract.capabilities : {};
+  const lines = Object.entries(capabilities).map(([key, value]) => {
+    const modes = Array.isArray(value.modes) && value.modes.length ? ` modos=${value.modes.join(',')}` : '';
+    const intent = value.executionIntent ? ` intent=${value.executionIntent}` : '';
+    return `- ${key}:${intent}${modes} :: ${value.description || ''}`;
+  });
+  const rules = Array.isArray(productContract.rules) ? productContract.rules.map((rule) => `- ${rule}`) : [];
+  return [
+    `Versao: ${productContract.schemaVersion || 'product-route-v1'}`,
+    'Capacidades:',
+    lines.join('\n') || '- indisponivel',
+    'Regras:',
+    rules.join('\n') || '- indisponivel',
+  ].join('\n');
+}
+
+function formatProductFactsForPrompt(productFacts = {}) {
+  const signals = productFacts && productFacts.signals ? productFacts.signals : {};
+  return JSON.stringify(
+    {
+      projectState: productFacts.projectState || 'unknown',
+      executionIntent: productFacts.executionIntent || '',
+      hasProject: Boolean(productFacts.hasProject),
+      signals,
+    },
+    null,
+    2
+  );
+}
+
+async function requestAiProductRouteDecision({
+  projectInfo,
+  userMessage = '',
+  sourceMessage = '',
+  attachments = [],
+  contextHint = null,
+  conversationMessages = [],
+  productContract = {},
+  productFacts = {},
+} = {}) {
+  const provider = getSelectedAiProvider();
+  const status = await getAiRuntimeStatus().catch((error) => ({
+    ok: false,
+    provider,
+    reason: 'runtime_status_error',
+    message: error && error.message ? error.message : String(error || ''),
+  }));
+
+  if (!status || !status.ok || !status.ready) {
+    return {
+      ok: false,
+      providerUnavailable: true,
+      provider,
+      reason: status && status.reason ? status.reason : 'provider_not_ready',
+    };
+  }
+
+  const timeoutMs = provider === 'rwkv' ? Math.min(AI_REQUEST_TIMEOUT_MS, 120000) : Math.min(AI_REQUEST_TIMEOUT_MS, 45000);
+  const projectSummary = projectInfo
+    ? {
+        rootPath: projectInfo.rootPath || null,
+        stacks: projectInfo.stacks || [],
+        totalFiles: projectInfo.totalFiles || 0,
+        sampleFiles: (projectInfo.files || []).slice(0, 18),
+      }
+    : null;
+  const history = formatConversationMessagesForPrompt(conversationMessages);
+  const attachmentSummary = Array.isArray(attachments) && attachments.length
+    ? attachments.map((item) => `${item.name || 'anexo'} (${item.type || 'tipo desconhecido'})`).join(', ')
+    : 'nenhum';
+
+  const systemPrompt = [
+    'Voce e o Product Router do Faber Code.',
+    'Sua unica funcao e interpretar o pedido do usuario contra o contrato de capacidades do produto.',
+    'Voce nao executa, nao promete que arquivos foram alterados e nao inventa ferramentas fora do contrato.',
+    'Responda somente JSON valido.',
+    'A decisao final ainda sera validada por um policy gate deterministico.',
+    'Use execute apenas quando houver uma capacidade clara do Faber Code para atender o pedido.',
+    'Use clarify quando faltar informacao de produto ou quando o pedido conflitar com o estado do projeto.',
+    'Use chat para conversa, pergunta conceitual ou pedido que nao exige acao em arquivos/ferramentas.',
+  ].join(' ');
+
+  const userPrompt = [
+    'Contrato de produto:',
+    formatProductContractForPrompt(productContract),
+    '',
+    `Mensagem atual: ${String(userMessage || '').trim() || '[mensagem vazia]'}`,
+    `Mensagem consolidada: ${String(sourceMessage || userMessage || '').trim() || '[mensagem vazia]'}`,
+    projectSummary ? `Projeto aberto: ${JSON.stringify(projectSummary)}` : 'Projeto aberto: nenhum.',
+    `Fatos determinísticos: ${formatProductFactsForPrompt(productFacts)}`,
+    history,
+    contextHint ? `Contexto do runtime: ${JSON.stringify(contextHint).slice(0, 1600)}` : 'Contexto do runtime: nenhum.',
+    `Anexos: ${attachmentSummary}`,
+    '',
+    'Formato obrigatorio:',
+    '{',
+    '  "decision": "chat|clarify|execute",',
+    '  "capability": "conversation|create_project|edit_project|search_project|diagnose_project|project_tools",',
+    '  "mode": "faber_blueprint|cortex_scaffold|deterministic_patch|cortex_incremental_edit|local_search|local_diagnostics|terminal|preview|git|runner|ai_router",',
+    '  "executionIntent": "init_project|edit_project|search_project|diagnose_project|tool_action",',
+    '  "response": "resposta curta para o usuario",',
+    '  "executionMessage": "pedido tecnico consolidado quando decision=execute",',
+    '  "missingSlots": ["campo faltante opcional"],',
+    '  "confidence": 0.0',
+    '}',
+  ].join('\n');
+
+  try {
+    const raw = await callPersonaProviderChat(
+      PERSONA_MODEL_BRAIN,
+      [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      timeoutMs,
+      { options: { num_predict: 650 } }
+    );
+    const parsed = tryParseJsonObject(raw);
+    if (parsed && typeof parsed === 'object') {
+      return {
+        ...parsed,
+        provider,
+        rawText: raw,
+      };
+    }
+    return {
+      ok: false,
+      provider,
+      invalidOutput: true,
+      rawText: sanitizeAssistantText(raw, ''),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      provider,
+      providerUnavailable: true,
+      errorMessage: error && error.message ? error.message : String(error || ''),
+    };
+  }
+}
+
 async function requestPersonaRouteDecision({ projectInfo, userMessage = '', attachments = [], contextHint = null, conversationMessages = [] }) {
   const provider = getSelectedAiProvider();
   const defaultsAuthorized = shouldUseDefaultScaffoldConfiguration(userMessage);
@@ -1833,7 +1523,9 @@ async function requestPersonaRouteDecision({ projectInfo, userMessage = '', atta
     (Boolean(extractRequestedTitle(userMessage)) ||
       isButtonColorEditRequest(userMessage) ||
       isFooterInsertRequest(userMessage) ||
-      isHydrationMismatchRepairRequest(userMessage));
+      isHydrationMismatchRepairRequest(userMessage) ||
+      isLiteralColorReplacementRequest(userMessage) ||
+      isThemeColorEditRequest(userMessage));
   if (deterministicEditIntent) {
     return {
       ok: true,
@@ -1924,6 +1616,7 @@ async function requestPersonaRouteDecision({ projectInfo, userMessage = '', atta
     'Se o usuário autorizou defaults ou disse para seguir depois de alinhamento suficiente, escolha execute em vez de fazer nova rodada de perguntas.',
     'Use clarify apenas quando faltar decisão de produto/design que bloqueia execução segura; não use clarify para bugs técnicos que podem ser diagnosticados nos arquivos locais.',
     'Se escolher execute, explique brevemente o que vai analisar e defina executionMessage com o pedido técnico consolidado.',
+    'Mantenha response e executionMessage curtos para evitar JSON truncado.',
     'Use português natural, acolhedor e direto; evite respostas robóticas como "vou alterar" quando nenhuma alteração foi aplicada ainda.',
   ].join(' ');
 
@@ -1961,10 +1654,11 @@ async function requestPersonaRouteDecision({ projectInfo, userMessage = '', atta
         { role: 'user', content: userPrompt },
       ],
       timeoutMs,
-      { options: { num_predict: 220 } }
+      { options: { num_predict: 700 } }
     );
     const parsed = tryParseJsonObject(raw);
-    let normalized = normalizePersonaRouteDecision(parsed, userMessage);
+    let normalized = normalizePersonaRouteDecision(parsed, userMessage) ||
+      tryRecoverPersonaRouteDecisionFromText(raw, userMessage);
     if (normalized && normalized.decision === 'clarify' && shouldForceExecutionFromLocalDiagnostics({
       userMessage,
       projectInfo,
@@ -1991,7 +1685,7 @@ async function requestPersonaRouteDecision({ projectInfo, userMessage = '', atta
       };
     }
 
-    const fallbackResponse = looksLikeInvalidPersonaText(raw)
+    const fallbackResponse = looksLikeInvalidPersonaText(raw) || looksLikeRouteDecisionJson(raw)
       ? 'A IA selecionada respondeu fora de um formato legível. Não iniciei execução nem alterei arquivos; tente novamente com outro provedor ou ajuste a configuração da IA.'
       : sanitizeAssistantText(
           raw,
@@ -2430,6 +2124,7 @@ function parseRetryAfterMs(reason) {
 
 function detectProviderFromReason(reason) {
   const text = String(reason || '').toLowerCase();
+  if (text.includes('openai')) return 'openai';
   if (text.includes('sambanova')) return 'sambanova';
   if (text.includes('gemini') || text.includes('google')) return 'gemini';
   return 'generic';
@@ -2456,6 +2151,11 @@ function computeRetryBackoffMs(reason, stagnationCount) {
   if (provider === 'gemini') {
     const raw = GEMINI_429_BASE_BACKOFF_MS * Math.pow(2, exp);
     return Math.min(GEMINI_429_MAX_BACKOFF_MS, Math.max(genericBackoff, raw));
+  }
+
+  if (provider === 'openai') {
+    const raw = OPENAI_429_BASE_BACKOFF_MS * Math.pow(2, exp);
+    return Math.min(OPENAI_429_MAX_BACKOFF_MS, Math.max(genericBackoff, raw));
   }
 
   const raw = 5000 * Math.pow(2, Math.min(5, exp));
@@ -2486,6 +2186,9 @@ function getSelectedAiProvider() {
 
 function isAiRetryableReason(reason) {
   const text = String(reason || '');
+  if (/n[aã]o retornou texto gerado|empty response|blank response|invalid output|json invalido|json inválido/i.test(text)) {
+    return false;
+  }
   return /(ai_error:|ai_provider_error:|rwkv_error:|gemini_error:|sambanova_error:|openai_error:|deepseek_error:|custom_api_error:|mock_error:)/i.test(text);
 }
 
@@ -2495,9 +2198,11 @@ async function callAiProviderChat(model, messages, timeoutMs = AI_REQUEST_TIMEOU
     callCustomProviderChat,
     callGeminiChat,
     callMockPersonaProviderChat,
+    callOpenAiChat,
     callRwkvProviderChat,
     callSambaNovaChat,
     getEffectiveGeminiModel,
+    getEffectiveOpenAiModel,
     getEffectiveSambaNovaModel,
     getSelectedAiProvider,
     rwkvEnabled: RWKV_ENABLED,
@@ -2564,6 +2269,305 @@ function buildExecutionCommandFromAction(action) {
       require_audit_event: true,
     },
   };
+}
+
+async function buildInitialBlueprintRuntimePlan({
+  projectInfo,
+  userMessage,
+  attachments = [],
+  executionIntent,
+  runtimeBudget,
+  basePlan,
+  contextHint = {},
+  workingBrief = null,
+  buildModeRoute = null,
+  productRouteDecision = null,
+} = {}) {
+  if (executionIntent !== 'init_project') return null;
+  if (hasApplicationSurfaceFilesForBlueprintGuard(projectInfo)) return null;
+
+  const contextRoute =
+    productRouteDecision && typeof productRouteDecision === 'object'
+      ? productRouteDecision
+      : resolveCortexProductRouteDecisionFromContextHint(contextHint);
+  const structuredWorkingBrief = workingBrief || resolvePersonaWorkingBriefFromProductRoute(contextRoute);
+  const structuredBuildModeRoute = buildModeRoute || resolveCortexBuildModeRouteFromProductRoute(contextRoute);
+  const contextRouteMeta = contextRoute && contextRoute.meta ? contextRoute.meta : {};
+  const contextProductRoute = contextRoute && contextRoute.productRoute ? contextRoute.productRoute : {};
+  const routeMode = String(
+    contextProductRoute.mode ||
+      contextRouteMeta.mode ||
+      contextRouteMeta.buildMode ||
+      (structuredBuildModeRoute ? structuredBuildModeRoute.mode : '') ||
+      ''
+  ).toLowerCase();
+  const routeAllowsBlueprint = [
+    'adaptive_blueprint',
+    'faber_blueprint',
+    'initial_blueprint',
+    'cortex_scaffold',
+    'guided_app_architecture',
+  ].includes(routeMode);
+
+  const blueprintOptions = {
+    userMessage,
+    executionIntent,
+    attachments,
+    workingBrief: structuredWorkingBrief,
+  };
+  if (!routeAllowsBlueprint && !shouldPreferProjectBlueprint(blueprintOptions)) return null;
+
+  const mediaAssets = await resolveBlueprintMediaAssets({
+    userMessage,
+    projectInfo,
+    workingBrief: structuredWorkingBrief,
+    buildModeRoute: structuredBuildModeRoute,
+    productRouteDecision: contextRoute,
+    mediaIntent: structuredWorkingBrief && Array.isArray(structuredWorkingBrief.mediaIntent)
+      ? structuredWorkingBrief.mediaIntent
+      : [],
+    contract: buildCortexPexelsContractFromPersonaBrief(structuredWorkingBrief),
+  });
+  const blueprint = buildProjectBlueprintOperationBatch({
+    projectInfo,
+    userMessage,
+    attachments,
+    executionIntent,
+    buildOperationBatchDiffPreview,
+    force: true,
+    mediaAssets,
+    workingBrief: structuredWorkingBrief,
+    buildModeRoute: structuredBuildModeRoute,
+  });
+  if (!blueprint || !blueprint.ok || !blueprint.action) return null;
+
+  const artifactContext = [
+    'Compositor modular determinístico de criação inicial.',
+    'Aplicado antes do briefing remoto para preservar stack, domínio e peças de layout do pedido.',
+  ].join(' ');
+  const validation = evaluateExecutionReadiness({
+    operations: blueprint.action.operations,
+    projectRootPath: projectInfo && projectInfo.rootPath ? projectInfo.rootPath : null,
+    executionIntent,
+    userMessage,
+    artifactContext,
+  });
+  if (!validation || !validation.ready) return null;
+
+  const actionWithCommand = {
+    ...blueprint.action,
+    cortexRuntimeVersion: CORTEX_RENDER_RUNTIME_VERSION,
+    cortexValidated: true,
+    workGraphId: null,
+    renderPassId: null,
+    executionValidation: validation,
+    artifactContext,
+    executionCommand: buildExecutionCommandFromAction(blueprint.action),
+  };
+  const writeCount = actionWithCommand.operations.filter((op) => op.op === 'write_file' || op.op === 'append_file').length;
+  const stackLabel = actionWithCommand.blueprint && actionWithCommand.blueprint.stack
+    ? actionWithCommand.blueprint.stack
+    : 'web';
+
+  return {
+    ...basePlan,
+    action: actionWithCommand,
+    response: [
+      `Preparei uma composição modular ${stackLabel} sem depender de nova chamada remota.`,
+      `O compositor local preparou ${actionWithCommand.operations.length} operação(ões), com ${writeCount} arquivo(s) gerado(s).`,
+      `A validação técnica marcou ${validation.score}% (mínimo ${validation.minScore}%). Deseja aplicar esses artefatos no projeto?`,
+    ].join(' '),
+    meta: {
+      planner: 'cortex_runtime',
+      model: null,
+      reason: 'project_blueprint_ready',
+      runtime: CORTEX_RENDER_RUNTIME_VERSION,
+      runtimeBudget,
+      protocol: PERSONA_PROTOCOL_VERSION,
+      blueprint: actionWithCommand.blueprint || null,
+    },
+  };
+}
+
+function resolveProductRouteModeForRuntime({ contextHint = {}, productRouteDecision = null, buildModeRoute = null } = {}) {
+  const contextRoute =
+    productRouteDecision && typeof productRouteDecision === 'object'
+      ? productRouteDecision
+      : resolveCortexProductRouteDecisionFromContextHint(contextHint);
+  const contextProductRoute = contextRoute && contextRoute.productRoute ? contextRoute.productRoute : {};
+  const contextRouteMeta = contextRoute && contextRoute.meta ? contextRoute.meta : {};
+  return String(
+    contextProductRoute.mode ||
+      contextRouteMeta.mode ||
+      contextRouteMeta.buildMode ||
+      (buildModeRoute && buildModeRoute.mode ? buildModeRoute.mode : '') ||
+      ''
+  ).toLowerCase();
+}
+
+function buildDeterministicPatchRuntimePlan({
+  projectInfo,
+  userMessage,
+  attachments = [],
+  executionIntent,
+  runtimeBudget,
+  basePlan,
+  contextHint = {},
+  buildModeRoute = null,
+  productRouteDecision = null,
+} = {}) {
+  if (executionIntent !== 'edit_project') return null;
+  const routeMode = resolveProductRouteModeForRuntime({ contextHint, productRouteDecision, buildModeRoute });
+  if (routeMode !== 'deterministic_patch') return null;
+
+  const localDiagnostics = buildLocalProjectDiagnostics({ projectInfo, userMessage, attachments });
+  const patch = buildDeterministicPatchOperationBatch({
+    projectInfo,
+    userMessage,
+    attachments,
+    executionIntent,
+    localDiagnostics,
+  });
+
+  if (!patch || !patch.ok || !patch.action) {
+    return {
+      ...basePlan,
+      action: null,
+      response:
+        'Identifiquei uma rota de patch determinístico, mas nenhum contrato local ativo conseguiu materializar uma alteração segura. Vou preservar o projeto e manter este pedido para resolução semântica pela IA.',
+      meta: {
+        planner: 'cortex_runtime',
+        model: null,
+        reason: 'deterministic_patch_contract_unresolved',
+        runtime: CORTEX_RENDER_RUNTIME_VERSION,
+        runtimeBudget,
+        localDiagnostics,
+      },
+    };
+  }
+
+  const artifactContext = [
+    'Patch determinístico local.',
+    'Executado antes do briefing remoto porque a rota do produto já apontou um contrato técnico ativo.',
+  ].join(' ');
+  const validation = evaluateExecutionReadiness({
+    operations: patch.action.operations,
+    projectRootPath: projectInfo && projectInfo.rootPath ? projectInfo.rootPath : null,
+    executionIntent,
+    userMessage,
+    artifactContext,
+  });
+
+  if (!validation || !validation.ready) {
+    return {
+      ...basePlan,
+      action: null,
+      response:
+        'Preparei o patch local, mas a validação técnica não liberou a execução. Mantive o projeto intacto para não aplicar uma alteração incompleta.',
+      meta: {
+        planner: 'cortex_runtime',
+        model: null,
+        reason: `deterministic_patch_validation_failed:${validation ? validation.score : 0}`,
+        runtime: CORTEX_RENDER_RUNTIME_VERSION,
+        runtimeBudget,
+        localDiagnostics,
+        validation,
+      },
+    };
+  }
+
+  const actionWithCommand = {
+    ...patch.action,
+    cortexRuntimeVersion: CORTEX_RENDER_RUNTIME_VERSION,
+    cortexValidated: true,
+    workGraphId: null,
+    renderPassId: null,
+    executionValidation: validation,
+    artifactContext,
+    executionCommand: buildExecutionCommandFromAction(patch.action),
+  };
+  const writeCount = actionWithCommand.operations.filter((op) => op.op === 'write_file' || op.op === 'append_file').length;
+
+  return {
+    ...basePlan,
+    action: actionWithCommand,
+    response: [
+      'Preparei uma alteração local com contrato determinístico ativo, sem depender de chamada remota.',
+      `A validação técnica marcou ${validation.score}% (mínimo ${validation.minScore}%).`,
+      `Serão alterado(s) ${writeCount} arquivo(s). Deseja aplicar?`,
+    ].join(' '),
+    meta: {
+      planner: 'cortex_runtime',
+      model: null,
+      reason: 'deterministic_patch_ready',
+      runtime: CORTEX_RENDER_RUNTIME_VERSION,
+      runtimeBudget,
+      protocol: PERSONA_PROTOCOL_VERSION,
+      localDiagnostics,
+    },
+  };
+}
+
+function buildRuntimeIntentSourceMessage(userMessage = '', contextHint = {}) {
+  const routeDecision =
+    contextHint && contextHint.personaRouteDecision && typeof contextHint.personaRouteDecision === 'object'
+      ? contextHint.personaRouteDecision
+      : {};
+  const conversationMessages = Array.isArray(contextHint && contextHint.conversationMessages)
+    ? contextHint.conversationMessages
+    : [];
+  const recentConversation = conversationMessages
+    .slice(-8)
+    .map((message) => {
+      const role = message && message.role ? String(message.role) : 'message';
+      const text = message && message.text ? String(message.text) : '';
+      return text ? `${role}: ${text}` : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+
+  return clipText([
+    contextHint && contextHint.originalUserMessage ? `Pedido original: ${contextHint.originalUserMessage}` : '',
+    userMessage ? `Pedido técnico atual: ${userMessage}` : '',
+    contextHint && contextHint.routeExecutionMessage ? `Execução roteada: ${contextHint.routeExecutionMessage}` : '',
+    routeDecision.response ? `Resposta da Persona: ${routeDecision.response}` : '',
+    routeDecision.executionMessage ? `Mensagem de execução da Persona: ${routeDecision.executionMessage}` : '',
+    recentConversation ? `Histórico recente:\n${recentConversation}` : '',
+  ].filter(Boolean).join('\n\n'), 6000);
+}
+
+function resolveRuntimeExecutionIntent({
+  intentSourceMessage = '',
+  effectiveUserMessage = '',
+  contextHint = {},
+  projectInfo = null,
+  productRuntimeContract = null,
+} = {}) {
+  const routeDecision = productRuntimeContract && productRuntimeContract.routeDecision
+    ? productRuntimeContract.routeDecision
+    : resolveCortexProductRouteDecisionFromContextHint(contextHint);
+  const productRoute = routeDecision && routeDecision.productRoute ? routeDecision.productRoute : {};
+  const buildModeRoute = productRuntimeContract && productRuntimeContract.buildModeRoute
+    ? productRuntimeContract.buildModeRoute
+    : resolveCortexBuildModeRouteFromProductRoute(routeDecision);
+  const routedIntent = String(
+    productRoute.executionIntent ||
+      (buildModeRoute && buildModeRoute.executionIntent) ||
+      ''
+  )
+    .trim()
+    .toLowerCase();
+
+  if (
+    routeDecision &&
+    routeDecision.decision === 'execute' &&
+    routedIntent &&
+    routedIntent !== 'conversation'
+  ) {
+    return routedIntent;
+  }
+
+  return resolveExecutionIntent(intentSourceMessage || effectiveUserMessage, contextHint, projectInfo);
 }
 
 function bindActionToAuthorizedProject(action, projectInfo) {
@@ -2770,7 +2774,57 @@ async function runCortexRenderRuntimePlan({ projectInfo, userMessage, attachment
   const brainBudget = getBrainBudgetSettings(runtimeSettings);
   const clarificationAttempts = Number(contextHint && contextHint.scaffoldClarificationAttempts ? contextHint.scaffoldClarificationAttempts : 0);
   const latestDiagnostics = contextHint && contextHint.latestDiagnostics ? contextHint.latestDiagnostics : null;
-  const executionIntent = resolveExecutionIntent(effectiveUserMessage, contextHint, projectInfo);
+  const intentSourceMessage = buildRuntimeIntentSourceMessage(effectiveUserMessage, contextHint);
+  const productRuntimeContract = resolveCortexProductRuntimeContract(contextHint);
+  const executionIntent = resolveRuntimeExecutionIntent({
+    intentSourceMessage,
+    effectiveUserMessage,
+    contextHint,
+    projectInfo,
+    productRuntimeContract,
+  });
+  const initialBlueprintPlan = await buildInitialBlueprintRuntimePlan({
+    projectInfo,
+    userMessage: intentSourceMessage || effectiveUserMessage,
+    attachments,
+    executionIntent,
+    runtimeBudget,
+    basePlan,
+    contextHint,
+    workingBrief: productRuntimeContract.workingBrief,
+    buildModeRoute: productRuntimeContract.buildModeRoute,
+    productRouteDecision: productRuntimeContract.routeDecision,
+  });
+  if (initialBlueprintPlan) {
+    if (jobId) {
+      setJobCheckpoint(jobId, 'project_blueprint', {
+        reason: initialBlueprintPlan.meta ? initialBlueprintPlan.meta.reason : 'project_blueprint_ready',
+        files: initialBlueprintPlan.action.operations.map((operation) => operation.path).slice(0, 24),
+      });
+    }
+    return initialBlueprintPlan;
+  }
+
+  const deterministicPatchPlan = buildDeterministicPatchRuntimePlan({
+    projectInfo,
+    userMessage: intentSourceMessage || effectiveUserMessage,
+    attachments,
+    executionIntent,
+    runtimeBudget,
+    basePlan,
+    contextHint,
+    buildModeRoute: productRuntimeContract.buildModeRoute,
+    productRouteDecision: productRuntimeContract.routeDecision,
+  });
+  if (deterministicPatchPlan) {
+    if (jobId && deterministicPatchPlan.action && Array.isArray(deterministicPatchPlan.action.operations)) {
+      setJobCheckpoint(jobId, 'deterministic_patch', {
+        reason: deterministicPatchPlan.meta ? deterministicPatchPlan.meta.reason : 'deterministic_patch_ready',
+        files: deterministicPatchPlan.action.operations.map((operation) => operation.path).slice(0, 24),
+      });
+    }
+    return deterministicPatchPlan;
+  }
   if (
     !defaultScaffoldAuthorized &&
     (executionIntent === 'init_project' || hasScaffoldIntent(effectiveUserMessage)) &&
@@ -2814,6 +2868,9 @@ async function runCortexRenderRuntimePlan({ projectInfo, userMessage, attachment
     rag: ragContext,
     cortex: cortexContext,
   });
+  workGraph.productRouteDecision = productRuntimeContract.routeDecision || null;
+  workGraph.workingBrief = productRuntimeContract.workingBrief || null;
+  workGraph.buildModeRoute = productRuntimeContract.buildModeRoute || null;
   checkpointCortexRuntime(jobId, workGraph, runtimeBudget, { stage: 'created' });
 
   const brainPass = createRenderPass({
@@ -2951,6 +3008,9 @@ async function runCortexRenderRuntimePlan({ projectInfo, userMessage, attachment
       latestDiagnostics,
       artifactContext,
       executionIntent,
+      productRouteDecision: productRuntimeContract.routeDecision,
+      workingBrief: productRuntimeContract.workingBrief,
+      buildModeRoute: productRuntimeContract.buildModeRoute,
     });
   };
 
@@ -2986,6 +3046,9 @@ async function runCortexRenderRuntimePlan({ projectInfo, userMessage, attachment
       latestDiagnostics,
       executionIntent,
       artifactContext,
+      productRouteDecision: productRuntimeContract.routeDecision,
+      workingBrief: productRuntimeContract.workingBrief,
+      buildModeRoute: productRuntimeContract.buildModeRoute,
       repairContext: {
         failedCoverage: enginePlan.coverage,
         failedRaw: enginePlan.raw || '',
@@ -3217,161 +3280,16 @@ async function buildPlanWithCortexRuntime(projectInfo, userMessage, attachments 
 }
 
 
-function isCssStylesheetRepairRequest(text = '') {
-  const normalized = String(text || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase();
-  const mentionsCss = /\b(css|style\.css|stylesheet|estilo)\b/.test(normalized);
-  const mentionsHtml = /\b(html|index\.html|pagina|site|arquivo)\b/.test(normalized);
-  const mentionsConnection = /(conect|carreg|link|href|import|nao esta funcionando|nao funciona|corrig)/.test(normalized);
-  return mentionsCss && mentionsHtml && mentionsConnection;
-}
-
-function toPosixPath(filePath = '') {
-  return String(filePath || '').split(path.sep).join('/');
-}
-
-function findProjectRelativeFile(projectRoot, projectInfo, fileName) {
-  const directCandidates = [fileName, `public/${fileName}`, `src/${fileName}`, `pages/${fileName}`];
-  for (const candidate of directCandidates) {
-    if (fs.existsSync(path.join(projectRoot, candidate))) return candidate;
-  }
-  const files = Array.isArray(projectInfo && projectInfo.files) ? projectInfo.files : [];
-  const match = files.find((item) => {
-    const rel = typeof item === 'string' ? item : item && (item.path || item.relativePath || item.name);
-    return rel && path.basename(rel) === fileName;
-  });
-  if (!match) return null;
-  const rel = typeof match === 'string' ? match : match.path || match.relativePath || match.name;
-  return rel ? toPosixPath(rel) : null;
-}
-
-function normalizeRelativeHref(fromFile, toFile) {
-  const fromDir = path.posix.dirname(toPosixPath(fromFile));
-  let href = path.posix.relative(fromDir === '.' ? '' : fromDir, toPosixPath(toFile));
-  if (!href || href === '') href = path.posix.basename(toFile);
-  if (!href.startsWith('.') && !href.startsWith('/')) href = `./${href}`;
-  return href;
-}
-
-function escapeRegExpLiteral(value) {
-  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function replaceStylesheetHref(html, fromHref, toHref) {
-  const source = String(html || '');
-  const escapedFrom = escapeRegExpLiteral(fromHref);
-  const patterns = [
-    new RegExp(`(<link\\b[^>]*rel=["']?stylesheet["']?[^>]*href=["'])${escapedFrom}(["'][^>]*>)`, 'i'),
-    new RegExp(`(<link\\b[^>]*href=["'])${escapedFrom}(["'][^>]*rel=["']?stylesheet["']?[^>]*>)`, 'i'),
-  ];
-  for (const pattern of patterns) {
-    const next = source.replace(pattern, `$1${toHref}$2`);
-    if (next !== source) return { changed: true, content: next };
-  }
-  return { changed: false, content: source };
-}
-
-function ensureHtmlHasStylesheetLink(html, href) {
-  const source = String(html || '');
-  const escapedHref = href.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const existingStyleLink = new RegExp(`<link\\b[^>]*rel=["']?stylesheet["']?[^>]*href=["'][^"']*style\\.css["'][^>]*>`, 'i');
-  const exactLink = `<link rel="stylesheet" href="${href}">`;
-
-  if (existingStyleLink.test(source)) {
-    const next = source.replace(existingStyleLink, exactLink);
-    return { changed: next !== source, content: next };
-  }
-
-  const alreadyExact = new RegExp(`<link\\b[^>]*href=["']${escapedHref}["'][^>]*rel=["']?stylesheet["']?[^>]*>|<link\\b[^>]*rel=["']?stylesheet["']?[^>]*href=["']${escapedHref}["'][^>]*>`, 'i');
-  if (alreadyExact.test(source)) return { changed: false, content: source };
-
-  const line = `  ${exactLink}\n`;
-  if (/<\/head>/i.test(source)) {
-    return { changed: true, content: source.replace(/<\/head>/i, `${line}</head>`) };
-  }
-  if (/<head\b[^>]*>/i.test(source)) {
-    return { changed: true, content: source.replace(/<head\b[^>]*>/i, (match) => `${match}\n${line.trimEnd()}`) };
-  }
-  if (/<html\b[^>]*>/i.test(source)) {
-    return {
-      changed: true,
-      content: source.replace(/<html\b[^>]*>/i, (match) => `${match}\n<head>\n  <meta charset="UTF-8">\n${line}</head>`),
-    };
-  }
-  return {
-    changed: true,
-    content: `<!doctype html>\n<html lang="pt-BR">\n<head>\n  <meta charset="UTF-8">\n${line}</head>\n<body>\n${source}\n</body>\n</html>\n`,
-  };
-}
-
-function isCssRuntimeRepairRequest(text = '') {
-  const normalized = String(text || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase();
-  const mentionsCss = /\b(css|style\.css|stylesheet|estilo|estilos|visual|cores|tipografia)\b/.test(normalized);
-  const mentionsProblem = /(quebrad|sem estilo|sem estilos|html estatico|nao esta funcionando|nao funciona|nao carrega|carreg|conect|corrig|arrum|visual)/.test(normalized);
-  return mentionsCss && mentionsProblem;
-}
-
-function repairInvalidCssCustomPropertyReferences(css = '') {
-  const source = String(css || '');
-  let replacements = 0;
-  const content = source.replace(/var\(\s*-{3,}([a-zA-Z0-9_-]+)(\s*,[^)]*)?\s*\)/g, (_match, name, fallback = '') => {
-    replacements += 1;
-    return `var(--${name}${fallback || ''})`;
-  });
-  return {
-    changed: content !== source,
-    content,
-    replacements,
-  };
-}
-
-function buildCssRuntimeRepairOperationBatch({ projectInfo, userMessage, attachments = [], executionIntent, reason = 'css_runtime_repair' }) {
-  if (executionIntent !== 'edit_project') return null;
-  const projectRoot = projectInfo && projectInfo.rootPath;
-  if (!projectRoot) return null;
-
-  const styleRel = findProjectRelativeFile(projectRoot, projectInfo, 'style.css');
-  if (!styleRel) return null;
-
-  const styleAbs = path.join(projectRoot, styleRel);
-  if (!fs.existsSync(styleAbs)) return null;
-
-  const currentCss = fs.readFileSync(styleAbs, 'utf8');
-  const result = repairInvalidCssCustomPropertyReferences(currentCss);
-  if (!result.changed) return null;
-
-  const linkAlreadyOkNote = reason === 'css_link_already_ok_css_runtime_repair'
-    ? 'O link do CSS ja estava presente; encontrei a raiz do problema no proprio CSS. '
-    : '';
-
-  return {
-    ok: true,
-    action: {
-      type: 'operation_batch',
-      intent: 'edit_project',
-      rootPath: projectRoot,
-      targetFile: styleRel,
-      operations: [
-        {
-          op: 'write_file',
-          path: styleRel,
-          content: result.content,
-        },
-      ],
-      diffPreview: `Corrigir ${result.replacements} referencia(s) invalida(s) de variaveis CSS em ${styleRel}.`,
-      summary: `${linkAlreadyOkNote}Corrigir referencias invalidas de variaveis CSS em ${styleRel} para o navegador aplicar cores, fundos e tipografia corretamente.`,
-      userMessage,
-      attachments,
-      generatedBy: 'automata_static_css_runtime_repair',
-    },
-    raw: reason,
-  };
-}
+const cssRuntimeRepairService = createCssRuntimeRepairService({ fs, path });
+const {
+  buildCssRuntimeRepairOperationBatch,
+  ensureHtmlHasStylesheetLink,
+  findProjectRelativeFile,
+  isCssRuntimeRepairRequest,
+  isCssStylesheetRepairRequest,
+  normalizeRelativeHref,
+  replaceStylesheetHref,
+} = cssRuntimeRepairService;
 
 const deterministicEditService = createDeterministicEditService({
   fs,
@@ -3478,12 +3396,16 @@ const aiRuntimeStatus = createAiRuntimeStatusService({
   RWKV_STRATEGY,
   RWKV_TOKENIZER_PATH,
   RWKV_V7_ON,
+  OPENAI_API_BASE_URL,
+  OPENAI_API_KEY,
   SAMBANOVA_API_BASE_URL,
   SAMBANOVA_API_KEY,
   extractJsonFromMixedText,
   getCortexRuntimeBudget,
   getEffectiveGeminiApiKey,
   getEffectiveGeminiModel,
+  getEffectiveOpenAiApiKey,
+  getEffectiveOpenAiModel,
   getEffectiveSambaNovaApiKey,
   getEffectiveSambaNovaModel,
   getRuntimeProfileSettings,
@@ -3648,8 +3570,10 @@ function getAssistantFlow() {
       markJobPhase,
       markJobRetryPending,
       requestPersonaRouteDecision,
+      resolveProductRoute,
       runtimeVersion: CORTEX_RENDER_RUNTIME_VERSION,
       setJobCheckpoint,
+      suggestAutomataContract: (input, options) => automataContractLedgerService.suggestContract(input, options),
     });
   }
   return assistantFlowInstance;
@@ -3667,13 +3591,15 @@ async function handleAssistantMessage(payload = {}) {
   return getAssistantFlow().handleAssistantMessage(payload);
 }
 
+async function resolveAssistantRouteDecision(payload = {}) {
+  return getAssistantFlow().resolveAssistantRouteDecision(payload);
+}
+
 function resolveAppIconPath() {
   const candidates = [
     path.join(__dirname, 'assets', 'logo_faber.png'),
-    path.join(__dirname, 'assets', 'temp_logo_faber.png'),
     path.join(__dirname, 'build', 'icon.png'),
     path.join(process.cwd(), 'assets', 'logo_faber.png'),
-    path.join(process.cwd(), 'assets', 'temp_logo_faber.png'),
     path.join(process.cwd(), 'build', 'icon.png'),
   ];
   for (const p of candidates) {
@@ -3786,6 +3712,23 @@ app.whenReady().then(() => {
     } catch {}
   }
 
+  registerAccountHandlers({
+    accountService: platformAccountService,
+    appendAuditEvent,
+    emitAccountEvent: (payload) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('account:event', payload);
+      }
+    },
+    registerIpcHandler,
+    shell,
+  });
+  platformBackendService.start().catch((error) => {
+    appendAuditEvent('platform_backend.start_failed', {
+      message: error && error.message ? error.message : String(error || ''),
+    });
+  });
+
   registerProjectHandlers({
     appendAuditEvent,
     authorizeProjectRoot,
@@ -3832,6 +3775,20 @@ app.whenReady().then(() => {
     stopProjectPreview,
   });
 
+  registerTerminalHandlers({
+    appendAuditEvent,
+    authorizeProjectRoot,
+    registerIpcHandler,
+    terminalService: projectTerminalService,
+  });
+
+  registerAutomataContractHandlers({
+    appendAuditEvent,
+    ledgerService: automataContractLedgerService,
+    normalizeAuthorizedProjectInfo,
+    registerIpcHandler,
+  });
+
   registerIpcHandler('window:toggle-maximize', () => {
     const targetWindow = BrowserWindow.getFocusedWindow() || mainWindow;
     if (!targetWindow || targetWindow.isDestroyed()) {
@@ -3849,15 +3806,13 @@ app.whenReady().then(() => {
     const { projectInfo, userMessage, attachments, contextHint, conversationMessages } = payload || {};
     const project = normalizeAuthorizedProjectInfo(projectInfo);
     if (!project.ok) return project;
-    const route = await requestPersonaRouteDecision({
+    return resolveAssistantRouteDecision({
       projectInfo: project.projectInfo,
       userMessage: userMessage || '',
       attachments: attachments || [],
       contextHint: contextHint || null,
       conversationMessages: conversationMessages || [],
     });
-    appendAssistantRouteAudit(route, project.projectInfo);
-    return route;
   });
 
   registerIpcHandler('assistant:plan', async (_, payload) => {
@@ -4214,12 +4169,18 @@ app.whenReady().then(() => {
     AI_PROVIDER_ENV,
     AI_PROVIDER_OPTIONS,
     GEMINI_API_KEY,
+    OPENAI_API_BASE_URL,
+    OPENAI_API_KEY,
+    PEXELS_API_KEY,
     SAMBANOVA_API_BASE_URL,
     SAMBANOVA_API_KEY,
     appendAuditEvent,
     getAiRuntimeStatus,
     getEffectiveGeminiApiKey,
     getEffectiveGeminiModel,
+    getEffectiveOpenAiApiKey,
+    getEffectiveOpenAiModel,
+    getEffectivePexelsApiKey,
     getEffectiveSambaNovaApiKey,
     getEffectiveSambaNovaModel,
     maskApiKeyTail,
@@ -4228,6 +4189,7 @@ app.whenReady().then(() => {
     registerIpcHandler,
     sanitizeCustomApiProfiles,
     sanitizeGeminiModelName,
+    sanitizeOpenAiModelName,
     sanitizeSambaNovaModelName,
     setSelectedAiProvider,
     writeAiRuntimeSettings,
@@ -4299,6 +4261,8 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  platformBackendService.stop().catch(() => {});
+  projectTerminalService.stopAllSessions();
   stopAllProjectPreviews().catch(() => {});
 });
 

@@ -39,7 +39,15 @@ function registerPreviewHandlers(dependencies = {}) {
         mode: result && result.session ? result.session.mode : '',
         url: result && result.session ? result.session.url : '',
       });
-      if (result && result.ok && payload && payload.open === true && result.session && result.session.url) {
+      if (
+        result &&
+        result.ok &&
+        payload &&
+        payload.open === true &&
+        result.session &&
+        result.session.url &&
+        result.session.status === 'ready'
+      ) {
         await shell.openExternal(result.session.url);
       }
       return { ok: Boolean(result && result.ok), info, ...result };

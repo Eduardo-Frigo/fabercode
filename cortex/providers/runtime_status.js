@@ -19,12 +19,16 @@ function createAiRuntimeStatusService(dependencies = {}) {
     RWKV_STRATEGY,
     RWKV_TOKENIZER_PATH,
     RWKV_V7_ON,
+    OPENAI_API_BASE_URL,
+    OPENAI_API_KEY = '',
     SAMBANOVA_API_BASE_URL,
     SAMBANOVA_API_KEY = '',
     extractJsonFromMixedText,
     getCortexRuntimeBudget,
     getEffectiveGeminiApiKey,
     getEffectiveGeminiModel,
+    getEffectiveOpenAiApiKey,
+    getEffectiveOpenAiModel,
     getEffectiveSambaNovaApiKey,
     getEffectiveSambaNovaModel,
     getRuntimeProfileSettings,
@@ -48,6 +52,8 @@ function createAiRuntimeStatusService(dependencies = {}) {
     requireDependency('getCortexRuntimeBudget', getCortexRuntimeBudget);
     requireDependency('getEffectiveGeminiApiKey', getEffectiveGeminiApiKey);
     requireDependency('getEffectiveGeminiModel', getEffectiveGeminiModel);
+    requireDependency('getEffectiveOpenAiApiKey', getEffectiveOpenAiApiKey);
+    requireDependency('getEffectiveOpenAiModel', getEffectiveOpenAiModel);
     requireDependency('getEffectiveSambaNovaApiKey', getEffectiveSambaNovaApiKey);
     requireDependency('getEffectiveSambaNovaModel', getEffectiveSambaNovaModel);
     requireDependency('getRuntimeProfileSettings', getRuntimeProfileSettings);
@@ -62,6 +68,7 @@ function createAiRuntimeStatusService(dependencies = {}) {
   }
 
   function getConfiguredModel(selectedProvider) {
+    if (selectedProvider === 'openai') return getEffectiveOpenAiModel();
     if (selectedProvider === 'gemini') return getEffectiveGeminiModel();
     if (selectedProvider === 'sambanova') return getEffectiveSambaNovaModel();
     return PERSONA_MODEL_BRAIN;
@@ -143,6 +150,29 @@ function createAiRuntimeStatusService(dependencies = {}) {
       if (!effectiveKey) {
         result.reason = 'gemini_api_key_missing';
       }
+      return result;
+    }
+
+    if (selectedProvider === 'openai') {
+      const settings = readAiRuntimeSettings();
+      const localKey = String(settings.openaiApiKey || '').trim();
+      const effectiveKey = getEffectiveOpenAiApiKey();
+      result.apiConfigured = Boolean(effectiveKey);
+      result.reachable = Boolean(effectiveKey);
+      result.ready = Boolean(effectiveKey && getEffectiveOpenAiModel());
+      result.memoryGuard = {
+        enabled: false,
+        reason: 'remote_provider',
+      };
+      result.openai = {
+        keySource: localKey ? 'settings' : OPENAI_API_KEY ? 'env' : 'none',
+        keyMasked: maskApiKeyTail(effectiveKey),
+        model: getEffectiveOpenAiModel(),
+        apiLabel: String(settings.openaiApiLabel || '').trim(),
+        baseUrl: OPENAI_API_BASE_URL,
+      };
+      if (!effectiveKey) result.reason = 'openai_api_key_missing';
+      else if (!getEffectiveOpenAiModel()) result.reason = 'openai_model_missing';
       return result;
     }
 

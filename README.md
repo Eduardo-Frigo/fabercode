@@ -46,7 +46,8 @@ Supported provider categories:
 
 - local deterministic mock provider for architecture tests;
 - local RWKV provider hooks;
-- remote/custom API providers configured by the user;
+- native OpenAI, Gemini and SambaNova providers configured by the user;
+- custom OpenAI-compatible API providers configured by the user;
 - optional RAG backend;
 - optional MemPalace runtime.
 
@@ -103,6 +104,8 @@ The application keeps the renderer lightweight and routes privileged work throug
 - `cortex/`: provider registry, orchestration, memory adapters, validation and execution planning.
 - `plugins/`: stack/plugin extension surface.
 - `tests/`: focused architecture and service tests.
+
+Renderer UI modules are loaded explicitly from `renderer/index.html` before `renderer/app.js`. The app entrypoint enforces that contract through `renderer/bootstrap_guard.js`, so missing panel/composer/sidebar/terminal modules fail fast instead of creating a partially booted interface.
 
 Knowledge and memory layers:
 

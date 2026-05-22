@@ -171,9 +171,133 @@ const DOMAIN_PROFILES = {
     guidance:
       'Preserve o domínio de fotografia: portfólio, ensaios, eventos, agenda e estilo visual.',
   },
+  'leather-goods': {
+    id: 'leather-goods',
+    label: 'artefatos de couro',
+    brandFallback: 'Atelier Couro Faber',
+    positiveTerms: [
+      'couro',
+      'bolsa',
+      'bolsas',
+      'pasta',
+      'pastas',
+      'artefatos de couro',
+      'marroquinaria',
+      'artesanal',
+      'artesao',
+      'artesa',
+      'feito a mao',
+      'longevidade',
+    ],
+    negativeTerms: [
+      'advocacia',
+      'advogado',
+      'advogada',
+      'juridico',
+      'direito',
+      'dentista',
+      'odontologia',
+      'veterinario',
+      'pet',
+      'software workspace',
+    ],
+    guidance:
+      'Preserve o domínio de artefatos de couro: bolsas, pastas, produção artesanal, matéria-prima, durabilidade e visual de atelier.',
+  },
+  greenhouses: {
+    id: 'greenhouses',
+    label: 'estufas agrícolas',
+    brandFallback: 'Estufas Protegidas',
+    positiveTerms: [
+      'estufa',
+      'estufas',
+      'greenhouse',
+      'greenhouses',
+      'cultivo protegido',
+      'viveiro',
+      'viveiros',
+      'horta comercial',
+      'hortas comerciais',
+      'floricultura',
+      'floriculturas',
+      'produtor rural',
+      'agricultor',
+      'agricultura',
+      'hortalicas',
+      'mudas',
+      'irrigacao',
+      'controle climatico',
+    ],
+    negativeTerms: [
+      'clinica sorriso',
+      'dentista',
+      'odontologia',
+      'odontologico',
+      'sorriso',
+      'real estate',
+      'imoveis',
+      'imobiliaria',
+      'corretor',
+      'interior residencial',
+      'professional workspace',
+    ],
+    guidance:
+      'Preserve o domínio de estufas agrícolas: cultivo protegido, produtores rurais, viveiros, hortas comerciais, proteção climática, estrutura resistente e orçamento.',
+  },
+  'humpback-whales': {
+    id: 'humpback-whales',
+    label: 'baleias jubarte',
+    brandFallback: 'Jubarte Azul',
+    positiveTerms: [
+      'baleia',
+      'baleias',
+      'jubarte',
+      'jubartes',
+      'humpback',
+      'whale',
+      'whales',
+      'oceano',
+      'oceanico',
+      'marinho',
+      'vida marinha',
+      'conservacao',
+      'observacao',
+    ],
+    negativeTerms: [
+      'advocacia',
+      'advogado',
+      'advogada',
+      'juridico',
+      'direito',
+      'dentista',
+      'odontologia',
+      'veterinario',
+      'pet',
+    ],
+    guidance:
+      'Preserve o domínio marinho: baleias jubarte, oceano, conservação, pesquisa, observação e educação ambiental.',
+  },
 };
 
 const DOMAIN_DETECTORS = [
+  {
+    id: 'greenhouses',
+    patterns: [
+      /\bestufas?\b/,
+      /\bgreenhouses?\b/,
+      /\bcultivo protegido\b/,
+      /\bviveiros?\b/,
+      /\bhortas? comerciais?\b/,
+      /\bfloriculturas?\b/,
+      /\bprodutor rural\b/,
+      /\bagricultor(?:es)?\b/,
+      /\bagricultura\b/,
+      /\bhortalicas?\b/,
+      /\bmudas?\b/,
+      /\birrigacao\b/,
+      /\bcontrole climatico\b/,
+    ],
+  },
   {
     id: 'legal',
     patterns: [
@@ -228,6 +352,34 @@ const DOMAIN_DETECTORS = [
       /\bevento\b/,
     ],
   },
+  {
+    id: 'leather-goods',
+    patterns: [
+      /\bcouro\b/,
+      /\bcouros\b/,
+      /\bartefatos? de couro\b/,
+      /\bmarroquinaria\b/,
+      /\bbolsas?\b/,
+      /\bpastas?\b/,
+      /\bcarteiras?\b/,
+      /\bartesanal\b/,
+      /\bartesa[oa]\b/,
+      /\bfeito a mao\b/,
+      /\blongevidade\b/,
+    ],
+  },
+  {
+    id: 'humpback-whales',
+    patterns: [
+      /\bbaleias?\b/,
+      /\bjubartes?\b/,
+      /\bhumpback\b/,
+      /\bwhales?\b/,
+      /\boceano\b/,
+      /\boceanic[oa]\b/,
+      /\bvida marinha\b/,
+    ],
+  },
 ];
 
 function inferDomainFromText(value = '') {
@@ -245,6 +397,7 @@ function inferStackFromText(value = '') {
   if (/\bnext(\.js|js)?\b/.test(normalized)) return 'next';
   if (/\breact\b/.test(normalized) && /\btailwind\b/.test(normalized)) return 'next-tailwind';
   if (/\breact\b/.test(normalized)) return 'react';
+  if (/\b(static-web|static web|site estatico|pagina estatica|html css|html\/css|html, css|html e css|vanilla)\b/.test(normalized)) return 'static-web';
   if (/\bhtml\b|\bcss\b|\bjavascript\b|\bjs\b/.test(normalized)) return 'static-web';
   return '';
 }

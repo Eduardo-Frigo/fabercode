@@ -4,17 +4,34 @@ function sanitizeInterfaceLanguage(rawValue) {
   return allowed.has(value) ? value : 'pt-BR';
 }
 
+function sanitizeInterfaceTheme(rawValue) {
+  const value = String(rawValue || '').trim().toLowerCase();
+  return value === 'light' ? 'light' : 'dark';
+}
+
+function sanitizePanelFontScale(rawValue) {
+  const value = Number(rawValue);
+  if (!Number.isFinite(value)) return 100;
+  return Math.min(120, Math.max(90, Math.round(value / 5) * 5));
+}
+
 function registerAiHandlers(dependencies = {}) {
   const {
     AI_PROVIDER_ENV,
     AI_PROVIDER_OPTIONS,
     GEMINI_API_KEY,
+    OPENAI_API_BASE_URL,
+    OPENAI_API_KEY,
+    PEXELS_API_KEY = '',
     SAMBANOVA_API_BASE_URL,
     SAMBANOVA_API_KEY,
     appendAuditEvent,
     getAiRuntimeStatus,
     getEffectiveGeminiApiKey,
     getEffectiveGeminiModel,
+    getEffectiveOpenAiApiKey,
+    getEffectiveOpenAiModel,
+    getEffectivePexelsApiKey,
     getEffectiveSambaNovaApiKey,
     getEffectiveSambaNovaModel,
     maskApiKeyTail,
@@ -23,6 +40,7 @@ function registerAiHandlers(dependencies = {}) {
     registerIpcHandler,
     sanitizeCustomApiProfiles,
     sanitizeGeminiModelName,
+    sanitizeOpenAiModelName,
     sanitizeSambaNovaModelName,
     setSelectedAiProvider,
     writeAiRuntimeSettings,
@@ -39,6 +57,9 @@ function registerAiHandlers(dependencies = {}) {
     requireDependency('getAiRuntimeStatus', getAiRuntimeStatus);
     requireDependency('getEffectiveGeminiApiKey', getEffectiveGeminiApiKey);
     requireDependency('getEffectiveGeminiModel', getEffectiveGeminiModel);
+    requireDependency('getEffectiveOpenAiApiKey', getEffectiveOpenAiApiKey);
+    requireDependency('getEffectiveOpenAiModel', getEffectiveOpenAiModel);
+    requireDependency('getEffectivePexelsApiKey', getEffectivePexelsApiKey);
     requireDependency('getEffectiveSambaNovaApiKey', getEffectiveSambaNovaApiKey);
     requireDependency('getEffectiveSambaNovaModel', getEffectiveSambaNovaModel);
     requireDependency('maskApiKeyTail', maskApiKeyTail);
@@ -47,6 +68,7 @@ function registerAiHandlers(dependencies = {}) {
     requireDependency('registerIpcHandler', registerIpcHandler);
     requireDependency('sanitizeCustomApiProfiles', sanitizeCustomApiProfiles);
     requireDependency('sanitizeGeminiModelName', sanitizeGeminiModelName);
+    requireDependency('sanitizeOpenAiModelName', sanitizeOpenAiModelName);
     requireDependency('sanitizeSambaNovaModelName', sanitizeSambaNovaModelName);
     requireDependency('setSelectedAiProvider', setSelectedAiProvider);
     requireDependency('writeAiRuntimeSettings', writeAiRuntimeSettings);
@@ -66,7 +88,11 @@ function registerAiHandlers(dependencies = {}) {
 
   function buildSettingsResponse(settings) {
     const localGeminiKey = String(settings.geminiApiKey || '').trim();
+    const localOpenAiKey = String(settings.openaiApiKey || '').trim();
+    const localPexelsKey = String(settings.pexelsApiKey || '').trim();
     const effectiveGeminiKey = getEffectiveGeminiApiKey();
+    const effectiveOpenAiKey = getEffectiveOpenAiApiKey();
+    const effectivePexelsKey = getEffectivePexelsApiKey();
     const effectiveSambaNovaKey = getEffectiveSambaNovaApiKey();
 
     return {
@@ -74,9 +100,19 @@ function registerAiHandlers(dependencies = {}) {
       provider: settings.selectedProvider || AI_PROVIDER_ENV,
       providerOptions: AI_PROVIDER_OPTIONS,
       interfaceLanguage: sanitizeInterfaceLanguage(settings.interfaceLanguage),
+      interfaceTheme: sanitizeInterfaceTheme(settings.interfaceTheme),
+      panelFontScale: sanitizePanelFontScale(settings.panelFontScale),
       disabledBuiltInProviders: Array.isArray(settings.disabledBuiltInProviders)
         ? settings.disabledBuiltInProviders
         : [],
+      openai: {
+        hasKey: Boolean(effectiveOpenAiKey),
+        keyMasked: maskApiKeyTail(effectiveOpenAiKey),
+        keySource: localOpenAiKey ? 'settings' : OPENAI_API_KEY ? 'env' : 'none',
+        model: getEffectiveOpenAiModel(),
+        apiLabel: String(settings.openaiApiLabel || '').trim(),
+        baseUrl: OPENAI_API_BASE_URL,
+      },
       gemini: {
         hasKey: Boolean(effectiveGeminiKey),
         keyMasked: maskApiKeyTail(effectiveGeminiKey),
@@ -91,6 +127,14 @@ function registerAiHandlers(dependencies = {}) {
         model: getEffectiveSambaNovaModel(),
         apiLabel: String(settings.sambanovaApiLabel || '').trim(),
         baseUrl: SAMBANOVA_API_BASE_URL,
+      },
+      mediaAssets: {
+        pexels: {
+          hasKey: Boolean(effectivePexelsKey),
+          keyMasked: maskApiKeyTail(effectivePexelsKey),
+          keySource: localPexelsKey ? 'settings' : PEXELS_API_KEY ? 'env' : 'none',
+          website: 'https://www.pexels.com/api/',
+        },
       },
       customApis: customApisForView(settings.customApis || []),
     };
@@ -110,6 +154,18 @@ function registerAiHandlers(dependencies = {}) {
 
     if (payload && Object.prototype.hasOwnProperty.call(payload, 'geminiApiKey')) {
       next.geminiApiKey = payload.geminiApiKey;
+    }
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'openaiApiKey')) {
+      next.openaiApiKey = payload.openaiApiKey;
+    }
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'openaiModel')) {
+      next.openaiModel = sanitizeOpenAiModelName(payload.openaiModel);
+    }
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'openaiApiLabel')) {
+      next.openaiApiLabel = String(payload.openaiApiLabel || '').trim();
+    }
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'pexelsApiKey')) {
+      next.pexelsApiKey = payload.pexelsApiKey;
     }
     if (payload && Object.prototype.hasOwnProperty.call(payload, 'geminiModel')) {
       next.geminiModel = sanitizeGeminiModelName(payload.geminiModel);
@@ -137,12 +193,23 @@ function registerAiHandlers(dependencies = {}) {
     if (payload && Object.prototype.hasOwnProperty.call(payload, 'interfaceLanguage')) {
       next.interfaceLanguage = sanitizeInterfaceLanguage(payload.interfaceLanguage);
     }
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'interfaceTheme')) {
+      next.interfaceTheme = sanitizeInterfaceTheme(payload.interfaceTheme);
+    }
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'panelFontScale')) {
+      next.panelFontScale = sanitizePanelFontScale(payload.panelFontScale);
+    }
 
     const saved = writeAiRuntimeSettings(next);
     const customApis = customApisForView(saved.customApis || []);
 
     appendAuditEvent('ai.settings_saved', {
       provider: saved.selectedProvider,
+      openaiKeyConfigured: Boolean(getEffectiveOpenAiApiKey()),
+      openaiKeySource: saved.openaiApiKey ? 'settings' : OPENAI_API_KEY ? 'env' : 'none',
+      openaiModel: getEffectiveOpenAiModel(),
+      pexelsKeyConfigured: Boolean(getEffectivePexelsApiKey()),
+      pexelsKeySource: saved.pexelsApiKey ? 'settings' : PEXELS_API_KEY ? 'env' : 'none',
       geminiKeyConfigured: Boolean(getEffectiveGeminiApiKey()),
       geminiKeySource: saved.geminiApiKey ? 'settings' : GEMINI_API_KEY ? 'env' : 'none',
       geminiModel: getEffectiveGeminiModel(),
@@ -151,6 +218,8 @@ function registerAiHandlers(dependencies = {}) {
       sambanovaApiLabel: String(saved.sambanovaApiLabel || '').trim(),
       customApisCount: customApis.length,
       interfaceLanguage: sanitizeInterfaceLanguage(saved.interfaceLanguage),
+      interfaceTheme: sanitizeInterfaceTheme(saved.interfaceTheme),
+      panelFontScale: sanitizePanelFontScale(saved.panelFontScale),
     });
 
     return buildSettingsResponse(saved);
@@ -163,7 +232,9 @@ function registerAiHandlers(dependencies = {}) {
       provider: settings.selectedProvider,
       providerOptions: AI_PROVIDER_OPTIONS,
       hasGeminiApiKey: Boolean(getEffectiveGeminiApiKey()),
+      hasOpenAiApiKey: Boolean(getEffectiveOpenAiApiKey()),
       geminiModel: getEffectiveGeminiModel(),
+      openaiModel: getEffectiveOpenAiModel(),
       sambanovaModel: getEffectiveSambaNovaModel(),
     };
   });
@@ -177,7 +248,9 @@ function registerAiHandlers(dependencies = {}) {
       provider: saved.selectedProvider,
       providerOptions: AI_PROVIDER_OPTIONS,
       hasGeminiApiKey: Boolean(getEffectiveGeminiApiKey()),
+      hasOpenAiApiKey: Boolean(getEffectiveOpenAiApiKey()),
       geminiModel: getEffectiveGeminiModel(),
+      openaiModel: getEffectiveOpenAiModel(),
       sambanovaModel: getEffectiveSambaNovaModel(),
     };
   });

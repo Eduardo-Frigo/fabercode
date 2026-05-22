@@ -39,8 +39,10 @@ async function run() {
 
   const clarification = buildCortexBriefingClarificationResponse('criar site', 1, ['Pergunta A?', 'Pergunta B?']);
   assert.ok(clarification.includes('Estamos quase lá'));
-  assert.ok(clarification.includes('1. Pergunta A?'));
-  assert.ok(clarification.includes('padrão institucional premium'));
+  assert.ok(clarification.includes('Escolha um caminho curto'));
+  assert.ok(clarification.includes('Ponto principal se quiser detalhar: Pergunta A?'));
+  assert.ok(clarification.includes('composição modular'));
+  assert.strictEqual(clarification.includes('padrão institucional premium'), false);
 
   assert.strictEqual(
     shouldAskCortexBriefingClarification('criar site', {}, { hasScaffoldIntent: () => true }),
@@ -57,6 +59,14 @@ async function run() {
   assert.strictEqual(
     shouldAskCortexBriefingClarification(
       'criar site institucional em LAMP com placeholder rápido',
+      {},
+      { hasScaffoldIntent: () => true }
+    ),
+    false
+  );
+  assert.strictEqual(
+    shouldAskCortexBriefingClarification(
+      'next.js, queria um site azul e offwhite para um advogado',
       {},
       { hasScaffoldIntent: () => true }
     ),
@@ -84,7 +94,8 @@ async function run() {
   assert.strictEqual(platformSpec.pages[0].slug, 'index');
   assert.strictEqual(platformSpec.pages[0].sections[0].ctaLabel, 'Abrir');
 
-  const defaultSpec = normalizeBrainSiteSpec({ siteType: 'institutional_site' }, 'criar site');
+  const defaultSpec = normalizeBrainSiteSpec({ siteType: 'modular_site' }, 'criar site');
+  assert.strictEqual(defaultSpec.siteType, 'modular_site');
   assert.strictEqual(defaultSpec.pages[0].sections.length, 4);
 
   const providerCalls = [];
@@ -105,7 +116,7 @@ async function run() {
         needsClarification: true,
         clarificationQuestions: ['Qual CTA?'],
         siteSpec: {
-          siteType: 'institutional_site',
+          siteType: 'modular_site',
           brandName: 'Marca',
           pages: [{ slug: 'home', title: 'Home', sections: [{ id: 'hero', title: 'Hero' }] }],
         },
@@ -186,10 +197,27 @@ async function run() {
     userMessage: 'criar site',
     runtimeBudget: { maxPromptCharsPerPass: 1000, generationOptions: {} },
   });
-  assert.ok(fallback.brief.includes('sanitized:Briefing normalizado pelo Cortex'));
+  assert.ok(fallback.brief.includes('sanitized:Briefing normalizado localmente pelo Cortex'));
   assert.strictEqual(fallback.raw, 'texto não json');
   assert.strictEqual(fallback.suggestedPasses[0], 'render_operations');
   assert.strictEqual(fallback.needsClarification, false);
+
+  const providerFailureFallbackService = createCortexBriefingService({
+    callPersonaProviderChat: async () => {
+      throw new Error('OpenAI não retornou texto gerado.');
+    },
+    getRuntimeProfileSettings: () => ({ brainSampleFilesLimit: 1 }),
+    tryParseJsonObject,
+  });
+  const providerFailureFallback = await providerFailureFallbackService.requestCortexBrainBriefing({
+    projectInfo: { rootPath: '/tmp/project', files: [] },
+    userMessage: 'next.js, queria um site azul e offwhite para um advogado',
+    runtimeBudget: { maxPromptCharsPerPass: 1000, generationOptions: {} },
+  });
+  assert.strictEqual(providerFailureFallback.providerFallback, true);
+  assert.strictEqual(providerFailureFallback.needsClarification, false);
+  assert.strictEqual(providerFailureFallback.suggestedPasses[0], 'render_operations');
+  assert.ok(providerFailureFallback.raw.includes('provider_error:OpenAI não retornou texto gerado.'));
 
   console.log('briefing-service.test.js: ok');
 }

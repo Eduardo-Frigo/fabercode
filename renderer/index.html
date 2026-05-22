@@ -12,7 +12,7 @@
     <link rel="stylesheet" href="../node_modules/codemirror/lib/codemirror.css" />
     <link rel="stylesheet" href="../node_modules/codemirror/theme/material-darker.css" />
   </head>
-  <body>
+  <body class="account-locked">
     <div id="startup-preloader" class="startup-preloader" aria-label="Carregando Faber Code">
       <div class="startup-preloader__content">
         <div class="startup-preloader__logo-wrap">
@@ -21,6 +21,70 @@
         <div class="startup-preloader__bar"><span></span></div>
       </div>
     </div>
+    <section id="account-gate" class="account-gate" aria-label="Login obrigatório">
+      <div class="account-gate__backdrop" aria-hidden="true"></div>
+      <div class="account-gate__panel" role="dialog" aria-modal="true" aria-labelledby="account-gate-title">
+        <img class="account-gate__logo" src="./assets/Faber-Code-Logo-02.png" alt="Faber Code" />
+        <h1 id="account-gate-title" class="sr-only">Login Faber Code</h1>
+        <div id="account-gate-actions" class="account-gate__actions">
+          <button id="account-gate-email-toggle" type="button" class="btn btn-muted account-gate__wide-action">
+            Logar com e-mail
+          </button>
+          <span class="account-gate__separator">ou</span>
+          <button id="account-gate-google-login" type="button" class="btn btn-muted account-gate__wide-action account-gate__google-action">
+            <span class="account-gate__google-mark" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path fill="#4285f4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.58c2.09-1.93 3.27-4.78 3.27-8.09z"></path>
+                <path fill="#34a853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.58-2.77c-.98.66-2.23 1.06-3.7 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"></path>
+                <path fill="#fbbc05" d="M5.84 14.1c-.22-.66-.35-1.36-.35-2.1s.13-1.44.35-2.1V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l3.66-2.84z"></path>
+                <path fill="#ea4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84C6.71 7.3 9.14 5.38 12 5.38z"></path>
+              </svg>
+            </span>
+            <span>Logar com o Google</span>
+          </button>
+          <button id="account-gate-sign-out" type="button" class="btn btn-muted hidden">Sair da conta</button>
+        </div>
+        <form id="account-gate-email-form" class="account-gate__email-form hidden" autocomplete="on">
+          <label class="account-gate__field" for="account-gate-email">
+            <span>E-mail</span>
+            <input id="account-gate-email" type="email" placeholder="voce@email.com" autocomplete="email" />
+          </label>
+          <label class="account-gate__field" for="account-gate-password">
+            <span>Senha</span>
+            <input id="account-gate-password" type="password" placeholder="Sua senha" autocomplete="current-password" />
+          </label>
+          <div id="account-gate-signup-fields" class="account-gate__signup-fields hidden">
+            <label class="account-gate__field" for="account-gate-full-name">
+              <span>Nome completo</span>
+              <input id="account-gate-full-name" type="text" placeholder="Seu nome completo" autocomplete="name" />
+            </label>
+            <label class="account-gate__field" for="account-gate-theme">
+              <span>Cor do painel</span>
+              <select id="account-gate-theme">
+                <option value="dark">Escuro</option>
+                <option value="light">Claro</option>
+              </select>
+            </label>
+            <label class="account-gate__field" for="account-gate-language">
+              <span>Idioma</span>
+              <select id="account-gate-language">
+                <option value="pt-BR">Português (Brasil)</option>
+                <option value="en-US">English</option>
+                <option value="es-ES">Español</option>
+              </select>
+            </label>
+          </div>
+          <button id="account-gate-email-submit" type="submit" class="btn btn-success account-gate__wide-action">Entrar</button>
+          <button id="account-gate-create-toggle" type="button" class="account-gate__link">
+            Não tem uma conta? Crie aqui.
+          </button>
+          <button id="account-gate-back" type="button" class="account-gate__back-action" aria-label="Voltar para escolher outra forma de login">
+            <span aria-hidden="true">&larr;</span>
+          </button>
+        </form>
+        <div id="account-gate-status" class="account-gate__status" aria-live="polite"></div>
+      </div>
+    </section>
     <div id="app-drag-region" class="app-drag-region" aria-hidden="true"></div>
     <div class="app-shell">
       <aside class="panel panel-left">
@@ -101,12 +165,13 @@
             <div class="input-shell">
               <textarea
                 id="user-input"
-                placeholder="Descreva o que você precisa. A IA sempre vai confirmar antes de editar qualquer arquivo."
+                placeholder="Descreva a tarefa para este projeto."
               ></textarea>
               <button id="btn-attach" class="icon-btn attach-btn" title="Anexar imagem" aria-label="Anexar imagem">+</button>
               <select id="composer-provider" class="composer-provider" title="Selecionar IA do projeto" aria-label="Selecionar IA do projeto">
                 <option value="mock">Mock Local</option>
                 <option value="rwkv">RWKV Local</option>
+                <option value="openai">OpenAI API</option>
                 <option value="gemini">Gemini API</option>
                 <option value="sambanova">SambaNova API</option>
               </select>
@@ -135,6 +200,32 @@
           <ul id="next-steps-list" class="hidden"></ul>
           
         </div>
+
+        <section id="project-terminal-panel" class="project-terminal-panel hidden" aria-label="Terminal do projeto">
+          <div class="project-terminal-head">
+            <div class="project-terminal-title">
+              <strong>Terminal</strong>
+              <span id="project-terminal-cwd">.</span>
+            </div>
+            <div class="project-terminal-actions">
+              <button id="project-terminal-placement" type="button" class="project-terminal-icon-btn" title="Alternar posição" aria-label="Alternar posição">↕</button>
+              <button id="project-terminal-new-tab" type="button" class="project-terminal-icon-btn" title="Novo terminal" aria-label="Novo terminal">+</button>
+              <button id="project-terminal-clear" type="button" class="project-terminal-icon-btn" title="Limpar terminal" aria-label="Limpar terminal">⌫</button>
+              <button id="project-terminal-stop" type="button" class="project-terminal-icon-btn" title="Interromper comando" aria-label="Interromper comando">■</button>
+              <button id="project-terminal-minimize" type="button" class="project-terminal-icon-btn" title="Minimizar terminal" aria-label="Minimizar terminal">−</button>
+              <button id="project-terminal-close" type="button" class="project-terminal-icon-btn" title="Fechar terminal" aria-label="Fechar terminal">×</button>
+            </div>
+          </div>
+          <div id="project-terminal-tabs" class="project-terminal-tabs" role="tablist" aria-label="Terminais abertos"></div>
+          <div id="project-terminal-body" class="project-terminal-body">
+            <pre id="project-terminal-output" class="project-terminal-output" aria-live="polite"></pre>
+            <form id="project-terminal-form" class="project-terminal-form">
+              <span id="project-terminal-prompt" class="project-terminal-prompt">$</span>
+              <input id="project-terminal-input" type="text" autocomplete="off" spellcheck="false" aria-label="Comando do terminal" />
+              <button id="project-terminal-run" type="submit" class="project-terminal-run" title="Executar comando" aria-label="Executar comando">↵</button>
+            </form>
+          </div>
+        </section>
 
         <div id="cortex-learning-box" class="next-steps-box hidden">
           <h3>Regras e contexto</h3>
@@ -166,6 +257,15 @@
             <button id="btn-project-deploy" class="project-panel-btn" type="button" title="Executar projeto localmente">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
               <span>Executar</span>
+            </button>
+            <button id="btn-automata-contracts" class="project-panel-btn automata-contracts-btn" type="button" title="Revisar contratos Automata staged" aria-label="Contratos Automata">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h9l3 3v13H6V4Zm9 0v4h4M9 11h6M9 15h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span>Contratos</span>
+              <small id="automata-contracts-count" class="automata-contracts-count hidden">0</small>
+            </button>
+            <button id="btn-project-terminal" class="project-panel-btn" type="button" title="Abrir terminal do projeto">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 4 4-4 4m6 2h8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span>Terminal</span>
             </button>
           </div>
         </div>
@@ -288,6 +388,28 @@
       <button type="button" data-action="reveal">Mostrar na pasta</button>
     </div>
 
+    <div id="automata-contract-ledger-panel" class="automata-contract-ledger hidden" aria-hidden="true">
+      <div id="automata-contract-ledger-backdrop" class="automata-contract-ledger__backdrop"></div>
+      <div class="automata-contract-ledger__dialog" role="dialog" aria-modal="true" aria-label="Automata Contract Ledger">
+        <div class="automata-contract-ledger__head">
+          <div>
+            <strong>Automata Contract Ledger</strong>
+            <span>Contratos locais em staged, teste e promocao.</span>
+          </div>
+          <button id="automata-contract-ledger-close" type="button" class="automata-contract-ledger__close" aria-label="Fechar">×</button>
+        </div>
+        <div id="automata-contract-ledger-empty" class="automata-contract-ledger__empty">
+          Nenhum contrato staged neste projeto.
+        </div>
+        <div id="automata-contract-ledger-list" class="automata-contract-ledger__list"></div>
+        <div class="automata-contract-ledger__footer">
+          <button id="automata-contract-ledger-push-selected" type="button" class="automata-contract-ledger__push">
+            Push selecionados
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div id="project-file-modal" class="project-file-modal hidden" aria-hidden="true">
       <div class="project-file-modal__backdrop" data-close="1"></div>
       <div class="project-file-modal__dialog" role="dialog" aria-modal="true" aria-label="Visualizador de arquivo">
@@ -324,6 +446,14 @@
               <strong>Idioma</strong>
               <span>Português, inglês ou espanhol para a experiência da ferramenta</span>
             </button>
+            <button id="ai-settings-open-appearance" type="button" class="ai-settings-home-btn">
+              <strong>Aparência</strong>
+              <span>Tema claro/escuro, logos e tamanho da fonte dos painéis</span>
+            </button>
+            <button id="ai-settings-open-account" type="button" class="ai-settings-home-btn">
+              <strong>Conta</strong>
+              <span>Login com email ou Google para liberar serviços de plataforma</span>
+            </button>
             <button id="ai-settings-open-apis" type="button" class="ai-settings-home-btn">
               <strong>Configurar APIs</strong>
               <span>Veja chaves salvas, edite somente ao clicar em editar e adicione novos serviços</span>
@@ -345,6 +475,59 @@
             </label>
             <p class="ai-settings-help">
               A preferência fica salva no projeto da ferramenta. A tradução completa dos rótulos será evoluída por etapas.
+            </p>
+          </div>
+
+          <div id="ai-settings-appearance-panel" class="ai-settings-panel hidden">
+            <div class="ai-settings-panel-head">
+              <button id="ai-settings-back-home-appearance" type="button" class="btn btn-muted">Voltar</button>
+              <span>Aparência</span>
+            </div>
+            <label id="ai-settings-theme-field" class="ai-settings-field">
+              <span>Tema</span>
+              <select id="ai-settings-theme">
+                <option value="dark">Escuro</option>
+                <option value="light">Claro</option>
+              </select>
+            </label>
+            <label id="ai-settings-font-field" class="ai-settings-field ai-settings-range-field">
+              <span>Tamanho da fonte dos painéis</span>
+              <strong id="ai-settings-font-scale-value">100%</strong>
+              <input id="ai-settings-font-scale" type="range" min="90" max="120" step="5" value="100" />
+            </label>
+            <p id="ai-settings-appearance-help" class="ai-settings-help">
+              Ajuste visual aplicado à interface do Faber Code neste dispositivo.
+            </p>
+          </div>
+
+          <div id="ai-settings-account-panel" class="ai-settings-panel hidden">
+            <div class="ai-settings-panel-head">
+              <button id="ai-settings-back-home-account" type="button" class="btn btn-muted">Voltar</button>
+              <span>Conta</span>
+            </div>
+
+            <p id="ai-settings-account-status" class="ai-settings-current">Conta ainda não conectada.</p>
+
+            <div class="ai-settings-account-actions">
+              <button id="ai-settings-google-login" type="button" class="btn btn-success">Entrar com Google</button>
+              <button id="ai-settings-sign-out" type="button" class="btn btn-muted hidden">Sair</button>
+            </div>
+
+            <div class="ai-settings-account-email">
+              <label class="ai-settings-field" for="ai-settings-account-email">
+                <span>Email</span>
+                <input id="ai-settings-account-email" type="email" placeholder="voce@email.com" autocomplete="email" />
+              </label>
+              <button id="ai-settings-email-start" type="button" class="btn btn-muted">Enviar código</button>
+              <label class="ai-settings-field" for="ai-settings-account-code">
+                <span>Código de acesso</span>
+                <input id="ai-settings-account-code" type="text" inputmode="numeric" placeholder="000000" autocomplete="one-time-code" />
+              </label>
+              <button id="ai-settings-email-complete" type="button" class="btn btn-success">Confirmar email</button>
+            </div>
+
+            <p id="ai-settings-account-help" class="ai-settings-help">
+              O login registra o usuário no backend do Faber Code e libera serviços de plataforma, como mídia contextual para blueprints.
             </p>
           </div>
 
@@ -373,27 +556,34 @@
               <input id="ai-settings-editor-id" type="hidden" />
               <input id="ai-settings-editor-kind" type="hidden" />
 
-              <label class="ai-settings-field">
+              <label class="ai-settings-field" for="ai-settings-editor-provider">
                 <span>Serviço</span>
                 <input id="ai-settings-editor-provider" type="text" placeholder="Ex: OpenAI" autocomplete="off" />
               </label>
 
-              <label class="ai-settings-field">
+              <label class="ai-settings-field" for="ai-settings-editor-label">
                 <span>Nome/Identificação</span>
                 <input id="ai-settings-editor-label" type="text" placeholder="Ex: Produção, Homologação, Pessoal" autocomplete="off" />
               </label>
 
-              <label class="ai-settings-field">
-                <span>Modelo</span>
-                <input id="ai-settings-editor-model" type="text" placeholder="Ex: gpt-4.1-mini / gemini-2.0-flash" autocomplete="off" />
+              <label class="ai-settings-field" for="ai-settings-editor-model-preset">
+                <span>Modelo recomendado</span>
+                <select id="ai-settings-editor-model-preset">
+                  <option value="">Modelo customizado</option>
+                </select>
               </label>
 
-              <label class="ai-settings-field">
+              <label class="ai-settings-field" for="ai-settings-editor-model">
+                <span>Modelo customizado</span>
+                <input id="ai-settings-editor-model" type="text" placeholder="Ex: gpt-5-codex / gemini-2.0-flash" autocomplete="off" />
+              </label>
+
+              <label class="ai-settings-field" for="ai-settings-editor-key">
                 <span>API Key</span>
                 <input id="ai-settings-editor-key" type="password" placeholder="Cole a chave (deixe vazio para manter a atual)" autocomplete="off" />
               </label>
 
-              <label class="ai-settings-field">
+              <label class="ai-settings-field" for="ai-settings-editor-website">
                 <span>Site oficial (opcional)</span>
                 <input id="ai-settings-editor-website" type="text" placeholder="https://..." autocomplete="off" />
               </label>
@@ -437,6 +627,38 @@
     <script src="../node_modules/codemirror/mode/htmlmixed/htmlmixed.js"></script>
     <script src="../node_modules/codemirror/mode/markdown/markdown.js"></script>
     <script src="../node_modules/codemirror/mode/meta.js"></script>
+    <script src="./bootstrap_guard.js"></script>
+    <script src="./app_state.js"></script>
+    <script src="./app_formatters.js"></script>
+    <script src="./app_conversations.js"></script>
+    <script src="./app_projects.js"></script>
+    <script src="./app_jobs.js"></script>
+    <script src="./app_actions.js"></script>
+    <script src="./app_events.js"></script>
+    <script src="./startup_preloader.js"></script>
+    <script src="./i18n.js"></script>
+    <script src="./ui_appearance.js"></script>
+    <script src="./app_preferences.js"></script>
+    <script src="./account_gate.js"></script>
+    <script src="./ai_settings_support.js"></script>
+    <script src="./ai_settings_draft.js"></script>
+    <script src="./ai_settings_elements.js"></script>
+    <script src="./ai_settings_account_panel.js"></script>
+    <script src="./ai_settings_controller.js"></script>
+    <script src="./ai_settings.js"></script>
+    <script src="./chat_composer.js"></script>
+    <script src="./cortex_controller.js"></script>
+    <script src="./inline_input_dialog.js"></script>
+    <script src="./job_progress.js"></script>
+    <script src="./panel_layout.js"></script>
+    <script src="./automata_contracts.js"></script>
+    <script src="./project_tools.js"></script>
+    <script src="./project_sidebar.js"></script>
+    <script src="./project_state_modal.js"></script>
+    <script src="./project_file_editor.js"></script>
+    <script src="./project_file_tree.js"></script>
+    <script src="./project_terminal.js"></script>
+    <script src="./welcome_project_modal.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

@@ -1,6 +1,7 @@
 function normalizeProviderKey(provider) {
   const raw = String(provider || '').trim().toLowerCase();
   if (!raw) return null;
+  if (raw.includes('openai') || raw === 'oai') return 'openai';
   if (raw.includes('sambanova')) return 'sambanova';
   if (raw.includes('gemini') || raw.includes('google')) return 'gemini';
   return null;
@@ -20,6 +21,77 @@ function normalizeChatMessagesForCompletion(messages = []) {
         })
         .filter(Boolean)
     : [];
+}
+
+function resolveOpenAiBaseUrl(baseUrl = 'https://api.openai.com/v1') {
+  const value = String(baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '');
+  if (value.endsWith('/chat/completions')) return value.slice(0, -'/chat/completions'.length);
+  if (value.endsWith('/responses')) return value.slice(0, -'/responses'.length);
+  return value;
+}
+
+function shouldUseOpenAiResponsesApi(model = '') {
+  return /\bcodex\b/i.test(String(model || ''));
+}
+
+function normalizeMessagesForOpenAiResponses(messages = []) {
+  const normalizedMessages = normalizeChatMessagesForCompletion(messages);
+  const instructions = normalizedMessages
+    .filter((message) => message.role === 'system')
+    .map((message) => message.content)
+    .join('\n\n')
+    .trim();
+  const inputMessages = normalizedMessages
+    .filter((message) => message.role !== 'system')
+    .map((message) => ({
+      role: message.role === 'assistant' ? 'assistant' : 'user',
+      content: message.content,
+    }));
+
+  return {
+    instructions,
+    input: inputMessages.length === 1 && inputMessages[0].role === 'user'
+      ? inputMessages[0].content
+      : inputMessages,
+  };
+}
+
+function extractOpenAiResponsesText(data = {}) {
+  const directText = typeof data.output_text === 'string' ? data.output_text.trim() : '';
+  if (directText) return directText;
+
+  function collectTextFragments(value, fragments = []) {
+    if (!value) return fragments;
+    if (typeof value === 'string') {
+      fragments.push(value);
+      return fragments;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => collectTextFragments(item, fragments));
+      return fragments;
+    }
+    if (typeof value !== 'object') return fragments;
+
+    if (typeof value.output_text === 'string') fragments.push(value.output_text);
+    if (typeof value.text === 'string') {
+      fragments.push(value.text);
+    } else if (value.text && typeof value.text.value === 'string') {
+      fragments.push(value.text.value);
+    }
+    if (typeof value.content === 'string') {
+      fragments.push(value.content);
+    } else if (Array.isArray(value.content)) {
+      collectTextFragments(value.content, fragments);
+    }
+    return fragments;
+  }
+
+  const output = Array.isArray(data.output) ? data.output : [];
+  const text = collectTextFragments(output, [])
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+  return text;
 }
 
 function buildGeminiPromptFromMessages(messages = []) {
@@ -51,6 +123,8 @@ function createRemoteProviderClients(dependencies = {}) {
     AI_REQUEST_TIMEOUT_MS = 420000,
     GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta',
     GEMINI_MIN_REQUEST_INTERVAL_MS = 0,
+    OPENAI_API_BASE_URL = 'https://api.openai.com/v1',
+    OPENAI_MIN_REQUEST_INTERVAL_MS = 0,
     RWKV_TEMPERATURE = 0.2,
     RWKV_TOP_P = 0.9,
     SAMBANOVA_API_BASE_URL = 'https://api.sambanova.ai/v1',
@@ -65,12 +139,15 @@ function createRemoteProviderClients(dependencies = {}) {
     fetchFn = globalThis.fetch,
     getEffectiveGeminiApiKey,
     getEffectiveGeminiModel,
+    getEffectiveOpenAiApiKey = () => '',
+    getEffectiveOpenAiModel = () => '',
     getEffectiveSambaNovaApiKey,
     getEffectiveSambaNovaModel,
     getSelectedCustomApiProfile,
     nowMs = () => Date.now(),
     resolveCustomApiEndpoint,
     resolveCustomProviderKind,
+    sanitizeOpenAiModelName = (value) => String(value || '').replace(/\s+/g, ''),
     sanitizeSambaNovaModelName,
     setTimeoutFn = setTimeout,
   } = dependencies;
@@ -93,6 +170,7 @@ function createRemoteProviderClients(dependencies = {}) {
   }
 
   let lastGeminiRequestAtMs = 0;
+  let lastOpenAiRequestAtMs = 0;
   let lastSambaNovaRequestAtMs = 0;
 
   async function throttleGeminiRequest() {
@@ -115,6 +193,16 @@ function createRemoteProviderClients(dependencies = {}) {
     await enforceProviderRequestsPerMinute('sambanova');
   }
 
+  async function throttleOpenAiRequest() {
+    await enforceProviderCooldown('openai');
+    const elapsedSinceLastCall = nowMs() - lastOpenAiRequestAtMs;
+    const minInterval = Math.max(0, Number(OPENAI_MIN_REQUEST_INTERVAL_MS) || 0);
+    if (minInterval > 0 && elapsedSinceLastCall < minInterval) {
+      await delayMs(minInterval - elapsedSinceLastCall);
+    }
+    await enforceProviderRequestsPerMinute('openai');
+  }
+
   async function callOpenAiCompatibleChat({
     endpoint,
     apiKey,
@@ -135,6 +223,8 @@ function createRemoteProviderClients(dependencies = {}) {
 
     if (providerKey === 'sambanova') {
       await throttleSambaNovaRequest();
+    } else if (providerKey === 'openai') {
+      await throttleOpenAiRequest();
     } else {
       await enforceProviderCooldown(providerKey);
     }
@@ -146,6 +236,8 @@ function createRemoteProviderClients(dependencies = {}) {
     try {
       if (providerKey === 'sambanova') {
         lastSambaNovaRequestAtMs = nowMs();
+      } else if (providerKey === 'openai') {
+        lastOpenAiRequestAtMs = nowMs();
       }
       const response = await fetchFn(endpoint, {
         method: 'POST',
@@ -193,6 +285,71 @@ function createRemoteProviderClients(dependencies = {}) {
       return text;
     } catch (error) {
       applyProviderCooldownFromReason(providerKey, error && error.message ? error.message : String(error || ''), 1);
+      throw error;
+    } finally {
+      clearTimeoutFn(timeout);
+    }
+  }
+
+  async function callOpenAiResponses({
+    endpoint,
+    apiKey,
+    model,
+    messages,
+    timeoutMs = AI_REQUEST_TIMEOUT_MS,
+    requestOptions = {},
+    providerLabel = 'OpenAI',
+  }) {
+    assertReady();
+    if (!endpoint) throw new Error(`${providerLabel} endpoint_unconfigured: informe um endpoint válido.`);
+    if (!apiKey) throw new Error(`${providerLabel} api_key_missing: configure a API key.`);
+    if (!model) throw new Error(`${providerLabel} model_unconfigured: configure um modelo válido.`);
+
+    const normalizedMessages = normalizeChatMessagesForCompletion(messages);
+    if (!normalizedMessages.length) throw new Error(`Prompt vazio para ${providerLabel}.`);
+
+    await throttleOpenAiRequest();
+
+    const controller = new abortController();
+    const timeout = setTimeoutFn(() => controller.abort(), timeoutMs);
+    const maxTokens = resolveNumPredict(requestOptions, { fallback: 256, min: 32, max: 4096 });
+    const responseInput = normalizeMessagesForOpenAiResponses(normalizedMessages);
+    const body = {
+      model: String(model).trim(),
+      input: responseInput.input,
+      max_output_tokens: maxTokens,
+    };
+    if (responseInput.instructions) body.instructions = responseInput.instructions;
+
+    try {
+      lastOpenAiRequestAtMs = nowMs();
+      const response = await fetchFn(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + apiKey,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const retryAfter = response.headers.get('retry-after');
+        const responseBody = await response.text().catch(() => '');
+        const clipped = String(responseBody || '').replace(/\s+/g, ' ').slice(0, 260);
+        const retryAfterText = retryAfter ? ' (retry-after:' + retryAfter + ')' : '';
+        const reason = `${providerLabel} HTTP ${response.status}${retryAfterText}${clipped ? ': ' + clipped : ''}`;
+        applyProviderCooldownFromReason('openai', reason, 1);
+        throw new Error(reason);
+      }
+
+      const data = await response.json();
+      const text = extractOpenAiResponsesText(data);
+      if (!text) throw new Error(`${providerLabel} não retornou texto gerado.`);
+      clearProviderCooldown('openai');
+      return text;
+    } catch (error) {
+      applyProviderCooldownFromReason('openai', error && error.message ? error.message : String(error || ''), 1);
       throw error;
     } finally {
       clearTimeoutFn(timeout);
@@ -342,6 +499,38 @@ function createRemoteProviderClients(dependencies = {}) {
     }
   }
 
+  async function callOpenAiChat(model, messages, timeoutMs = AI_REQUEST_TIMEOUT_MS, requestOptions = {}) {
+    assertReady();
+    const apiKey = getEffectiveOpenAiApiKey();
+    const effectiveModel = sanitizeOpenAiModelName(model || getEffectiveOpenAiModel());
+    const baseUrl = resolveOpenAiBaseUrl(OPENAI_API_BASE_URL);
+
+    if (shouldUseOpenAiResponsesApi(effectiveModel)) {
+      const responsesEndpoint = baseUrl.endsWith('/responses') ? baseUrl : baseUrl + '/responses';
+      return callOpenAiResponses({
+        endpoint: responsesEndpoint,
+        apiKey,
+        model: effectiveModel,
+        messages,
+        timeoutMs,
+        requestOptions,
+        providerLabel: 'OpenAI',
+      });
+    }
+
+    const endpoint = baseUrl.endsWith('/chat/completions') ? baseUrl : baseUrl + '/chat/completions';
+
+    return callOpenAiCompatibleChat({
+      endpoint,
+      apiKey,
+      model: effectiveModel,
+      messages,
+      timeoutMs,
+      requestOptions,
+      providerLabel: 'OpenAI',
+    });
+  }
+
   async function callCustomProviderChat(selectedProvider, model, messages, timeoutMs = AI_REQUEST_TIMEOUT_MS, requestOptions = {}) {
     assertReady();
     const profile = getSelectedCustomApiProfile(selectedProvider);
@@ -437,6 +626,7 @@ function createRemoteProviderClients(dependencies = {}) {
     buildGeminiPromptFromMessages,
     callCustomProviderChat,
     callGeminiChat,
+    callOpenAiChat,
     callOpenAiCompatibleChat,
     callSambaNovaChat,
     normalizeChatMessagesForCompletion,
@@ -444,9 +634,13 @@ function createRemoteProviderClients(dependencies = {}) {
 }
 
 module.exports = {
-  buildGeminiPromptFromMessages,
-  createRemoteProviderClients,
-  normalizeChatMessagesForCompletion,
-  normalizeProviderKey,
-  resolveNumPredict,
-};
+    buildGeminiPromptFromMessages,
+    createRemoteProviderClients,
+    extractOpenAiResponsesText,
+    normalizeChatMessagesForCompletion,
+    normalizeMessagesForOpenAiResponses,
+    normalizeProviderKey,
+    resolveOpenAiBaseUrl,
+    resolveNumPredict,
+    shouldUseOpenAiResponsesApi,
+  };

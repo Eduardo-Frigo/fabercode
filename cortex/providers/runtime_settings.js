@@ -4,6 +4,7 @@ function normalizeAiProviderName(rawValue) {
     .toLowerCase();
   if (!normalized) return 'rwkv';
   if (normalized.startsWith('custom:')) return normalized;
+  if (normalized === 'openai' || normalized === 'oai' || normalized.includes('openai')) return 'openai';
   if (normalized === 'gemini' || normalized === 'google' || normalized.includes('gemini')) return 'gemini';
   if (normalized === 'sambanova' || normalized.replace(/\s+/g, '') === 'sambanova' || normalized.includes('samba')) return 'sambanova';
   if (normalized === 'mock' || normalized.includes('mock')) return 'mock';
@@ -17,10 +18,28 @@ function sanitizeModelName(rawValue) {
   return value.replace(/\s+/g, '');
 }
 
+function sanitizeOpenAiModelName(rawValue) {
+  const value = sanitizeModelName(rawValue);
+  const normalized = value.toLowerCase();
+  if (normalized === 'gpt-5.3-codex' || normalized === 'gpt-5-3-codex') return 'gpt-5-codex';
+  return value;
+}
+
 function sanitizeInterfaceLanguage(rawValue) {
   const value = String(rawValue || '').trim();
   const allowed = new Set(['pt-BR', 'en-US', 'es-ES']);
   return allowed.has(value) ? value : 'pt-BR';
+}
+
+function sanitizeInterfaceTheme(rawValue) {
+  const value = String(rawValue || '').trim().toLowerCase();
+  return value === 'light' ? 'light' : 'dark';
+}
+
+function sanitizePanelFontScale(rawValue) {
+  const value = Number(rawValue);
+  if (!Number.isFinite(value)) return 100;
+  return Math.min(120, Math.max(90, Math.round(value / 5) * 5));
 }
 
 function createAiRuntimeSettingsService(dependencies = {}) {
@@ -30,7 +49,10 @@ function createAiRuntimeSettingsService(dependencies = {}) {
     geminiApiKey = '',
     geminiModelBrain = '',
     getUserDataPath,
+    openaiApiKey = '',
+    openaiModelBrain = '',
     path,
+    pexelsApiKey = '',
     protectSecret = (value) => String(value || '').trim(),
     sambanovaApiKey = '',
     sambanovaModelBrain = '',
@@ -51,9 +73,10 @@ function createAiRuntimeSettingsService(dependencies = {}) {
     return normalizeAiProviderName(aiProviderEnv || 'rwkv');
   }
 
-  function getSafeFallbackProvider() {
+  function getSafeFallbackProvider(disabledBuiltInProviders = []) {
     const fallback = getDefaultProvider();
-    return fallback.startsWith('custom:') ? 'rwkv' : fallback;
+    const disabled = new Set(sanitizeDisabledBuiltInProviders(disabledBuiltInProviders));
+    return fallback.startsWith('custom:') || disabled.has(fallback) ? 'rwkv' : fallback;
   }
 
   function ensureStore() {
@@ -96,7 +119,7 @@ function createAiRuntimeSettingsService(dependencies = {}) {
   }
 
   function sanitizeDisabledBuiltInProviders(rawList) {
-    const allowed = new Set(['gemini', 'sambanova']);
+    const allowed = new Set(['openai', 'gemini', 'sambanova']);
     const list = Array.isArray(rawList) ? rawList : [];
     return Array.from(
       new Set(
@@ -124,11 +147,11 @@ function createAiRuntimeSettingsService(dependencies = {}) {
   function resolveSelectedProvider(selectedProvider, customApis = [], disabledBuiltInProviders = []) {
     const normalized = normalizeAiProviderName(selectedProvider || getDefaultProvider());
     const disabled = new Set(sanitizeDisabledBuiltInProviders(disabledBuiltInProviders));
-    if (disabled.has(normalized)) return getSafeFallbackProvider();
+    if (disabled.has(normalized)) return getSafeFallbackProvider(disabledBuiltInProviders);
     if (!normalized.startsWith('custom:')) return normalized;
     const customId = normalized.slice('custom:'.length);
     const exists = sanitizeCustomApiProfiles(customApis).some((item) => String(item.id || '').toLowerCase() === customId);
-    return exists ? normalized : getSafeFallbackProvider();
+    return exists ? normalized : getSafeFallbackProvider(disabledBuiltInProviders);
   }
 
   function readSettings() {
@@ -145,6 +168,12 @@ function createAiRuntimeSettingsService(dependencies = {}) {
           disabledBuiltInProviders
         ),
         interfaceLanguage: sanitizeInterfaceLanguage(parsed && parsed.interfaceLanguage),
+        interfaceTheme: sanitizeInterfaceTheme(parsed && parsed.interfaceTheme),
+        panelFontScale: sanitizePanelFontScale(parsed && parsed.panelFontScale),
+        openaiApiKey: parsed && typeof parsed.openaiApiKey === 'string' ? unprotectSecret(parsed.openaiApiKey) : '',
+        openaiModel: parsed && typeof parsed.openaiModel === 'string' ? sanitizeOpenAiModelName(parsed.openaiModel) : '',
+        openaiApiLabel: parsed && typeof parsed.openaiApiLabel === 'string' ? parsed.openaiApiLabel.trim() : '',
+        pexelsApiKey: parsed && typeof parsed.pexelsApiKey === 'string' ? unprotectSecret(parsed.pexelsApiKey) : '',
         geminiApiKey: parsed && typeof parsed.geminiApiKey === 'string' ? unprotectSecret(parsed.geminiApiKey) : '',
         geminiModel: parsed && typeof parsed.geminiModel === 'string' ? parsed.geminiModel.trim() : '',
         geminiApiLabel: parsed && typeof parsed.geminiApiLabel === 'string' ? parsed.geminiApiLabel.trim() : '',
@@ -158,6 +187,12 @@ function createAiRuntimeSettingsService(dependencies = {}) {
       return {
         selectedProvider: getDefaultProvider(),
         interfaceLanguage: 'pt-BR',
+        interfaceTheme: 'dark',
+        panelFontScale: 100,
+        openaiApiKey: '',
+        openaiModel: '',
+        openaiApiLabel: '',
+        pexelsApiKey: '',
         geminiApiKey: '',
         geminiModel: '',
         geminiApiLabel: '',
@@ -182,6 +217,12 @@ function createAiRuntimeSettingsService(dependencies = {}) {
     const hasCustomApis = Object.prototype.hasOwnProperty.call(settings, 'customApis');
     const hasDisabledBuiltInProviders = Object.prototype.hasOwnProperty.call(settings, 'disabledBuiltInProviders');
     const hasInterfaceLanguage = Object.prototype.hasOwnProperty.call(settings, 'interfaceLanguage');
+    const hasInterfaceTheme = Object.prototype.hasOwnProperty.call(settings, 'interfaceTheme');
+    const hasPanelFontScale = Object.prototype.hasOwnProperty.call(settings, 'panelFontScale');
+    const hasOpenAiApiKey = Object.prototype.hasOwnProperty.call(settings, 'openaiApiKey');
+    const hasOpenAiModel = Object.prototype.hasOwnProperty.call(settings, 'openaiModel');
+    const hasOpenAiApiLabel = Object.prototype.hasOwnProperty.call(settings, 'openaiApiLabel');
+    const hasPexelsApiKey = Object.prototype.hasOwnProperty.call(settings, 'pexelsApiKey');
     const customApis = hasCustomApis
       ? mergeCustomApisKeepingExistingKeys(current.customApis || [], settings.customApis)
       : sanitizeCustomApiProfiles(current.customApis);
@@ -198,6 +239,24 @@ function createAiRuntimeSettingsService(dependencies = {}) {
       interfaceLanguage: hasInterfaceLanguage
         ? sanitizeInterfaceLanguage(settings.interfaceLanguage)
         : sanitizeInterfaceLanguage(current.interfaceLanguage),
+      interfaceTheme: hasInterfaceTheme
+        ? sanitizeInterfaceTheme(settings.interfaceTheme)
+        : sanitizeInterfaceTheme(current.interfaceTheme),
+      panelFontScale: hasPanelFontScale
+        ? sanitizePanelFontScale(settings.panelFontScale)
+        : sanitizePanelFontScale(current.panelFontScale),
+      openaiApiKey: hasOpenAiApiKey
+        ? String(settings.openaiApiKey || '').trim()
+        : String(current.openaiApiKey || '').trim(),
+      openaiModel: hasOpenAiModel
+        ? sanitizeOpenAiModelName(settings.openaiModel || '')
+        : sanitizeOpenAiModelName(current.openaiModel || ''),
+      openaiApiLabel: hasOpenAiApiLabel
+        ? String(settings.openaiApiLabel || '').trim()
+        : String(current.openaiApiLabel || '').trim(),
+      pexelsApiKey: hasPexelsApiKey
+        ? String(settings.pexelsApiKey || '').trim()
+        : String(current.pexelsApiKey || '').trim(),
       geminiApiKey: hasGeminiApiKey
         ? String(settings.geminiApiKey || '').trim()
         : String(current.geminiApiKey || '').trim(),
@@ -222,6 +281,8 @@ function createAiRuntimeSettingsService(dependencies = {}) {
 
     const stored = {
       ...next,
+      openaiApiKey: protectSecret(next.openaiApiKey),
+      pexelsApiKey: protectSecret(next.pexelsApiKey),
       geminiApiKey: protectSecret(next.geminiApiKey),
       sambanovaApiKey: protectSecret(next.sambanovaApiKey),
       customApis: sanitizeCustomApiProfiles(next.customApis).map((item) => ({
@@ -245,11 +306,31 @@ function createAiRuntimeSettingsService(dependencies = {}) {
     return String(geminiApiKey || '').trim();
   }
 
+  function getEffectiveOpenAiApiKey() {
+    const settings = readSettings();
+    const localKey = String(settings.openaiApiKey || '').trim();
+    if (localKey) return localKey;
+    return String(openaiApiKey || '').trim();
+  }
+
+  function getEffectivePexelsApiKey() {
+    const settings = readSettings();
+    const localKey = String(settings.pexelsApiKey || '').trim();
+    if (localKey) return localKey;
+    return String(pexelsApiKey || '').trim();
+  }
+
   function getEffectiveSambaNovaApiKey() {
     const settings = readSettings();
     const localKey = String(settings.sambanovaApiKey || '').trim();
     if (localKey) return localKey;
     return String(sambanovaApiKey || '').trim();
+  }
+
+  function getEffectiveOpenAiModel() {
+    const settings = readSettings();
+    const selectedModel = sanitizeOpenAiModelName(settings.openaiModel || '');
+    return selectedModel || sanitizeOpenAiModelName(openaiModelBrain);
   }
 
   function getEffectiveGeminiModel() {
@@ -271,6 +352,9 @@ function createAiRuntimeSettingsService(dependencies = {}) {
 
   return {
     ensureStore,
+    getEffectiveOpenAiApiKey,
+    getEffectiveOpenAiModel,
+    getEffectivePexelsApiKey,
     getEffectiveGeminiApiKey,
     getEffectiveGeminiModel,
     getEffectiveSambaNovaApiKey,
@@ -280,8 +364,11 @@ function createAiRuntimeSettingsService(dependencies = {}) {
     readSettings,
     resolveSelectedProvider,
     sanitizeDisabledBuiltInProviders,
+    sanitizeInterfaceTheme,
     sanitizeInterfaceLanguage,
+    sanitizePanelFontScale,
     sanitizeCustomApiProfiles,
+    sanitizeOpenAiModelName,
     sanitizeGeminiModelName: sanitizeModelName,
     sanitizeSambaNovaModelName: sanitizeModelName,
     setSelectedProvider,
@@ -292,5 +379,8 @@ function createAiRuntimeSettingsService(dependencies = {}) {
 module.exports = {
   createAiRuntimeSettingsService,
   normalizeAiProviderName,
+  sanitizeOpenAiModelName,
+  sanitizeInterfaceTheme,
   sanitizeInterfaceLanguage,
+  sanitizePanelFontScale,
 };

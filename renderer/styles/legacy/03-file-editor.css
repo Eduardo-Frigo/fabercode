@@ -1,0 +1,248 @@
+
+
+/* FILE-EDITOR-OVERRIDE-2026-05-04-V2 START */
+.project-file-editor-wrap {
+  display: grid !important;
+  grid-template-columns: 56px 1fr !important;
+  min-height: 560px !important;
+  max-height: calc(100vh - 210px) !important;
+  overflow: hidden !important;
+  background: #151515 !important;
+}
+.project-file-lines {
+  display: block !important;
+  margin: 0 !important;
+  padding: 12px 8px 12px 10px !important;
+  text-align: right !important;
+  color: #8f8f8f !important;
+  background: #121212 !important;
+  border-right: 1px solid rgba(255,255,255,0.08) !important;
+  user-select: none !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+  white-space: pre !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.74rem !important;
+  line-height: 1.5 !important;
+}
+.project-file-code-layer {
+  position: relative !important;
+  min-height: 100% !important;
+  overflow: hidden !important;
+}
+.project-file-modal__content {
+  display: block !important;
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 1 !important;
+  margin: 0 !important;
+  padding: 12px !important;
+  border: 0 !important;
+  background: #151515 !important;
+  color: #d7d7d7 !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+  white-space: pre !important;
+  tab-size: 2 !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.76rem !important;
+  line-height: 1.5 !important;
+}
+.project-file-editor {
+  display: block !important;
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 2 !important;
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+  padding: 12px !important;
+  border: 0 !important;
+  resize: none !important;
+  outline: none !important;
+  background: transparent !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  caret-color: #f2f2f2 !important;
+  pointer-events: auto !important;
+  overflow: auto !important;
+  white-space: pre !important;
+  tab-size: 2 !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.76rem !important;
+  line-height: 1.5 !important;
+}
+.project-file-editor::selection { background: rgba(255,255,255,0.24) !important; }
+
+.tok-comment { color: #9b9b9b !important; }
+.tok-string  { color: #e9d8a7 !important; }
+.tok-number  { color: #d7c38b !important; }
+.tok-key     { color: #f5f5f5 !important; font-weight: 700 !important; }
+/* FILE-EDITOR-OVERRIDE-2026-05-04-V2 END */
+
+
+/* FILE-EDITOR-OVERRIDE-2026-05-04-V3 START */
+.project-file-editor-wrap {
+  display: grid !important;
+  grid-template-columns: 56px 1fr !important;
+  min-height: 560px !important;
+  max-height: calc(100vh - 210px) !important;
+  overflow: hidden !important;
+  background: #151515 !important;
+}
+.project-file-lines {
+  display: block !important;
+  margin: 0 !important;
+  padding: 12px 8px 12px 10px !important;
+  text-align: right !important;
+  color: #8f8f8f !important;
+  background: #121212 !important;
+  border-right: 1px solid rgba(255,255,255,0.08) !important;
+  user-select: none !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+  white-space: pre !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.74rem !important;
+  line-height: 1.5 !important;
+}
+.project-file-code-layer {
+  position: relative !important;
+  min-height: 100% !important;
+  overflow: hidden !important;
+}
+.project-file-modal__content {
+  display: block !important;
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 1 !important;
+  margin: 0 !important;
+  padding: 12px !important;
+  border: 0 !important;
+  background: #151515 !important;
+  color: #d7d7d7 !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+  white-space: pre !important;
+  tab-size: 2 !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.76rem !important;
+  line-height: 1.5 !important;
+}
+.project-file-editor {
+  display: block !important;
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 2 !important;
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+  padding: 12px !important;
+  border: 0 !important;
+  resize: none !important;
+  outline: none !important;
+  background: transparent !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  caret-color: #f2f2f2 !important;
+  pointer-events: auto !important;
+  overflow: auto !important;
+  white-space: pre !important;
+  tab-size: 2 !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.76rem !important;
+  line-height: 1.5 !important;
+}
+.project-file-editor::selection { background: rgba(255,255,255,0.24) !important; }
+
+.tok-comment { color: #9b9b9b !important; }
+.tok-string  { color: #e9d8a7 !important; }
+.tok-number  { color: #d7c38b !important; }
+.tok-key     { color: #f5f5f5 !important; font-weight: 700 !important; }
+/* FILE-EDITOR-OVERRIDE-2026-05-04-V3 END */
+
+
+/* FILE-EDITOR-OVERRIDE-2026-05-04-V4 START */
+.project-file-editor-wrap {
+  display: grid !important;
+  grid-template-columns: 56px 1fr !important;
+  min-height: 560px !important;
+  max-height: calc(100vh - 210px) !important;
+  overflow: hidden !important;
+  background: #151515 !important;
+}
+.project-file-lines {
+  display: block !important;
+  margin: 0 !important;
+  padding: 12px 8px 12px 10px !important;
+  text-align: right !important;
+  color: #8f8f8f !important;
+  background: #121212 !important;
+  border-right: 1px solid rgba(255,255,255,0.08) !important;
+  user-select: none !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+  white-space: pre !important;
+}
+.project-file-code-layer {
+  position: relative !important;
+  min-height: 100% !important;
+  overflow: hidden !important;
+}
+.project-file-modal__content {
+  display: block !important;
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 1 !important;
+  margin: 0 !important;
+  padding: 12px !important;
+  background: #151515 !important;
+  color: #d7d7d7 !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+  white-space: pre !important;
+}
+.project-file-editor {
+  display: block !important;
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 2 !important;
+  background: transparent !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  caret-color: #f2f2f2 !important;
+  pointer-events: auto !important;
+  overflow: auto !important;
+}
+.tok-comment { color: #9b9b9b !important; }
+.tok-string  { color: #e9d8a7 !important; }
+.tok-number  { color: #d7c38b !important; }
+.tok-key     { color: #f5f5f5 !important; font-weight: 700 !important; }
+/* FILE-EDITOR-OVERRIDE-2026-05-04-V4 END */
+
+
+/* FINAL-UI-FIX-2026-05-04-V5 START */
+.project-file-modal__content {
+  pointer-events: none !important;
+}
+.project-file-editor {
+  pointer-events: auto !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
+.project-tree-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+.project-tree-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: #dcdcdc;
+}
+.project-tree-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;

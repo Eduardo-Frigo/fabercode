@@ -3,9 +3,13 @@ const assert = require('assert');
 const {
   buildGeminiPromptFromMessages,
   createRemoteProviderClients,
+  extractOpenAiResponsesText,
   normalizeChatMessagesForCompletion,
+  normalizeMessagesForOpenAiResponses,
   normalizeProviderKey,
+  resolveOpenAiBaseUrl,
   resolveNumPredict,
+  shouldUseOpenAiResponsesApi,
 } = require('../cortex/providers/remote_clients');
 
 class FakeAbortController {
@@ -42,6 +46,8 @@ function createHarness() {
     AI_REQUEST_TIMEOUT_MS: 1000,
     GEMINI_API_BASE_URL: 'https://gemini.test/v1beta',
     GEMINI_MIN_REQUEST_INTERVAL_MS: 0,
+    OPENAI_API_BASE_URL: 'https://openai.test/v1',
+    OPENAI_MIN_REQUEST_INTERVAL_MS: 0,
     RWKV_TEMPERATURE: 0.2,
     RWKV_TOP_P: 0.9,
     SAMBANOVA_API_BASE_URL: 'https://samba.test/v1',
@@ -60,6 +66,8 @@ function createHarness() {
     },
     getEffectiveGeminiApiKey: () => 'gemini-key',
     getEffectiveGeminiModel: () => 'gemini-default',
+    getEffectiveOpenAiApiKey: () => 'openai-key',
+    getEffectiveOpenAiModel: () => 'gpt-test',
     getEffectiveSambaNovaApiKey: () => 'samba-key',
     getEffectiveSambaNovaModel: () => 'samba-default',
     getSelectedCustomApiProfile: () => ({
@@ -74,10 +82,12 @@ function createHarness() {
     resolveCustomProviderKind: (providerName) => {
       const text = String(providerName || '').toLowerCase();
       if (text.includes('deepseek')) return 'deepseek';
+      if (text.includes('openai')) return 'openai';
       if (text.includes('samba')) return 'sambanova';
       if (text.includes('gemini')) return 'gemini';
       return 'custom';
     },
+    sanitizeOpenAiModelName: (value) => String(value || '').replace(/\s+/g, ''),
     sanitizeSambaNovaModelName: (value) => String(value || '').replace(/\s+/g, ''),
     setTimeoutFn: () => 1,
   });
@@ -88,7 +98,25 @@ function createHarness() {
 async function run() {
   assert.strictEqual(normalizeProviderKey('Google Gemini'), 'gemini');
   assert.strictEqual(normalizeProviderKey('SambaNova'), 'sambanova');
+  assert.strictEqual(normalizeProviderKey('OpenAI'), 'openai');
   assert.strictEqual(normalizeProviderKey('DeepSeek'), null);
+  assert.strictEqual(resolveOpenAiBaseUrl('https://api.openai.com/v1/chat/completions'), 'https://api.openai.com/v1');
+  assert.strictEqual(shouldUseOpenAiResponsesApi('gpt-5-codex'), true);
+  assert.strictEqual(shouldUseOpenAiResponsesApi('gpt-5.4-mini'), false);
+  assert.strictEqual(extractOpenAiResponsesText({ output_text: ' Codex OK ' }), 'Codex OK');
+  assert.strictEqual(extractOpenAiResponsesText({
+    output: [
+      { type: 'reasoning', summary: [] },
+      { type: 'message', content: [{ type: 'output_text', text: { value: ' Nested Codex OK ' } }] },
+    ],
+  }), 'Nested Codex OK');
+  assert.deepStrictEqual(normalizeMessagesForOpenAiResponses([
+    { role: 'system', content: 'S' },
+    { role: 'user', content: 'Olá' },
+  ]), {
+    instructions: 'S',
+    input: 'Olá',
+  });
   assert.strictEqual(resolveNumPredict({ runtimeBudget: { generationOptions: { num_predict: 1800 } } }), 1800);
   assert.strictEqual(resolveNumPredict({ options: { num_predict: 12 } }), 32);
   assert.deepStrictEqual(normalizeChatMessagesForCompletion([
@@ -127,6 +155,38 @@ async function run() {
   assert.strictEqual(samba.calls[0].body.model, 'sambamodel');
   assert.strictEqual(samba.calls[0].body.max_tokens, 32);
   assert.deepStrictEqual(samba.calls[0].body.messages, [{ role: 'system', content: 'S' }]);
+
+  const openai = createHarness();
+  openai.responses.push(createResponse({
+    json: { choices: [{ message: { content: ' OpenAI OK ' } }] },
+  }));
+  const openaiText = await openai.clients.callOpenAiChat(' gpt test ', [{ role: 'user', content: 'Olá' }], 1000, {
+    options: { num_predict: 700 },
+  });
+  assert.strictEqual(openaiText, 'OpenAI OK');
+  assert.strictEqual(openai.calls[0].url, 'https://openai.test/v1/chat/completions');
+  assert.strictEqual(openai.calls[0].options.headers.Authorization, 'Bearer openai-key');
+  assert.strictEqual(openai.calls[0].body.model, 'gpttest');
+  assert.strictEqual(openai.calls[0].body.max_tokens, 700);
+  assert.deepStrictEqual(openai.calls[0].body.messages, [{ role: 'user', content: 'Olá' }]);
+
+  const openaiCodex = createHarness();
+  openaiCodex.responses.push(createResponse({
+    json: { output_text: ' Codex OK ' },
+  }));
+  const openaiCodexText = await openaiCodex.clients.callOpenAiChat('gpt-5-codex', [
+    { role: 'system', content: 'Você edita código.' },
+    { role: 'user', content: 'Olá' },
+  ], 1000, {
+    options: { num_predict: 700 },
+  });
+  assert.strictEqual(openaiCodexText, 'Codex OK');
+  assert.strictEqual(openaiCodex.calls[0].url, 'https://openai.test/v1/responses');
+  assert.strictEqual(openaiCodex.calls[0].options.headers.Authorization, 'Bearer openai-key');
+  assert.strictEqual(openaiCodex.calls[0].body.model, 'gpt-5-codex');
+  assert.strictEqual(openaiCodex.calls[0].body.max_output_tokens, 700);
+  assert.strictEqual(openaiCodex.calls[0].body.instructions, 'Você edita código.');
+  assert.strictEqual(openaiCodex.calls[0].body.input, 'Olá');
 
   const custom = createHarness();
   custom.responses.push(createResponse({

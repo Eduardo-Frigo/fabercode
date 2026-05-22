@@ -1,5 +1,8 @@
 const defaultFs = require('fs');
 const defaultPath = require('path');
+const {
+  findCssImportOrderViolation,
+} = require('../../cortex/orchestration/css_operation_safety');
 
 function createPostExecutionQualityService(dependencies = {}) {
   const {
@@ -120,6 +123,17 @@ function createPostExecutionQualityService(dependencies = {}) {
         detail: 'Variável CSS com travessão unicode inválido em var(...).',
         hint: 'Usar --nome-da-variavel com hífen ASCII.',
         source: 'css_var_invalid_dash',
+      });
+    }
+
+    const importOrderViolation = findCssImportOrderViolation(text);
+    if (importOrderViolation) {
+      issues.push({
+        file: relPath,
+        severity: 'error',
+        detail: `@import CSS encontrado depois de regras na linha ${importOrderViolation.line}.`,
+        hint: 'Mover todos os @import para o topo do CSS antes de seletores, :root e media queries.',
+        source: 'css_import_order',
       });
     }
 

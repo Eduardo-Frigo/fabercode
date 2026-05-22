@@ -16,6 +16,7 @@ function normalizeAiProviderName(rawValue) {
   const normalized = String(rawValue || '').trim().toLowerCase();
   if (!normalized) return 'rwkv';
   if (normalized.startsWith('custom:')) return normalized;
+  if (normalized === 'openai' || normalized === 'oai' || normalized.includes('openai')) return 'openai';
   if (normalized === 'gemini' || normalized === 'google' || normalized.includes('gemini')) return 'gemini';
   if (normalized === 'sambanova' || normalized.replace(/\s+/g, '') === 'sambanova' || normalized.includes('samba')) return 'sambanova';
   if (normalized === 'mock' || normalized.includes('mock')) return 'mock';
@@ -59,6 +60,12 @@ async function run() {
   let settings = {
     selectedProvider: 'rwkv',
     interfaceLanguage: 'pt-BR',
+    interfaceTheme: 'dark',
+    panelFontScale: 100,
+    openaiApiKey: '',
+    openaiModel: '',
+    openaiApiLabel: '',
+    pexelsApiKey: '',
     geminiApiKey: '',
     geminiModel: '',
     geminiApiLabel: '',
@@ -82,14 +89,20 @@ async function run() {
 
   const deps = {
     AI_PROVIDER_ENV: 'rwkv',
-    AI_PROVIDER_OPTIONS: ['mock', 'rwkv', 'gemini', 'sambanova'],
+    AI_PROVIDER_OPTIONS: ['mock', 'rwkv', 'openai', 'gemini', 'sambanova'],
     GEMINI_API_KEY: 'env-gemini-9999',
+    OPENAI_API_BASE_URL: 'https://api.openai.com/v1',
+    OPENAI_API_KEY: 'env-openai-9999',
+    PEXELS_API_KEY: 'env-pexels-9999',
     SAMBANOVA_API_BASE_URL: 'https://api.sambanova.ai/v1',
     SAMBANOVA_API_KEY: '',
     appendAuditEvent: (type, payload) => audit.push({ type, payload }),
     getAiRuntimeStatus: async () => ({ ok: true, provider: settings.selectedProvider, ready: true }),
     getEffectiveGeminiApiKey: () => settings.geminiApiKey || 'env-gemini-9999',
     getEffectiveGeminiModel: () => settings.geminiModel || 'gemini-default',
+    getEffectiveOpenAiApiKey: () => settings.openaiApiKey || 'env-openai-9999',
+    getEffectiveOpenAiModel: () => settings.openaiModel || 'openai-default',
+    getEffectivePexelsApiKey: () => settings.pexelsApiKey || 'env-pexels-9999',
     getEffectiveSambaNovaApiKey: () => settings.sambanovaApiKey || '',
     getEffectiveSambaNovaModel: () => settings.sambanovaModel || 'samba-default',
     maskApiKeyTail,
@@ -98,6 +111,7 @@ async function run() {
     registerIpcHandler,
     sanitizeCustomApiProfiles,
     sanitizeGeminiModelName: sanitizeModelName,
+    sanitizeOpenAiModelName: sanitizeModelName,
     sanitizeSambaNovaModelName: sanitizeModelName,
     setSelectedAiProvider: (provider) => {
       settings = { ...settings, selectedProvider: normalizeAiProviderName(provider) };
@@ -130,14 +144,24 @@ async function run() {
   assert.strictEqual(initialSettings.ok, true);
   assert.strictEqual(initialSettings.provider, 'rwkv');
   assert.strictEqual(initialSettings.interfaceLanguage, 'pt-BR');
+  assert.strictEqual(initialSettings.interfaceTheme, 'dark');
+  assert.strictEqual(initialSettings.panelFontScale, 100);
+  assert.strictEqual(initialSettings.openai.keySource, 'env');
   assert.strictEqual(initialSettings.gemini.keySource, 'env');
+  assert.strictEqual(initialSettings.mediaAssets.pexels.keySource, 'env');
   assert.deepStrictEqual(initialSettings.disabledBuiltInProviders, []);
   assert.strictEqual(initialSettings.customApis[0].hasKey, true);
   assert.strictEqual(initialSettings.customApis[0].keyMasked, '**************1234');
 
   const saved = await handlers['ai:settings:save'](null, {
-    provider: 'google',
+    provider: 'openai',
     interfaceLanguage: 'es-ES',
+    interfaceTheme: 'light',
+    panelFontScale: 114,
+    openaiApiKey: 'local-openai-0000',
+    openaiModel: ' gpt model ',
+    openaiApiLabel: ' OpenAI Prod ',
+    pexelsApiKey: 'local-pexels-0000',
     geminiApiKey: 'local-gemini-0000',
     geminiModel: ' gemini model ',
     geminiApiLabel: ' Local Gemini ',
@@ -147,8 +171,14 @@ async function run() {
   });
 
   assert.strictEqual(saved.ok, true);
-  assert.strictEqual(saved.provider, 'gemini');
+  assert.strictEqual(saved.provider, 'openai');
   assert.strictEqual(saved.interfaceLanguage, 'es-ES');
+  assert.strictEqual(saved.interfaceTheme, 'light');
+  assert.strictEqual(saved.panelFontScale, 115);
+  assert.strictEqual(saved.openai.keySource, 'settings');
+  assert.strictEqual(saved.openai.model, 'gptmodel');
+  assert.strictEqual(saved.mediaAssets.pexels.keySource, 'settings');
+  assert.strictEqual(saved.mediaAssets.pexels.keyMasked, '*************0000');
   assert.strictEqual(saved.gemini.keySource, 'settings');
   assert.strictEqual(saved.gemini.model, 'geminimodel');
   assert.strictEqual(saved.sambanova.model, 'sambamodel');
@@ -157,9 +187,13 @@ async function run() {
   assert.strictEqual(saved.customApis[0].hasKey, true);
   assert.ok(audit.some((event) => event.type === 'ai.settings_saved' && event.payload.customApisCount === 1));
   assert.ok(audit.some((event) => event.type === 'ai.settings_saved' && event.payload.interfaceLanguage === 'es-ES'));
+  assert.ok(audit.some((event) => event.type === 'ai.settings_saved' && event.payload.interfaceTheme === 'light'));
+  assert.ok(audit.some((event) => event.type === 'ai.settings_saved' && event.payload.panelFontScale === 115));
+  assert.ok(audit.some((event) => event.type === 'ai.settings_saved' && event.payload.pexelsKeyConfigured === true));
 
   const providerGet = await handlers['ai:provider:get']();
-  assert.strictEqual(providerGet.provider, 'gemini');
+  assert.strictEqual(providerGet.provider, 'openai');
+  assert.strictEqual(providerGet.hasOpenAiApiKey, true);
   assert.strictEqual(providerGet.hasGeminiApiKey, true);
 
   const providerSet = await handlers['ai:provider:set'](null, { provider: 'Samba Nova' });

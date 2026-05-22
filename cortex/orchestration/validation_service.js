@@ -5,6 +5,10 @@ const {
   isPatchStyleRequest,
   looksLikeScaffoldRewriteBatch,
 } = require('./render_pass_service');
+const {
+  findCssImportOrderViolation,
+  isCssOperationPath,
+} = require('./css_operation_safety');
 
 function buildSemanticRequirementsFromPrompt(userMessage = '') {
   const text = String(userMessage || '').toLowerCase();
@@ -62,6 +66,7 @@ function createCortexValidationService(dependencies = {}) {
     const contentParts = opList
       .filter((op) => op && (op.op === 'write_file' || op.op === 'append_file'))
       .map((op) => String(op.content || ''));
+    const cssImportOrderViolations = [];
 
     if (projectRootPath && typeof projectRootPath === 'string' && fs.existsSync(projectRootPath)) {
       const stack = [projectRootPath];
@@ -120,6 +125,32 @@ function createCortexValidationService(dependencies = {}) {
         } catch {
           // ignora arquivos inacessíveis
         }
+      }
+    }
+
+    for (const op of opList) {
+      if (!op || (op.op !== 'write_file' && op.op !== 'append_file')) continue;
+      if (!isCssOperationPath(op.path)) continue;
+      const relPath = normalizeRequestedRelativePath(op.path);
+      let cssContent = String(op.content || '');
+      if (op.op === 'append_file' && projectRootPath && typeof projectRootPath === 'string' && relPath) {
+        const absPath = path.join(projectRootPath, relPath);
+        try {
+          if (fs.existsSync(absPath) && fs.statSync(absPath).isFile()) {
+            cssContent = `${fs.readFileSync(absPath, 'utf8')}${cssContent}`;
+          }
+        } catch {
+          // Se o arquivo existente não puder ser lido, a validação principal segue.
+        }
+      }
+      const violation = findCssImportOrderViolation(cssContent);
+      if (violation) {
+        cssImportOrderViolations.push({
+          op: op.op,
+          path: String(op.path || ''),
+          line: violation.line,
+          statement: violation.statement,
+        });
       }
     }
 
@@ -195,6 +226,7 @@ function createCortexValidationService(dependencies = {}) {
       jsLinked:
         !hasJsFile || linkedJs || !hasDiskIndex,
       contentNonEmpty: mergedContent.trim().length > 40,
+      cssImportOrder: cssImportOrderViolations.length === 0,
       semanticCoverage:
         semanticRequirements.length === 0 || semanticCoverage >= 0.6,
       ...artifactChecks,
@@ -210,6 +242,7 @@ function createCortexValidationService(dependencies = {}) {
       checks.files &&
       checks.runnableEntry &&
       checks.patchFirst &&
+      checks.cssImportOrder &&
       artifactGatePassed
     );
     const ready = CORTEX_VALIDATION_REQUIRE_CORE ? coreChecksPassed && score >= minScore : score >= minScore;
@@ -221,6 +254,7 @@ function createCortexValidationService(dependencies = {}) {
       semanticRequirements,
       semanticHits,
       semanticCoverage,
+      cssImportOrderViolations,
       artifactQuality: artifactQuality && artifactQuality.enabled ? artifactQuality : null,
       missingRequiredFiles: [],
       missingRequiredDirs: [],

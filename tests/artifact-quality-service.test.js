@@ -122,6 +122,68 @@ input, textarea { width: 100%; padding: 12px; border: 1px solid rgba(0,0,0,.18);
   assert.strictEqual(nextTailwind.checks.cssSubstantial, true);
   assert.strictEqual(nextTailwind.checks.responsive, true);
 
+  const leatherModular = service.evaluateOperationBatchArtifactQuality({
+    userMessage: 'Criar landing page em Next.js para artefatos de couro, bolsas, pastas, produção artesanal e longevidade',
+    executionIntent: 'init_project',
+    operations: [
+      {
+        op: 'write_file',
+        path: 'package.json',
+        content: '{"dependencies":{"next":"^16.0.0","react":"^19.0.0","react-dom":"^19.0.0"},"devDependencies":{"tailwindcss":"^4.0.0","@tailwindcss/postcss":"^4.0.0"}}',
+      },
+      {
+        op: 'write_file',
+        path: 'app/layout.tsx',
+        content: "import './globals.css'; export default function RootLayout({children}:{children:React.ReactNode}) { return <html><body>{children}</body></html>; }",
+      },
+      {
+        op: 'write_file',
+        path: 'app/page.tsx',
+        content:
+          '<main className="min-h-screen bg-[var(--color-bg)] px-6 py-20"><section className="hero grid gap-10 md:grid-cols-2"><h1>Peças de couro feitas para atravessar anos</h1><p>Bolsas, pastas e acessórios com produção artesanal, couro selecionado e visual europeu.</p><a className="rounded bg-[var(--color-accent)] px-5 py-3 text-white" href="#contato">Conhecer coleções</a></section><section id="colecoes" className="grid gap-4 md:grid-cols-3"><article className="rounded border p-6 shadow">Bolsas de couro</article><article className="rounded border p-6 shadow">Pastas em couro</article></section><section id="materia-prima" className="grid gap-6 md:grid-cols-2">Matéria-prima, durabilidade e longevidade do couro natural.</section><section id="processo" className="grid gap-6 md:grid-cols-3">Processo artesanal em etapas pequenas.</section><section id="cuidados">FAQ e cuidados para preservar a peça.</section><section id="contato">Contato para encomendas e catálogo.</section></main>',
+      },
+      {
+        op: 'write_file',
+        path: 'app/globals.css',
+        content:
+          '@import "tailwindcss"; :root { --color-bg: #fcf7e3; --color-ink: #1f2424; --color-muted: #66706d; --color-accent: #8f3447; --color-line: rgba(31,36,36,.14); } body { margin: 0; background: var(--color-bg); color: var(--color-ink); }',
+      },
+    ],
+  });
+  assert.strictEqual(leatherModular.checks.requiredSections, true);
+  assert.strictEqual(leatherModular.passesMinimum, true);
+
+  const inferredTailwindFromPackage = service.evaluateOperationBatchArtifactQuality({
+    userMessage: 'Criar página institucional em Next.js para escritório de advocacia',
+    executionIntent: 'init_project',
+    operations: [
+      {
+        op: 'write_file',
+        path: 'package.json',
+        content: '{"dependencies":{"next":"^16.0.0","react":"^19.0.0","react-dom":"^19.0.0"},"devDependencies":{"tailwindcss":"^4.0.0","@tailwindcss/postcss":"^4.0.0"}}',
+      },
+      {
+        op: 'write_file',
+        path: 'app/layout.tsx',
+        content: "import './globals.css'; export default function RootLayout({children}:{children:React.ReactNode}) { return <html><body>{children}</body></html>; }",
+      },
+      {
+        op: 'write_file',
+        path: 'app/page.tsx',
+        content:
+          '<main className="grid min-h-screen gap-8 bg-[var(--color-bg)] px-5 py-20 md:grid-cols-2"><section className="hero max-w-4xl"><h1>Advocacia de propriedade intelectual</h1><p>Serviços, sobre, depoimentos, FAQ e contato para marcas, patentes e software.</p><a className="rounded bg-[var(--color-accent)] px-5 py-3 text-white" href="#contato">Agendar consulta</a></section><section id="servicos" className="grid gap-4 md:grid-cols-3"><article className="rounded border p-6 shadow">Marcas</article></section><section id="sobre">Sobre</section><section id="contato">Contato</section></main>',
+      },
+      {
+        op: 'write_file',
+        path: 'app/globals.css',
+        content:
+          '@import "tailwindcss"; :root { --color-bg: #f7f4ec; --color-ink: #1d252c; --color-muted: #66706d; --color-accent: #183b73; --color-line: rgba(31,36,36,.14); } body { margin: 0; background: var(--color-bg); color: var(--color-ink); }',
+      },
+    ],
+  });
+  assert.strictEqual(inferredTailwindFromPackage.checks.cssSubstantial, true);
+  assert.strictEqual(inferredTailwindFromPackage.passesMinimum, true);
+
   const legalDentalDrift = service.evaluateOperationBatchArtifactQuality({
     userMessage: 'Criar site institucional em Next.js com Tailwind e React para advogado empresarial',
     executionIntent: 'init_project',
@@ -174,6 +236,7 @@ input, textarea { width: 100%; padding: 12px; border: 1px solid rgba(0,0,0,.18);
   });
   assert.ok(guidance.includes('index.php'));
   assert.ok(guidance.includes('veterinário'));
+  assert.strictEqual(guidance.includes('hero, serviços, sobre, contato'), false);
 
   console.log('artifact-quality-service.test.js: ok');
 }

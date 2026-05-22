@@ -1,0 +1,352 @@
+.ai-settings-api-editor {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ai-settings-editor-actions {
+    grid-column: 1 / -1;
+  }
+}
+
+/* PROJECT-TREE-RENAME-UX-FIX-2026-05-07 */
+.project-item {
+  overflow: hidden;
+}
+
+.project-tree-header {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-tree-actions {
+  flex: 0 0 auto;
+  margin-left: auto;
+  max-width: 72px;
+}
+
+.conversation-tree {
+  min-width: 0;
+}
+
+.conversation-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.conversation-item {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+
+.conversation-rename-btn {
+  flex: 0 0 auto;
+}
+
+/* ACCESSIBILITY_TYPE_SCALE_2026-05-14
+   Mantem a densidade da ferramenta, mas tira textos principais da faixa pequena demais para uso prolongado. */
+html,
+body {
+  font-size: 15px;
+}
+
+.panel h2,
+.left-section-title {
+  font-size: 0.9rem;
+}
+
+.left-action-btn,
+#projects-search,
+.project-name,
+.project-tree-header {
+  font-size: 0.86rem;
+}
+
+.project-mini-btn {
+  width: 24px;
+  height: 24px;
+  font-size: 0.86rem;
+}
+
+.conversation-tree {
+  gap: 6px;
+}
+
+.conversation-item {
+  font-size: 0.8rem;
+  line-height: 1.42;
+  padding: 6px 8px;
+}
+
+.conversation-rename-btn {
+  width: 24px;
+  height: 24px;
+  font-size: 0.84rem;
+  opacity: 0.72;
+  pointer-events: auto;
+}
+
+.conversation-row:hover .conversation-rename-btn,
+.conversation-row:focus-within .conversation-rename-btn,
+.conversation-item.active + .conversation-rename-btn {
+  opacity: 1;
+}
+
+.status-pill,
+.incremental-mode-badge,
+.project-panel-btn,
+.btn {
+  font-size: 0.82rem;
+}
+
+.msg {
+  font-size: 0.88rem;
+  line-height: 1.5;
+  padding: 12px 14px;
+}
+
+.thinking-progress,
+.job-progress-detail,
+#job-progress-status {
+  font-size: 0.76rem;
+}
+
+.job-progress-head strong,
+.pending-action p,
+.meta-box,
+.next-steps-box,
+.change-card-file,
+.change-card-toggle,
+.project-tree-row,
+.project-tree-label,
+.project-file-status {
+  font-size: 0.82rem !important;
+}
+
+textarea {
+  font-size: 0.88rem;
+  line-height: 1.48;
+}
+
+.composer-provider {
+  font-size: 0.76rem;
+  max-width: 172px;
+}
+
+.attachment-chip,
+.project-tree-diff-add,
+.project-tree-diff-del {
+  font-size: 0.74rem;
+}
+
+.ai-settings-modal__head strong,
+.ai-settings-home-btn strong,
+.ai-settings-panel-head span,
+.ai-settings-field span,
+.ai-settings-current strong,
+.ai-settings-api-title-row strong {
+  font-size: 0.86rem;
+}
+
+.ai-settings-home-btn span,
+.ai-settings-current,
+.ai-settings-current span,
+.ai-settings-help,
+.ai-settings-api-detail,
+.ai-settings-api-facts,
+.ai-settings-api-empty,
+.ai-settings-add-api-row select,
+.ai-settings-field input,
+.ai-settings-field select {
+  font-size: 0.82rem;
+}
+
+.ai-settings-api-section-title,
+.ai-settings-api-badge,
+.ai-settings-api-actions .btn {
+  font-size: 0.74rem;
+}
+
+.inline-input-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 180;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.inline-input-dialog__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.inline-input-dialog__panel {
+  position: relative;
+  z-index: 1;
+  width: min(420px, 100%);
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(28, 28, 28, 0.98), rgba(13, 13, 13, 0.98));
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.58);
+}
+
+.inline-input-dialog__title {
+  color: #f3f3f3;
+  font-size: 0.96rem;
+  letter-spacing: 0.01em;
+}
+
+.inline-input-dialog__input {
+  height: 42px;
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #f2f2f2;
+  font-family: var(--font-main);
+  font-size: 0.92rem;
+  padding: 0 12px;
+}
+
+.inline-input-dialog__input:focus {
+  outline: none;
+  border-color: rgba(112, 170, 255, 0.78);
+  box-shadow: 0 0 0 2px rgba(112, 170, 255, 0.24);
+}
+
+.inline-input-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* WINDOW_CHROME_AND_COMPACT_TYPE_CORRECTION_2026-05-14
+   Restaura area nativa de arraste e recalibra controles compactos apos o aumento de legibilidade. */
+.app-drag-region {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 30;
+  height: 38px;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.app-shell {
+  padding-top: max(42px, calc(14px + env(titlebar-area-height, 0px) + 8px)) !important;
+  -webkit-app-region: no-drag;
+}
+
+/* LEFT_SIDEBAR_TITLEBAR_PADDING_2026-05-21 */
+.panel-left {
+  padding-top: 12px;
+}
+
+button,
+input,
+textarea,
+select,
+a,
+.panel,
+.ai-settings-modal,
+.inline-input-dialog,
+.project-context-menu,
+.project-file-context-menu,
+.project-file-modal,
+.project-state-modal {
+  -webkit-app-region: no-drag;
+}
+
+html,
+body {
+  font-size: calc(14px * var(--panel-font-scale)) !important;
+}
+
+.panel-header {
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.panel h2,
+.left-section-title {
+  font-size: 0.82rem !important;
+  line-height: 1.22;
+}
+
+.panel-right .panel-header h2 {
+  max-width: 150px;
+}
+
+.incremental-mode-badge,
+.status-pill {
+  min-height: 24px;
+  padding: 3px 9px;
+  font-size: 0.68rem !important;
+  line-height: 1.15;
+}
+
+.left-action-btn,
+#projects-search,
+.project-name,
+.project-tree-header {
+  font-size: 0.8rem !important;
+}
+
+.conversation-item {
+  font-size: 0.76rem !important;
+  line-height: 1.34;
+  padding: 5px 8px;
+}
+
+.project-panel-btn,
+.btn {
+  font-size: 0.76rem !important;
+}
+
+.msg {
+  font-size: 0.82rem !important;
+  line-height: 1.45;
+  padding: 10px 12px;
+}
+
+textarea,
+#user-input {
+  font-size: 0.8rem !important;
+  line-height: 1.38;
+  padding-right: 164px;
+}
+
+#user-input::placeholder {
+  color: rgba(232, 228, 223, 0.32) !important;
+  font-size: 0.7rem;
+  line-height: 1.25;
+  -webkit-text-fill-color: rgba(232, 228, 223, 0.32) !important;
+}
+
+.composer-provider {
+  max-width: 160px;
+  font-size: 0.68rem !important;
+}
+
+.icon-btn {

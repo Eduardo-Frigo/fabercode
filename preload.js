@@ -2,6 +2,20 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('localcodeApi', {
   toggleWindowMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
+  getAccountStatus: () => ipcRenderer.invoke('account:status'),
+  startGoogleLogin: (payload) => ipcRenderer.invoke('account:google:start', payload),
+  completeGoogleLogin: (payload) => ipcRenderer.invoke('account:google:complete', payload),
+  startEmailLogin: (payload) => ipcRenderer.invoke('account:email:start', payload),
+  completeEmailLogin: (payload) => ipcRenderer.invoke('account:email:complete', payload),
+  signInWithPassword: (payload) => ipcRenderer.invoke('account:password:sign-in', payload),
+  signUpWithPassword: (payload) => ipcRenderer.invoke('account:password:sign-up', payload),
+  signOutAccount: () => ipcRenderer.invoke('account:sign-out'),
+  onAccountEvent: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_, payload) => callback(payload);
+    ipcRenderer.on('account:event', listener);
+    return () => ipcRenderer.removeListener('account:event', listener);
+  },
   listProjects: () => ipcRenderer.invoke('projects:list'),
   addProject: () => ipcRenderer.invoke('projects:add'),
   removeProject: (id) => ipcRenderer.invoke('projects:remove', id),
@@ -16,6 +30,18 @@ contextBridge.exposeInMainWorld('localcodeApi', {
   startProjectPreview: (payload) => ipcRenderer.invoke('project:preview:start', payload),
   stopProjectPreview: (payload) => ipcRenderer.invoke('project:preview:stop', payload),
   getProjectPreviewRuntimeStatus: (payload) => ipcRenderer.invoke('project:preview:runtime-status', payload),
+  listProjectTerminalSessions: (payload) => ipcRenderer.invoke('project:terminal:list', payload),
+  createProjectTerminalSession: (payload) => ipcRenderer.invoke('project:terminal:create', payload),
+  runProjectTerminalCommand: (payload) => ipcRenderer.invoke('project:terminal:run', payload),
+  stopProjectTerminalCommand: (payload) => ipcRenderer.invoke('project:terminal:stop', payload),
+  clearProjectTerminalSession: (payload) => ipcRenderer.invoke('project:terminal:clear', payload),
+  closeProjectTerminalSession: (payload) => ipcRenderer.invoke('project:terminal:close', payload),
+  onProjectTerminalEvent: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_, payload) => callback(payload);
+    ipcRenderer.on('project:terminal:event', listener);
+    return () => ipcRenderer.removeListener('project:terminal:event', listener);
+  },
   getProjectVerificationPlan: (payload) => ipcRenderer.invoke('project:verify:plan', payload),
   runProjectVerification: (payload) => ipcRenderer.invoke('project:verify:run', payload),
   getProjectFilesTree: (payload) => ipcRenderer.invoke('project:files-tree', payload),
@@ -43,6 +69,13 @@ contextBridge.exposeInMainWorld('localcodeApi', {
   getJob: (payload) => ipcRenderer.invoke('orchestration:jobs:get', payload),
   cancelJob: (payload) => ipcRenderer.invoke('orchestration:jobs:cancel', payload),
   retryJob: (payload) => ipcRenderer.invoke('orchestration:jobs:retry', payload),
+  listAutomataContracts: (payload) => ipcRenderer.invoke('automata:contracts:list', payload),
+  getAutomataContractSummary: (payload) => ipcRenderer.invoke('automata:contracts:summary', payload),
+  suggestAutomataContract: (payload) => ipcRenderer.invoke('automata:contracts:suggest', payload),
+  stageAutomataContract: (payload) => ipcRenderer.invoke('automata:contracts:stage', payload),
+  markAutomataContractTrial: (payload) => ipcRenderer.invoke('automata:contracts:trial', payload),
+  promoteAutomataContract: (payload) => ipcRenderer.invoke('automata:contracts:promote', payload),
+  rejectAutomataContract: (payload) => ipcRenderer.invoke('automata:contracts:reject', payload),
   getAiStatus: () => ipcRenderer.invoke('ai:status'),
   getAiSettings: () => ipcRenderer.invoke('ai:settings:get'),
   saveAiSettings: (payload) => ipcRenderer.invoke('ai:settings:save', payload),

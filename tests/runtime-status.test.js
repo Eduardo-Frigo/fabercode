@@ -21,6 +21,8 @@ function createService(overrides = {}) {
   const state = {
     selectedProvider: 'mock',
     settings: {
+      openaiApiKey: '',
+      openaiApiLabel: '',
       geminiApiKey: '',
       geminiApiLabel: '',
       sambanovaApiKey: '',
@@ -30,7 +32,7 @@ function createService(overrides = {}) {
   };
 
   const service = createAiRuntimeStatusService({
-    AI_PROVIDER_OPTIONS: ['mock', 'rwkv', 'gemini', 'sambanova'],
+    AI_PROVIDER_OPTIONS: ['mock', 'rwkv', 'openai', 'gemini', 'sambanova'],
     CORTEX_RAG_ENABLED: true,
     CORTEX_RAG_PROVIDER: 'r2r',
     CORTEX_RENDER_RUNTIME_VERSION: 'runtime.v1',
@@ -49,12 +51,16 @@ function createService(overrides = {}) {
     RWKV_STRATEGY: 'cpu fp16',
     RWKV_TOKENIZER_PATH: '/models/tokenizer.json',
     RWKV_V7_ON: '0',
+    OPENAI_API_BASE_URL: 'https://api.openai.com/v1',
+    OPENAI_API_KEY: '',
     SAMBANOVA_API_BASE_URL: 'https://api.sambanova.ai/v1',
     SAMBANOVA_API_KEY: '',
     extractJsonFromMixedText,
     getCortexRuntimeBudget: async () => ({ profile: 'rapido', maxActiveModels: 1 }),
     getEffectiveGeminiApiKey: () => state.settings.geminiApiKey || '',
     getEffectiveGeminiModel: () => 'gemini-default',
+    getEffectiveOpenAiApiKey: () => state.settings.openaiApiKey || '',
+    getEffectiveOpenAiModel: () => state.settings.openaiModel || 'openai-default',
     getEffectiveSambaNovaApiKey: () => state.settings.sambanovaApiKey || '',
     getEffectiveSambaNovaModel: () => 'samba-default',
     getRuntimeProfileSettings: () => ({ profile: 'rapido' }),
@@ -92,6 +98,27 @@ async function run() {
   assert.strictEqual(geminiStatus.ready, false);
   assert.strictEqual(geminiStatus.reason, 'gemini_api_key_missing');
   assert.strictEqual(geminiStatus.gemini.keySource, 'none');
+
+  const openaiMissing = createService({ state: { selectedProvider: 'openai' } });
+  const openaiMissingStatus = await openaiMissing.service.getStatus();
+  assert.strictEqual(openaiMissingStatus.ready, false);
+  assert.strictEqual(openaiMissingStatus.reason, 'openai_api_key_missing');
+  assert.strictEqual(openaiMissingStatus.openai.keySource, 'none');
+
+  const openaiReady = createService({
+    state: {
+      selectedProvider: 'openai',
+      settings: {
+        openaiApiKey: 'openai-secret-7777',
+        openaiModel: 'gpt-test',
+        openaiApiLabel: 'Testes',
+      },
+    },
+  });
+  const openaiReadyStatus = await openaiReady.service.getStatus();
+  assert.strictEqual(openaiReadyStatus.ready, true);
+  assert.strictEqual(openaiReadyStatus.configuredModel, 'gpt-test');
+  assert.strictEqual(openaiReadyStatus.openai.keyMasked, '**************7777');
 
   const custom = createService({
     state: {

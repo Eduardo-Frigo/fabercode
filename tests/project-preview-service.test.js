@@ -15,6 +15,10 @@ function writeFile(filePath, content = '') {
   fs.writeFileSync(filePath, content, 'utf8');
 }
 
+function writeLocalBin(rootPath, name) {
+  writeFile(path.join(rootPath, 'node_modules', '.bin', name), '#!/usr/bin/env node\n');
+}
+
 function createProjectInfo(rootPath, files, stacks) {
   return {
     rootPath,
@@ -76,6 +80,7 @@ function testNextPreviewUsesDevScriptWhenReady(tempRoot) {
     },
   });
   fs.mkdirSync(path.join(rootPath, 'node_modules'), { recursive: true });
+  writeLocalBin(rootPath, 'next');
 
   const service = createProjectPreviewService({ fs, path });
   const plan = service.buildProjectPreviewPlan(createProjectInfo(rootPath, ['package.json'], ['Next.js']), {
@@ -86,6 +91,28 @@ function testNextPreviewUsesDevScriptWhenReady(tempRoot) {
   assert.strictEqual(plan.stack, 'Next.js');
   assert.strictEqual(plan.url, 'http://127.0.0.1:3010/');
   assert.strictEqual(plan.commandText, 'npm run dev -- --hostname 127.0.0.1 --port 3010');
+}
+
+function testNextPreviewBlocksWhenNodeModulesIsPartial(tempRoot) {
+  const rootPath = path.join(tempRoot, 'next-partial-install');
+  writeJson(path.join(rootPath, 'package.json'), {
+    scripts: {
+      dev: 'next dev',
+    },
+    dependencies: {
+      next: '^16.0.0',
+      react: '^19.0.0',
+    },
+  });
+  fs.mkdirSync(path.join(rootPath, 'node_modules'), { recursive: true });
+
+  const service = createProjectPreviewService({ fs, path });
+  const plan = service.buildProjectPreviewPlan(createProjectInfo(rootPath, ['package.json'], ['Next.js']));
+
+  assert.strictEqual(plan.ready, false);
+  assert.strictEqual(plan.status, 'blocked');
+  assert.ok(plan.warnings.some((warning) => warning.includes('node_modules/.bin/next')));
+  assert.ok(plan.steps.some((step) => step.id === 'preview_dependencies' && step.commandText === 'npm install'));
 }
 
 function testNextPreviewBlocksWithoutDependencies(tempRoot) {
@@ -121,6 +148,7 @@ function testReactPreviewUsesViteStyleHostFlag(tempRoot) {
     },
   });
   fs.mkdirSync(path.join(rootPath, 'node_modules'), { recursive: true });
+  writeLocalBin(rootPath, 'vite');
 
   const service = createProjectPreviewService({ fs, path });
   const plan = service.buildProjectPreviewPlan(createProjectInfo(rootPath, ['package.json'], ['React']));
@@ -143,6 +171,7 @@ function testElectronPreviewUsesAppModeWithoutBrowserUrl(tempRoot) {
   });
   writeFile(path.join(rootPath, 'main.js'), 'require("electron");');
   fs.mkdirSync(path.join(rootPath, 'node_modules'), { recursive: true });
+  writeLocalBin(rootPath, 'electron');
 
   const service = createProjectPreviewService({ fs, path });
   const plan = service.buildProjectPreviewPlan(createProjectInfo(rootPath, ['package.json', 'main.js'], ['Electron']));
@@ -168,6 +197,7 @@ function testPnpmLockChangesPreviewCommand(tempRoot) {
   });
   writeFile(path.join(rootPath, 'pnpm-lock.yaml'), 'lockfileVersion: 9');
   fs.mkdirSync(path.join(rootPath, 'node_modules'), { recursive: true });
+  writeLocalBin(rootPath, 'next');
 
   const service = createProjectPreviewService({ fs, path });
   const plan = service.buildProjectPreviewPlan(createProjectInfo(rootPath, ['package.json', 'pnpm-lock.yaml'], ['Next.js']));
@@ -183,6 +213,7 @@ function main() {
     testStaticPreviewUsesFileUrl(tempRoot);
     testLampPreviewUsesPhpServer(tempRoot);
     testNextPreviewUsesDevScriptWhenReady(tempRoot);
+    testNextPreviewBlocksWhenNodeModulesIsPartial(tempRoot);
     testNextPreviewBlocksWithoutDependencies(tempRoot);
     testReactPreviewUsesViteStyleHostFlag(tempRoot);
     testElectronPreviewUsesAppModeWithoutBrowserUrl(tempRoot);

@@ -235,6 +235,38 @@ function createArtifactQualityService(dependencies = {}) {
     const packageHasNext = /"next"\s*:/i.test(packageContent);
     const packageHasTailwind = /"tailwindcss"\s*:/i.test(packageContent) || /"@tailwindcss\/postcss"\s*:/i.test(packageContent);
     const cssImportsTailwind = /@import\s+["']tailwindcss["']|@tailwind\s+(base|components|utilities)/i.test(cssContent);
+    const usesTailwindUtilities =
+      expectations.tailwind ||
+      packageHasTailwind ||
+      cssImportsTailwind ||
+      tailwindUtilityTokens >= 10;
+    const hasHeroSection = hasAnyPattern(merged, [
+      /\bhero\b/,
+      /\binicio\b/,
+      /\bprincipal\b/,
+      /\bpresenca digital\b/,
+      /\bproposta de valor\b/,
+      /\bheadline\b/,
+    ]);
+    const hasConversionSection = hasAnyPattern(merged, [
+      /\bcontato\b/,
+      /\bagendar\b/,
+      /\bfale conosco\b/,
+      /\bconversar\b/,
+      /\bsolicitar\b/,
+      /\bcomprar\b/,
+      /\bconhecer colecoes\b/,
+    ]);
+    const sectionFamilies = [
+      [/\bservicos\b/, /\batendimentos\b/, /\bofertas\b/, /\bsolucoes\b/],
+      [/\bcolecoes\b/, /\bprodutos\b/, /\bproduto\b/, /\bcat[aá]logo\b/, /\bbolsas\b/, /\bpastas\b/],
+      [/\bsobre\b/, /\bquem somos\b/, /\bhistoria\b/, /\batelier\b/, /\bequipe\b/],
+      [/\bmetodo\b/, /\bprocesso\b/, /\bproducao\b/, /\bartesanal\b/, /\bpassos\b/],
+      [/\bmateriais\b/, /\bmateria[-\s]prima\b/, /\bcouro\b/, /\bdurabilidade\b/, /\blongevidade\b/],
+      [/\bdepoimentos\b/, /\bprova social\b/, /\bresultados\b/, /\bcredenciais\b/],
+      [/\bfaq\b/, /\bperguntas\b/, /\bduvidas\b/, /\bcuidados\b/],
+      [/\bgaleria\b/, /\bportfolio\b/, /\bprojetos\b/, /\breferencias\b/],
+    ].filter((patterns) => hasAnyPattern(merged, patterns)).length;
     const checks = {
       stackEntry:
         expectations.lamp
@@ -246,12 +278,11 @@ function createArtifactQualityService(dependencies = {}) {
         !expectations.tailwind ||
         (packageHasTailwind && cssImportsTailwind && tailwindUtilityTokens >= 6),
       requiredSections:
-        hasAnyPattern(merged, [/\bservicos\b/, /\batendimentos\b/]) &&
-        hasAnyPattern(merged, [/\bsobre\b/, /\bquem somos\b/]) &&
-        hasAnyPattern(merged, [/\bcontato\b/, /\bagendar\b/, /\bfale conosco\b/]) &&
-        hasAnyPattern(merged, [/\bhero\b/, /\binicio\b/, /\bprincipal\b/, /\bpresenca digital\b/]),
+        hasHeroSection &&
+        hasConversionSection &&
+        sectionFamilies >= 2,
       cssSubstantial:
-        expectations.tailwind
+        usesTailwindUtilities
           ? cssContent.trim().length >= 220 && tailwindUtilityTokens >= 10
           : cssContent.trim().length >= 500 &&
             cssRules >= 8 &&
@@ -307,15 +338,15 @@ function createArtifactQualityService(dependencies = {}) {
       addIssue(
         'required_sections',
         'warning',
-        'Página institucional sem todas as seções mínimas esperadas.',
-        'Inclua hero/início, serviços, sobre, contato e CTA explícita.'
+        'Página sem composição mínima de seções editáveis.',
+        'Inclua hero/início, pelo menos duas seções coerentes com o domínio, contato/conversão e CTA explícita.'
       );
     }
     if (!checks.cssSubstantial) {
       addIssue(
         'css_substantial',
         'critical',
-        `CSS insuficiente para uma página institucional (${cssContent.trim().length} bytes, ${cssRules} regra(s)).`,
+        `CSS insuficiente para uma página modular (${cssContent.trim().length} bytes, ${cssRules} regra(s)).`,
         'Expanda style.css com layout, espaçamento, cores, botões, cards/formulário e estados responsivos.'
       );
     }
@@ -414,7 +445,7 @@ function createArtifactQualityService(dependencies = {}) {
 
     const lines = [
       'Diretrizes suaves de qualidade visual e aderência:',
-      '- Entregue uma página usável, não um wireframe cru: hero, serviços, sobre, contato e CTA clara.',
+      '- Entregue uma página usável, não um wireframe cru: hero, seções coerentes com o domínio, contato/conversão e CTA clara.',
       '- Use placeholders contextualizados ao domínio do pedido; evite "Título principal", "Subtítulo", "Serviço 1" e textos genéricos similares.',
       '- O CSS deve ser substancial: layout, espaçamento, paleta, tipografia, botões, formulário/cards e responsividade.',
       '- Inclua regra responsiva com @media, clamp(...) ou minmax(...).',

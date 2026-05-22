@@ -183,6 +183,53 @@ async function run() {
   });
   assert.strictEqual(deterministic.raw, 'deterministic');
 
+  const deterministicUnresolvedService = createService({
+    buildDeterministicPatchOperationBatch: () => null,
+    callPersonaProviderChat: async () => {
+      throw new Error('should not call provider for deterministic contract miss');
+    },
+  });
+  const deterministicUnresolved = await deterministicUnresolvedService.requestEngineOperationBatchAction({
+    projectInfo: { rootPath: '/tmp/project', totalFiles: 1, files: ['app/page.tsx'] },
+    userMessage: 'altere uma cor do projeto',
+    executionIntent: 'edit_project',
+    productRouteDecision: { productRoute: { mode: 'deterministic_patch' } },
+  });
+  assert.strictEqual(deterministicUnresolved.ok, false);
+  assert.strictEqual(deterministicUnresolved.raw, 'deterministic_patch_contract_unresolved');
+
+  let forcedAdaptiveCalls = 0;
+  const forcedAdaptiveService = createService({
+    shouldPreferProjectBlueprint: () => false,
+    buildProjectBlueprintOperationBatch: ({ force }) => {
+      forcedAdaptiveCalls += 1;
+      assert.strictEqual(force, true);
+      return {
+        ok: true,
+        action: {
+          type: 'operation_batch',
+          intent: 'init_project',
+          generatedBy: 'project_blueprint_service',
+          operations: [{ op: 'write_file', path: 'index.html', content: '<main>Aquário</main>' }],
+        },
+        raw: 'forced_adaptive_blueprint',
+      };
+    },
+    callPersonaProviderChat: async () => {
+      throw new Error('should not call provider for adaptive_blueprint');
+    },
+  });
+  const forcedAdaptive = await forcedAdaptiveService.requestEngineOperationBatchAction({
+    projectInfo: { rootPath: '/tmp/project', totalFiles: 0, files: [] },
+    userMessage: 'criar site de aquário com fotos, CTA, footer e ícones',
+    executionIntent: 'init_project',
+    productRouteDecision: { productRoute: { mode: 'adaptive_blueprint' } },
+    buildModeRoute: { mode: 'adaptive_blueprint', executionIntent: 'init_project' },
+  });
+  assert.strictEqual(forcedAdaptive.ok, true);
+  assert.strictEqual(forcedAdaptive.raw, 'forced_adaptive_blueprint');
+  assert.strictEqual(forcedAdaptiveCalls, 1);
+
   let repairCalls = 0;
   const repairService = createService({
     callPersonaProviderChat: async () => {
@@ -219,9 +266,16 @@ async function run() {
   assert.strictEqual(invalidInitCalls, 0);
   assert.strictEqual(invalidInit.action.generatedBy, 'project_blueprint_service');
   assert.deepStrictEqual(invalidInit.action.operations.map((operation) => operation.path), [
-    'index.html',
-    'style.css',
-    'script.js',
+    'package.json',
+    '.nvmrc',
+    'next.config.mjs',
+    'postcss.config.mjs',
+    'tsconfig.json',
+    'next-env.d.ts',
+    'app/layout.tsx',
+    'app/page.tsx',
+    'app/globals.css',
+    'README.md',
   ]);
 
   const partialLampService = createService({
@@ -294,6 +348,97 @@ async function run() {
   assert.ok(nextBlueprint.action.operations.some((operation) => operation.path === 'package.json'));
   assert.ok(nextBlueprint.action.operations.some((operation) => operation.path === 'app/page.tsx'));
   assert.ok(nextBlueprint.action.operations.some((operation) => operation.path === 'app/globals.css'));
+
+  let providerFailureCalls = 0;
+  const providerFailureFallbackService = createService({
+    callPersonaProviderChat: async () => {
+      providerFailureCalls += 1;
+      throw new Error('OpenAI não retornou texto gerado.');
+    },
+  });
+  const providerFailureFallback = await providerFailureFallbackService.requestEngineOperationBatchAction({
+    projectInfo: { rootPath: '/tmp/project', totalFiles: 0, files: [] },
+    userMessage: 'criar site de aquário em Next.js com horário, ingressos, mapa, imagens e ícones',
+    executionIntent: 'init_project',
+  });
+  assert.strictEqual(providerFailureCalls, 1);
+  assert.strictEqual(providerFailureFallback.ok, true);
+  assert.strictEqual(providerFailureFallback.action.generatedBy, 'project_blueprint_service');
+  assert.strictEqual(providerFailureFallback.providerFailure.message, 'OpenAI não retornou texto gerado.');
+  assert.ok(providerFailureFallback.action.operations.some((operation) => operation.path === 'app/page.tsx'));
+
+  let capturedMediaPayload = null;
+  const workingBrief = {
+    schemaVersion: 'working-brief-v1',
+    source: {
+      current: 'faz qualquer coisa para advocacia',
+      consolidated: 'Criar site de advocacia com azul e branco.',
+      normalized: 'criar site de advocacia com azul e branco',
+    },
+    intent: {
+      action: 'create_project',
+      contentMode: 'ai_placeholder',
+      autonomy: 'high',
+    },
+    product: {
+      domain: 'legal',
+      domainLabel: 'advocacia',
+      stack: 'static-web',
+      projectKind: 'institutional-site',
+      brandFallback: 'Faber Advocacia',
+    },
+    style: {
+      palette: { primary: '#3240a8', background: '#ffffff', imageColor: '#3240a8' },
+      typography: { family: 'Manrope' },
+    },
+    mediaIntent: [{
+      slot: 'hero',
+      provider: 'pexels',
+      mediaType: 'photo',
+      query: 'modern law office blue',
+      orientation: 'landscape',
+      color: '#3240a8',
+    }],
+    iconIntent: [
+      { provider: 'lucide', semanticName: 'scale' },
+      { provider: 'lucide', semanticName: 'document-text' },
+      { provider: 'lucide', semanticName: 'shield-check' },
+    ],
+    executionPrompt: 'Criar site de advocacia com azul e branco, placeholders, Pexels e icones.',
+  };
+  const contractAwareService = createService({
+    resolveBlueprintMediaAssets: async (payload) => {
+      capturedMediaPayload = payload;
+      return {
+        hero: {
+          kind: 'photo',
+          provider: 'pexels',
+          query: payload.mediaIntent[0].query,
+          src: 'https://images.pexels.com/photos/legal-office.jpeg',
+          alt: 'Modern law office',
+          attribution: 'Foto de Faber no Pexels',
+          sourceUrl: 'https://www.pexels.com/photo/legal-office/',
+        },
+      };
+    },
+    callPersonaProviderChat: async () => {
+      throw new Error('should not call provider for contract-aware blueprint');
+    },
+  });
+  const contractAwareBlueprint = await contractAwareService.requestEngineOperationBatchAction({
+    projectInfo: { rootPath: '/tmp/project', totalFiles: 0, files: [] },
+    userMessage: 'faz qualquer coisa ai',
+    executionIntent: 'init_project',
+    workingBrief,
+    buildModeRoute: { mode: 'adaptive_blueprint', executionIntent: 'init_project' },
+  });
+  assert.strictEqual(contractAwareBlueprint.ok, true);
+  assert.strictEqual(capturedMediaPayload.workingBrief, workingBrief);
+  assert.strictEqual(capturedMediaPayload.mediaIntent[0].query, 'modern law office blue');
+  assert.strictEqual(contractAwareBlueprint.action.blueprint.media.query, 'modern law office blue');
+  assert.strictEqual(contractAwareBlueprint.action.blueprint.theme.accent, '#3240a8');
+  assert.deepStrictEqual(contractAwareBlueprint.action.blueprint.icons.names, ['scale', 'documentText', 'shieldCheck']);
+  assert.ok(contractAwareBlueprint.action.operations.find((operation) => operation.path === 'style.css').content.includes('Manrope'));
 
   console.log('render-pass-service.test.js: ok');
 }

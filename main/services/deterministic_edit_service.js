@@ -1,321 +1,68 @@
 const defaultFs = require('fs');
 const defaultPath = require('path');
 
-function normalizeText(value = '') {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim();
-}
-
-function escapeHtmlText(value = '') {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function escapeJsString(value = '', quote = "'") {
-  const text = String(value || '').replace(/\\/g, '\\\\').replace(/\r?\n/g, '\\n');
-  if (quote === '"') return text.replace(/"/g, '\\"');
-  if (quote === '`') return text.replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
-  return text.replace(/'/g, "\\'");
-}
-
-function defaultNormalizeRequestedRelativePath(rawPath) {
-  if (!rawPath) return null;
-  const sanitized = String(rawPath).trim().replace(/^["'`]+|["'`]+$/g, '');
-  if (!sanitized) return null;
-  if (/^(?:[a-zA-Z]:[\\/]|\/)/.test(sanitized)) return null;
-  const normalized = sanitized.replace(/\\/g, '/').replace(/^(\.\/)+/, '');
-  if (!normalized || normalized.startsWith('..') || normalized.includes('/../')) return null;
-  return normalized;
-}
-
-function extractQuotedTextAfterMarker(text, markerIndex) {
-  const slice = String(text || '').slice(Math.max(0, markerIndex));
-  const quoted = slice.match(/["“']([^"”']{1,160})["”']/);
-  return quoted && quoted[1] ? quoted[1].trim() : '';
-}
-
-function extractRequestedTitle(userMessage = '') {
-  const source = String(userMessage || '').trim();
-  if (!source) return '';
-  const normalized = normalizeText(source);
-  if (!/\btitulo\b/.test(normalized)) return '';
-  if (!/\b(mude|altere|troque|substitua|atualize|renomeie|editar|edite)\b/.test(normalized)) return '';
-
-  const paraIndex = normalized.search(/\b(para|por|como)\b/);
-  if (paraIndex >= 0) {
-    const quoted = extractQuotedTextAfterMarker(source, paraIndex);
-    if (quoted) return quoted;
-  }
-
-  const fallback = source.match(/\b(?:para|por|como)\s+(.+)$/i);
-  if (!fallback || !fallback[1]) return '';
-  return fallback[1]
-    .replace(/^["'“”]+|["'“”.]+$/g, '')
-    .trim()
-    .slice(0, 160);
-}
-
-function expandShortHex(hex) {
-  const value = String(hex || '').replace(/^#/, '').trim();
-  if (/^[0-9a-fA-F]{3}$/.test(value)) {
-    return `#${value.split('').map((char) => `${char}${char}`).join('')}`.toLowerCase();
-  }
-  if (/^[0-9a-fA-F]{6}$/.test(value)) return `#${value}`.toLowerCase();
-  return '';
-}
-
-function darkenHex(hex, amount = 0.16) {
-  const normalized = expandShortHex(hex);
-  if (!normalized) return hex;
-  const value = normalized.replace(/^#/, '');
-  const parts = [value.slice(0, 2), value.slice(2, 4), value.slice(4, 6)].map((part) =>
-    Number.parseInt(part, 16)
-  );
-  const factor = Math.max(0, Math.min(1, 1 - Number(amount || 0)));
-  return `#${parts
-    .map((part) => Math.max(0, Math.min(255, Math.round(part * factor))).toString(16).padStart(2, '0'))
-    .join('')}`;
-}
-
-function extractRequestedColor(userMessage = '') {
-  const source = String(userMessage || '');
-  const hex = source.match(/#[0-9a-fA-F]{3,6}\b/);
-  if (hex) return expandShortHex(hex[0]);
-
-  const normalized = normalizeText(source);
-  const colorMap = [
-    { regex: /vermelho\s+coral|coral/, value: '#cf416b' },
-    { regex: /vermelh[oa]/, value: '#cf416b' },
-    { regex: /verde/, value: '#2f8f83' },
-    { regex: /azul\s+marinho|marinho/, value: '#0b1f3a' },
-    { regex: /azul\s+petroleo|petroleo/, value: '#123a5a' },
-    { regex: /azul/, value: '#2563eb' },
-    { regex: /preto|escuro/, value: '#1f2424' },
-    { regex: /branco|claro/, value: '#ffffff' },
-    { regex: /dourado|ouro/, value: '#c9a227' },
-  ];
-  const hit = colorMap.find((entry) => entry.regex.test(normalized));
-  return hit ? hit.value : '';
-}
-
-function isButtonColorEditRequest(userMessage = '') {
-  const normalized = normalizeText(userMessage);
-  if (!normalized) return false;
-  const hasButtonTarget = /\b(botao|button|cta|chamada)\b/.test(normalized);
-  const hasEditVerb = /\b(ajuste|ajustar|mude|alterar|altere|troque|trocar|substitua|atualize|defina|coloque)\b/.test(normalized);
-  const hasColor = /#[0-9a-f]{3,6}\b/.test(normalized) || /\b(cor|vermelh|coral|verde|azul|preto|branco|dourado|ouro|marinho|petroleo)\b/.test(normalized);
-  return Boolean(hasButtonTarget && hasEditVerb && hasColor);
-}
-
-function isFooterInsertRequest(userMessage = '') {
-  const normalized = normalizeText(userMessage);
-  if (!normalized) return false;
-  const hasFooterTarget = /\b(rodape|footer)\b/.test(normalized);
-  const hasAddVerb = /\b(insira|inserir|adicione|adicionar|inclua|incluir|crie|criar|coloque)\b/.test(normalized);
-  return Boolean(hasFooterTarget && hasAddVerb);
-}
-
-function isHydrationMismatchRepairRequest(userMessage = '') {
-  const normalized = normalizeText(userMessage);
-  if (!normalized) return false;
-  return /\b(hydration|hidratacao|hydrated|mismatch|cz-shortcut-listen|server rendered html|client properties)\b/.test(normalized);
-}
-
-function replaceFirstSimpleTagInner(content, tagName, replacementText) {
-  const source = String(content || '');
-  const pattern = new RegExp(`(<${tagName}\\b[^>]*>)([\\s\\S]*?)(</${tagName}>)`, 'i');
-  const match = source.match(pattern);
-  if (!match) return { changed: false, content: source };
-
-  const inner = String(match[2] || '');
-  if (/<[a-z][\s\S]*>/i.test(inner)) return { changed: false, content: source };
-
-  const nextInner = escapeHtmlText(replacementText);
-  if (inner.trim() === nextInner) return { changed: false, content: source };
-  return {
-    changed: true,
-    content: source.replace(pattern, `$1${nextInner}$3`),
-  };
-}
-
-function replaceHtmlDocumentTitle(content, replacementText) {
-  const source = String(content || '');
-  const pattern = /(<title\b[^>]*>)([\s\S]*?)(<\/title>)/i;
-  if (!pattern.test(source)) return { changed: false, content: source };
-  const nextTitle = escapeHtmlText(replacementText);
-  const next = source.replace(pattern, `$1${nextTitle}$3`);
-  return { changed: next !== source, content: next };
-}
-
-function replaceMetadataTitle(content, replacementText) {
-  const source = String(content || '');
-  const pattern = /(title\s*:\s*)(['"`])([\s\S]{0,180}?)(\2)/m;
-  const match = source.match(pattern);
-  if (!match) return { changed: false, content: source };
-  const quote = match[2] || "'";
-  const next = source.replace(pattern, (_full, prefix, q, _old, suffix) => {
-    return `${prefix}${q}${escapeJsString(replacementText, quote)}${suffix}`;
-  });
-  return { changed: next !== source, content: next };
-}
-
-function updateTitleContent(content, replacementText, relPath = '') {
-  const lowerPath = String(relPath || '').toLowerCase();
-  let next = String(content || '');
-  let changed = false;
-  const changes = [];
-
-  if (/\.(html|php)$/.test(lowerPath)) {
-    const titleResult = replaceHtmlDocumentTitle(next, replacementText);
-    if (titleResult.changed) {
-      next = titleResult.content;
-      changed = true;
-      changes.push('title');
-    }
-  }
-
-  if (/\.(html|php|jsx|tsx)$/.test(lowerPath)) {
-    const h1Result = replaceFirstSimpleTagInner(next, 'h1', replacementText);
-    if (h1Result.changed) {
-      next = h1Result.content;
-      changed = true;
-      changes.push('h1');
-    }
-  }
-
-  if (/\.(js|jsx|ts|tsx)$/.test(lowerPath)) {
-    const metadataResult = replaceMetadataTitle(next, replacementText);
-    if (metadataResult.changed) {
-      next = metadataResult.content;
-      changed = true;
-      changes.push('metadata');
-    }
-  }
-
-  return { changed, content: next, changes };
-}
-
-function ensureNextLayoutSuppressHydrationWarning(content, relPath = '') {
-  const lowerPath = String(relPath || '').toLowerCase();
-  if (!/(^|\/)layout\.(tsx|jsx)$/.test(lowerPath)) {
-    return { changed: false, content: String(content || '') };
-  }
-  const source = String(content || '');
-  if (!/<body\b/i.test(source)) return { changed: false, content: source };
-  if (/<body\b[^>]*\bsuppressHydrationWarning\b/i.test(source)) {
-    return { changed: false, content: source };
-  }
-  const next = source.replace(/<body\b([^>]*)>/i, (_match, attrs = '') => {
-    return `<body${attrs} suppressHydrationWarning>`;
-  });
-  return { changed: next !== source, content: next };
-}
-
-function replaceCssVariable(content, variableName, color) {
-  const source = String(content || '');
-  const pattern = new RegExp(`(${variableName}\\s*:\\s*)#[0-9a-fA-F]{3,8}(\\s*;)`, 'i');
-  if (!pattern.test(source)) return { changed: false, content: source };
-  const next = source.replace(pattern, `$1${color}$2`);
-  return { changed: next !== source, content: next };
-}
-
-function updateAccentColorCss(content, color) {
-  const source = String(content || '');
-  let next = source;
-  let changed = false;
-  for (const variable of ['--color-accent', '--accent', '--color-primary', '--primary']) {
-    const result = replaceCssVariable(next, variable, color);
-    if (result.changed) {
-      next = result.content;
-      changed = true;
-      break;
-    }
-  }
-  const darkResult = replaceCssVariable(next, '--color-accent-dark', darkenHex(color));
-  if (darkResult.changed) {
-    next = darkResult.content;
-    changed = true;
-  }
-  return { changed, content: next };
-}
-
-function updateFirstButtonColorClass(content, color) {
-  const source = String(content || '');
-  const dark = darkenHex(color);
-  const buttonPattern = /(<(?:a|button)\b[^>]*className=")([^"]*\bbg-\[[^\]]+\][^"]*)(")/i;
-  const match = source.match(buttonPattern);
-  if (!match) return { changed: false, content: source };
-  let className = match[2];
-  className = className
-    .replace(/\bbg-\[[^\]]+\]/, `bg-[${color}]`)
-    .replace(/\bhover:bg-\[[^\]]+\]\s*/g, '');
-  if (!/\bhover:bg-\[/.test(className)) className = `${className} hover:bg-[${dark}]`;
-  const next = source.replace(buttonPattern, `$1${className}$3`);
-  return { changed: next !== source, content: next };
-}
-
-function extractBrandFromContent(content = '') {
-  const source = String(content || '');
-  const headerLink = source.match(/<a\b[^>]*href=["']#inicio["'][^>]*>([^<]{2,80})<\/a>/i);
-  if (headerLink && headerLink[1]) return headerLink[1].trim();
-  const metadata = source.match(/title\s*:\s*['"`]([^'"`]{2,80})['"`]/);
-  if (metadata && metadata[1]) return metadata[1].trim();
-  const h1 = source.match(/<h1\b[^>]*>([^<]{2,80})<\/h1>/i);
-  if (h1 && h1[1]) return h1[1].trim();
-  return 'Faber Projeto';
-}
-
-function buildNextFooterBlock(brand = 'Faber Projeto') {
-  const safeBrand = escapeHtmlText(brand || 'Faber Projeto');
-  return [
-    '',
-    '      <footer className="border-t border-[var(--color-line)] bg-[var(--color-ink)] px-5 py-10 text-white">',
-    '        <div className="mx-auto flex max-w-6xl flex-col gap-3 text-sm text-white/75 md:flex-row md:items-center md:justify-between">',
-    `          <strong className="text-base text-white">${safeBrand}</strong>`,
-    `          <span>© 2026 ${safeBrand}. Todos os direitos reservados.</span>`,
-    '        </div>',
-    '      </footer>',
-  ].join('\n');
-}
-
-function insertFooterIntoNextPage(content, brand = 'Faber Projeto') {
-  const source = String(content || '');
-  if (/<footer\b/i.test(source)) return { changed: false, content: source };
-  if (!/<\/main>/i.test(source)) return { changed: false, content: source };
-  const next = source.replace(/(\s*)<\/main>/i, `${buildNextFooterBlock(brand)}$1</main>`);
-  return { changed: next !== source, content: next };
-}
-
-function buildHtmlFooterBlock(brand = 'Faber Projeto') {
-  const safeBrand = escapeHtmlText(brand || 'Faber Projeto');
-  return [
-    '',
-    '<footer class="site-footer">',
-    `  <strong>${safeBrand}</strong>`,
-    `  <span>© 2026 ${safeBrand}. Todos os direitos reservados.</span>`,
-    '</footer>',
-  ].join('\n');
-}
-
-function insertFooterIntoHtml(content, brand = 'Faber Projeto') {
-  const source = String(content || '');
-  if (/<footer\b/i.test(source)) return { changed: false, content: source };
-  const block = buildHtmlFooterBlock(brand);
-  if (/<\/body>/i.test(source)) {
-    const next = source.replace(/<\/body>/i, `${block}\n</body>`);
-    return { changed: next !== source, content: next };
-  }
-  return { changed: false, content: source };
-}
-
-function uniqueList(values = []) {
-  return Array.from(new Set(values.filter(Boolean)));
-}
+const {
+  normalizeText,
+  escapeHtmlText,
+  escapeJsString,
+  defaultNormalizeRequestedRelativePath,
+  extractQuotedTextAfterMarker,
+  extractRequestedTitle,
+  expandShortHex,
+  darkenHex,
+  extractRequestedColor,
+  resolveColorKeyword,
+  extractRequestedTargetColor,
+  listRequestedSourceColorFamilies,
+  sourceColorFamilyPattern,
+  extractTargetColorForSourceFamily,
+  escapeRegExp,
+  extractLiteralColorReplacementIntent,
+  isLiteralColorReplacementRequest,
+  isButtonColorEditRequest,
+  isThemeColorEditRequest,
+  extractSemanticColorEditIntent,
+  isSemanticColorEditRequest,
+  isFooterInsertRequest,
+  isHydrationMismatchRepairRequest,
+  replaceFirstSimpleTagInner,
+  replaceHtmlDocumentTitle,
+  replaceMetadataTitle,
+  updateTitleContent,
+  isHeadingColorEditRequest,
+  extractHeadingColorValue,
+  replaceHeadingColorClass,
+  updateHeadingColorContent,
+  ensureNextLayoutSuppressHydrationWarning,
+  replaceCssVariable,
+  updateAccentColorCss,
+  replaceLiteralColor,
+  hexToRgb,
+  getHue,
+  getLuminance,
+  isHexColorFamily,
+  replaceSemanticHexFamily,
+  replaceTailwindSemanticColorClasses,
+  updateSemanticColorContent,
+  updateFirstButtonColorClass,
+  extractBrandFromContent,
+  buildNextFooterBlock,
+  insertFooterIntoNextPage,
+  buildHtmlFooterBlock,
+  insertFooterIntoHtml,
+  extractBackgroundColor,
+  replaceCssVariableIfPresent,
+  updateBackgroundColorCss,
+  extractTypographyIntent,
+  isTypographyEditRequest,
+  fontImportName,
+  fontStack,
+  buildGoogleFontImport,
+  ensureGoogleFontImport,
+  replaceOrAppendCssRule,
+  updateTypographyCss,
+  uniqueList,
+} = require('./deterministic_edit_helpers');
 
 function createDeterministicEditService(dependencies = {}) {
   const {
@@ -415,6 +162,61 @@ function createDeterministicEditService(dependencies = {}) {
     return fs.readFileSync(absPath, 'utf8');
   }
 
+  function buildHeadingColorOperationBatch({ projectInfo, userMessage, attachments = [], executionIntent = 'edit_project' } = {}) {
+    if (String(executionIntent || '').toLowerCase() !== 'edit_project') return null;
+    if (!isHeadingColorEditRequest(userMessage)) return null;
+    const projectRoot = projectInfo && projectInfo.rootPath ? String(projectInfo.rootPath) : '';
+    if (!projectRoot) return null;
+    const target = extractHeadingColorValue(userMessage);
+    if (!target) return null;
+
+    const operations = [];
+    const pageCandidates = collectExistingCandidates(projectInfo, [
+      'app/page.tsx',
+      'src/app/page.tsx',
+      'pages/index.tsx',
+      'src/pages/index.tsx',
+      'app/page.jsx',
+      'pages/index.jsx',
+      'src/pages/index.jsx',
+      'index.html',
+      'index.php',
+    ]);
+    for (const relPath of pageCandidates) {
+      if (!/\.(tsx|jsx|html|php)$/i.test(relPath)) continue;
+      let current = '';
+      try {
+        current = readTextFile(projectRoot, relPath);
+      } catch {
+        continue;
+      }
+      if (current === null) continue;
+      const result = updateHeadingColorContent(current, target, relPath);
+      if (!result.changed || result.content === current) continue;
+      operations.push({ op: 'write_file', path: relPath, content: result.content });
+      break;
+    }
+
+    if (!operations.length) return null;
+    return {
+      ok: true,
+      action: {
+        type: 'operation_batch',
+        intent: 'edit_project',
+        rootPath: projectRoot,
+        targetFile: operations[0].path,
+        operations,
+        diffPreview: buildOperationBatchDiffPreview(operations),
+        summary: `Ajustar a cor do H1 para ${target.label} sem alterar o texto.`,
+        humanSummary: `Cor do H1 ajustada para ${target.label}.`,
+        userMessage,
+        attachments,
+        generatedBy: 'deterministic_heading_color_patch',
+      },
+      raw: `deterministic_heading_color_patch:${target.label}`,
+    };
+  }
+
   function buildHydrationMismatchOperationBatch({ projectInfo, userMessage, attachments = [], executionIntent = 'edit_project' } = {}) {
     if (String(executionIntent || '').toLowerCase() !== 'edit_project') return null;
     if (!isHydrationMismatchRepairRequest(userMessage)) return null;
@@ -453,6 +255,240 @@ function createDeterministicEditService(dependencies = {}) {
         generatedBy: 'deterministic_next_hydration_patch',
       },
       raw: 'deterministic_next_hydration_patch',
+    };
+  }
+
+  function collectColorReplacementCandidates(projectInfo = {}) {
+    return collectExistingCandidates(projectInfo, [
+      'app/globals.css',
+      'src/app/globals.css',
+      'style.css',
+      'styles.css',
+      'src/styles.css',
+      'app/page.tsx',
+      'src/app/page.tsx',
+      'pages/index.tsx',
+      'src/pages/index.tsx',
+      'app/layout.tsx',
+      'src/app/layout.tsx',
+      'index.html',
+      'index.php',
+    ]).filter((relPath) => {
+      if (/package-lock\.json$/i.test(relPath)) return false;
+      return /\.(css|scss|sass|tsx|jsx|ts|js|html|php)$/i.test(relPath);
+    });
+  }
+
+  function buildLiteralColorReplacementOperationBatch({
+    projectInfo,
+    userMessage,
+    attachments = [],
+    executionIntent = 'edit_project',
+  } = {}) {
+    if (String(executionIntent || '').toLowerCase() !== 'edit_project') return null;
+    const intent = extractLiteralColorReplacementIntent(userMessage);
+    if (!intent) return null;
+    const projectRoot = projectInfo && projectInfo.rootPath ? String(projectInfo.rootPath) : '';
+    if (!projectRoot) return null;
+
+    const operations = [];
+    let replacementCount = 0;
+    for (const relPath of collectColorReplacementCandidates(projectInfo)) {
+      let current = '';
+      try {
+        current = readTextFile(projectRoot, relPath);
+      } catch {
+        continue;
+      }
+      if (current === null) continue;
+      const result = replaceLiteralColor(current, intent.from, intent.to);
+      if (!result.changed) continue;
+      replacementCount += result.count || 0;
+      operations.push({ op: 'write_file', path: relPath, content: result.content });
+    }
+
+    if (!operations.length) return null;
+    return {
+      ok: true,
+      action: {
+        type: 'operation_batch',
+        intent: 'edit_project',
+        rootPath: projectRoot,
+        targetFile: operations[0].path,
+        operations,
+        diffPreview: buildOperationBatchDiffPreview(operations),
+        summary: `Substituir ocorrências literais de ${intent.from} por ${intent.to} nos arquivos atuais.`,
+        humanSummary: `Cor ${intent.from} substituída por ${intent.to}.`,
+        userMessage,
+        attachments,
+        generatedBy: 'micro_color_literal_replace_patch',
+        microContract: {
+          schemaVersion: 'micro-edit-color-replacement-v1',
+          type: intent.kind,
+          from: intent.from,
+          to: intent.to,
+          replacements: replacementCount,
+        },
+      },
+      raw: `micro_color_literal_replace_patch:${intent.from}->${intent.to}`,
+    };
+  }
+
+  function buildSemanticColorOperationBatch({
+    projectInfo,
+    userMessage,
+    attachments = [],
+    executionIntent = 'edit_project',
+  } = {}) {
+    if (String(executionIntent || '').toLowerCase() !== 'edit_project') return null;
+    const intent = extractSemanticColorEditIntent(userMessage);
+    if (!intent) return null;
+    const projectRoot = projectInfo && projectInfo.rootPath ? String(projectInfo.rootPath) : '';
+    if (!projectRoot) return null;
+
+    const operations = [];
+    let replacementCount = 0;
+    for (const relPath of collectColorReplacementCandidates(projectInfo)) {
+      let current = '';
+      try {
+        current = readTextFile(projectRoot, relPath);
+      } catch {
+        continue;
+      }
+      if (current === null) continue;
+      const result = updateSemanticColorContent(current, intent, relPath);
+      if (!result.changed) continue;
+      replacementCount += result.count || 0;
+      operations.push({ op: 'write_file', path: relPath, content: result.content });
+    }
+
+    if (!operations.length) return null;
+    return {
+      ok: true,
+      action: {
+        type: 'operation_batch',
+        intent: 'edit_project',
+        rootPath: projectRoot,
+        targetFile: operations[0].path,
+        operations,
+        diffPreview: buildOperationBatchDiffPreview(operations),
+        summary: `Aplicar edição semântica de cor: ${intent.sourceFamily} -> ${intent.targetColor}.`,
+        humanSummary: `Cores ${intent.sourceFamily} ajustadas para ${intent.targetColor}.`,
+        userMessage,
+        attachments,
+        generatedBy: 'micro_semantic_color_edit_patch',
+        microContract: {
+          schemaVersion: 'micro-edit-semantic-color-v1',
+          type: intent.kind,
+          sourceFamily: intent.sourceFamily,
+          targetColor: intent.targetColor,
+          targetScope: intent.targetScope,
+          replacements: replacementCount,
+        },
+      },
+      raw: `micro_semantic_color_edit_patch:${intent.sourceFamily}->${intent.targetColor}`,
+    };
+  }
+
+  function buildGlobalStyleOperationBatch({
+    projectInfo,
+    userMessage,
+    attachments = [],
+    executionIntent = 'edit_project',
+  } = {}) {
+    if (String(executionIntent || '').toLowerCase() !== 'edit_project') return null;
+    const normalized = normalizeText(userMessage);
+    if (
+      isButtonColorEditRequest(userMessage) &&
+      !/\b(global|todas|todos|paleta|tema|visual|identidade|site inteiro|projeto inteiro)\b/.test(normalized)
+    ) {
+      return null;
+    }
+    const semanticIntent = extractSemanticColorEditIntent(userMessage);
+    const backgroundColor = extractBackgroundColor(userMessage);
+    const typographyIntent = extractTypographyIntent(userMessage);
+    if (!semanticIntent && !backgroundColor && !typographyIntent) return null;
+    const projectRoot = projectInfo && projectInfo.rootPath ? String(projectInfo.rootPath) : '';
+    if (!projectRoot) return null;
+
+    const operations = [];
+    let replacementCount = 0;
+    const touchedKinds = [];
+    for (const relPath of collectColorReplacementCandidates(projectInfo)) {
+      let current = '';
+      try {
+        current = readTextFile(projectRoot, relPath);
+      } catch {
+        continue;
+      }
+      if (current === null) continue;
+
+      let next = current;
+      let changed = false;
+
+      if (semanticIntent) {
+        const result = updateSemanticColorContent(next, semanticIntent, relPath);
+        if (result.changed) {
+          next = result.content;
+          changed = true;
+          replacementCount += result.count || 0;
+          touchedKinds.push('palette');
+        }
+      }
+
+      if (backgroundColor && /\.(css|scss|sass)$/i.test(relPath)) {
+        const result = updateBackgroundColorCss(next, backgroundColor);
+        if (result.changed) {
+          next = result.content;
+          changed = true;
+          touchedKinds.push('background');
+        }
+      }
+
+      if (typographyIntent && /\.(css|scss|sass)$/i.test(relPath)) {
+        const result = updateTypographyCss(next, typographyIntent);
+        if (result.changed) {
+          next = result.content;
+          changed = true;
+          touchedKinds.push('typography');
+        }
+      }
+
+      if (!changed || next === current) continue;
+      operations.push({ op: 'write_file', path: relPath, content: next });
+    }
+
+    if (!operations.length) return null;
+    const uniqueKinds = uniqueList(touchedKinds);
+    return {
+      ok: true,
+      action: {
+        type: 'operation_batch',
+        intent: 'edit_project',
+        rootPath: projectRoot,
+        targetFile: operations[0].path,
+        operations,
+        diffPreview: buildOperationBatchDiffPreview(operations),
+        summary: `Aplicar ajuste global de estilo (${uniqueKinds.join(', ') || 'estilo'}) sem recriar o projeto.`,
+        humanSummary: `Estilo global ajustado: ${uniqueKinds.join(', ') || 'estilo'}.`,
+        userMessage,
+        attachments,
+        generatedBy: 'deterministic_global_style_patch',
+        microContract: {
+          schemaVersion: 'micro-edit-global-style-v1',
+          semanticColor: semanticIntent
+            ? {
+                sourceFamilies: semanticIntent.sourceFamilies || [semanticIntent.sourceFamily].filter(Boolean),
+                targetColor: semanticIntent.targetColor,
+                perFamilyTargets: semanticIntent.perFamilyTargets || {},
+                replacements: replacementCount,
+              }
+            : null,
+          backgroundColor: backgroundColor || '',
+          typography: typographyIntent || null,
+        },
+      },
+      raw: `deterministic_global_style_patch:${uniqueKinds.join('+') || 'style'}`,
     };
   }
 
@@ -530,6 +566,81 @@ function createDeterministicEditService(dependencies = {}) {
     };
   }
 
+  function buildThemeColorOperationBatch({ projectInfo, userMessage, attachments = [], executionIntent = 'edit_project' } = {}) {
+    if (String(executionIntent || '').toLowerCase() !== 'edit_project') return null;
+    if (!isThemeColorEditRequest(userMessage)) return null;
+    const projectRoot = projectInfo && projectInfo.rootPath ? String(projectInfo.rootPath) : '';
+    if (!projectRoot) return null;
+    const color = extractRequestedColor(userMessage);
+    if (!color) return null;
+
+    const operations = [];
+    for (const relPath of collectExistingCandidates(projectInfo, [
+      'app/globals.css',
+      'src/app/globals.css',
+      'style.css',
+      'styles.css',
+      'src/styles.css',
+    ])) {
+      if (!/\.(css|scss)$/.test(relPath)) continue;
+      let current = '';
+      try {
+        current = readTextFile(projectRoot, relPath);
+      } catch {
+        continue;
+      }
+      if (current === null) continue;
+      const result = updateAccentColorCss(current, color);
+      if (!result.changed) continue;
+      operations.push({ op: 'write_file', path: relPath, content: result.content });
+      break;
+    }
+
+    if (!operations.length) {
+      const pageCandidates = collectExistingCandidates(projectInfo, [
+        'app/page.tsx',
+        'src/app/page.tsx',
+        'pages/index.tsx',
+        'src/pages/index.tsx',
+        'index.html',
+        'index.php',
+      ]);
+      for (const relPath of pageCandidates) {
+        if (!/\.(tsx|jsx)$/.test(relPath)) continue;
+        let current = '';
+        try {
+          current = readTextFile(projectRoot, relPath);
+        } catch {
+          continue;
+        }
+        if (current === null) continue;
+        const result = updateFirstButtonColorClass(current, color);
+        if (!result.changed) continue;
+        operations.push({ op: 'write_file', path: relPath, content: result.content });
+        break;
+      }
+    }
+
+    if (!operations.length) return null;
+    return {
+      ok: true,
+      action: {
+        type: 'operation_batch',
+        intent: 'edit_project',
+        rootPath: projectRoot,
+        targetFile: operations[0].path,
+        operations,
+        diffPreview: buildOperationBatchDiffPreview(operations),
+        summary: `Ajustar cor principal/acento do projeto para ${color} sem recriar a base.`,
+        humanSummary: `Paleta principal ajustada para ${color}.`,
+        userMessage,
+        attachments,
+        generatedBy: 'deterministic_theme_color_patch',
+      },
+      raw: `deterministic_theme_color_patch:${color}`,
+    };
+  }
+
   function buildFooterInsertOperationBatch({ projectInfo, userMessage, attachments = [], executionIntent = 'edit_project' } = {}) {
     if (String(executionIntent || '').toLowerCase() !== 'edit_project') return null;
     if (!isFooterInsertRequest(userMessage)) return null;
@@ -555,9 +666,10 @@ function createDeterministicEditService(dependencies = {}) {
       }
       if (current === null) continue;
       const brand = extractBrandFromContent(current);
+      const backgroundColor = extractRequestedColor(userMessage);
       const result = /\.(tsx|jsx)$/.test(relPath)
-        ? insertFooterIntoNextPage(current, brand)
-        : insertFooterIntoHtml(current, brand);
+        ? insertFooterIntoNextPage(current, brand, { backgroundColor })
+        : insertFooterIntoHtml(current, brand, { backgroundColor });
       if (!result.changed) continue;
       operations.push({ op: 'write_file', path: relPath, content: result.content });
       break;
@@ -586,8 +698,12 @@ function createDeterministicEditService(dependencies = {}) {
   function buildContentEditOperationBatch(options = {}) {
     return (
       buildHydrationMismatchOperationBatch(options) ||
+      buildHeadingColorOperationBatch(options) ||
       buildTitleEditOperationBatch(options) ||
+      buildLiteralColorReplacementOperationBatch(options) ||
+      buildGlobalStyleOperationBatch(options) ||
       buildButtonColorOperationBatch(options) ||
+      buildThemeColorOperationBatch(options) ||
       buildFooterInsertOperationBatch(options)
     );
   }
@@ -596,11 +712,27 @@ function createDeterministicEditService(dependencies = {}) {
     buildButtonColorOperationBatch,
     buildContentEditOperationBatch,
     buildFooterInsertOperationBatch,
+    buildGlobalStyleOperationBatch,
+    buildHeadingColorOperationBatch,
     buildHydrationMismatchOperationBatch,
+    buildLiteralColorReplacementOperationBatch,
+    buildSemanticColorOperationBatch,
+    buildThemeColorOperationBatch,
     buildTitleEditOperationBatch,
     ensureNextLayoutSuppressHydrationWarning,
+    extractSemanticColorEditIntent,
+    extractLiteralColorReplacementIntent,
     extractRequestedColor,
     extractRequestedTitle,
+    extractBackgroundColor,
+    extractTypographyIntent,
+    isHeadingColorEditRequest,
+    isLiteralColorReplacementRequest,
+    isSemanticColorEditRequest,
+    isTypographyEditRequest,
+    replaceLiteralColor,
+    updateBackgroundColorCss,
+    updateTypographyCss,
     updateTitleContent,
   };
 }
@@ -608,10 +740,22 @@ function createDeterministicEditService(dependencies = {}) {
 module.exports = {
   createDeterministicEditService,
   ensureNextLayoutSuppressHydrationWarning,
+  extractLiteralColorReplacementIntent,
   extractRequestedColor,
   extractRequestedTitle,
+  extractBackgroundColor,
+  extractTypographyIntent,
+  extractSemanticColorEditIntent,
   isButtonColorEditRequest,
   isFooterInsertRequest,
+  isHeadingColorEditRequest,
   isHydrationMismatchRepairRequest,
+  isLiteralColorReplacementRequest,
+  isSemanticColorEditRequest,
+  isThemeColorEditRequest,
+  isTypographyEditRequest,
+  replaceLiteralColor,
+  updateBackgroundColorCss,
+  updateTypographyCss,
   updateTitleContent,
 };

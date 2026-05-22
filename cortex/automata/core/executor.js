@@ -1,4 +1,8 @@
 const DEFAULT_EXCLUDED_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.turbo', '.cache']);
+const {
+  isCssOperationPath,
+  normalizeCssImportOrder,
+} = require('../../orchestration/css_operation_safety');
 
 function createAutomataExecutor(dependencies = {}) {
   const {
@@ -289,7 +293,10 @@ function createAutomataExecutor(dependencies = {}) {
       };
     }
 
-    const nextContent = String(action.nextContent || '');
+    let nextContent = String(action.nextContent || '');
+    if (isCssOperationPath(action.targetFile || absoluteTarget)) {
+      nextContent = normalizeCssImportOrder(nextContent);
+    }
     fs.writeFileSync(absoluteTarget, nextContent, 'utf8');
 
     const targetFile = normalizeRelativePathForDiff(action.targetFile || '');
@@ -360,7 +367,10 @@ function createAutomataExecutor(dependencies = {}) {
           const dir = path.dirname(absolutePath);
           if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
           const previous = fs.existsSync(absolutePath) ? fs.readFileSync(absolutePath, 'utf8') : '';
-          const nextContent = String(operation.content || '');
+          let nextContent = String(operation.content || '');
+          if (isCssOperationPath(normalizedPath)) {
+            nextContent = normalizeCssImportOrder(nextContent);
+          }
           fs.writeFileSync(absolutePath, nextContent, 'utf8');
           const rel = normalizeRelativePathForDiff(normalizedPath);
           modifiedFiles.push(rel);
@@ -372,7 +382,10 @@ function createAutomataExecutor(dependencies = {}) {
           const dir = path.dirname(absolutePath);
           if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
           const previous = fs.existsSync(absolutePath) ? fs.readFileSync(absolutePath, 'utf8') : '';
-          const nextContent = `${previous}${String(operation.content || '')}`;
+          let nextContent = `${previous}${String(operation.content || '')}`;
+          if (isCssOperationPath(normalizedPath)) {
+            nextContent = normalizeCssImportOrder(nextContent);
+          }
           fs.writeFileSync(absolutePath, nextContent, 'utf8');
           const rel = normalizeRelativePathForDiff(normalizedPath);
           modifiedFiles.push(rel);

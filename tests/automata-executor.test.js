@@ -162,6 +162,23 @@ async function run() {
     assert.strictEqual(fs.readFileSync(path.join(projectRoot, 'contract.txt'), 'utf8'), 'contract ok');
     assert.strictEqual(diffIngestions.length, 1);
 
+    fs.mkdirSync(path.join(projectRoot, 'app'), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, 'app', 'globals.css'), 'body { margin: 0; }\n', 'utf8');
+    const cssAppendBatch = executor.executeOperationBatchAction({
+      rootPath: projectRoot,
+      operations: [
+        {
+          op: 'append_file',
+          path: 'app/globals.css',
+          content: '@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap");\n:root { --color-bg: #fff; }\n',
+        },
+      ],
+    });
+    assert.strictEqual(cssAppendBatch.ok, true);
+    const normalizedCss = fs.readFileSync(path.join(projectRoot, 'app', 'globals.css'), 'utf8');
+    assert.ok(normalizedCss.startsWith('@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap");'));
+    assert.strictEqual(/body\s*\{[^}]*\}\s*@import/i.test(normalizedCss), false);
+
     console.log('automata-executor.test.js: ok');
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });

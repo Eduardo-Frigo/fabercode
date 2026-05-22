@@ -1,10 +1,14 @@
 const { spawn: defaultSpawn } = require('child_process');
 const defaultNet = require('net');
+const { createProjectNodeRuntimeService } = require('./project_node_runtime_service');
 
 function createProjectPreviewRuntimeService(dependencies = {}) {
   const {
     buildProjectPreviewPlan,
+    fs = null,
     net = defaultNet,
+    path = null,
+    nodeRuntimeService = createProjectNodeRuntimeService({ fs, path, processEnv: dependencies.processEnv || process.env }),
     processEnv = process.env,
     spawn = defaultSpawn,
   } = dependencies;
@@ -27,6 +31,16 @@ function createProjectPreviewRuntimeService(dependencies = {}) {
   function clipRuntimeOutput(value = '', maxChars = 5000) {
     const text = String(value || '');
     return text.length > maxChars ? text.slice(text.length - maxChars) : text;
+  }
+
+  function buildProjectProcessEnv(rootPath, extraEnv = {}) {
+    if (nodeRuntimeService && typeof nodeRuntimeService.buildEnv === 'function') {
+      return nodeRuntimeService.buildEnv(rootPath, extraEnv).env;
+    }
+    const env = { ...processEnv, ...extraEnv };
+    delete env.npm_config_metrics_registry;
+    delete env.NPM_CONFIG_METRICS_REGISTRY;
+    return env;
   }
 
   function summarizeSession(session) {
@@ -94,6 +108,91 @@ function createProjectPreviewRuntimeService(dependencies = {}) {
     return null;
   }
 
+  function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function canConnectToPort(port, host = '127.0.0.1', timeoutMs = 800) {
+    const connect = typeof net.createConnection === 'function'
+      ? net.createConnection.bind(net)
+      : typeof net.connect === 'function'
+        ? net.connect.bind(net)
+        : null;
+
+    if (!connect) return Promise.resolve(true);
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let socket = null;
+      const finish = (ok) => {
+        if (settled) return;
+        settled = true;
+        if (socket) {
+          try {
+            if (typeof socket.destroy === 'function') socket.destroy();
+            else if (typeof socket.end === 'function') socket.end();
+          } catch {
+            // Best effort socket cleanup.
+          }
+        }
+        resolve(Boolean(ok));
+      };
+
+      try {
+        socket = connect({ port, host });
+      } catch {
+        finish(false);
+        return;
+      }
+
+      if (socket && typeof socket.setTimeout === 'function') socket.setTimeout(timeoutMs);
+      if (socket && typeof socket.once === 'function') {
+        socket.once('connect', () => finish(true));
+        socket.once('ready', () => finish(true));
+        socket.once('timeout', () => finish(false));
+        socket.once('error', () => finish(false));
+      } else {
+        finish(true);
+      }
+    });
+  }
+
+  async function waitForServerReady(session, options = {}) {
+    const port = Number(session && session.port ? session.port : 0);
+    if (!port) return { ok: true, ready: false, message: 'Preview sem porta HTTP para aguardar.' };
+
+    const host = '127.0.0.1';
+    const timeoutMs = Math.max(3000, Number(options.readyTimeoutMs || 45000));
+    const intervalMs = Math.max(100, Number(options.readyPollIntervalMs || 250));
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      if (session.status === 'failed' || session.status === 'stopped') {
+        return {
+          ok: false,
+          ready: false,
+          message: session.message || 'Servidor de preview finalizou antes de ficar pronto.',
+        };
+      }
+
+      if (await canConnectToPort(port, host)) {
+        return {
+          ok: true,
+          ready: true,
+          message: `Preview respondendo em http://${host}:${port}/.`,
+        };
+      }
+
+      await wait(intervalMs);
+    }
+
+    return {
+      ok: false,
+      ready: false,
+      message: `O servidor de preview iniciou, mas http://${host}:${port}/ não respondeu dentro do tempo limite.`,
+    };
+  }
+
   function findPreviewDependencyStep(plan = {}) {
     const steps = Array.isArray(plan && plan.steps) ? plan.steps : [];
     return steps.find((step) => {
@@ -147,7 +246,7 @@ function createProjectPreviewRuntimeService(dependencies = {}) {
 
       const child = spawn(command.bin, command.args, {
         cwd: rootPath,
-        env: { ...processEnv, ...(options.env || {}) },
+        env: buildProjectProcessEnv(rootPath, options.env || {}),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
@@ -301,7 +400,7 @@ function createProjectPreviewRuntimeService(dependencies = {}) {
         sessionsByRoot.delete(session.rootPath);
       });
       child.once('close', (code, signal) => {
-        if (session.status === 'stopped') return;
+        if (session.status === 'stopped' || session.status === 'failed') return;
         session.status = code === 0 ? 'stopped' : 'failed';
         session.exitCode = code;
         session.signal = signal || null;
@@ -329,7 +428,7 @@ function createProjectPreviewRuntimeService(dependencies = {}) {
 
     const child = spawn(command.bin, command.args, {
       cwd: plan.cwd || plan.rootPath || rootPath,
-      env: { ...processEnv, ...(options.env || {}) },
+      env: buildProjectProcessEnv(rootPath, options.env || {}),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -338,7 +437,7 @@ function createProjectPreviewRuntimeService(dependencies = {}) {
       rootPath,
       mode: plan.mode,
       stack: plan.stack,
-      status: 'running',
+      status: plan.mode === 'server' ? 'starting' : 'running',
       url: plan.url,
       port: plan.port || null,
       pid: child && child.pid ? child.pid : null,
@@ -348,15 +447,115 @@ function createProjectPreviewRuntimeService(dependencies = {}) {
       stoppedAt: null,
       stdout: '',
       stderr: '',
-      message: 'Preview local iniciado.',
+      message: plan.mode === 'server' ? 'Aguardando servidor de preview responder.' : 'Preview local iniciado.',
     };
     sessionsById.set(session.id, session);
     sessionsByRoot.set(rootPath, session);
     attachChildEvents(session, child);
 
+    if (session.mode === 'server' && session.port) {
+      const readiness = await waitForServerReady(session, options);
+      if (!readiness.ok) {
+        if (session.status !== 'failed' && session.status !== 'stopped') {
+          session.status = 'failed';
+          session.message = readiness.message;
+          session.stoppedAt = new Date().toISOString();
+          if (child && typeof child.kill === 'function') {
+            try {
+              child.kill('SIGTERM');
+            } catch {
+              // Best effort cleanup after failed readiness probe.
+            }
+          }
+          sessionsById.delete(session.id);
+          sessionsByRoot.delete(rootPath);
+        }
+        return {
+          ok: false,
+          started: false,
+          plan,
+          session: summarizeSession(session).session,
+          message: session.message || readiness.message,
+          readiness,
+        };
+      }
+      session.status = 'ready';
+      session.message = readiness.message || 'Preview local pronto.';
+    }
+
     return {
       ok: true,
       started: true,
+      plan,
+      session: summarizeSession(session).session,
+      message: session.message,
+    };
+  }
+
+  async function attachServerPreview(projectInfo, plan, options = {}) {
+    const rootPath = normalizeRootPath(projectInfo);
+    await stopProjectPreview({ rootPath });
+
+    const port = Number.parseInt(options.port || (plan && plan.port) || '0', 10);
+    const url = plan && plan.url
+      ? plan.url
+      : port
+        ? `http://127.0.0.1:${port}/`
+        : '';
+    if (!port || !url) {
+      return {
+        ok: false,
+        started: false,
+        attached: false,
+        plan,
+        message: 'Plano de preview sem porta para anexar ao terminal interno.',
+      };
+    }
+
+    const session = {
+      id: createSessionId(),
+      rootPath,
+      mode: 'server',
+      stack: plan && plan.stack ? plan.stack : 'Node',
+      status: 'starting',
+      url,
+      port,
+      pid: null,
+      commandText: plan && plan.commandText ? plan.commandText : '',
+      child: null,
+      startedAt: new Date().toISOString(),
+      stoppedAt: null,
+      stdout: '',
+      stderr: '',
+      message: 'Aguardando servidor iniciado no terminal interno.',
+    };
+    sessionsById.set(session.id, session);
+    sessionsByRoot.set(rootPath, session);
+
+    const readiness = await waitForServerReady(session, options);
+    if (!readiness.ok) {
+      session.status = 'failed';
+      session.message = readiness.message;
+      session.stoppedAt = new Date().toISOString();
+      sessionsById.delete(session.id);
+      sessionsByRoot.delete(rootPath);
+      return {
+        ok: false,
+        started: false,
+        attached: false,
+        plan,
+        session: summarizeSession(session).session,
+        message: session.message,
+        readiness,
+      };
+    }
+
+    session.status = 'ready';
+    session.message = readiness.message || 'Preview local pronto.';
+    return {
+      ok: true,
+      started: true,
+      attached: true,
       plan,
       session: summarizeSession(session).session,
       message: session.message,
@@ -375,6 +574,19 @@ function createProjectPreviewRuntimeService(dependencies = {}) {
     }
 
     let initialPlan = buildProjectPreviewPlan(projectInfo, options);
+    if (options.attachToExistingServer === true) {
+      if (!initialPlan.ok || initialPlan.mode !== 'server') {
+        return {
+          ok: false,
+          started: false,
+          attached: false,
+          plan: initialPlan,
+          message: initialPlan.message || 'Preview HTTP indisponível para anexar ao terminal interno.',
+        };
+      }
+      return attachServerPreview(projectInfo, initialPlan, options);
+    }
+
     const installResult = initialPlan && initialPlan.ok && !initialPlan.ready
       ? await maybeInstallPreviewDependencies(projectInfo, initialPlan, options)
       : null;

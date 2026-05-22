@@ -1,0 +1,246 @@
+}
+.project-tree-label {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-tree-diff {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.project-tree-diff-add,
+.project-tree-diff-del {
+  font-size: 0.65rem;
+  line-height: 1;
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  border: 1px solid transparent;
+}
+.project-tree-diff-add {
+  color: #89f0c0;
+  border-color: rgba(137, 240, 192, 0.55);
+  background: rgba(24, 94, 62, 0.32);
+}
+.project-tree-diff-del {
+  color: #ffacb0;
+  border-color: rgba(255, 172, 176, 0.52);
+  background: rgba(114, 38, 42, 0.3);
+}
+
+.left-mini-action {
+  border: 1px solid rgba(255,255,255,0.34) !important;
+  background: rgba(255,255,255,0.08) !important;
+}
+.left-mini-action svg {
+  width: 19px !important;
+  height: 19px !important;
+  stroke: currentColor !important;
+  color: #f5f5f5 !important;
+}
+/* FINAL-UI-FIX-2026-05-04-V5 END */
+
+/* FINAL-EDITOR-FIX-2026-05-04 */
+.project-file-editor {
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  background: transparent !important;
+  caret-color: #f5f7ff !important;
+}
+.project-file-modal__content {
+  opacity: 1 !important;
+}
+.project-file-modal__content,
+.project-file-editor,
+.project-file-lines {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.78rem !important;
+  line-height: 1.55 !important;
+  tab-size: 2 !important;
+}
+.project-file-editor::selection {
+  background: rgba(122, 162, 247, 0.32) !important;
+}
+.tok-comment { color: #8fa1ba !important; }
+.tok-string  { color: #7ef0c2 !important; }
+.tok-number  { color: #ffbf73 !important; }
+.tok-key     { color: #8bd5ff !important; font-weight: 700 !important; }
+.tok-prop    { color: #f2a8ff !important; }
+.tok-fn      { color: #ffe38f !important; }
+
+
+/* DEFINITIVE-EDITOR-AND-ICONS-FIX-2026-05-04 */
+.left-mini-action {
+  width: 44px !important;
+  height: 44px !important;
+  padding: 0 !important;
+  border-radius: 999px !important;
+  display: inline-grid !important;
+  place-items: center !important;
+  border: 1px solid rgba(255,255,255,0.32) !important;
+  background: rgba(255,255,255,0.07) !important;
+}
+.left-mini-action svg {
+  width: 19px !important;
+  height: 19px !important;
+  color: #f2f4f8 !important;
+  stroke: currentColor !important;
+  fill: none !important;
+}
+.left-mini-action:hover {
+  background: rgba(255,255,255,0.12) !important;
+  border-color: rgba(255,255,255,0.44) !important;
+}
+.project-file-modal .project-file-editor-wrap {
+  position: relative !important;
+  overflow: hidden !important;
+}
+.project-file-modal .project-file-code-layer {
+  position: relative !important;
+  overflow: hidden !important;
+  min-height: 100% !important;
+}
+.project-file-modal .project-file-modal__content {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 1 !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+  opacity: 1 !important;
+  white-space: pre !important;
+}
+.project-file-modal .project-file-modal__content::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+}
+.project-file-modal .project-file-editor {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 2 !important;
+  background: transparent !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  caret-color: #dce8ff !important;
+  overflow: auto !important;
+  white-space: pre !important;
+  word-wrap: normal !important;
+}
+.project-file-modal .project-file-editor::selection {
+  background: rgba(124, 156, 255, 0.34) !important;
+}
+.project-file-modal .project-file-lines,
+.project-file-modal .project-file-modal__content,
+.project-file-modal .project-file-editor {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.8rem !important;
+  line-height: 1.58 !important;
+  tab-size: 2 !important;
+}
+.tok-comment { color: #7f90a9 !important; }
+.tok-string  { color: #55e6a8 !important; }
+.tok-number  { color: #ffb86c !important; }
+.tok-key     { color: #7ecbff !important; font-weight: 700 !important; }
+.tok-prop    { color: #c29bff !important; }
+.tok-fn      { color: #ffd866 !important; }
+.tok-tag     { color: #ff7ab2 !important; }
+.tok-attr    { color: #5ad1ff !important; }
+.tok-op      { color: #ff9e64 !important; }
+.tok-punct   { color: #b6c2d4 !important; }
+
+
+/* FINAL-FIX-ICONS-EDITOR-SELECTION-2026-05-04 */
+.left-mini-action img {
+  width: 18px !important;
+  height: 18px !important;
+  display: block !important;
+  opacity: 0.96 !important;
+  filter: brightness(0) invert(1) opacity(0.92);
+}
+.project-file-modal .project-file-modal__content,
+.project-file-modal .project-file-lines {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+.project-file-modal .project-file-modal__content {
+  pointer-events: none !important;
+}
+.project-file-modal .project-file-editor {
+  pointer-events: auto !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+.project-file-modal .project-file-editor::selection {
+  background: rgba(102, 153, 255, 0.38) !important;
+}
+.tok-comment { color: #6f7b89 !important; }
+.tok-string  { color: #86d27a !important; }
+.tok-number  { color: #f2b880 !important; }
+.tok-key     { color: #8fb5ff !important; font-weight: 700 !important; }
+.tok-prop    { color: #b7a3ff !important; }
+.tok-fn      { color: #f7d27a !important; }
+.tok-tag     { color: #f08aa4 !important; }
+.tok-attr    { color: #79d4ff !important; }
+.tok-op      { color: #f0a167 !important; }
+.tok-punct   { color: #c7d0dd !important; }
+
+/* FINAL-SELECTION-ALIGNMENT-FIX-2026-05-04 */
+.project-file-modal .project-file-modal__content,
+.project-file-modal .project-file-editor {
+  font-variant-ligatures: none !important;
+  letter-spacing: 0 !important;
+  text-rendering: geometricPrecision !important;
+}
+
+.project-file-modal .project-file-modal__content .tok-comment,
+.project-file-modal .project-file-modal__content .tok-string,
+.project-file-modal .project-file-modal__content .tok-number,
+.project-file-modal .project-file-modal__content .tok-key,
+.project-file-modal .project-file-modal__content .tok-prop,
+.project-file-modal .project-file-modal__content .tok-fn,
+.project-file-modal .project-file-modal__content .tok-tag,
+.project-file-modal .project-file-modal__content .tok-attr,
+.project-file-modal .project-file-modal__content .tok-op,
+.project-file-modal .project-file-modal__content .tok-punct {
+  font-weight: 400 !important;
+}
+
+.project-file-modal .project-file-editor {
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  caret-color: #cfe0ff !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
+.project-file-modal .project-file-modal__content,
+.project-file-modal .project-file-lines {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+/* HOTFIX-LIGHTBOX-SELECTION-WEBKIT-2026-05-04 */
+#project-file-lines,
+#project-file-modal-content {
+  pointer-events: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+#project-file-modal-content {
+  z-index: 1 !important;
+}
+
+#project-file-editor {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 3 !important;
+  pointer-events: auto !important;
+  cursor: text !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  /* WebKit/Electron: evitar texto 100% transparente melhora hit-test/selection */
+  color: rgba(255, 255, 255, 0.015) !important;
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.015) !important;

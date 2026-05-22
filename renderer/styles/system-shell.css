@@ -1,0 +1,320 @@
+color: rgba(232, 232, 232, 0.64);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+/* WINDOW_DRAG_AREA_EXPANSION_2026-05-14
+   Faz a area vazia superior e os respiros entre paineis se comportarem como barra nativa de janela. */
+.app-shell {
+  -webkit-app-region: drag !important;
+}
+
+.app-drag-region {
+  height: max(78px, calc(env(titlebar-area-height, 0px) + 34px)) !important;
+  -webkit-app-region: drag !important;
+  pointer-events: auto;
+  cursor: default;
+}
+
+.panel,
+.panel-splitter,
+.panel *,
+.composer,
+.composer *,
+.chat-log,
+.chat-log *,
+.projects-list,
+.projects-list *,
+.project-files-tree,
+.project-files-tree *,
+.next-steps-box,
+.next-steps-box *,
+.panel-right-footer,
+.panel-right-footer *,
+.left-bottom-actions,
+.left-bottom-actions *,
+.cortex-modal,
+.cortex-modal *,
+.ai-settings-modal,
+.ai-settings-modal *,
+.inline-input-dialog,
+.inline-input-dialog *,
+.project-context-menu,
+.project-context-menu *,
+.project-file-context-menu,
+.project-file-context-menu *,
+.project-file-modal,
+.project-file-modal *,
+.project-state-modal,
+.project-state-modal *,
+button,
+input,
+textarea,
+select,
+a {
+  -webkit-app-region: no-drag !important;
+}
+
+/* RESIZABLE_PANELS_2026-05-14
+   Permite ajustar os tres painéis principais mantendo limites seguros para a ferramenta. */
+.app-shell {
+  --faber-left-panel-width: 320px;
+  --faber-right-panel-width: 360px;
+  --faber-panel-splitter-width: 10px;
+  grid-template-columns:
+    var(--faber-left-panel-width)
+    var(--faber-panel-splitter-width)
+    minmax(500px, 1fr)
+    var(--faber-panel-splitter-width)
+    var(--faber-right-panel-width) !important;
+  gap: 6px !important;
+}
+
+.panel {
+  min-width: 0;
+}
+
+.panel-splitter {
+  position: relative;
+  display: block;
+  min-width: var(--faber-panel-splitter-width);
+  height: 100%;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  z-index: 6;
+  touch-action: none;
+  user-select: none;
+}
+
+.panel-splitter::before {
+  content: "";
+  position: absolute;
+  top: 20px;
+  bottom: 20px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  transition: width 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.panel-splitter:hover::before,
+.panel-splitter:focus-visible::before,
+.panel-splitter.is-dragging::before {
+  width: 3px;
+  background: rgba(245, 245, 245, 0.42);
+  box-shadow: 0 0 18px rgba(255, 255, 255, 0.12);
+}
+
+.panel-splitter:focus-visible {
+  outline: none;
+}
+
+body.is-panel-resizing,
+body.is-panel-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* APPEARANCE_SETTINGS_2026-05-17
+   Centraliza o tema visual e a escala tipografica dos painéis sem alterar contratos de domínio. */
+body[data-theme='dark'] {
+  --text: #e8e4df;
+  color: #e8e4df !important;
+}
+
+body[data-theme='dark'] .panel,
+body[data-theme='dark'] .msg,
+body[data-theme='dark'] .composer-surface,
+body[data-theme='dark'] .input-shell,
+body[data-theme='dark'] #user-input,
+body[data-theme='dark'] .project-files-tree,
+body[data-theme='dark'] .project-terminal-panel,
+body[data-theme='dark'] .project-file-modal__dialog,
+body[data-theme='dark'] .ai-settings-modal__dialog,
+body[data-theme='dark'] .cortex-modal__dialog,
+body[data-theme='dark'] .project-state-modal__dialog,
+body[data-theme='dark'] .welcome-project-modal__dialog,
+body[data-theme='dark'] .inline-input-dialog__panel {
+  color: #e8e4df !important;
+}
+
+body[data-theme='dark'] #user-input,
+body[data-theme='dark'] textarea,
+body[data-theme='dark'] input,
+body[data-theme='dark'] select {
+  -webkit-text-fill-color: #e8e4df;
+  caret-color: #e8e4df !important;
+}
+
+body[data-theme='light'] {
+  --bg: #f3f4f2;
+  --panel: #fbfbfa;
+  --panel-alt: #eef0ed;
+  --line: rgba(33, 33, 33, 0.18);
+  --text: #212121;
+  --text-soft: rgba(33, 33, 33, 0.66);
+  --accent: #61635f;
+  --shadow: 0 16px 36px rgba(33, 33, 33, 0.14);
+  background: radial-gradient(circle at top left, #ffffff 0%, #f3f4f2 46%, #e5e8e4 100%) !important;
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .startup-preloader {
+  background: #f3f4f2 !important;
+}
+
+body[data-theme='light'] .startup-preloader__bar {
+  background: rgba(33, 33, 33, 0.14) !important;
+}
+
+body[data-theme='light'] .startup-preloader__bar span {
+  background: linear-gradient(90deg, #212121, rgba(33, 33, 33, 0.38)) !important;
+}
+
+body[data-theme='light'] .panel-center,
+body[data-theme='light'] .panel-left,
+body[data-theme='light'] .panel-right,
+body[data-theme='light'] .next-steps-box,
+body[data-theme='light'] .project-files-tree,
+body[data-theme='light'] .project-terminal-panel,
+body[data-theme='light'] .project-terminal-output,
+body[data-theme='light'] .chat-log,
+body[data-theme='light'] .composer,
+body[data-theme='light'] .composer-surface,
+body[data-theme='light'] .input-shell,
+body[data-theme='light'] #user-input,
+body[data-theme='light'] .left-action-btn,
+body[data-theme='light'] .left-search-row,
+body[data-theme='light'] .project-item,
+body[data-theme='light'] .conversation-item,
+body[data-theme='light'] .welcome-action,
+body[data-theme='light'] .msg,
+body[data-theme='light'] .pending-action,
+body[data-theme='light'] .project-file-modal__dialog,
+body[data-theme='light'] .ai-settings-modal__dialog,
+body[data-theme='light'] .cortex-modal__dialog,
+body[data-theme='light'] .project-state-modal__dialog,
+body[data-theme='light'] .welcome-project-modal__dialog,
+body[data-theme='light'] .inline-input-dialog__panel,
+body[data-theme='light'] .project-context-menu,
+body[data-theme='light'] .project-file-context-menu {
+  background: rgba(255, 255, 255, 0.78) !important;
+  border-color: rgba(33, 33, 33, 0.16) !important;
+  color: #212121 !important;
+  box-shadow: var(--shadow) !important;
+}
+
+body[data-theme='light'] .panel-left,
+body[data-theme='light'] .panel-right {
+  background: rgba(250, 250, 248, 0.74) !important;
+  backdrop-filter: blur(28px) saturate(130%) brightness(1.02) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(130%) brightness(1.02) !important;
+}
+
+body[data-theme='light'] .panel-center,
+body[data-theme='light'] .composer,
+body[data-theme='light'] .composer-surface,
+body[data-theme='light'] .input-shell,
+body[data-theme='light'] #user-input {
+  background: #fbfbfa !important;
+}
+
+body[data-theme='light'] .panel-left::before,
+body[data-theme='light'] .panel-right::before {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0) 34%) !important;
+}
+
+body[data-theme='light'] .panel,
+body[data-theme='light'] .panel *,
+body[data-theme='light'] .ai-settings-modal__dialog,
+body[data-theme='light'] .ai-settings-modal__dialog *,
+body[data-theme='light'] .project-file-modal__dialog,
+body[data-theme='light'] .project-file-modal__dialog *,
+body[data-theme='light'] .cortex-modal__dialog,
+body[data-theme='light'] .cortex-modal__dialog * {
+  color: #212121 !important;
+}
+
+body[data-theme='light'] input,
+body[data-theme='light'] textarea,
+body[data-theme='light'] select,
+body[data-theme='light'] #user-input,
+body[data-theme='light'] .project-file-editor,
+body[data-theme='light'] .inline-input-dialog__input {
+  background: rgba(255, 255, 255, 0.92) !important;
+  border-color: rgba(33, 33, 33, 0.2) !important;
+  color: #212121 !important;
+  -webkit-text-fill-color: #212121 !important;
+  caret-color: #212121 !important;
+}
+
+body[data-theme='light'] input::placeholder,
+body[data-theme='light'] textarea::placeholder,
+body[data-theme='light'] #user-input::placeholder {
+  color: rgba(33, 33, 33, 0.36) !important;
+  -webkit-text-fill-color: rgba(33, 33, 33, 0.36) !important;
+}
+
+body[data-theme='light'] .chat-system-notice {
+  color: rgba(33, 33, 33, 0.46) !important;
+}
+
+body[data-theme='light'] .btn-muted,
+body[data-theme='light'] .project-panel-btn,
+body[data-theme='light'] .icon-btn,
+body[data-theme='light'] .project-mini-btn,
+body[data-theme='light'] .left-mini-action,
+body[data-theme='light'] .ai-settings-home-btn {
+  background: rgba(255, 255, 255, 0.82) !important;
+  border-color: rgba(33, 33, 33, 0.2) !important;
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .left-mini-action:hover,
+body[data-theme='light'] .left-memory-action.active {
+  background: rgba(33, 33, 33, 0.08) !important;
+  border-color: rgba(33, 33, 33, 0.28) !important;
+}
+
+body[data-theme='light'] .left-mini-action img {
+  opacity: 0.86 !important;
+  filter: none !important;
+}
+
+body[data-theme='light'] .btn-success {
+  color: #0d2419 !important;
+}
+
+body[data-theme='light'] .incremental-mode-badge.is-edit,
+body[data-theme='light'] .ai-settings-current,
+body[data-theme='light'] .ai-settings-api-item.is-active {
+  background: rgba(24, 122, 79, 0.1) !important;
+  border-color: rgba(24, 122, 79, 0.42) !important;
+}
+
+body[data-theme='light'] .ai-settings-api-badge.is-warning,
+body[data-theme='light'] .ai-settings-api-item.is-incomplete {
+  background: rgba(156, 112, 28, 0.1) !important;
+  border-color: rgba(156, 112, 28, 0.34) !important;
+}
+
+body[data-theme='light'] .project-item.active,
+body[data-theme='light'] .conversation-item.active,
+body[data-theme='light'] .project-tree-row.active {
+  background: rgba(33, 33, 33, 0.08) !important;
+  border-color: rgba(33, 33, 33, 0.28) !important;
+}
+
+body[data-theme='light'] .panel-splitter::before {
+  background: rgba(33, 33, 33, 0.16) !important;
+}
+
+body[data-theme='light'] .panel-splitter:hover::before,
+body[data-theme='light'] .panel-splitter:focus-visible::before,
+body[data-theme='light'] .panel-splitter.is-dragging::before {
+  background: rgba(33, 33, 33, 0.42) !important;
+  box-shadow: 0 0 16px rgba(33, 33, 33, 0.12) !important;
+}

@@ -62,6 +62,21 @@ async function run() {
     assert.ok(report.issues.some((issue) => issue.source === 'html_asset_missing'));
     assert.strictEqual(commandCalls.length, 1);
 
+    writeFile(
+      path.join(tempRoot, 'late-import.css'),
+      'body { margin: 0; }\n@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap");\n'
+    );
+    const lateImportReport = await service.runPostExecutionQualityReport(
+      {
+        rootPath: tempRoot,
+        files: ['late-import.css'],
+      },
+      {
+        modifiedFiles: ['late-import.css'],
+      }
+    );
+    assert.ok(lateImportReport.issues.some((issue) => issue.source === 'css_import_order'));
+
     const promptContext = service.buildDiagnosticsPromptContext(report, { maxIssues: 2, maxChars: 600 });
     assert.ok(promptContext.includes('Diagnóstico anterior:'));
 

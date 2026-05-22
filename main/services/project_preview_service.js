@@ -82,6 +82,12 @@ function createProjectPreviewService(dependencies = {}) {
     return Boolean(packageJson && packageJson.scripts && typeof packageJson.scripts[scriptName] === 'string');
   }
 
+  function getPackageScript(packageJson, scriptName) {
+    return packageJson && packageJson.scripts && typeof packageJson.scripts[scriptName] === 'string'
+      ? packageJson.scripts[scriptName]
+      : '';
+  }
+
   function detectPackageManager(rootPath) {
     if (safeExists(path.join(rootPath, 'pnpm-lock.yaml'))) return 'pnpm';
     if (safeExists(path.join(rootPath, 'yarn.lock'))) return 'yarn';
@@ -117,7 +123,65 @@ function createProjectPreviewService(dependencies = {}) {
     return [command.bin, ...(Array.isArray(command.args) ? command.args : [])].join(' ');
   }
 
-  function buildManualDependencyStep(packageManager) {
+  function hasLocalBinary(rootPath, binaryName = '') {
+    const name = String(binaryName || '').trim();
+    if (!name) return true;
+    const binDir = path.join(rootPath, 'node_modules', '.bin');
+    return (
+      safeExists(path.join(binDir, name)) ||
+      safeExists(path.join(binDir, `${name}.cmd`)) ||
+      safeExists(path.join(binDir, `${name}.ps1`))
+    );
+  }
+
+  function inferScriptBinary(script = '') {
+    const normalized = String(script || '').trim();
+    if (!normalized) return '';
+    const parts = normalized.split(/\s+/).filter(Boolean);
+    while (parts.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[0])) parts.shift();
+    if (parts[0] === 'cross-env') parts.shift();
+    while (parts.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[0])) parts.shift();
+    const first = parts[0] || '';
+    return /^(next|vite|electron|astro|vue-cli-service|svelte-kit)$/.test(first) ? first : '';
+  }
+
+  function inferRequiredRuntimeBinary(packageJson, runtimeKind) {
+    if (runtimeKind === 'next') return 'next';
+    if (runtimeKind === 'electron') return 'electron';
+    const scriptBinary = inferScriptBinary(getPackageScript(packageJson, 'dev'));
+    if (scriptBinary) return scriptBinary;
+    if (runtimeKind === 'react' && packageHasDependency(packageJson, 'vite')) return 'vite';
+    return '';
+  }
+
+  function assessDependencyReadiness(rootPath, packageJson, runtimeKind) {
+    const nodeModulesPath = path.join(rootPath, 'node_modules');
+    const requiredBinary = inferRequiredRuntimeBinary(packageJson, runtimeKind);
+    if (!safeExists(nodeModulesPath)) {
+      return {
+        ready: false,
+        reason: 'missing_node_modules',
+        requiredBinary,
+        detail: 'Dependências ausentes; preview com servidor Node depende de instalação.',
+      };
+    }
+    if (requiredBinary && !hasLocalBinary(rootPath, requiredBinary)) {
+      return {
+        ready: false,
+        reason: 'missing_runtime_binary',
+        requiredBinary,
+        detail: `Dependências incompletas; node_modules existe, mas node_modules/.bin/${requiredBinary} não foi encontrado.`,
+      };
+    }
+    return {
+      ready: true,
+      reason: 'ready',
+      requiredBinary,
+      detail: 'Dependências locais prontas.',
+    };
+  }
+
+  function buildManualDependencyStep(packageManager, dependencyState = {}) {
     const command = buildInstallCommand(packageManager);
     return {
       id: 'preview_dependencies',
@@ -126,7 +190,7 @@ function createProjectPreviewService(dependencies = {}) {
       status: 'manual',
       command,
       commandText: commandText(command),
-      detail: 'Dependências ausentes; preview com servidor Node depende de instalação manual.',
+      detail: dependencyState.detail || 'Dependências ausentes; preview com servidor Node depende de instalação manual.',
     };
   }
 
@@ -232,7 +296,8 @@ function createProjectPreviewService(dependencies = {}) {
   function buildNodePreviewPlan(rootPath, packageJson, packageManager, runtimeKind, options = {}) {
     const port = Number.parseInt(options.port || (runtimeKind === 'next' ? '3000' : '5173'), 10);
     const url = `http://127.0.0.1:${port}/`;
-    const dependenciesInstalled = safeExists(path.join(rootPath, 'node_modules'));
+    const dependencyState = assessDependencyReadiness(rootPath, packageJson, runtimeKind);
+    const dependenciesInstalled = dependencyState.ready;
     const hasDevScript = packageHasScript(packageJson, 'dev');
     const command = buildDevCommand(packageManager, runtimeKind, port);
     const steps = [];
@@ -240,8 +305,9 @@ function createProjectPreviewService(dependencies = {}) {
     const warnings = [];
 
     if (!dependenciesInstalled) {
-      steps.push(buildManualDependencyStep(packageManager));
+      steps.push(buildManualDependencyStep(packageManager, dependencyState));
       blockers.push('preview_dependencies');
+      if (dependencyState.reason === 'missing_runtime_binary') warnings.push(dependencyState.detail);
     }
     if (!hasDevScript) warnings.push('Script `dev` ausente no package.json; preview por servidor Node fica bloqueado.');
 
@@ -280,7 +346,8 @@ function createProjectPreviewService(dependencies = {}) {
   }
 
   function buildElectronPreviewPlan(rootPath, packageJson, packageManager, knownFiles) {
-    const dependenciesInstalled = safeExists(path.join(rootPath, 'node_modules'));
+    const dependencyState = assessDependencyReadiness(rootPath, packageJson, 'electron');
+    const dependenciesInstalled = dependencyState.ready;
     const hasDevScript = packageHasScript(packageJson, 'dev');
     const entryFile = findFirstProjectFile(rootPath, knownFiles, ['main.js', 'electron/main.js', 'src/main.js']);
     const command = buildPlainScriptCommand(packageManager, 'dev');
@@ -289,8 +356,9 @@ function createProjectPreviewService(dependencies = {}) {
     const warnings = [];
 
     if (!dependenciesInstalled) {
-      steps.push(buildManualDependencyStep(packageManager));
+      steps.push(buildManualDependencyStep(packageManager, dependencyState));
       blockers.push('preview_dependencies');
+      if (dependencyState.reason === 'missing_runtime_binary') warnings.push(dependencyState.detail);
     }
     if (!hasDevScript) warnings.push('Script `dev` ausente no package.json; preview Electron fica bloqueado.');
     if (!entryFile) warnings.push('Entrada Electron não encontrada em main.js, electron/main.js ou src/main.js.');
@@ -328,7 +396,8 @@ function createProjectPreviewService(dependencies = {}) {
   function buildGenericNodePreviewPlan(rootPath, packageJson, packageManager, options = {}) {
     const port = Number.parseInt(options.port || '5173', 10);
     const url = `http://127.0.0.1:${port}/`;
-    const dependenciesInstalled = safeExists(path.join(rootPath, 'node_modules'));
+    const dependencyState = assessDependencyReadiness(rootPath, packageJson, 'generic');
+    const dependenciesInstalled = dependencyState.ready;
     const hasDevScript = packageHasScript(packageJson, 'dev');
     const command = buildDevCommand(packageManager, 'generic', port);
     const steps = [];
@@ -336,8 +405,9 @@ function createProjectPreviewService(dependencies = {}) {
     const warnings = ['Stack Node generica; confirme no navegador se o script `dev` aceita `--host` e `--port`.'];
 
     if (!dependenciesInstalled) {
-      steps.push(buildManualDependencyStep(packageManager));
+      steps.push(buildManualDependencyStep(packageManager, dependencyState));
       blockers.push('preview_dependencies');
+      if (dependencyState.reason === 'missing_runtime_binary') warnings.push(dependencyState.detail);
     }
     if (!hasDevScript) warnings.push('Script `dev` ausente no package.json.');
 

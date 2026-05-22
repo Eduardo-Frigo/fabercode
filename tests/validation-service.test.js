@@ -133,6 +133,21 @@ function run() {
     });
     assert.strictEqual(nextReady.checks.runnableEntry, true);
 
+    const nextLateCssImport = service.evaluateExecutionReadiness({
+      operations: [
+        { op: 'write_file', path: 'package.json', content: '{"dependencies":{"next":"^16.0.0","react":"^19.0.0","tailwindcss":"^4.0.0"}}' },
+        { op: 'write_file', path: 'app/page.tsx', content: 'export default function Page(){return <main>Next com Tailwind</main>}' },
+        { op: 'write_file', path: 'app/globals.css', content: 'body { margin: 0; }\n@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap");\n:root { --color-bg: #fff; }' },
+      ],
+      projectRootPath: tempRoot,
+      executionIntent: 'init_project',
+      userMessage: 'criar página institucional em Next.js com Tailwind',
+    });
+    assert.strictEqual(nextLateCssImport.checks.cssImportOrder, false);
+    assert.strictEqual(nextLateCssImport.coreChecksPassed, false);
+    assert.strictEqual(nextLateCssImport.ready, false);
+    assert.deepStrictEqual(nextLateCssImport.cssImportOrderViolations.map((entry) => entry.path), ['app/globals.css']);
+
     const nextWithoutEntry = service.evaluateExecutionReadiness({
       operations: [
         { op: 'write_file', path: 'README.md', content: 'Next sem página' },
