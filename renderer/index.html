@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: file:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Faber Code</title>
+    <link rel="stylesheet" href="./styles/preloader-critical.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="../node_modules/codemirror/lib/codemirror.css" />
+    <link rel="stylesheet" href="../node_modules/codemirror/theme/material-darker.css" />
+  </head>
+  <body class="account-locked">
+    <div id="startup-preloader" class="startup-preloader" aria-label="Carregando Faber Code">
+      <div class="startup-preloader__content">
+        <div class="startup-preloader__logo-wrap">
+          <img class="startup-preloader__logo-img" src="./assets/Faber-Code-Logo-horizontal.png" alt="Faber Code" />
+        </div>
+        <div class="startup-preloader__bar"><span></span></div>
+      </div>
+    </div>
+    <section id="account-gate" class="account-gate" aria-label="Login obrigatório">
+      <div class="account-gate__backdrop" aria-hidden="true"></div>
+      <div class="account-gate__panel" role="dialog" aria-modal="true" aria-labelledby="account-gate-title">
+        <img class="account-gate__logo" src="./assets/Faber-Code-Logo-02.png" alt="Faber Code" />
+        <h1 id="account-gate-title" class="sr-only">Login Faber Code</h1>
+        <div id="account-gate-actions" class="account-gate__actions">
+          <button id="account-gate-email-toggle" type="button" class="btn btn-muted account-gate__wide-action">
+            Logar com e-mail
+          </button>
+          <span class="account-gate__separator">ou</span>
+          <button id="account-gate-google-login" type="button" class="btn btn-muted account-gate__wide-action account-gate__google-action">
+            <span class="account-gate__google-mark" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path fill="#4285f4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.58c2.09-1.93 3.27-4.78 3.27-8.09z"></path>
+                <path fill="#34a853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.58-2.77c-.98.66-2.23 1.06-3.7 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"></path>
+                <path fill="#fbbc05" d="M5.84 14.1c-.22-.66-.35-1.36-.35-2.1s.13-1.44.35-2.1V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l3.66-2.84z"></path>
+                <path fill="#ea4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84C6.71 7.3 9.14 5.38 12 5.38z"></path>
+              </svg>
+            </span>
+            <span>Logar com o Google</span>
+          </button>
+          <button id="account-gate-github-login" type="button" class="btn btn-muted account-gate__wide-action account-gate__github-action">
+            <span class="account-gate__github-mark" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path fill="currentColor" d="M12 .8a11.2 11.2 0 0 0-3.54 21.83c.56.1.77-.24.77-.54v-1.9c-3.13.68-3.79-1.35-3.79-1.35-.51-1.3-1.25-1.65-1.25-1.65-1.02-.7.08-.69.08-.69 1.13.08 1.72 1.16 1.72 1.16 1 .1 1.63.74 2.2 1.1.18-.73.55-1.23 1-1.51-2.5-.28-5.13-1.25-5.13-5.56 0-1.23.44-2.23 1.16-3.02-.12-.28-.5-1.43.1-2.98 0 0 .94-.3 3.08 1.15a10.6 10.6 0 0 1 5.6 0c2.14-1.45 3.08-1.15 3.08-1.15.6 1.55.22 2.7.1 2.98.72.79 1.16 1.79 1.16 3.02 0 4.32-2.63 5.27-5.14 5.55.57.49 1.08 1.45 1.08 2.93v2.44c0 .3.2.65.78.54A11.2 11.2 0 0 0 12 .8Z"></path>
+              </svg>
+            </span>
+            <span>Logar com GitHub</span>
+          </button>
+          <button id="account-gate-sign-out" type="button" class="btn btn-muted hidden">Sair da conta</button>
+        </div>
+        <form id="account-gate-email-form" class="account-gate__email-form hidden" autocomplete="on">
+          <label class="account-gate__field" for="account-gate-email">
+            <span>E-mail</span>
+            <input id="account-gate-email" type="email" placeholder="voce@email.com" autocomplete="email" />
+          </label>
+          <label class="account-gate__field" for="account-gate-password">
+            <span>Senha</span>
+            <input id="account-gate-password" type="password" placeholder="Sua senha" autocomplete="current-password" />
+          </label>
+          <div id="account-gate-signup-fields" class="account-gate__signup-fields hidden">
+            <label class="account-gate__field" for="account-gate-full-name">
+              <span>Nome completo</span>
+              <input id="account-gate-full-name" type="text" placeholder="Seu nome completo" autocomplete="name" />
+            </label>
+            <label class="account-gate__field" for="account-gate-theme">
+              <span>Cor do painel</span>
+              <select id="account-gate-theme">
+                <option value="dark">Escuro</option>
+                <option value="light">Claro</option>
+              </select>
+            </label>
+            <label class="account-gate__field" for="account-gate-language">
+              <span>Idioma</span>
+              <select id="account-gate-language">
+                <option value="pt-BR">Português (Brasil)</option>
+                <option value="en-US">English</option>
+                <option value="es-ES">Español</option>
+              </select>
+            </label>
+          </div>
+          <button id="account-gate-email-submit" type="submit" class="btn btn-success account-gate__wide-action">Entrar</button>
+          <button id="account-gate-create-toggle" type="button" class="account-gate__link">
+            Não tem uma conta? Crie aqui.
+          </button>
+          <button id="account-gate-back" type="button" class="account-gate__back-action" aria-label="Voltar para escolher outra forma de login">
+            <span aria-hidden="true">&larr;</span>
+          </button>
+        </form>
+        <div id="account-gate-status" class="account-gate__status" aria-live="polite"></div>
+      </div>
+    </section>
+    <div id="project-rail-lightbox" class="project-rail-lightbox hidden" aria-hidden="true">
+      <button id="project-rail-lightbox-backdrop" class="project-rail-lightbox__backdrop" type="button" aria-label="Fechar lista de projetos"></button>
+      <div class="project-rail-lightbox__panel" role="dialog" aria-modal="false" aria-label="Projetos">
+        <div class="project-rail-lightbox__head">
+          <span>Projetos</span>
+          <button id="project-rail-lightbox-close" class="project-rail-lightbox__close" type="button" aria-label="Fechar lista de projetos">×</button>
+        </div>
+        <div id="project-rail-lightbox-list" class="project-rail-lightbox-list projects-tree"></div>
+      </div>
+    </div>
+    <div id="app-drag-region" class="app-drag-region" aria-hidden="true"></div>
+    <button id="workspace-restore-left" class="workspace-floating-restore workspace-floating-restore--left" type="button" title="Expandir painel esquerdo" aria-label="Expandir painel esquerdo" aria-pressed="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="4" y="5" width="16" height="14" rx="3"></rect>
+        <line x1="10" y1="5" x2="10" y2="19"></line>
+      </svg>
+    </button>
+    <button id="workspace-restore-right" class="workspace-floating-restore workspace-floating-restore--right" type="button" title="Expandir painel direito" aria-label="Expandir painel direito" aria-pressed="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="4" y="5" width="16" height="14" rx="3"></rect>
+        <line x1="14" y1="5" x2="14" y2="19"></line>
+      </svg>
+    </button>
+    <div class="app-shell">
+      <aside class="panel panel-left">
+        <div class="workspace-panel-rail">
+          <button id="workspace-collapse-left" class="workspace-collapse-btn" type="button" title="Recolher painel esquerdo" aria-label="Recolher painel esquerdo" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 4h10a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3Zm4 0v16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+        <div id="workspace-left-zone" class="workspace-zone-shell workspace-zone-shell--left" data-workspace-runtime-zone="left">
+          <section id="workspace-projects-region" class="workspace-tool-region workspace-tool-region--projects" data-workspace-runtime-tool="projects">
+            <div class="left-actions-row">
+              <button id="btn-add-project" class="left-action-btn" type="button" title="Novo projeto" aria-label="Novo projeto">
+                <span class="action-icon">+</span>
+                <span>Novo projeto</span>
+              </button>
+            </div>
+            <div class="left-search-row">
+              <span class="search-icon" aria-hidden="true"></span>
+              <input id="projects-search" type="text" placeholder="Pesquisa" />
+            </div>
+
+            <div class="left-section-title">Projetos</div>
+            <button id="project-rail-menu-toggle" class="project-rail-menu-toggle" type="button" title="Projetos" aria-label="Abrir lista de projetos" aria-expanded="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M5 8.4 12 5l7 3.4-7 3.4-7-3.4Z" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"></path>
+                <path d="M5 8.5v6.9l7 3.6 7-3.6V8.5" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"></path>
+                <path d="M12 11.8V19" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+            </button>
+            <div id="projects-list" class="projects-list projects-tree"></div>
+            <div class="left-bottom-actions">
+              <button id="btn-cortex-mode" class="left-mini-action left-memory-action" title="Regras e memória" aria-label="Regras e memória">
+                <img src="./assets/icons/brain.svg" alt="" aria-hidden="true"/>
+              </button>
+              <button id="btn-archived-projects" class="left-mini-action" title="Projetos arquivados" aria-label="Projetos arquivados">
+                <img src="./assets/icons/archive.svg" alt="" aria-hidden="true"/>
+              </button>
+              <button id="btn-trash-projects" class="left-mini-action" title="Lixeira" aria-label="Lixeira">
+                <img src="./assets/icons/bin.svg" alt="" aria-hidden="true"/>
+              </button>
+
+              <button id="btn-project-settings" class="left-mini-action" title="Configurações" aria-label="Configurações">
+                <img src="./assets/icons/settings.svg" alt="" aria-hidden="true"/>
+              </button>
+            </div>
+          </section>
+        </div>
+      </aside>
+
+      <div id="splitter-left" class="panel-splitter panel-splitter-left" role="separator" tabindex="0" aria-orientation="vertical" aria-label="Redimensionar painel de projetos"></div>
+
+      <main class="panel panel-center">
+        <div class="panel-header">
+          <h2 id="center-title" class="center-title-hidden" aria-hidden="true"></h2>
+          <span class="status-pill" id="status-pill">Aguardando projeto</span>
+        </div>
+
+        <div id="workspace-center-zone" class="workspace-zone-shell workspace-zone-shell--center" data-workspace-runtime-zone="center">
+          <section id="welcome-panel" class="welcome-panel hidden" aria-label="Começar no Faber Code">
+            <div class="welcome-panel__content">
+              <img class="welcome-panel__logo" src="./assets/Faber-Code-Logo-02.png" alt="Faber Code" />
+              <figure id="welcome-quote" class="welcome-panel__quote" aria-live="polite">
+                <blockquote id="welcome-quote-text">A simplicidade é o último grau de sofisticação.</blockquote>
+                <figcaption id="welcome-quote-author">— Leonardo da Vinci</figcaption>
+              </figure>
+            </div>
+          </section>
+
+          <div id="workspace-center-tools-zone" class="workspace-center-tools-zone" data-workspace-runtime-zone="center-tools"></div>
+
+          <section id="workspace-chat-region" class="workspace-tool-region workspace-tool-region--chat" data-workspace-runtime-tool="chat">
+            <div id="chat-log" class="chat-log"></div>
+
+            <div id="pending-action" class="pending-action hidden">
+              <p id="pending-text"></p>
+              <div class="action-row">
+                <button id="btn-confirm" class="btn btn-success">Confirmar e Executar</button>
+                <button id="btn-cancel" class="btn btn-muted">Cancelar</button>
+              </div>
+            </div>
+
+            <div id="job-progress" class="job-progress hidden">
+              <div class="job-progress-head">
+                <strong id="job-progress-title">Processando</strong>
+                <span id="job-progress-status">Aguardando</span>
+              </div>
+              <div id="job-progress-detail" class="job-progress-detail"></div>
+            </div>
+
+            <div id="workspace-bottom-zone" class="workspace-bottom-zone" data-workspace-runtime-zone="bottom"></div>
+
+            <div id="change-summary-strip" class="change-summary-strip hidden" aria-live="polite"></div>
+
+            <div class="composer">
+              <div class="composer-surface">
+                <div class="input-shell">
+                  <textarea
+                    id="user-input"
+                    placeholder="Descreva a tarefa para este projeto."
+                  ></textarea>
+                  <button id="btn-attach" class="icon-btn attach-btn" title="Anexar imagem" aria-label="Anexar imagem">+</button>
+                  <select id="composer-provider" class="composer-provider" title="Selecionar IA do projeto" aria-label="Selecionar IA do projeto">
+                    <option value="mock">Mock Local</option>
+                    <option value="rwkv">RWKV Local</option>
+                    <option value="openai">OpenAI API</option>
+                    <option value="gemini">Gemini API</option>
+                    <option value="sambanova">SambaNova API</option>
+                  </select>
+                  <button id="btn-send" class="icon-btn send-btn" title="Enviar prompt" aria-label="Enviar prompt">
+                    <span>&uarr;</span>
+                  </button>
+                </div>
+                <div id="attachment-list" class="attachment-list hidden"></div>
+                <input id="image-input" type="file" accept=".pdf,.txt,.md,.markdown,image/*" multiple hidden />
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+
+      <div id="splitter-right" class="panel-splitter panel-splitter-right" role="separator" tabindex="0" aria-orientation="vertical" aria-label="Redimensionar painel de arquivos"></div>
+
+      <aside class="panel panel-right">
+        <div class="panel-header">
+          <div class="panel-header-main">
+            <button id="workspace-collapse-right" class="workspace-collapse-btn" type="button" title="Recolher painel direito" aria-label="Recolher painel direito" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M7 4h10a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3Zm6 0v16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+            </button>
+            <h2 id="right-panel-title">Arquivos</h2>
+          </div>
+          <span id="incremental-mode-badge" class="incremental-mode-badge hidden" aria-live="polite"></span>
+        </div>
+
+        <div id="workspace-right-zone" class="workspace-zone-shell workspace-zone-shell--right" data-workspace-runtime-zone="right">
+          <section id="workspace-files-region" class="workspace-tool-region workspace-tool-region--files" data-workspace-runtime-tool="files">
+            <div id="modification-alert" class="modification-alert hidden"></div>
+
+            <div class="next-steps-box">
+              <div id="project-files-tree" class="project-files-tree"></div>
+              <ul id="next-steps-list" class="hidden"></ul>
+
+            </div>
+          </section>
+
+        <section id="project-terminal-panel" class="project-terminal-panel hidden workspace-tool-region workspace-tool-region--terminal" data-workspace-runtime-tool="terminal" aria-label="Terminal do projeto">
+          <div class="project-terminal-head">
+            <div class="project-terminal-title">
+              <strong>Terminal</strong>
+              <span id="project-terminal-cwd">.</span>
+              <span id="project-terminal-status" class="project-terminal-status">Sem sessão</span>
+            </div>
+            <div class="project-terminal-actions">
+              <button id="project-terminal-placement" type="button" class="project-terminal-icon-btn" title="Alternar posição" aria-label="Alternar posição">↕</button>
+              <button id="project-terminal-new-tab" type="button" class="project-terminal-icon-btn" title="Novo terminal" aria-label="Novo terminal">+</button>
+              <button id="project-terminal-clear" type="button" class="project-terminal-icon-btn" title="Limpar terminal" aria-label="Limpar terminal">⌫</button>
+              <button id="project-terminal-stop" type="button" class="project-terminal-icon-btn" title="Interromper comando" aria-label="Interromper comando">■</button>
+              <button id="project-terminal-minimize" type="button" class="project-terminal-icon-btn" title="Minimizar terminal" aria-label="Minimizar terminal">−</button>
+              <button id="project-terminal-close" type="button" class="project-terminal-icon-btn" title="Fechar terminal" aria-label="Fechar terminal">×</button>
+            </div>
+          </div>
+          <div id="project-terminal-tabs" class="project-terminal-tabs" role="tablist" aria-label="Terminais abertos"></div>
+          <div id="project-terminal-body" class="project-terminal-body">
+            <pre id="project-terminal-output" class="project-terminal-output" aria-live="polite"></pre>
+            <form id="project-terminal-form" class="project-terminal-form">
+              <span id="project-terminal-prompt" class="project-terminal-prompt">$</span>
+              <input id="project-terminal-input" type="text" autocomplete="off" spellcheck="false" aria-label="Comando do terminal" />
+              <button id="project-terminal-run" type="submit" class="project-terminal-run" title="Executar comando" aria-label="Executar comando">↵</button>
+            </form>
+          </div>
+        </section>
+
+        <div id="cortex-learning-box" class="next-steps-box hidden workspace-tool-region workspace-tool-region--cortex" data-workspace-runtime-tool="cortex">
+          <h3>Regras e contexto</h3>
+          <p class="cortex-memory-copy">
+            Registre preferências, decisões, referências e restrições que a Persona e o Executor devem considerar neste projeto.
+          </p>
+          <div class="cortex-memory-scope" aria-label="Escopos de memória">
+            <div>
+              <strong>Projeto</strong>
+              <span>Stack, objetivo, identidade visual e decisões atuais.</span>
+            </div>
+            <div>
+              <strong>Execução</strong>
+              <span>Cuidados técnicos, padrões de edição e aprendizados de falhas.</span>
+            </div>
+          </div>
+          <h3>Memória registrada</h3>
+          <div id="cortex-learning-content" class="meta-box">
+            Ainda não há regras ou memórias registradas nesta sessão.
+          </div>
+        </div>
+      
+        <div id="workspace-actions-region" class="panel-right-footer workspace-tool-region workspace-tool-region--actions" data-workspace-runtime-tool="automations">
+          <div class="project-panel-footer">
+            <button id="btn-project-git" class="project-panel-btn" type="button" title="Git" aria-label="Git">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M10.9 2.75a1.55 1.55 0 0 1 2.2 0l8.15 8.15a1.55 1.55 0 0 1 0 2.2l-8.15 8.15a1.55 1.55 0 0 1-2.2 0L2.75 13.1a1.55 1.55 0 0 1 0-2.2l8.15-8.15Z" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linejoin="round"/>
+                <path d="M8.35 7.85v5.45m0 0a1.45 1.45 0 1 0 0 2.9 1.45 1.45 0 0 0 0-2.9Zm0-5.45a1.45 1.45 0 1 0 0-2.9 1.45 1.45 0 0 0 0 2.9Zm0 0 5.45 5.45m0 0a1.45 1.45 0 1 0 2.05 0 1.45 1.45 0 0 0-2.05 0Z" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <span>Git</span>
+            </button>
+            <button id="btn-project-terminal" class="project-panel-btn" type="button" title="Abrir terminal do projeto">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 4 4-4 4m6 2h8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span>Terminal</span>
+            </button>
+            <button id="btn-automata-contracts" class="project-panel-btn automata-contracts-btn" type="button" title="Revisar contratos Automata staged" aria-label="Contratos Automata">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h9l3 3v13H6V4Zm9 0v4h4M9 11h6M9 15h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span>Contratos</span>
+              <small id="automata-contracts-count" class="automata-contracts-count hidden">0</small>
+            </button>
+            <button id="btn-project-deploy" class="project-panel-btn" type="button" title="Executar projeto localmente">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5L8 5.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span>Executar</span>
+            </button>
+          </div>
+        </div>
+        </div>
+      </aside>
+    </div>
+
+    <div id="project-context-menu" class="project-context-menu hidden" role="menu" aria-hidden="true">
+      <button type="button" data-action="rename">Renomear</button>
+      <button type="button" data-action="archive">Arquivar</button>
+      <button type="button" data-action="trash">Excluir</button>
+    </div>
+
+    <div id="welcome-project-modal" class="welcome-project-modal hidden" aria-hidden="true">
+      <div id="welcome-project-backdrop" class="welcome-project-modal__backdrop" data-close="1"></div>
+      <div class="welcome-project-modal__dialog" role="dialog" aria-modal="true" aria-label="Escolher projeto">
+        <div class="welcome-project-modal__head">
+          <div>
+            <strong id="welcome-project-title">Escolha um projeto</strong>
+            <span id="welcome-project-subtitle">A conversa será criada no projeto selecionado.</span>
+          </div>
+          <button id="welcome-project-close" type="button" class="welcome-project-modal__close" aria-label="Fechar">×</button>
+        </div>
+        <div id="welcome-project-list" class="welcome-project-modal__list"></div>
+        <div class="welcome-project-modal__footer">
+          <button id="welcome-project-create" type="button" class="btn btn-success">Criar novo projeto</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="project-state-modal" class="project-state-modal hidden" aria-hidden="true">
+      <div class="project-state-modal__backdrop" data-close="1"></div>
+      <div class="project-state-modal__dialog" role="dialog" aria-modal="true" aria-label="Projetos">
+        <div class="project-state-modal__head">
+          <strong id="project-state-modal-title">Projetos</strong>
+          <button id="project-state-modal-close" type="button" class="project-state-modal__close">×</button>
+        </div>
+        <div id="project-state-modal-list" class="project-state-modal__list"></div>
+        <div id="project-state-modal-footer" class="project-state-modal__footer"></div>
+      </div>
+    </div>
+
+    <div id="cortex-modal" class="cortex-modal hidden" aria-hidden="true">
+      <div id="cortex-modal-backdrop" class="cortex-modal__backdrop"></div>
+      <div class="cortex-modal__dialog" role="dialog" aria-modal="true" aria-label="Cortex: markdowns e referências">
+        <div class="cortex-modal__head">
+          <div class="cortex-modal__title">
+            <span class="cortex-modal__icon" aria-hidden="true">
+              <img src="./assets/icons/brain.svg" alt="" />
+            </span>
+            <div>
+              <strong>Cortex</strong>
+              <span>Markdowns e referências do projeto</span>
+            </div>
+          </div>
+          <button id="cortex-modal-close" type="button" class="cortex-modal__close" aria-label="Fechar Cortex">×</button>
+        </div>
+
+        <div class="cortex-modal__body">
+          <section class="cortex-card cortex-chat-card" aria-label="Adicionar ao Cortex">
+            <div class="cortex-card__head">
+              <strong>Adicionar ao Cortex</strong>
+              <span>Salve markdowns, decisões e referências para este projeto.</span>
+            </div>
+            <div class="cortex-topic-row">
+              <label for="cortex-topic-select">Assunto</label>
+              <select id="cortex-topic-select">
+                <option value="geral">Geral</option>
+                <option value="produto">Produto</option>
+                <option value="design">UI/UX e identidade visual</option>
+                <option value="codigo">Código e arquitetura</option>
+                <option value="deploy">Deploy e infraestrutura</option>
+                <option value="integracoes">Integrações</option>
+              </select>
+              <div class="cortex-topic-actions" aria-label="Ações de assunto do Cortex">
+                <button id="cortex-topic-add" type="button" class="cortex-icon-action" title="Criar assunto" aria-label="Criar assunto">+</button>
+                <button id="cortex-topic-rename" type="button" class="cortex-icon-action" title="Renomear assunto" aria-label="Renomear assunto">✎</button>
+              </div>
+            </div>
+            <div id="cortex-chat-log" class="cortex-chat-log" aria-live="polite"></div>
+            <div class="cortex-composer">
+              <textarea id="cortex-input" placeholder="Cole uma nota, decisão ou trecho de Markdown para guardar neste projeto."></textarea>
+              <div class="cortex-composer__actions">
+                <button id="cortex-attach" type="button" class="btn btn-muted">Anexar Markdown</button>
+                <button id="cortex-send" type="button" class="btn btn-success">Adicionar</button>
+              </div>
+              <div id="cortex-attachment-list" class="cortex-attachment-list"></div>
+              <input id="cortex-file-input" type="file" accept=".md,.markdown,.txt,.pdf" multiple hidden />
+            </div>
+          </section>
+
+          <section class="cortex-card cortex-memory-card" aria-label="Biblioteca do Cortex">
+            <div class="cortex-card__head">
+              <div>
+                <strong>Biblioteca</strong>
+                <span>Explore markdowns e notas já adicionadas.</span>
+              </div>
+              <div class="cortex-library-actions" aria-label="Ações da biblioteca de memória">
+                <button id="cortex-library-attach" type="button" class="cortex-library-upload" title="Anexar Markdown" aria-label="Anexar Markdown">
+                  <img src="./assets/icons/paperclip.svg" alt="" aria-hidden="true" />
+                  <span>Anexar Markdown</span>
+                </button>
+              </div>
+            </div>
+            <div class="cortex-memory-filters" aria-label="Filtros de memória">
+              <input id="cortex-memory-search" type="search" placeholder="Buscar markdowns e notas" />
+              <select id="cortex-memory-status-filter" aria-label="Filtrar status da memória">
+                <option value="all">Todos os status</option>
+                <option value="active">Ativas</option>
+                <option value="promoted">Promovidas</option>
+                <option value="expired">Expiradas</option>
+              </select>
+            </div>
+            <div id="cortex-runtime-status" class="cortex-runtime-status" aria-live="polite"></div>
+            <div id="cortex-topic-list" class="cortex-topic-list"></div>
+            <div id="cortex-library-list" class="cortex-library-list"></div>
+          </section>
+
+          <section class="cortex-card cortex-rules-card cortex-technical-card hidden" aria-label="Regras ativas do Cortex" aria-hidden="true">
+            <div class="cortex-card__head">
+              <strong>Regras ativas</strong>
+              <span>O que entra no contexto dos próximos pedidos</span>
+            </div>
+            <div id="cortex-rules-list" class="cortex-rules-list"></div>
+          </section>
+
+          <section class="cortex-card cortex-context-card cortex-technical-card hidden" aria-label="Diagnóstico de memória e contexto" aria-hidden="true">
+            <div class="cortex-card__head">
+              <strong>Context Frame</strong>
+              <span>Fonte dominante, memória usada e provenance</span>
+            </div>
+            <div id="cortex-context-diagnostics" class="cortex-context-diagnostics" aria-live="polite"></div>
+            <div id="cortex-memory-audit-list" class="cortex-memory-audit-list" aria-live="polite"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div id="project-file-context-menu" class="project-file-context-menu hidden" role="menu" aria-hidden="true">
+      <button type="button" data-action="open">Abrir</button>
+      <button type="button" data-action="reveal">Mostrar na pasta</button>
+    </div>
+
+    <div id="automata-contract-ledger-panel" class="automata-contract-ledger hidden" aria-hidden="true">
+      <div id="automata-contract-ledger-backdrop" class="automata-contract-ledger__backdrop"></div>
+      <div class="automata-contract-ledger__dialog" role="dialog" aria-modal="true" aria-label="Automata Contract Ledger">
+        <div class="automata-contract-ledger__head">
+          <div>
+            <strong>Automata Contract Ledger</strong>
+            <span>Contratos locais em staged, teste e promocao.</span>
+          </div>
+          <button id="automata-contract-ledger-close" type="button" class="automata-contract-ledger__close" aria-label="Fechar">×</button>
+        </div>
+        <div id="automata-contract-ledger-empty" class="automata-contract-ledger__empty">
+          Nenhum contrato staged neste projeto.
+        </div>
+        <div id="automata-contract-ledger-list" class="automata-contract-ledger__list"></div>
+        <div class="automata-contract-ledger__footer">
+          <button id="automata-contract-ledger-push-selected" type="button" class="automata-contract-ledger__push">
+            Push selecionados
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="project-file-modal" class="project-file-modal hidden" aria-hidden="true">
+      <div class="project-file-modal__backdrop" data-close="1"></div>
+      <div class="project-file-modal__dialog" role="dialog" aria-modal="true" aria-label="Visualizador de arquivo">
+        <div class="project-file-modal__head">
+          <strong id="project-file-modal-title">Arquivo</strong>
+          <button id="project-file-modal-close" type="button" class="project-file-modal__close">×</button>
+        </div>
+        <div class="project-file-modal__tools">
+          <button id="project-file-save" type="button" class="project-file-save" disabled>Salvar</button>
+          <span id="project-file-status" class="project-file-status">Sem alterações</span>
+        </div>
+        <div class="project-file-editor-wrap">
+          <pre id="project-file-lines" class="project-file-lines" aria-hidden="true"></pre>
+          <div class="project-file-code-layer">
+            <pre id="project-file-modal-content" class="project-file-modal__content"></pre>
+            <textarea id="project-file-editor" class="project-file-editor" spellcheck="false"></textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <div id="ai-settings-modal" class="ai-settings-modal hidden" aria-hidden="true">
+      <div id="ai-settings-backdrop" class="ai-settings-modal__backdrop"></div>
+      <div class="ai-settings-modal__dialog" role="dialog" aria-modal="true" aria-label="Configurações">
+        <div class="ai-settings-modal__head">
+          <strong>Configurações</strong>
+          <button id="ai-settings-close" type="button" class="ai-settings-modal__close">×</button>
+        </div>
+
+        <div class="ai-settings-modal__body">
+          <div id="ai-settings-home-panel" class="ai-settings-panel">
+            <button id="ai-settings-open-language" type="button" class="ai-settings-home-btn">
+              <i class="ai-settings-home-btn__icon" aria-hidden="true">Aa</i>
+              <small>Interface</small>
+              <strong>Idioma</strong>
+              <span class="ai-settings-home-btn__desc">Português, inglês ou espanhol para a experiência da ferramenta</span>
+            </button>
+            <button id="ai-settings-open-appearance" type="button" class="ai-settings-home-btn">
+              <i class="ai-settings-home-btn__icon" aria-hidden="true">◐</i>
+              <small>Visual</small>
+              <strong>Aparência</strong>
+              <span class="ai-settings-home-btn__desc">Tema claro/escuro, logos e tamanho da fonte dos painéis</span>
+            </button>
+            <button id="ai-settings-open-account" type="button" class="ai-settings-home-btn">
+              <i class="ai-settings-home-btn__icon" aria-hidden="true">◎</i>
+              <small>Acesso</small>
+              <strong>Conta</strong>
+              <span class="ai-settings-home-btn__desc">Login com email, Google ou GitHub para liberar serviços de plataforma</span>
+            </button>
+            <button id="ai-settings-open-apis" type="button" class="ai-settings-home-btn">
+              <i class="ai-settings-home-btn__icon" aria-hidden="true">{ }</i>
+              <small>Modelos</small>
+              <strong>Configurar APIs</strong>
+              <span class="ai-settings-home-btn__desc">Veja chaves salvas, edite somente ao clicar em editar e adicione novos serviços</span>
+            </button>
+            <button id="ai-settings-open-mcp" type="button" class="ai-settings-home-btn">
+              <i class="ai-settings-home-btn__icon" aria-hidden="true">⌘</i>
+              <small>Integrações</small>
+              <strong>MCP externo</strong>
+              <span class="ai-settings-home-btn__desc">Configure servidores, descubra tools e aprove integrações locais</span>
+            </button>
+          </div>
+
+          <div id="ai-settings-language-panel" class="ai-settings-panel hidden">
+            <div class="ai-settings-panel-head">
+              <button id="ai-settings-back-home" type="button" class="btn btn-muted">Voltar</button>
+              <span>Idioma</span>
+            </div>
+            <label class="ai-settings-field">
+              <span>Idioma da interface</span>
+              <select id="ai-settings-language">
+                <option value="pt-BR">Português (Brasil) - padrão</option>
+                <option value="en-US">English</option>
+                <option value="es-ES">Español</option>
+              </select>
+            </label>
+            <p class="ai-settings-help">
+              A preferência fica salva no projeto da ferramenta. A tradução completa dos rótulos será evoluída por etapas.
+            </p>
+          </div>
+
+          <div id="ai-settings-appearance-panel" class="ai-settings-panel hidden">
+            <div class="ai-settings-panel-head">
+              <button id="ai-settings-back-home-appearance" type="button" class="btn btn-muted">Voltar</button>
+              <span>Aparência</span>
+            </div>
+            <label id="ai-settings-theme-field" class="ai-settings-field">
+              <span>Tema</span>
+              <select id="ai-settings-theme">
+                <option value="dark">Escuro</option>
+                <option value="light">Claro</option>
+              </select>
+            </label>
+            <label id="ai-settings-font-field" class="ai-settings-field ai-settings-range-field">
+              <span>Tamanho da fonte dos painéis</span>
+              <strong id="ai-settings-font-scale-value">100%</strong>
+              <input id="ai-settings-font-scale" type="range" min="90" max="120" step="5" value="100" />
+            </label>
+            <p id="ai-settings-appearance-help" class="ai-settings-help">
+              Ajuste visual aplicado à interface do Faber Code neste dispositivo.
+            </p>
+          </div>
+
+          <div id="ai-settings-account-panel" class="ai-settings-panel hidden">
+            <div class="ai-settings-panel-head">
+              <button id="ai-settings-back-home-account" type="button" class="btn btn-muted">Voltar</button>
+              <span>Conta</span>
+            </div>
+
+            <p id="ai-settings-account-status" class="ai-settings-current">Conta ainda não conectada.</p>
+
+            <div class="ai-settings-account-actions">
+              <button id="ai-settings-google-login" type="button" class="btn btn-success">Entrar com Google</button>
+              <button id="ai-settings-sign-out" type="button" class="btn btn-muted hidden">Sair</button>
+            </div>
+
+            <div class="ai-settings-account-email">
+              <label class="ai-settings-field" for="ai-settings-account-email">
+                <span>Email</span>
+                <input id="ai-settings-account-email" type="email" placeholder="voce@email.com" autocomplete="email" />
+              </label>
+              <button id="ai-settings-email-start" type="button" class="btn btn-muted">Enviar código</button>
+              <label class="ai-settings-field" for="ai-settings-account-code">
+                <span>Código de acesso</span>
+                <input id="ai-settings-account-code" type="text" inputmode="numeric" placeholder="000000" autocomplete="one-time-code" />
+              </label>
+              <button id="ai-settings-email-complete" type="button" class="btn btn-success">Confirmar email</button>
+            </div>
+
+            <p id="ai-settings-account-help" class="ai-settings-help">
+              O login registra o usuário no backend do Faber Code e libera serviços de plataforma, como mídia contextual para blueprints.
+            </p>
+          </div>
+
+          <div id="ai-settings-apis-panel" class="ai-settings-panel hidden">
+            <div class="ai-settings-panel-head">
+              <button id="ai-settings-back-home-apis" type="button" class="btn btn-muted">Voltar</button>
+              <span>APIs de IA</span>
+            </div>
+
+            <p id="ai-settings-current" class="ai-settings-current">Nenhuma chave detectada ainda.</p>
+
+            <div class="ai-settings-add-api-row">
+              <select id="ai-settings-add-provider">
+                <option value="gemini">Gemini</option>
+                <option value="sambanova">SambaNova</option>
+                <option value="openai">OpenAI</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="custom">Outro serviço</option>
+              </select>
+              <button id="ai-settings-add-api" type="button" class="btn btn-muted">Adicionar API</button>
+            </div>
+
+            <div id="ai-settings-api-list" class="ai-settings-api-list"></div>
+
+            <div id="ai-settings-api-editor" class="ai-settings-api-editor hidden">
+              <input id="ai-settings-editor-id" type="hidden" />
+              <input id="ai-settings-editor-kind" type="hidden" />
+
+              <label class="ai-settings-field" for="ai-settings-editor-provider">
+                <span>Serviço</span>
+                <input id="ai-settings-editor-provider" type="text" placeholder="Ex: OpenAI" autocomplete="off" />
+              </label>
+
+              <label class="ai-settings-field" for="ai-settings-editor-label">
+                <span>Nome/Identificação</span>
+                <input id="ai-settings-editor-label" type="text" placeholder="Ex: Produção, Homologação, Pessoal" autocomplete="off" />
+              </label>
+
+              <label class="ai-settings-field" for="ai-settings-editor-model-preset">
+                <span>Modelo recomendado</span>
+                <select id="ai-settings-editor-model-preset">
+                  <option value="">Modelo customizado</option>
+                </select>
+              </label>
+
+              <label class="ai-settings-field" for="ai-settings-editor-model">
+                <span>Modelo customizado</span>
+                <input id="ai-settings-editor-model" type="text" placeholder="Ex: gpt-5-codex / gemini-2.0-flash" autocomplete="off" />
+              </label>
+
+              <label class="ai-settings-field" for="ai-settings-editor-key">
+                <span>API Key</span>
+                <input id="ai-settings-editor-key" type="password" placeholder="Cole a chave (deixe vazio para manter a atual)" autocomplete="off" />
+              </label>
+
+              <label class="ai-settings-field" for="ai-settings-editor-website">
+                <span>Site oficial (opcional)</span>
+                <input id="ai-settings-editor-website" type="text" placeholder="https://..." autocomplete="off" />
+              </label>
+
+              <div class="ai-settings-editor-actions">
+                <button id="ai-settings-editor-cancel" type="button" class="btn btn-muted">Cancelar edição</button>
+                <button id="ai-settings-editor-save" type="button" class="btn btn-success">Salvar edição</button>
+              </div>
+            </div>
+
+            <p id="ai-settings-provider-help" class="ai-settings-help hidden">
+              <span id="ai-settings-provider-help-text">Não tem sua API ainda?</span>
+              <a id="ai-settings-provider-help-link" href="#" target="_blank" rel="noopener noreferrer">Adquira no site oficial clicando aqui</a>.
+            </p>
+          </div>
+
+          <div id="ai-settings-mcp-panel" class="ai-settings-panel hidden">
+            <div class="ai-settings-panel-head">
+              <button id="ai-settings-back-home-mcp" type="button" class="btn btn-muted">Voltar</button>
+              <span>MCP externo</span>
+            </div>
+
+            <p id="ai-settings-mcp-status" class="ai-settings-current">Nenhum servidor MCP externo carregado.</p>
+
+            <div class="ai-settings-mcp-presets" aria-label="Presets de MCP externo">
+              <label class="ai-settings-field" for="ai-settings-mcp-preset-select">
+                <span>Preset guiado</span>
+                <select id="ai-settings-mcp-preset-select">
+                  <option value="">Carregando presets...</option>
+                </select>
+              </label>
+              <button id="ai-settings-mcp-preset-apply" type="button" class="btn btn-muted">Usar preset</button>
+            </div>
+
+            <div class="ai-settings-mcp-editor">
+              <input id="ai-settings-mcp-id" type="hidden" />
+              <div class="ai-settings-mcp-grid">
+                <label class="ai-settings-field" for="ai-settings-mcp-name">
+                  <span>Nome</span>
+                  <input id="ai-settings-mcp-name" type="text" placeholder="Ex: Visual Auditor" autocomplete="off" />
+                </label>
+                <label class="ai-settings-field" for="ai-settings-mcp-transport">
+                  <span>Transporte</span>
+                  <select id="ai-settings-mcp-transport">
+                    <option value="stdio">stdio</option>
+                    <option value="http">HTTP</option>
+                    <option value="sse">SSE</option>
+                  </select>
+                </label>
+              </div>
+
+              <label class="ai-settings-field" for="ai-settings-mcp-command">
+                <span>Comando stdio</span>
+                <input id="ai-settings-mcp-command" type="text" placeholder="node /caminho/server.js" autocomplete="off" />
+              </label>
+
+              <label class="ai-settings-field" for="ai-settings-mcp-endpoint">
+                <span>Endpoint HTTP/SSE</span>
+                <input id="ai-settings-mcp-endpoint" type="text" placeholder="https://servidor-mcp.example/rpc" autocomplete="off" />
+              </label>
+
+              <div class="ai-settings-mcp-grid">
+                <label class="ai-settings-field" for="ai-settings-mcp-timeout">
+                  <span>Timeout ms</span>
+                  <input id="ai-settings-mcp-timeout" type="number" min="500" max="120000" step="500" value="8000" />
+                </label>
+                <label class="ai-settings-field" for="ai-settings-mcp-max-risk">
+                  <span>Risco máximo</span>
+                  <select id="ai-settings-mcp-max-risk">
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high" selected>high</option>
+                    <option value="critical">critical</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="ai-settings-mcp-grid">
+                <label class="ai-settings-field" for="ai-settings-mcp-allowed">
+                  <span>Tools permitidas</span>
+                  <input id="ai-settings-mcp-allowed" type="text" placeholder="visual.capture, demo.echo" autocomplete="off" />
+                </label>
+                <label class="ai-settings-field" for="ai-settings-mcp-blocked">
+                  <span>Tools bloqueadas</span>
+                  <input id="ai-settings-mcp-blocked" type="text" placeholder="filesystem.write" autocomplete="off" />
+                </label>
+              </div>
+
+              <div class="ai-settings-mcp-grid">
+                <label class="ai-settings-field" for="ai-settings-mcp-permissions">
+                  <span>Permissões permitidas</span>
+                  <input id="ai-settings-mcp-permissions" type="text" placeholder="read, write" autocomplete="off" />
+                </label>
+                <label class="ai-settings-field" for="ai-settings-mcp-blocked-risks">
+                  <span>Riscos bloqueados</span>
+                  <input id="ai-settings-mcp-blocked-risks" type="text" placeholder="critical" autocomplete="off" />
+                </label>
+              </div>
+
+              <div class="ai-settings-mcp-grid">
+                <label class="ai-settings-field" for="ai-settings-mcp-allowed-directories">
+                  <span>Diretórios permitidos</span>
+                  <input id="ai-settings-mcp-allowed-directories" type="text" placeholder=".faber, src" autocomplete="off" />
+                </label>
+                <label class="ai-settings-field" for="ai-settings-mcp-blocked-directories">
+                  <span>Diretórios bloqueados</span>
+                  <input id="ai-settings-mcp-blocked-directories" type="text" placeholder=".git, node_modules" autocomplete="off" />
+                </label>
+              </div>
+
+              <div class="ai-settings-mcp-grid">
+                <label class="ai-settings-field" for="ai-settings-mcp-allowed-network-hosts">
+                  <span>Hosts permitidos</span>
+                  <input id="ai-settings-mcp-allowed-network-hosts" type="text" placeholder="localhost, 127.0.0.1" autocomplete="off" />
+                </label>
+                <label class="ai-settings-field" for="ai-settings-mcp-blocked-network-hosts">
+                  <span>Hosts bloqueados</span>
+                  <input id="ai-settings-mcp-blocked-network-hosts" type="text" placeholder="example.com" autocomplete="off" />
+                </label>
+              </div>
+
+              <div class="ai-settings-mcp-secret-grid">
+                <label class="ai-settings-field" for="ai-settings-mcp-env">
+                  <span>Env stdio</span>
+                  <textarea id="ai-settings-mcp-env" rows="3" placeholder="MCP_TOKEN=..." autocomplete="off"></textarea>
+                </label>
+                <label class="ai-settings-field" for="ai-settings-mcp-headers">
+                  <span>Headers HTTP/SSE</span>
+                  <textarea id="ai-settings-mcp-headers" rows="3" placeholder="Authorization=Bearer ..." autocomplete="off"></textarea>
+                </label>
+              </div>
+
+              <div class="ai-settings-mcp-toggles">
+                <label class="workspace-toggle-row" for="ai-settings-mcp-enabled">
+                  <input id="ai-settings-mcp-enabled" type="checkbox" checked />
+                  <span>Ativo</span>
+                </label>
+                <label class="workspace-toggle-row" for="ai-settings-mcp-approved">
+                  <input id="ai-settings-mcp-approved" type="checkbox" />
+                  <span>Aprovado</span>
+                </label>
+                <label class="workspace-toggle-row" for="ai-settings-mcp-high-risk-allow">
+                  <input id="ai-settings-mcp-high-risk-allow" type="checkbox" />
+                  <span>Alto risco exige allowlist</span>
+                </label>
+                <label class="workspace-toggle-row" for="ai-settings-mcp-inject-session">
+                  <input id="ai-settings-mcp-inject-session" type="checkbox" />
+                  <span>Injetar projectSession</span>
+                </label>
+                <label class="workspace-toggle-row" for="ai-settings-mcp-allow-external-network">
+                  <input id="ai-settings-mcp-allow-external-network" type="checkbox" />
+                  <span>Rede externa</span>
+                </label>
+              </div>
+
+              <div class="ai-settings-editor-actions">
+                <button id="ai-settings-mcp-new" type="button" class="btn btn-muted">Novo</button>
+                <button id="ai-settings-mcp-save" type="button" class="btn btn-success">Salvar servidor</button>
+              </div>
+            </div>
+
+            <div id="ai-settings-mcp-list" class="ai-settings-mcp-list"></div>
+
+            <p class="ai-settings-help">
+              Servidores aprovados podem expor tools para a capability external_mcp. Escrita direta continua bloqueada por política e contrato.
+            </p>
+          </div>
+        </div>
+
+        <div class="ai-settings-modal__actions">
+          <button id="ai-settings-cancel" type="button" class="btn btn-muted">Cancelar</button>
+          <button id="ai-settings-save" type="button" class="btn btn-success">Salvar</button>
+        </div>
+      </div>
+    </div>
+
+
+<div id="unsaved-exit-modal" class="unsaved-exit-modal hidden" aria-hidden="true">
+      <div id="unsaved-exit-backdrop" class="unsaved-exit-modal__backdrop"></div>
+      <div class="unsaved-exit-modal__dialog" role="dialog" aria-modal="true" aria-label="Confirmação de saída sem salvar">
+        <p class="unsaved-exit-modal__text">Você alterou o projeto, deseja sair sem salvar?</p>
+        <div class="unsaved-exit-modal__actions">
+          <button id="unsaved-exit-no" type="button" class="unsaved-exit-btn unsaved-exit-btn--primary">Não</button>
+          <button id="unsaved-exit-yes" type="button" class="unsaved-exit-btn unsaved-exit-btn--ghost">Sim</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="../node_modules/codemirror/lib/codemirror.js"></script>
+    <script src="../node_modules/codemirror/mode/javascript/javascript.js"></script>
+    <script src="../node_modules/codemirror/mode/css/css.js"></script>
+    <script src="../node_modules/codemirror/mode/xml/xml.js"></script>
+    <script src="../node_modules/codemirror/mode/htmlmixed/htmlmixed.js"></script>
+    <script src="../node_modules/codemirror/mode/markdown/markdown.js"></script>
+    <script src="../node_modules/codemirror/mode/meta.js"></script>
+    <script src="./bootstrap_guard.js"></script>
+    <script src="./app_state.js"></script>
+    <script src="./app_formatters.js"></script>
+    <script src="./app_conversations.js"></script>
+    <script src="./app_projects.js"></script>
+    <script src="./app_jobs.js"></script>
+    <script src="./app_actions.js"></script>
+    <script src="./app_events.js"></script>
+    <script src="./startup_preloader.js"></script>
+    <script src="./i18n.js"></script>
+    <script src="./ui_appearance.js"></script>
+    <script src="./app_preferences.js"></script>
+    <script src="./account_gate.js"></script>
+    <script src="./ai_settings_support.js"></script>
+    <script src="./ai_settings_draft.js"></script>
+    <script src="./ai_settings_elements.js"></script>
+    <script src="./ai_settings_account_panel.js"></script>
+    <script src="./ai_settings_mcp_panel.js"></script>
+    <script src="./workspace_layout_preferences.js"></script>
+    <script src="./workspace_layout_builder.js"></script>
+    <script src="./workspace_layout_runtime.js"></script>
+    <script src="./ai_settings_controller.js"></script>
+    <script src="./ai_settings.js"></script>
+    <script src="./chat_composer.js"></script>
+    <script src="./cortex_controller.js"></script>
+    <script src="./inline_input_dialog.js"></script>
+    <script src="./ux_state_model.js"></script>
+    <script src="./job_progress.js"></script>
+    <script src="./panel_layout.js"></script>
+    <script src="./automata_contracts.js"></script>
+    <script src="./project_tools_support.js"></script>
+    <script src="./project_tools_github_deploy.js"></script>
+    <script src="./project_tools_git.js"></script>
+    <script src="./project_tools.js"></script>
+    <script src="./project_sidebar.js"></script>
+    <script src="./project_state_modal.js"></script>
+    <script src="./project_file_editor.js"></script>
+    <script src="./project_file_tree.js"></script>
+    <script src="./project_terminal.js"></script>
+    <script src="./welcome_project_modal.js"></script>
+    <script src="./welcome_quotes.js"></script>
+    <script src="./hover_tooltips.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

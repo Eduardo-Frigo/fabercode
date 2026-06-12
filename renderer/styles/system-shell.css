@@ -1,0 +1,586 @@
+color: rgba(232, 232, 232, 0.64);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+/* WINDOW_DRAG_AREA_EXPANSION_2026-05-14
+   Faz a area vazia superior e os respiros entre paineis se comportarem como barra nativa de janela. */
+.app-shell {
+  -webkit-app-region: drag !important;
+}
+
+.app-drag-region {
+  height: max(78px, calc(env(titlebar-area-height, 0px) + 34px)) !important;
+  -webkit-app-region: drag !important;
+  pointer-events: auto;
+  cursor: default;
+}
+
+.panel,
+.panel-splitter,
+.panel *,
+.composer,
+.composer *,
+.chat-log,
+.chat-log *,
+.projects-list,
+.projects-list *,
+.project-files-tree,
+.project-files-tree *,
+.next-steps-box,
+.next-steps-box *,
+.panel-right-footer,
+.panel-right-footer *,
+.left-bottom-actions,
+.left-bottom-actions *,
+.cortex-modal,
+.cortex-modal *,
+.ai-settings-modal,
+.ai-settings-modal *,
+.inline-input-dialog,
+.inline-input-dialog *,
+.project-context-menu,
+.project-context-menu *,
+.project-file-context-menu,
+.project-file-context-menu *,
+.project-file-modal,
+.project-file-modal *,
+.project-state-modal,
+.project-state-modal *,
+button,
+input,
+textarea,
+select,
+a {
+  -webkit-app-region: no-drag !important;
+}
+
+/* RESIZABLE_PANELS_2026-05-14
+   Permite ajustar os tres painéis principais mantendo limites seguros para a ferramenta. */
+.app-shell {
+  --faber-left-panel-width: 320px;
+  --faber-right-panel-width: 360px;
+  --faber-panel-splitter-width: 10px;
+  --faber-left-splitter-width: var(--faber-panel-splitter-width);
+  --faber-right-splitter-width: var(--faber-panel-splitter-width);
+  grid-template-columns:
+    var(--faber-left-panel-width)
+    var(--faber-left-splitter-width)
+    minmax(0, 1fr)
+    var(--faber-right-splitter-width)
+    var(--faber-right-panel-width) !important;
+  gap: 6px !important;
+}
+
+.panel {
+  min-width: 0;
+}
+
+.panel-splitter {
+  position: relative;
+  display: block;
+  min-width: var(--faber-panel-splitter-width);
+  height: 100%;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  z-index: 6;
+  touch-action: none;
+  user-select: none;
+}
+
+.panel-splitter-left {
+  min-width: var(--faber-left-splitter-width);
+}
+
+.panel-splitter-right {
+  min-width: var(--faber-right-splitter-width);
+}
+
+.panel-splitter::before {
+  content: "";
+  position: absolute;
+  top: 20px;
+  bottom: 20px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  transition: width 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.panel-splitter:hover::before,
+.panel-splitter:focus-visible::before,
+.panel-splitter.is-dragging::before {
+  width: 3px;
+  background: rgba(245, 245, 245, 0.42);
+  box-shadow: 0 0 18px rgba(255, 255, 255, 0.12);
+}
+
+.panel-splitter:focus-visible {
+  outline: none;
+}
+
+body.is-panel-resizing,
+body.is-panel-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* APPEARANCE_SETTINGS_2026-05-17
+   Centraliza o tema visual e a escala tipografica dos painéis sem alterar contratos de domínio. */
+body[data-theme='dark'] {
+  --text: #e8e4df;
+  color: #e8e4df !important;
+}
+
+body[data-theme='dark'] .panel,
+body[data-theme='dark'] .msg,
+body[data-theme='dark'] .composer-surface,
+body[data-theme='dark'] .input-shell,
+body[data-theme='dark'] #user-input,
+body[data-theme='dark'] .project-files-tree,
+body[data-theme='dark'] .project-terminal-panel,
+body[data-theme='dark'] .project-file-modal__dialog,
+body[data-theme='dark'] .ai-settings-modal__dialog,
+body[data-theme='dark'] .cortex-modal__dialog,
+body[data-theme='dark'] .project-state-modal__dialog,
+body[data-theme='dark'] .welcome-project-modal__dialog,
+body[data-theme='dark'] .inline-input-dialog__panel {
+  color: #e8e4df !important;
+}
+
+body[data-theme='dark'] #user-input,
+body[data-theme='dark'] textarea,
+body[data-theme='dark'] input,
+body[data-theme='dark'] select {
+  -webkit-text-fill-color: #e8e4df;
+  caret-color: #e8e4df !important;
+}
+
+body[data-theme='light'] {
+  --bg: #f3f4f2 !important;
+  --panel: #fbfbfa !important;
+  --panel-alt: #eef0ed !important;
+  --line: rgba(33, 33, 33, 0.18) !important;
+  --text: #212121 !important;
+  --text-soft: rgba(33, 33, 33, 0.66) !important;
+  --accent: #61635f !important;
+  --shadow: 0 16px 36px rgba(33, 33, 33, 0.14) !important;
+  background: radial-gradient(circle at top left, #ffffff 0%, #f3f4f2 46%, #e5e8e4 100%) !important;
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .app-shell {
+  background: radial-gradient(circle at top left, #ffffff 0%, #f3f4f2 46%, #e5e8e4 100%) !important;
+}
+
+body[data-theme='light'] .panel {
+  background: rgba(250, 250, 248, 0.78) !important;
+}
+
+body[data-theme='light'] .startup-preloader {
+  background: #f3f4f2 !important;
+}
+
+body[data-theme='light'] .startup-preloader__bar {
+  background: rgba(33, 33, 33, 0.14) !important;
+}
+
+body[data-theme='light'] .startup-preloader__bar span {
+  background: linear-gradient(90deg, #212121, rgba(33, 33, 33, 0.38)) !important;
+}
+
+body[data-theme='light'] .panel-center,
+body[data-theme='light'] .panel-left,
+body[data-theme='light'] .panel-right,
+body[data-theme='light'] .next-steps-box,
+body[data-theme='light'] .project-files-tree,
+body[data-theme='light'] .project-terminal-panel,
+body[data-theme='light'] .project-terminal-output,
+body[data-theme='light'] .chat-log,
+body[data-theme='light'] .composer,
+body[data-theme='light'] .composer-surface,
+body[data-theme='light'] .input-shell,
+body[data-theme='light'] #user-input,
+body[data-theme='light'] .left-action-btn,
+body[data-theme='light'] .left-search-row,
+body[data-theme='light'] .project-item,
+body[data-theme='light'] .conversation-item,
+body[data-theme='light'] .welcome-action,
+body[data-theme='light'] .msg,
+body[data-theme='light'] .pending-action,
+body[data-theme='light'] .project-file-modal__dialog,
+body[data-theme='light'] .ai-settings-modal__dialog,
+body[data-theme='light'] .cortex-modal__dialog,
+body[data-theme='light'] .project-state-modal__dialog,
+body[data-theme='light'] .welcome-project-modal__dialog,
+body[data-theme='light'] .inline-input-dialog__panel,
+body[data-theme='light'] .project-context-menu,
+body[data-theme='light'] .project-file-context-menu {
+  background: rgba(255, 255, 255, 0.78) !important;
+  border-color: rgba(33, 33, 33, 0.16) !important;
+  color: #212121 !important;
+  box-shadow: var(--shadow) !important;
+}
+
+body[data-theme='light'] .panel-left,
+body[data-theme='light'] .panel-right {
+  background: rgba(250, 250, 248, 0.74) !important;
+  backdrop-filter: blur(28px) saturate(130%) brightness(1.02) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(130%) brightness(1.02) !important;
+}
+
+body[data-theme='light'] .panel-center,
+body[data-theme='light'] .composer,
+body[data-theme='light'] .composer-surface,
+body[data-theme='light'] .input-shell,
+body[data-theme='light'] #user-input {
+  background: #fbfbfa !important;
+}
+
+body[data-theme='light'] .panel-left::before,
+body[data-theme='light'] .panel-right::before {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0) 34%) !important;
+}
+
+body[data-theme='light'] .panel,
+body[data-theme='light'] .panel *,
+body[data-theme='light'] .ai-settings-modal__dialog,
+body[data-theme='light'] .ai-settings-modal__dialog *,
+body[data-theme='light'] .project-file-modal__dialog,
+body[data-theme='light'] .project-file-modal__dialog *,
+body[data-theme='light'] .cortex-modal__dialog,
+body[data-theme='light'] .cortex-modal__dialog * {
+  color: #212121 !important;
+}
+
+body[data-theme='light'] input,
+body[data-theme='light'] textarea,
+body[data-theme='light'] select,
+body[data-theme='light'] #user-input,
+body[data-theme='light'] .project-file-editor,
+body[data-theme='light'] .inline-input-dialog__input {
+  background: rgba(255, 255, 255, 0.92) !important;
+  border-color: rgba(33, 33, 33, 0.2) !important;
+  color: #212121 !important;
+  -webkit-text-fill-color: #212121 !important;
+  caret-color: #212121 !important;
+}
+
+body[data-theme='light'] input::placeholder,
+body[data-theme='light'] textarea::placeholder,
+body[data-theme='light'] #user-input::placeholder {
+  color: rgba(33, 33, 33, 0.36) !important;
+  -webkit-text-fill-color: rgba(33, 33, 33, 0.36) !important;
+}
+
+body[data-theme='light'] .chat-system-notice {
+  color: rgba(33, 33, 33, 0.46) !important;
+}
+
+body[data-theme='light'] .btn-muted,
+body[data-theme='light'] .project-panel-btn,
+body[data-theme='light'] .icon-btn,
+body[data-theme='light'] .project-mini-btn,
+body[data-theme='light'] .left-mini-action,
+body[data-theme='light'] .ai-settings-home-btn {
+  background: rgba(255, 255, 255, 0.82) !important;
+  border-color: rgba(33, 33, 33, 0.2) !important;
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .left-mini-action:hover,
+body[data-theme='light'] .left-memory-action.active {
+  background: rgba(33, 33, 33, 0.08) !important;
+  border-color: rgba(33, 33, 33, 0.28) !important;
+}
+
+body[data-theme='light'] .left-mini-action img {
+  opacity: 0.86 !important;
+  filter: none !important;
+}
+
+body[data-theme='light'] .left-action-btn .action-icon {
+  background: rgba(255, 255, 255, 0.92) !important;
+  border-color: rgba(33, 33, 33, 0.22) !important;
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .left-action-btn .action-icon::before {
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .btn-success {
+  color: #0d2419 !important;
+}
+
+body[data-theme='light'] .incremental-mode-badge.is-edit,
+body[data-theme='light'] .ai-settings-current,
+body[data-theme='light'] .ai-settings-api-item.is-active {
+  background: rgba(24, 122, 79, 0.1) !important;
+  border-color: rgba(24, 122, 79, 0.42) !important;
+}
+
+body[data-theme='light'] .ai-settings-api-badge.is-warning,
+body[data-theme='light'] .ai-settings-api-item.is-incomplete {
+  background: rgba(156, 112, 28, 0.1) !important;
+  border-color: rgba(156, 112, 28, 0.34) !important;
+}
+
+body[data-theme='light'] .project-item.active,
+body[data-theme='light'] .conversation-item.active,
+body[data-theme='light'] .project-tree-row.active {
+  background: rgba(33, 33, 33, 0.08) !important;
+  border-color: rgba(33, 33, 33, 0.28) !important;
+}
+
+body[data-theme='light'] .panel-splitter::before {
+  background: rgba(33, 33, 33, 0.16) !important;
+}
+
+body[data-theme='light'] .panel-splitter:hover::before,
+body[data-theme='light'] .panel-splitter:focus-visible::before,
+body[data-theme='light'] .panel-splitter.is-dragging::before {
+  background: rgba(33, 33, 33, 0.42) !important;
+  box-shadow: 0 0 16px rgba(33, 33, 33, 0.12) !important;
+}
+
+body[data-theme='light'] .welcome-panel__quote {
+  color: rgba(33, 33, 33, 0.72) !important;
+}
+
+body[data-theme='light'] .welcome-panel__quote figcaption {
+  color: rgba(33, 33, 33, 0.48) !important;
+}
+
+body[data-theme='light'] .welcome-action {
+  background: rgba(255, 255, 255, 0.54) !important;
+  border-color: rgba(33, 33, 33, 0.12) !important;
+  color: rgba(33, 33, 33, 0.66) !important;
+}
+
+body[data-theme='light'] .welcome-action:hover {
+  background: rgba(255, 255, 255, 0.86) !important;
+  border-color: rgba(33, 33, 33, 0.22) !important;
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .faber-hover-tooltip {
+  background: rgba(255, 255, 255, 0.96) !important;
+  border-color: rgba(33, 33, 33, 0.16) !important;
+  color: #212121 !important;
+  box-shadow: 0 12px 28px rgba(33, 33, 33, 0.16) !important;
+}
+
+body[data-theme='light'] .ai-settings-home-btn {
+  background: rgba(255, 255, 255, 0.72) !important;
+  border-color: rgba(33, 33, 33, 0.14) !important;
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .ai-settings-home-btn:hover {
+  background: rgba(255, 255, 255, 0.94) !important;
+  border-color: rgba(24, 122, 79, 0.36) !important;
+}
+
+body[data-theme='light'] .ai-settings-home-btn__icon {
+  background: rgba(33, 33, 33, 0.045) !important;
+  border-color: rgba(33, 33, 33, 0.12) !important;
+  color: rgba(33, 33, 33, 0.74) !important;
+}
+
+body[data-theme='light'] .ai-settings-home-btn small {
+  color: rgba(24, 122, 79, 0.78) !important;
+}
+
+body[data-theme='light'] .ai-settings-home-btn__desc,
+body[data-theme='light'] .ai-settings-help,
+body[data-theme='light'] .ai-settings-api-detail,
+body[data-theme='light'] .ai-settings-api-facts,
+body[data-theme='light'] .right-tool-section__head span,
+body[data-theme='light'] .right-tool-git-summary span,
+body[data-theme='light'] .right-tool-git-step__head span,
+body[data-theme='light'] .right-tool-empty {
+  color: rgba(33, 33, 33, 0.62) !important;
+}
+
+body[data-theme='light'] .right-tool-lightbox__panel,
+body[data-theme='light'] .project-rail-lightbox__panel,
+body[data-theme='light'] .project-terminal-lightbox .project-terminal-panel {
+  background: rgba(250, 250, 248, 0.98) !important;
+  border-color: rgba(33, 33, 33, 0.16) !important;
+  color: #212121 !important;
+  box-shadow: 0 24px 70px rgba(33, 33, 33, 0.2) !important;
+}
+
+body[data-theme='light'] .project-rail-lightbox__head,
+body[data-theme='light'] .project-rail-lightbox__close,
+body[data-theme='light'] .project-rail-lightbox .project-name,
+body[data-theme='light'] .project-rail-lightbox .folder-icon,
+body[data-theme='light'] .project-rail-lightbox .project-tree-header,
+body[data-theme='light'] .project-rail-lightbox .conversation-item {
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .project-rail-lightbox .project-item,
+body[data-theme='light'] .project-rail-lightbox .conversation-item {
+  background: rgba(255, 255, 255, 0.82) !important;
+  border-color: rgba(33, 33, 33, 0.12) !important;
+}
+
+body[data-theme='light'] .project-rail-lightbox .project-tree-header:hover,
+body[data-theme='light'] .project-rail-lightbox .conversation-item:hover,
+body[data-theme='light'] .project-rail-lightbox .conversation-item.active {
+  background: rgba(33, 33, 33, 0.07) !important;
+  border-color: rgba(33, 33, 33, 0.18) !important;
+}
+
+body[data-theme='light'] .project-rail-lightbox .project-mini-btn,
+body[data-theme='light'] .project-rail-lightbox__close {
+  background: rgba(255, 255, 255, 0.86) !important;
+  border-color: rgba(33, 33, 33, 0.14) !important;
+}
+
+body[data-theme='light'] .right-tool-lightbox__head,
+body[data-theme='light'] .project-terminal-lightbox .project-terminal-head,
+body[data-theme='light'] .project-terminal-tabs,
+body[data-theme='light'] .project-terminal-form {
+  background: rgba(245, 246, 244, 0.96) !important;
+  border-color: rgba(33, 33, 33, 0.12) !important;
+}
+
+body[data-theme='light'] .right-tool-section,
+body[data-theme='light'] .right-tool-git-summary,
+body[data-theme='light'] .right-tool-git-step,
+body[data-theme='light'] .right-tool-file-row,
+body[data-theme='light'] .right-tool-git-file-chip,
+body[data-theme='light'] .right-tool-git-count,
+body[data-theme='light'] .right-tool-selection-summary,
+body[data-theme='light'] .right-tool-commit-summary,
+body[data-theme='light'] .right-tool-github-status,
+body[data-theme='light'] .right-tool-github-result,
+body[data-theme='light'] .right-tool-github-action-panel,
+body[data-theme='light'] .right-tool-command-panel,
+body[data-theme='light'] .right-tool-github-repo-row,
+body[data-theme='light'] .ai-settings-api-editor,
+body[data-theme='light'] .ai-settings-mcp-editor,
+body[data-theme='light'] .ai-settings-account-email {
+  background: rgba(255, 255, 255, 0.72) !important;
+  border-color: rgba(33, 33, 33, 0.13) !important;
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .right-tool-lightbox__head strong,
+body[data-theme='light'] .right-tool-lightbox__head span,
+body[data-theme='light'] .right-tool-section__head strong,
+body[data-theme='light'] .right-tool-git-summary strong,
+body[data-theme='light'] .right-tool-git-step__head strong,
+body[data-theme='light'] .right-tool-commit-summary strong,
+body[data-theme='light'] .right-tool-github-status strong,
+body[data-theme='light'] .right-tool-github-result strong,
+body[data-theme='light'] .right-tool-github-action-panel strong,
+body[data-theme='light'] .right-tool-github-repo-row strong,
+body[data-theme='light'] .right-tool-field span,
+body[data-theme='light'] .project-terminal-title strong,
+body[data-theme='light'] .project-terminal-title span,
+body[data-theme='light'] .right-tool-diff-preview strong {
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .right-tool-lightbox__head span {
+  color: rgba(33, 33, 33, 0.62) !important;
+}
+
+body[data-theme='light'] .right-tool-lightbox__close {
+  background: rgba(255, 255, 255, 0.88) !important;
+  border-color: rgba(33, 33, 33, 0.14) !important;
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .right-tool-github-status p,
+body[data-theme='light'] .right-tool-github-result p,
+body[data-theme='light'] .right-tool-github-action-panel p,
+body[data-theme='light'] .right-tool-github-note,
+body[data-theme='light'] .right-tool-git-step__head span,
+body[data-theme='light'] .right-tool-git-count,
+body[data-theme='light'] .right-tool-selection-summary,
+body[data-theme='light'] .right-tool-git-file-chip__meta,
+body[data-theme='light'] .right-tool-git-file-chip__summary,
+body[data-theme='light'] .right-tool-commit-summary span,
+body[data-theme='light'] .right-tool-github-repo-row span,
+body[data-theme='light'] .right-tool-step-list {
+  color: rgba(33, 33, 33, 0.72) !important;
+}
+
+body[data-theme='light'] .right-tool-git-file-chip__summary {
+  color: #8a5a00 !important;
+}
+
+body[data-theme='light'] .right-tool-icon-mark,
+body[data-theme='light'] .right-tool-git-step__badge,
+body[data-theme='light'] .right-tool-git-step__toggle {
+  background: rgba(255, 255, 255, 0.82) !important;
+  border-color: rgba(33, 33, 33, 0.14) !important;
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .right-tool-git-step--active {
+  background: rgba(42, 190, 118, 0.12) !important;
+  border-color: rgba(31, 154, 93, 0.28) !important;
+}
+
+body[data-theme='light'] .right-tool-command-panel code {
+  color: #137548 !important;
+}
+
+body[data-theme='light'] .right-tool-segmented,
+body[data-theme='light'] .right-tool-input,
+body[data-theme='light'] .right-tool-github-advanced input {
+  background: rgba(255, 255, 255, 0.78) !important;
+  border-color: rgba(33, 33, 33, 0.14) !important;
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .right-tool-action {
+  background: rgba(255, 255, 255, 0.88) !important;
+  border-color: rgba(33, 33, 33, 0.14) !important;
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .right-tool-action--primary {
+  background: rgba(42, 190, 118, 0.94) !important;
+  border-color: rgba(31, 154, 93, 0.38) !important;
+  color: #07140d !important;
+}
+
+body[data-theme='light'] .right-tool-action--primary:disabled {
+  background: rgba(33, 33, 33, 0.06) !important;
+  border-color: rgba(33, 33, 33, 0.12) !important;
+  color: rgba(33, 33, 33, 0.46) !important;
+  box-shadow: none !important;
+}
+
+body[data-theme='light'] .right-tool-segmented button {
+  color: rgba(33, 33, 33, 0.65) !important;
+}
+
+body[data-theme='light'] .right-tool-segmented button[aria-pressed='true'] {
+  background: rgba(31, 154, 93, 0.16) !important;
+  color: #124831 !important;
+}
+
+body[data-theme='light'] .right-tool-file-link {
+  color: #175f92 !important;
+}
+
+body[data-theme='light'] .project-terminal-lightbox .project-terminal-output {
+  background: #ffffff !important;
+  color: #1f2421 !important;
+}
+
+body[data-theme='light'] #project-terminal-input {
+  color: #1f2421 !important;
+  -webkit-text-fill-color: #1f2421 !important;
+}

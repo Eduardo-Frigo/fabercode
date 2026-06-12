@@ -1,0 +1,275 @@
+/* glassmorphism-ui-2026-05-03 */
+.panel-left,
+.panel-right {
+  background: rgba(33, 33, 33, 0.52) !important;
+  backdrop-filter: blur(14px) saturate(118%);
+  -webkit-backdrop-filter: blur(14px) saturate(118%);
+  border-color: rgba(255, 255, 255, 0.16) !important;
+}
+
+.panel-center {
+  background: rgba(33, 33, 33, 0.64) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+}
+
+.panel-left::before,
+.panel-right::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.00) 38%);
+}
+
+
+/* SIDE-GLASS-UNIFIED START */
+.panel-left,
+.panel-right,
+.panel-center {
+  background: rgba(33, 33, 33, 0.34) !important;
+  border: 1px solid rgba(255,255,255,0.14) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 10px 38px rgba(0,0,0,0.28) !important;
+}
+
+.panel-left,
+.panel-right {
+  backdrop-filter: blur(30px) saturate(160%) brightness(1.05) !important;
+  -webkit-backdrop-filter: blur(30px) saturate(160%) brightness(1.05) !important;
+}
+
+.panel-left::before,
+.panel-left::after,
+.panel-right::before,
+.panel-right::after {
+  display: none !important;
+}
+
+/* remove divisões visuais internas “em caixas” nas laterais */
+.panel-left .panel-header,
+.panel-right .panel-header,
+.panel-left .next-steps-box,
+.panel-right .next-steps-box,
+.panel-left .left-bottom-actions,
+.panel-right .panel-right-footer {
+  background: transparent !important;
+  border-color: rgba(255,255,255,0.10) !important;
+  box-shadow: none !important;
+}
+/* SIDE-GLASS-UNIFIED END */
+
+
+/* FINAL-SIDES-FLAT-GLASS START */
+.panel-left,
+.panel-right {
+  border: 0 !important;
+  box-shadow: none !important;
+  background: rgba(33,33,33,0.24) !important;
+  backdrop-filter: blur(30px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(30px) saturate(160%) !important;
+}
+
+.panel-left::before,
+.panel-left::after,
+.panel-right::before,
+.panel-right::after {
+  display: none !important;
+}
+
+.panel-left .panel-header,
+.panel-right .panel-header,
+.panel-left .left-bottom-actions,
+.panel-right .panel-right-footer,
+.panel-left .next-steps-box,
+.panel-right .next-steps-box,
+.projects-list {
+  border-color: transparent !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+.left-mini-action {
+  width: 40px !important;
+  height: 40px !important;
+  border-radius: 999px !important;
+  display: inline-grid !important;
+  place-items: center !important;
+  border: 1px solid rgba(255,255,255,0.28) !important;
+  background: rgba(255,255,255,0.06) !important;
+}
+
+.left-mini-action svg {
+  width: 18px !important;
+  height: 18px !important;
+  stroke: currentColor !important;
+  color: #f2f2f2 !important;
+}
+
+.project-files-tree {
+  min-height: 220px;
+  max-height: calc(100vh - 300px);
+  overflow: auto;
+  padding: 8px;
+}
+
+.project-tree-row {
+  font-size: 0.73rem;
+  color: #d9d9d9;
+  line-height: 1.45;
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+.project-tree-row:hover {
+  background: rgba(255,255,255,0.06);
+}
+/* FINAL-SIDES-FLAT-GLASS END */
+
+
+/* RESTORE-FILE-UX START */
+.next-steps-box h3#right-panel-title {
+  margin-bottom: 8px;
+}
+
+.project-files-tree {
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 10px;
+  background: rgba(14,14,14,0.75);
+}
+
+.project-tree-row {
+  display: block;
+  cursor: pointer;
+  user-select: none;
+}
+
+.left-mini-action {
+  width: 42px !important;
+  height: 42px !important;
+  padding: 0 !important;
+  display: inline-grid !important;
+  place-items: center !important;
+}
+
+.left-mini-action svg {
+  width: 18px !important;
+  height: 18px !important;
+  stroke: currentColor !important;
+  color: #f0f0f0 !important;
+}
+
+.folder-icon-svg.folder-open { color: #f6f6f6 !important; }
+.folder-icon-svg.folder-closed { color: #dcdcdc !important; }
+
+.project-file-modal__content {
+  display: none;
+}
+
+.project-file-editor {
+  position: static !important;
+  inset: auto !important;
+  z-index: auto !important;
+  width: 100% !important;
+  height: min(65vh, 720px) !important;
+  border: 0 !important;
+  outline: none !important;
+  resize: vertical !important;
+  background: #111 !important;
+  color: #e8e8e8 !important;
+  -webkit-text-fill-color: #e8e8e8 !important;
+  caret-color: #f2f2f2 !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.78rem !important;
+  line-height: 1.55 !important;
+  padding: 12px !important;
+  white-space: pre !important;
+  tab-size: 2 !important;
+}
+
+.project-file-modal__tools {
+  border-top: 1px solid rgba(255,255,255,0.10);
+  border-bottom: 1px solid rgba(255,255,255,0.10);
+}
+/* RESTORE-FILE-UX END */
+
+
+/* FILE-EDITOR-HILITE-LINES-2026-05-04 START */
+.project-file-editor-wrap {
+  display: grid !important;
+  grid-template-columns: 56px 1fr !important;
+  min-height: 560px !important;
+  max-height: calc(100vh - 210px) !important;
+  overflow: hidden !important;
+  background: #151515 !important;
+}
+
+.project-file-lines {
+  display: block !important;
+  margin: 0 !important;
+  padding: 12px 8px 12px 10px !important;
+  text-align: right !important;
+  color: #8f8f8f !important;
+  background: #121212 !important;
+  border-right: 1px solid rgba(255,255,255,0.08) !important;
+  user-select: none !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.74rem !important;
+  line-height: 1.5 !important;
+  white-space: pre !important;
+}
+
+.project-file-code-layer {
+  position: relative !important;
+  min-height: 100% !important;
+  overflow: hidden !important;
+}
+
+.project-file-modal__content {
+  display: block !important;
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 1 !important;
+  margin: 0 !important;
+  padding: 12px !important;
+  border: 0 !important;
+  background: #151515 !important;
+  color: #d7d7d7 !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+  white-space: pre !important;
+  tab-size: 2 !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.76rem !important;
+  line-height: 1.5 !important;
+}
+
+.project-file-editor {
+  display: block !important;
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 2 !important;
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+  padding: 12px !important;
+  border: 0 !important;
+  resize: none !important;
+  outline: none !important;
+  background: transparent !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  caret-color: #f2f2f2 !important;
+  pointer-events: auto !important;
+  overflow: auto !important;
+  white-space: pre !important;
+  tab-size: 2 !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.76rem !important;
+  line-height: 1.5 !important;
+}
+
+.project-file-editor::selection {
+  background: rgba(255,255,255,0.24) !important;
+}
+/* FILE-EDITOR-HILITE-LINES-2026-05-04 END */

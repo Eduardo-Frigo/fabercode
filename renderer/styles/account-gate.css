@@ -1,0 +1,409 @@
+padding: 14px;
+  border: 1px dashed rgba(255,255,255,0.2);
+  border-radius: 10px;
+  color: #b9b9b9;
+  font-size: 0.74rem;
+}
+
+.startup-preloader {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  background: radial-gradient(circle at top left, #1c1c1c 0%, #050505 55%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 220ms ease, visibility 220ms ease;
+}
+
+.startup-preloader.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.startup-preloader__content {
+  width: min(320px, calc(100vw - 48px));
+  display: grid;
+  gap: 12px;
+  text-align: center;
+}
+
+.startup-preloader__logo {
+  color: #f3f3f3;
+  font-family: var(--font-main);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  font-size: 1.15rem;
+}
+
+.startup-preloader__bar {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.08);
+}
+
+.startup-preloader__bar span {
+  display: block;
+  height: 100%;
+  width: 35%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #f0f0f0, #d7d7d7);
+  animation: faber-preloader 1.1s ease-in-out infinite;
+}
+
+.startup-preloader__logo-img.is-animating {
+  animation: faber-preloader-logo-once 1.25s cubic-bezier(0.19, 1, 0.22, 1) both;
+}
+
+.account-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 3600;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+}
+
+.account-gate__backdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at top left, rgba(60, 60, 60, 0.22), transparent 38%),
+    rgba(5, 5, 5, 0.88);
+  backdrop-filter: blur(18px) saturate(112%);
+  -webkit-backdrop-filter: blur(18px) saturate(112%);
+}
+
+.account-gate__panel {
+  position: relative;
+  width: min(520px, calc(100vw - 48px));
+  display: grid;
+  gap: 16px;
+  padding: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(24, 24, 24, 0.98), rgba(13, 13, 13, 0.98));
+  box-shadow: 0 28px 72px rgba(0, 0, 0, 0.56);
+  opacity: 0;
+  transform: translateY(18px) scale(0.985);
+}
+
+body.ui-ready .account-gate:not(.hidden) .account-gate__panel {
+  animation: account-gate-fade-up 320ms ease-out 90ms both;
+}
+
+.account-gate__logo {
+  width: min(300px, 72vw);
+  height: auto;
+  justify-self: center;
+}
+
+.account-gate__actions,
+.account-gate__email-form,
+.account-gate__signup-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.account-gate__email-form {
+  padding-bottom: 10px;
+}
+
+.account-gate__wide-action {
+  width: 100%;
+  min-height: 44px;
+  justify-content: center;
+}
+
+.account-gate__google-action,
+.account-gate__github-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.account-gate__google-action:hover,
+.account-gate__github-action:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.account-gate__google-mark,
+.account-gate__github-mark {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 999px;
+  background: #fff;
+  flex: 0 0 auto;
+}
+
+.account-gate__github-mark {
+  background: #f6f8fa;
+  color: #24292f;
+}
+
+.account-gate__google-mark svg,
+.account-gate__github-mark svg {
+  width: 16px;
+  height: 16px;
+}
+
+.account-gate__separator {
+  color: rgba(232, 228, 223, 0.52);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.account-gate__workspace-choice {
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(232, 228, 223, 0.76);
+  font-size: 0.76rem;
+}
+
+.account-gate__workspace-choice span {
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.account-gate__workspace-choice select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+  padding: 0 10px;
+}
+
+.account-gate__field {
+  display: grid;
+  gap: 7px;
+  color: rgba(232, 228, 223, 0.78);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.account-gate__field input,
+.account-gate__field select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+  padding: 0 12px;
+}
+
+.account-gate__field input::placeholder {
+  color: rgba(232, 228, 223, 0.42);
+}
+
+.account-gate__field input:focus,
+.account-gate__field select:focus {
+  border-color: rgba(130, 238, 179, 0.58);
+  box-shadow: 0 0 0 3px rgba(24, 192, 122, 0.14);
+}
+
+.account-gate__link {
+  justify-self: center;
+  border: 0;
+  background: transparent;
+  color: rgba(232, 228, 223, 0.72);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 4px 8px;
+}
+
+.account-gate__link:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.account-gate__back-action {
+  justify-self: start;
+  position: relative;
+  width: 74px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.025);
+  color: rgba(232, 228, 223, 0.52);
+  cursor: pointer;
+  font: inherit;
+  opacity: 0.78;
+}
+
+.account-gate__back-action span {
+  width: 0;
+  opacity: 0;
+  overflow: hidden;
+}
+
+.account-gate__back-action::before {
+  content: "";
+  width: 34px;
+  height: 1.5px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: translateX(4px);
+}
+
+.account-gate__back-action::after {
+  content: "";
+  position: absolute;
+  left: 21px;
+  width: 9px;
+  height: 9px;
+  border-left: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+
+.account-gate__back-action:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(232, 228, 223, 0.78);
+  opacity: 1;
+}
+
+.account-gate__status {
+  min-height: 46px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(232, 228, 223, 0.8);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+
+.account-gate__status:empty {
+  display: none;
+}
+
+body.account-locked .app-shell {
+  pointer-events: none;
+  user-select: none;
+}
+
+body[data-theme='light'] .account-gate__backdrop {
+  background:
+    radial-gradient(circle at top left, rgba(33, 33, 33, 0.08), transparent 38%),
+    rgba(243, 244, 242, 0.9);
+}
+
+body[data-theme='light'] .account-gate__panel {
+  background: rgba(255, 255, 255, 0.88);
+  border-color: rgba(33, 33, 33, 0.16);
+  box-shadow: 0 28px 72px rgba(33, 33, 33, 0.16);
+}
+
+body[data-theme='light'] .account-gate__status,
+body[data-theme='light'] .account-gate__separator,
+body[data-theme='light'] .account-gate__field,
+body[data-theme='light'] .account-gate__workspace-choice,
+body[data-theme='light'] .account-gate__link {
+  color: rgba(33, 33, 33, 0.68);
+}
+
+body[data-theme='light'] .account-gate__field input,
+body[data-theme='light'] .account-gate__field select,
+body[data-theme='light'] .account-gate__workspace-choice select {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(33, 33, 33, 0.14);
+  color: #212121;
+}
+
+body[data-theme='light'] .account-gate__field input::placeholder {
+  color: rgba(33, 33, 33, 0.42);
+}
+
+body[data-theme='light'] .account-gate__link:hover {
+  color: #212121;
+}
+
+body[data-theme='light'] .account-gate__status {
+  background: rgba(255, 255, 255, 0.86);
+  border-color: rgba(33, 33, 33, 0.14);
+}
+
+body[data-theme='light'] .account-gate__google-action,
+body[data-theme='light'] .account-gate__github-action,
+body[data-theme='light'] .account-gate__back-action {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(33, 33, 33, 0.14);
+  color: #212121;
+}
+
+body[data-theme='light'] .account-gate__google-action:hover,
+body[data-theme='light'] .account-gate__github-action:hover,
+body[data-theme='light'] .account-gate__back-action:hover {
+  background: #fff;
+  border-color: rgba(33, 33, 33, 0.22);
+}
+
+@keyframes account-gate-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes faber-preloader {
+  0% {
+    transform: translateX(-105%);
+  }
+  50% {
+    transform: translateX(95%);
+  }
+  100% {
+    transform: translateX(285%);
+  }
+}
+
+@keyframes faber-preloader-logo-once {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.965);
+    filter: blur(5px);
+  }
+  58% {
+    opacity: 1;
+    transform: translateY(0) scale(1.018);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}

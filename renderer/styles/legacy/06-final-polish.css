@@ -1,0 +1,220 @@
+  background-size: 3px 3px, 4px 4px, 5px 5px;
+  mix-blend-mode: soft-light;
+}
+
+.app-shell {
+  position: relative !important;
+  z-index: 1;
+  background: transparent !important;
+}
+
+.panel-left,
+.panel-right {
+  background: rgba(23, 25, 31, 0.22) !important;
+  border-color: rgba(255,255,255,0.15) !important;
+  backdrop-filter: blur(30px) saturate(165%) brightness(1.06) !important;
+  -webkit-backdrop-filter: blur(30px) saturate(165%) brightness(1.06) !important;
+}
+
+.panel-center {
+  background: #1f2025 !important;
+  border-color: rgba(255,255,255,0.14) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.projects-list,
+.project-files-tree,
+.next-steps-box {
+  background: rgba(10, 13, 18, 0.22) !important;
+  border-color: rgba(255,255,255,0.13) !important;
+}
+
+/* COLOR-UNIFY-HOTFIX-2026-05-04 */
+/* Padroniza laterais e áreas escuras após os blocos legacy de glass */
+.panel-left,
+.panel-right {
+  background: rgba(23, 25, 31, 0.22) !important;
+  border-color: rgba(255,255,255,0.15) !important;
+  backdrop-filter: blur(30px) saturate(165%) brightness(1.06) !important;
+  -webkit-backdrop-filter: blur(30px) saturate(165%) brightness(1.06) !important;
+}
+
+/* Esquerda e direita com o mesmo desenho de luz/colorido */
+.panel-left::after,
+.panel-right::after {
+  content: "";
+  position: absolute;
+  left: -10%;
+  right: -10%;
+  bottom: -16%;
+  height: 56%;
+  pointer-events: none;
+  z-index: 1;
+  background:
+    radial-gradient(54% 76% at 58% 38%, rgba(129, 196, 255, 0.17), transparent 74%),
+    radial-gradient(46% 66% at 46% 64%, rgba(255, 183, 120, 0.15), transparent 74%),
+    radial-gradient(44% 62% at 75% 80%, rgba(176, 142, 255, 0.12), transparent 78%);
+  filter: blur(2px);
+}
+
+/* Centro e caixas internas no preto escuro uniforme */
+.panel-center,
+.next-steps-box {
+  background: #1f2025 !important;
+  border-color: rgba(255,255,255,0.14) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.projects-list,
+.project-files-tree {
+  background: rgba(9, 11, 15, 0.60) !important;
+  border-color: rgba(255,255,255,0.14) !important;
+}
+
+/* TITLEBAR-SAFE-AREA-ALIGN-2026-05-04 */
+.app-shell {
+  padding-top: calc(14px + env(titlebar-area-height, 0px) + 8px) !important;
+}
+
+/* COLOR-FIX-151619-2026-05-04 */
+.panel-center,
+.next-steps-box,
+.project-files-tree,
+.project-item {
+  background: #151619 !important;
+}
+
+/* DESIGN-SYSTEM-LOCK-2026-05-04 */
+:root {
+  --ui-center-solid: #151619;
+  --ui-center-surface: #101217;
+  --ui-side-glass: rgba(21, 22, 25, 0.58);
+  --ui-side-glass-border: rgba(255, 255, 255, 0.14);
+  --ui-subtle-border: rgba(255, 255, 255, 0.12);
+}
+
+/* 1) Painéis principais */
+.panel-center {
+  background: var(--ui-center-solid) !important;
+  border: 1px solid var(--ui-subtle-border) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.panel-left,
+.panel-right {
+  background: var(--ui-side-glass) !important;
+  border: 1px solid var(--ui-side-glass-border) !important;
+  backdrop-filter: blur(28px) saturate(138%) brightness(0.94) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(138%) brightness(0.94) !important;
+}
+
+/* mesma linguagem visual nas duas laterais */
+.panel-left::before,
+.panel-right::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.00) 30%);
+}
+
+.panel-left::after,
+.panel-right::after {
+  display: none !important;
+}
+
+.panel-left > *,
+.panel-right > * {
+  position: relative;
+  z-index: 2;
+}
+
+/* 2) Superfícies internas consistentes */
+.next-steps-box,
+.project-files-tree,
+.projects-list {
+  background: rgba(16, 18, 23, 0.74) !important;
+  border: 1px solid var(--ui-subtle-border) !important;
+  box-shadow: none !important;
+}
+
+.project-item {
+  background: #0d1015 !important;
+  border: 1px solid var(--ui-subtle-border) !important;
+}
+
+.left-action-btn,
+.left-search-row {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+}
+
+/* 3) Centro sólido também nos blocos de conversa/composer */
+.chat-log,
+.composer,
+.composer-surface,
+.input-shell,
+#user-input {
+  background: var(--ui-center-surface) !important;
+}
+
+.composer-surface,
+.input-shell {
+  border-color: var(--ui-subtle-border) !important;
+}
+
+#user-input {
+  color: #e8eaf0 !important;
+}
+
+/* PROJECTS-AREA-TUNING-2026-05-04 */
+/* área vazia da lista de projetos transparente */
+.projects-list {
+  background: transparent !important;
+  border-top-color: rgba(255, 255, 255, 0.10) !important;
+  border-bottom-color: rgba(255, 255, 255, 0.10) !important;
+}
+
+/* projeto fechado = mesmo visual dos botões do topo esquerdo */
+.project-item {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+}
+
+/* só escurece quando aberto/ativo */
+.project-item.active {
+  background: #0d1015 !important;
+  border-color: rgba(255, 255, 255, 0.24) !important;
+}
+
+/* LEFT-PANEL-SCROLL-FIX-2026-05-04 */
+.panel-left {
+  min-height: 0 !important;
+}
+
+.projects-list.projects-tree,
+.projects-list {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.left-bottom-actions {
+  flex-shrink: 0 !important;
+}
+
+/* DARK-SURFACE-HEX-1D1E1F-2026-05-04 */
+.panel-center,
+.next-steps-box,
+.project-files-tree,
+.composer,
+.composer-surface,
+.input-shell,
+#user-input {

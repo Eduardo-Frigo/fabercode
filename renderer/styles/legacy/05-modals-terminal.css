@@ -1,0 +1,245 @@
+  caret-color: #cfe0ff !important;
+}
+
+#project-file-editor::selection {
+  background: rgba(102, 153, 255, 0.42) !important;
+}
+
+/* SINGLE-LAYER-CODE-EDITOR-2026-05-04 */
+.project-file-editor-wrap {
+  grid-template-columns: 1fr !important;
+}
+
+.project-file-code-layer {
+  min-height: 560px !important;
+  max-height: calc(100vh - 210px) !important;
+}
+
+#project-file-editor-cm,
+#project-file-editor-cm .CodeMirror {
+  height: 100% !important;
+}
+
+#project-file-editor-cm.CodeMirror,
+#project-file-editor-cm .CodeMirror-scroll,
+#project-file-editor-cm .CodeMirror-sizer,
+#project-file-editor-cm .CodeMirror-lines {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.8rem !important;
+  line-height: 1.58 !important;
+}
+
+#project-file-editor-cm.CodeMirror {
+  background: #111318 !important;
+  border-radius: 0 !important;
+}
+
+#project-file-editor-cm .CodeMirror-gutters {
+  background: #0f1116 !important;
+  border-right: 1px solid rgba(255,255,255,0.08) !important;
+}
+
+#project-file-lines {
+  display: none !important;
+}
+
+/* SINGLE-LAYER-CODE-EDITOR-HOTFIX-2026-05-04-B */
+body.cm-ready #project-file-editor,
+body.cm-ready #project-file-modal-content,
+body.cm-ready #project-file-lines {
+  display: none !important;
+}
+
+body.cm-ready #project-file-editor-cm.CodeMirror {
+  display: block !important;
+  min-height: 560px !important;
+  height: calc(100vh - 210px) !important;
+  max-height: calc(100vh - 210px) !important;
+}
+
+#project-file-editor-cm.CodeMirror {
+  width: 100% !important;
+}
+
+/* fallback sem CodeMirror: textarea visível e editável */
+body:not(.cm-ready) #project-file-editor {
+  position: static !important;
+  inset: auto !important;
+  z-index: auto !important;
+  background: #111318 !important;
+  color: #e6ebf5 !important;
+  -webkit-text-fill-color: #e6ebf5 !important;
+  caret-color: #cfe0ff !important;
+}
+
+
+/* UNSAVED-EXIT-MODAL-2026-05-04 */
+.unsaved-exit-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 2600;
+  display: grid;
+  place-items: center;
+}
+
+.unsaved-exit-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(5, 7, 10, 0.56);
+  backdrop-filter: blur(2px);
+}
+
+.unsaved-exit-modal__dialog {
+  position: relative;
+  width: min(460px, 92vw);
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: linear-gradient(180deg, rgba(25,25,28,0.96), rgba(18,18,21,0.96));
+  box-shadow: 0 20px 48px rgba(0,0,0,0.45);
+  padding: 18px;
+}
+
+.unsaved-exit-modal__text {
+  margin: 0;
+  color: #eceef4;
+  font-size: 1.05rem;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.unsaved-exit-modal__actions {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.unsaved-exit-btn {
+  min-width: 92px;
+  height: 38px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.06);
+  color: #e7e7eb;
+  font-family: var(--font-main);
+  font-size: 0.86rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.unsaved-exit-btn--primary {
+  border-color: rgba(79, 127, 255, 0.72);
+  background: linear-gradient(180deg, rgba(67,115,245,0.92), rgba(54,96,216,0.92));
+  color: #f7f9ff;
+}
+
+.unsaved-exit-btn--ghost:hover {
+  background: rgba(255,255,255,0.12);
+}
+
+.unsaved-exit-btn--primary:hover {
+  filter: brightness(1.04);
+}
+
+
+/* HOTFIX-MODAL-HIDDEN-PRIORITY-2026-05-04 */
+.unsaved-exit-modal.hidden {
+  display: none !important;
+  pointer-events: none !important;
+}
+
+/* GLASS-AREAS-OVERRIDE-2026-05-04 */
+.app-shell {
+  position: relative !important;
+}
+
+.panel-left,
+.panel-right {
+  position: relative !important;
+  overflow: hidden !important;
+  isolation: isolate;
+  background: rgba(33, 33, 33, 0.28) !important;
+  backdrop-filter: blur(28px) saturate(150%) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(150%) !important;
+}
+
+.panel-left > *,
+.panel-right > * {
+  position: relative;
+  z-index: 2;
+}
+
+/* brilho leve no topo/esquerda, como transição entre painéis */
+.panel-left::before,
+.panel-right::before {
+  content: "";
+  position: absolute;
+  inset: -18% -20% auto -20%;
+  height: 42%;
+  pointer-events: none;
+  z-index: 1;
+  background:
+    radial-gradient(65% 85% at 35% 35%, rgba(182, 208, 255, 0.14), transparent 72%),
+    radial-gradient(50% 70% at 70% 20%, rgba(255, 255, 255, 0.08), transparent 76%);
+}
+
+/* área X esquerda inferior */
+.panel-left::after {
+  content: "";
+  position: absolute;
+  left: -12%;
+  right: -8%;
+  bottom: -18%;
+  height: 48%;
+  pointer-events: none;
+  z-index: 1;
+  background:
+    radial-gradient(52% 70% at 30% 42%, rgba(255, 171, 84, 0.16), transparent 74%),
+    radial-gradient(56% 76% at 68% 58%, rgba(124, 168, 255, 0.16), transparent 75%),
+    radial-gradient(38% 56% at 50% 84%, rgba(202, 169, 255, 0.14), transparent 78%);
+  filter: blur(2px);
+}
+
+/* área X direita central/inferior */
+.panel-right::after {
+  content: "";
+  position: absolute;
+  left: -10%;
+  right: -10%;
+  bottom: -16%;
+  height: 56%;
+  pointer-events: none;
+  z-index: 1;
+  background:
+    radial-gradient(54% 76% at 58% 38%, rgba(129, 196, 255, 0.17), transparent 74%),
+    radial-gradient(46% 66% at 46% 64%, rgba(255, 183, 120, 0.15), transparent 74%),
+    radial-gradient(44% 62% at 75% 80%, rgba(176, 142, 255, 0.12), transparent 78%);
+  filter: blur(2px);
+}
+
+/* bloco de conversas/arquivos também com sensação de vidro */
+.projects-list,
+.project-files-tree {
+  background: rgba(12, 14, 20, 0.36) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  backdrop-filter: blur(16px) saturate(135%) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(135%) !important;
+}
+
+/* GLASS-TRANSPARENCY-NOISE-2026-05-04 */
+html,
+body {
+  background: transparent !important;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.16;
+  background-image:
+    radial-gradient(circle at 20% 20%, rgba(255,255,255,0.09) 0.6px, transparent 0.7px),
+    radial-gradient(circle at 80% 40%, rgba(255,255,255,0.08) 0.6px, transparent 0.7px),
+    radial-gradient(circle at 40% 80%, rgba(255,255,255,0.07) 0.6px, transparent 0.7px);

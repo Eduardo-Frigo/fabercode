@@ -1,0 +1,95 @@
+.startup-preloader {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 4000 !important;
+  width: 100vw !important;
+  min-width: 100vw !important;
+  height: 100vh !important;
+  min-height: 100vh !important;
+  display: grid !important;
+  place-items: center !important;
+  background: #212121 !important;
+  opacity: 1;
+  visibility: visible;
+}
+
+.startup-preloader.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.startup-preloader__content {
+  width: min(360px, calc(100vw - 48px)) !important;
+  margin: auto !important;
+  display: grid !important;
+  place-items: center !important;
+  justify-items: center !important;
+  gap: 12px !important;
+}
+
+.startup-preloader__logo-wrap,
+.startup-preloader__logo-img {
+  display: block;
+  max-width: min(320px, calc(100vw - 64px));
+}
+
+.startup-preloader__logo-img {
+  width: 100%;
+  height: auto;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0);
+}
+
+.startup-preloader__logo-img.is-animating {
+  animation: faber-preloader-logo-once 1.25s cubic-bezier(0.19, 1, 0.22, 1) both;
+}
+
+.startup-preloader__bar {
+  width: 100% !important;
+  height: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.startup-preloader__bar span {
+  display: block;
+  width: 35%;
+  height: 100%;
+  border-radius: 999px;
+  background: #f0f0f0;
+  animation: faber-preloader-critical 1.1s ease-in-out infinite;
+}
+
+@keyframes faber-preloader-critical {
+  0% {
+    transform: translateX(-105%);
+  }
+  50% {
+    transform: translateX(95%);
+  }
+  100% {
+    transform: translateX(285%);
+  }
+}
+
+@keyframes faber-preloader-logo-once {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.965);
+    filter: blur(5px);
+  }
+  58% {
+    opacity: 1;
+    transform: translateY(0) scale(1.018);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
