@@ -15,13 +15,14 @@ Para GitHub, a ordem recomendada e:
 3. [Security Policy](../SECURITY.md)
 4. [Pentest defensivo e prompt injection](FABER_CODE_PENTEST_PROMPT_INJECTION_SEGURANCA_2026-06-01.md)
 5. [Refatoracao segura de arquitetura](FABER_CODE_ARQUITETURA_REFATORACAO_SEGURA_2026-06-01.md)
-6. [Forge MRP, liberdade de execucao e loop visual](FABER_CODE_FORGE_MRP_LOOP_AVANCOS_2026-06-02.md)
-7. [Handoff 2026-06-02, pausa por limite da API](FABER_CODE_HANDOFF_2026-06-02_API_LIMIT.md)
-8. [Stresstest Forge MRP, contratos flexiveis e validacao ponta a ponta](FABER_CODE_STRESSTEST_FORGE_MRP_CORRECOES_2026-06-01.md)
-9. [Avancos de documentacao publica e release prep](FABER_CODE_PUBLIC_RELEASE_PREP_AVANCOS_2026-06-01.md)
-10. [QA exaustivo e correcoes recentes](FABER_CODE_QA_EXAUSTIVO_CORRECOES_2026-05-30.md)
-11. [Handoff tecnico QA/Git/Preview/OAuth](FABER_CODE_QA_HANDOFF_TECNICO_2026-05-30.md)
-12. [Indice historico detalhado](FABER_CODE_DOCS_INDEX_2026-05-25.md)
+6. [Runtime agentic e humanizacao do chat](FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md)
+7. [Forge MRP, liberdade de execucao e loop visual](FABER_CODE_FORGE_MRP_LOOP_AVANCOS_2026-06-02.md)
+8. [Handoff 2026-06-02, pausa por limite da API](FABER_CODE_HANDOFF_2026-06-02_API_LIMIT.md)
+9. [Stresstest Forge MRP, contratos flexiveis e validacao ponta a ponta](FABER_CODE_STRESSTEST_FORGE_MRP_CORRECOES_2026-06-01.md)
+10. [Avancos de documentacao publica e release prep](FABER_CODE_PUBLIC_RELEASE_PREP_AVANCOS_2026-06-01.md)
+11. [QA exaustivo e correcoes recentes](FABER_CODE_QA_EXAUSTIVO_CORRECOES_2026-05-30.md)
+12. [Handoff tecnico QA/Git/Preview/OAuth](FABER_CODE_QA_HANDOFF_TECNICO_2026-05-30.md)
+13. [Indice historico detalhado](FABER_CODE_DOCS_INDEX_2026-05-25.md)
 
 ## Documentos publicos essenciais
 
@@ -29,6 +30,7 @@ Para GitHub, a ordem recomendada e:
 - [AUTOMATA_CONTRACTS.md](AUTOMATA_CONTRACTS.md): contratos Automata e ledger.
 - [FABER_CODE_PENTEST_PROMPT_INJECTION_SEGURANCA_2026-06-01.md](FABER_CODE_PENTEST_PROMPT_INJECTION_SEGURANCA_2026-06-01.md): pentest defensivo, prompt injection, hardening e E2E real com OpenAI.
 - [FABER_CODE_ARQUITETURA_REFATORACAO_SEGURA_2026-06-01.md](FABER_CODE_ARQUITETURA_REFATORACAO_SEGURA_2026-06-01.md): refatoracao modular protegida por testes e smoke visual.
+- [FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md](FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md): corte do fluxo `plano -> confirmacao` para um caminho mais agentic, com humanizacao do chat e autoexecucao quando houver tool calling compativel.
 - [FABER_CODE_FORGE_MRP_LOOP_AVANCOS_2026-06-02.md](FABER_CODE_FORGE_MRP_LOOP_AVANCOS_2026-06-02.md): rodada Forge MRP com contrato advisory, modo de fases, validacao contra conteudo instrucional e bloqueio atual por limite da API.
 - [FABER_CODE_HANDOFF_2026-06-02_API_LIMIT.md](FABER_CODE_HANDOFF_2026-06-02_API_LIMIT.md): handoff para retomar o reparo do Forge MRP quando a API voltar.
 - [FABER_CODE_STRESSTEST_FORGE_MRP_CORRECOES_2026-06-01.md](FABER_CODE_STRESSTEST_FORGE_MRP_CORRECOES_2026-06-01.md): stresstest Forge MRP, contratos flexiveis, preview/runtime, validacao visual operacional e evidencias.
@@ -49,6 +51,7 @@ Para GitHub, a ordem recomendada e:
 
 - [FABER_CODE_PENTEST_PROMPT_INJECTION_SEGURANCA_2026-06-01.md](FABER_CODE_PENTEST_PROMPT_INJECTION_SEGURANCA_2026-06-01.md)
 - [FABER_CODE_ARQUITETURA_REFATORACAO_SEGURA_2026-06-01.md](FABER_CODE_ARQUITETURA_REFATORACAO_SEGURA_2026-06-01.md)
+- [FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md](FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md)
 - [FABER_CODE_FORGE_MRP_LOOP_AVANCOS_2026-06-02.md](FABER_CODE_FORGE_MRP_LOOP_AVANCOS_2026-06-02.md)
 - [FABER_CODE_HANDOFF_2026-06-02_API_LIMIT.md](FABER_CODE_HANDOFF_2026-06-02_API_LIMIT.md)
 - [FABER_CODE_STRESSTEST_FORGE_MRP_CORRECOES_2026-06-01.md](FABER_CODE_STRESSTEST_FORGE_MRP_CORRECOES_2026-06-01.md)
@@ -62,6 +65,7 @@ Para GitHub, a ordem recomendada e:
 ### Produto, blueprints e orquestracao
 
 - [FABER_CODE_INTAKE_ROBUSTO_AVANCOS_2026-05-29.md](FABER_CODE_INTAKE_ROBUSTO_AVANCOS_2026-05-29.md)
+- [FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md](FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md)
 - [FABER_CODE_FORGE_MRP_LOOP_AVANCOS_2026-06-02.md](FABER_CODE_FORGE_MRP_LOOP_AVANCOS_2026-06-02.md)
 - [FABER_CODE_STRESSTEST_FORGE_MRP_CORRECOES_2026-06-01.md](FABER_CODE_STRESSTEST_FORGE_MRP_CORRECOES_2026-06-01.md)
 - [FABER_CODE_BRIEFING_BLUEPRINTS_2026-05-25.md](FABER_CODE_BRIEFING_BLUEPRINTS_2026-05-25.md)

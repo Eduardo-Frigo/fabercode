@@ -15,6 +15,7 @@ function createHarness(overrides = {}) {
   const flow = (overrides.flowFactory || createAssistantFlow)({
     appendAuditEvent: (type, payload) => calls.audit.push({ type, payload }),
     appendJobEvent: (jobId, type, payload) => calls.jobEvents.push({ jobId, type, payload }),
+    buildAgenticExecutionPlan: overrides.buildAgenticExecutionPlan || null,
     buildAiProviderFailureMessage: (provider, message) => `${provider} failed: ${message}`,
     buildConversationOnlyPlan: (message) => ({ ok: true, response: `chat:${message}`, action: null }),
     buildPlanWithCortexRuntime: overrides.buildPlanWithCortexRuntime || (async () => ({
@@ -38,6 +39,11 @@ function createHarness(overrides = {}) {
       calls.phases.push({ jobId, phase: phase || 'retry_pending', reason });
       return { ok: true, job: { retryState: { retryable: true } } };
     },
+    requestDirectPersonaChat: overrides.requestDirectPersonaChat || (async ({ routeDecision }) => ({
+      ok: true,
+      response: routeDecision && routeDecision.response ? routeDecision.response : 'Resposta direta do modelo.',
+      meta: { planner: 'direct_persona_chat', reason: 'direct_chat_response' },
+    })),
     requestPersonaRouteDecision: overrides.requestPersonaRouteDecision || (async () => ({
       ok: true,
       decision: 'execute',
@@ -84,12 +90,36 @@ function createHarness(overrides = {}) {
 async function run() {
   assert.strictEqual(typeof createPersonaOrchestrator, 'function');
 
-  const orchestratorHarness = createHarness({ flowFactory: createPersonaOrchestrator });
+  let directGreetingCalled = false;
+  let routerGreetingCalled = false;
+  const orchestratorHarness = createHarness({
+    flowFactory: createPersonaOrchestrator,
+    requestPersonaRouteDecision: async () => {
+      routerGreetingCalled = true;
+      return {
+        ok: true,
+        decision: 'chat',
+        response: 'router fallback',
+        meta: { planner: 'persona_router', reason: 'persona_chat' },
+      };
+    },
+    requestDirectPersonaChat: async () => {
+      directGreetingCalled = true;
+      return {
+        ok: true,
+        response: 'Oi. Estou aqui.',
+        meta: { planner: 'direct_persona_chat', reason: 'direct_chat_response' },
+      };
+    },
+  });
   const orchestratorChatPlan = await orchestratorHarness.flow.handleAssistantMessage({
     projectInfo: { id: 'project-1', rootPath: '/tmp/project' },
     userMessage: 'oi',
   });
   assert.strictEqual(orchestratorChatPlan.meta.noJob, true);
+  assert.strictEqual(orchestratorChatPlan.response, 'Oi. Estou aqui.');
+  assert.strictEqual(routerGreetingCalled, true);
+  assert.strictEqual(directGreetingCalled, true);
 
   const executeHarness = createHarness();
   const executePlan = await executeHarness.flow.handleAssistantMessage({
@@ -105,6 +135,28 @@ async function run() {
   assert.strictEqual(executePlan.routeDecision.decision, 'execute');
   assert.ok(executeHarness.calls.phases.some((entry) => entry.phase === 'persona_plan'));
   assert.ok(executeHarness.calls.phases.some((entry) => entry.phase === 'awaiting_user_confirmation'));
+
+  const agenticHarness = createHarness({
+    flowFactory: createPersonaOrchestrator,
+    buildAgenticExecutionPlan: async () => ({
+      ok: true,
+      response: 'Vou agir direto no projeto.',
+      action: { type: 'agentic_tool_loop', rootPath: '/tmp/project' },
+      meta: {
+        planner: 'agentic_tool_loop',
+        reason: 'agentic_tool_loop_ready',
+        autoExecute: true,
+      },
+    }),
+  });
+  const agenticPlan = await agenticHarness.flow.handleAssistantMessage({
+    projectInfo: { id: 'project-1', rootPath: '/tmp/project' },
+    userMessage: 'corrija o projeto',
+  });
+  assert.strictEqual(agenticPlan.ok, true);
+  assert.strictEqual(agenticPlan.action.type, 'agentic_tool_loop');
+  assert.ok(agenticHarness.calls.phases.some((entry) => entry.phase === 'execute_pending'));
+  assert.ok(!agenticHarness.calls.phases.some((entry) => entry.phase === 'awaiting_user_confirmation'));
 
   const activeMemory = {
     schemaVersion: 'active-memory-v1',
@@ -162,6 +214,7 @@ async function run() {
   assert.ok(activeMemoryHarness.calls.checkpoints.some((entry) => entry.key === 'active_memory'));
 
   let chatPersonaCalled = false;
+  let directChatCalled = false;
   const chatHarness = createHarness({
     requestPersonaRouteDecision: async () => {
       chatPersonaCalled = true;
@@ -172,6 +225,16 @@ async function run() {
         meta: { planner: 'persona_router', reason: 'persona_chat' },
       };
     },
+    requestDirectPersonaChat: async ({ userMessage, routeDecision }) => {
+      directChatCalled = true;
+      assert.strictEqual(userMessage, 'oi');
+      assert.strictEqual(routeDecision.decision, 'chat');
+      return {
+        ok: true,
+        response: 'Olá! Pode falar comigo direto.',
+        meta: { planner: 'direct_persona_chat', reason: 'direct_chat_response' },
+      };
+    },
   });
   const chatPlan = await chatHarness.flow.handleAssistantMessage({
     projectInfo: { id: 'project-1', rootPath: '/tmp/project' },
@@ -180,18 +243,10 @@ async function run() {
   assert.strictEqual(chatPlan.ok, true);
   assert.strictEqual(chatPlan.action, null);
   assert.strictEqual(chatPlan.meta.noJob, true);
-  assert.strictEqual(chatPlan.meta.reason, 'casual_greeting');
-  assert.strictEqual(chatPlan.response, 'Oi, tudo bem?');
-  assert.strictEqual(chatPersonaCalled, false);
-
-  const wellBeingPlan = await chatHarness.flow.handleAssistantMessage({
-    projectInfo: { id: 'project-1', rootPath: '/tmp/project' },
-    userMessage: 'Tudo bem?',
-  });
-  assert.strictEqual(wellBeingPlan.ok, true);
-  assert.strictEqual(wellBeingPlan.action, null);
-  assert.strictEqual(wellBeingPlan.meta.noJob, true);
-  assert.strictEqual(wellBeingPlan.response, 'Tudo bem, e voce?');
+  assert.strictEqual(chatPlan.meta.reason, 'persona_chat');
+  assert.strictEqual(chatPlan.response, 'Olá! Pode falar comigo direto.');
+  assert.strictEqual(chatPersonaCalled, true);
+  assert.strictEqual(directChatCalled, true);
 
   const failureHarness = createHarness({
     buildPlanWithCortexRuntime: async () => {

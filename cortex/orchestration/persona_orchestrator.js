@@ -12,37 +12,6 @@ function normalizePersonaMessageText(value = '') {
     .trim();
 }
 
-function isCasualLocalMessage(userMessage = '', attachments = []) {
-  if (Array.isArray(attachments) && attachments.length > 0) return false;
-  const normalized = normalizePersonaMessageText(userMessage);
-  if (!normalized || normalized.length > 48) return false;
-  return /^(oi|ola|hello|hi|e ai|bom dia|boa tarde|boa noite|tudo bem|opa)[.!? ]*$/.test(normalized);
-}
-
-function buildCasualLocalPlan(userMessage = '') {
-  if (!isCasualLocalMessage(userMessage)) return null;
-  const normalized = normalizePersonaMessageText(userMessage);
-  const response = /^tudo bem/.test(normalized)
-    ? 'Tudo bem, e voce?'
-    : /^bom dia/.test(normalized)
-      ? 'Bom dia, tudo bem?'
-      : /^boa tarde/.test(normalized)
-        ? 'Boa tarde, tudo bem?'
-        : /^boa noite/.test(normalized)
-          ? 'Boa noite, tudo bem?'
-          : 'Oi, tudo bem?';
-  return {
-    ok: true,
-    response,
-    action: null,
-    meta: {
-      planner: 'local_casual',
-      reason: 'casual_greeting',
-      noJob: true,
-    },
-  };
-}
-
 function hasExplicitAutomataContractIntent(userMessage = '') {
   const normalized = normalizePersonaMessageText(userMessage);
   if (!normalized) return false;
@@ -59,6 +28,7 @@ function createPersonaOrchestrator(dependencies = {}) {
     appendAuditEvent,
     appendJobEvent,
     appendMemoryEvidence = null,
+    buildAgenticExecutionPlan = null,
     buildAiProviderFailureMessage,
     buildConversationOnlyPlan,
     buildPlanWithCortexRuntime,
@@ -71,6 +41,7 @@ function createPersonaOrchestrator(dependencies = {}) {
     markJobPausedForMemory,
     markJobPhase,
     markJobRetryPending,
+    requestDirectPersonaChat = null,
     requestPersonaRouteDecision,
     resolveActiveMemoryContext = null,
     resolveProductRoute,
@@ -292,8 +263,37 @@ function createPersonaOrchestrator(dependencies = {}) {
     return enrichedRouteDecision;
   }
 
-  function buildAssistantRouteOnlyPlan(routeDecision, userMessage = '') {
+  async function buildNaturalRouteOnlyResponse(routeDecision, payload = {}, activeMemory = null) {
+    if (!routeDecision || routeDecision.decision === 'execute' || typeof requestDirectPersonaChat !== 'function') {
+      return routeDecision && routeDecision.response ? routeDecision.response : '';
+    }
+
+    try {
+      const result = await requestDirectPersonaChat({
+        projectInfo: payload.projectInfo || null,
+        userMessage: payload.userMessage || '',
+        attachments: payload.attachments || [],
+        contextHint: payload.contextHint || null,
+        conversationMessages: payload.conversationMessages || [],
+        activeMemory,
+        routeDecision,
+      });
+      const response = result && result.response ? String(result.response).trim() : '';
+      if (response) return response;
+    } catch (error) {
+      appendAuditEvent('assistant.direct_chat_failed', {
+        rootPath: payload.projectInfo && payload.projectInfo.rootPath ? payload.projectInfo.rootPath : null,
+        decision: routeDecision.decision,
+        message: clipText(error && error.message ? error.message : String(error || ''), 500),
+      });
+    }
+
+    return routeDecision.response || '';
+  }
+
+  async function buildAssistantRouteOnlyPlan(routeDecision, payload = {}, activeMemory = null) {
     assertReady();
+    const userMessage = payload && payload.userMessage ? payload.userMessage : '';
     if (!routeDecision || !routeDecision.ok) {
       const routeMeta = routeDecision && routeDecision.meta ? routeDecision.meta : {};
       return {
@@ -319,9 +319,13 @@ function createPersonaOrchestrator(dependencies = {}) {
 
     if (routeDecision.decision !== 'execute') {
       const routeMeta = routeDecision.meta || {};
+      const response =
+        (await buildNaturalRouteOnlyResponse(routeDecision, payload, activeMemory)) ||
+        routeDecision.response ||
+        buildConversationOnlyPlan(userMessage || '').response;
       return {
         ok: true,
-        response: routeDecision.response || buildConversationOnlyPlan(userMessage || '').response,
+        response,
         action: null,
         routeDecision,
         meta: {
@@ -470,13 +474,6 @@ function createPersonaOrchestrator(dependencies = {}) {
   async function buildAssistantPlanResponse(payload = {}) {
     assertReady();
     const { projectInfo, userMessage, attachments, contextHint, conversationMessages, jobId: requestedJobId } = payload || {};
-    const casualPlan = buildCasualLocalPlan(userMessage || '', attachments || []);
-    if (casualPlan) {
-      appendAuditEvent('assistant.local_casual_response', {
-        rootPath: projectInfo && projectInfo.rootPath ? projectInfo.rootPath : null,
-      });
-      return casualPlan;
-    }
     const activeMemory = await resolveRequestActiveMemory(payload, 'plan');
     const enrichedContextHint = enrichContextHintWithActiveMemory(contextHint, activeMemory);
     const routeFromContext =
@@ -497,7 +494,17 @@ function createPersonaOrchestrator(dependencies = {}) {
       });
     }
 
-    const routeOnlyPlan = buildAssistantRouteOnlyPlan(routeDecision, userMessage || '');
+    const routeOnlyPlan = await buildAssistantRouteOnlyPlan(
+      routeDecision,
+      {
+        projectInfo,
+        userMessage: userMessage || '',
+        attachments,
+        contextHint: enrichedContextHint,
+        conversationMessages,
+      },
+      activeMemory
+    );
     if (routeOnlyPlan) return routeOnlyPlan;
 
     let jobId = requestedJobId || null;
@@ -546,13 +553,26 @@ function createPersonaOrchestrator(dependencies = {}) {
 
     let plan = null;
     try {
-      plan = await buildPlanWithCortexRuntime(
-        projectInfo,
-        effectiveUserMessage,
-        attachments || [],
-        effectiveContextHint,
-        jobId
-      );
+      if (routeDecision && routeDecision.decision === 'execute' && typeof buildAgenticExecutionPlan === 'function') {
+        plan = await buildAgenticExecutionPlan({
+          projectInfo,
+          userMessage: effectiveUserMessage,
+          attachments: attachments || [],
+          contextHint: effectiveContextHint,
+          conversationMessages: conversationMessages || [],
+          routeDecision,
+          jobId,
+        });
+      }
+      if (!plan) {
+        plan = await buildPlanWithCortexRuntime(
+          projectInfo,
+          effectiveUserMessage,
+          attachments || [],
+          effectiveContextHint,
+          jobId
+        );
+      }
     } catch (error) {
       const provider = getSelectedAiProvider();
       const failure = normalizeProviderFailure(error, provider);
@@ -653,6 +673,7 @@ function createPersonaOrchestrator(dependencies = {}) {
 
       const plannerName = plan.meta && plan.meta.planner ? plan.meta.planner : null;
       const planReason = plan.meta && plan.meta.reason ? plan.meta.reason : null;
+      const autoExecute = Boolean(plan.meta && plan.meta.autoExecute);
       if (planReason === 'paused_memory_pressure') {
         markJobPausedForMemory(jobId, {
           runtime: plan.meta && plan.meta.runtime ? plan.meta.runtime : runtimeVersion,
@@ -666,9 +687,12 @@ function createPersonaOrchestrator(dependencies = {}) {
         if (retryMarked.ok && retryMarked.job && retryMarked.job.retryState && retryMarked.job.retryState.retryable === false) {
           markJobFailed(jobId, planReason, 'persona_retry_exhausted');
         }
-      } else if (plannerName === 'cortex_runtime') {
+      } else if (plannerName === 'cortex_runtime' || plannerName === 'agentic_tool_loop') {
         if (plan.action) {
-          markJobPhase(jobId, 'awaiting_user_confirmation');
+          markJobPhase(jobId, autoExecute ? 'execute_pending' : 'awaiting_user_confirmation', {
+            planner: plannerName,
+            autoExecute,
+          });
         } else {
           const reasonText = String(planReason || '');
           const hasAutomataContractSuggestion = Boolean(plan.automataContractSuggestion);
@@ -712,7 +736,7 @@ function createPersonaOrchestrator(dependencies = {}) {
           }
         }
       } else if (plannerName === 'persona_orchestrator') {
-        markJobPhase(jobId, plan.action ? 'awaiting_user_confirmation' : 'persona_done');
+        markJobPhase(jobId, plan.action ? (autoExecute ? 'execute_pending' : 'awaiting_user_confirmation') : 'persona_done');
       } else {
         appendJobEvent(jobId, 'job.plan_non_persona_route', {
           planner: plannerName || 'unknown',
@@ -730,9 +754,10 @@ function createPersonaOrchestrator(dependencies = {}) {
             markJobFailed(jobId, nonPersonaReason, 'persona_non_actionable_route');
           }
         } else {
-          markJobPhase(jobId, 'awaiting_user_confirmation', {
+          markJobPhase(jobId, autoExecute ? 'execute_pending' : 'awaiting_user_confirmation', {
             route: 'non_persona_with_action',
             planner: plannerName || 'unknown',
+            autoExecute,
           });
         }
       }
@@ -767,13 +792,6 @@ function createPersonaOrchestrator(dependencies = {}) {
   async function handleAssistantMessage(payload = {}) {
     assertReady();
     const { projectInfo, userMessage, attachments, contextHint, conversationMessages, jobId } = payload || {};
-    const casualPlan = buildCasualLocalPlan(userMessage || '', attachments || []);
-    if (casualPlan) {
-      appendAuditEvent('assistant.local_casual_response', {
-        rootPath: projectInfo && projectInfo.rootPath ? projectInfo.rootPath : null,
-      });
-      return casualPlan;
-    }
     const activeMemory = await resolveRequestActiveMemory(payload, 'message');
     const enrichedContextHint = enrichContextHintWithActiveMemory(contextHint, activeMemory);
     const routeDecision = await resolveAssistantRouteDecision({
@@ -784,7 +802,17 @@ function createPersonaOrchestrator(dependencies = {}) {
       conversationMessages: conversationMessages || [],
     });
 
-    const routeOnlyPlan = buildAssistantRouteOnlyPlan(routeDecision, userMessage || '');
+    const routeOnlyPlan = await buildAssistantRouteOnlyPlan(
+      routeDecision,
+      {
+        projectInfo,
+        userMessage: userMessage || '',
+        attachments,
+        contextHint: enrichedContextHint,
+        conversationMessages,
+      },
+      activeMemory
+    );
     if (routeOnlyPlan) return routeOnlyPlan;
 
     return buildAssistantPlanResponse({

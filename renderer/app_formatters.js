@@ -39,6 +39,7 @@
 
   function buildExecutionOutcomeAssistantMessage(result, action, qualityReport) {
     const isOk = Boolean(result && result.ok);
+    const isAgentic = Boolean(result && result.agentic);
     const blockedByValidation = Boolean(result && result.blockedByPostExecutionValidation);
     const blockedByEffect = Boolean(result && result.blockedByExecutionEffect);
     const modifiedFiles = Array.isArray(result && result.modifiedFiles) ? result.modifiedFiles : [];
@@ -49,6 +50,13 @@
     const del = Math.max(0, Number(totals.del || 0));
     const totalDelta = add + del;
     const effectOk = !blockedByEffect && (modifiedFiles.length > 0 || totalDelta > 0 || !blockedByValidation);
+
+    if (isAgentic) {
+      if (isOk) {
+        return String((result && result.message) || '').trim() || (modifiedFiles.length ? 'Concluído: apliquei a alteração no projeto.' : 'Concluído.');
+      }
+      return String((result && result.message) || '').trim() || 'Parei antes de concluir: preciso corrigir a causa mostrada no progresso da execução.';
+    }
 
     if (isOk && effectOk && errors === 0) {
       return modifiedFiles.length
@@ -72,7 +80,7 @@
   function shouldSuppressInterimAssistantPlanMessage(plan) {
     const response = String((plan && plan.response) || '').trim();
     if (/^\s*[{`]/.test(response) && /"decision"\s*:/i.test(response)) return true;
-    if (plan && plan.action) return true;
+    if (plan && plan.action && !(plan.meta && plan.meta.autoExecute)) return true;
   
     const reason = String((plan && plan.meta && plan.meta.reason) || '').toLowerCase();
     if (!reason) return false;
@@ -93,13 +101,7 @@
   function buildTerminalJobMessage(job) {
     if (!job) return null;
     if (job.status === 'completed') {
-      const completedEvent = Array.isArray(job.events)
-        ? job.events.find((event) => event && event.type === 'job.completed')
-        : null;
-      if (completedEvent && completedEvent.payload && completedEvent.payload.noFileChanges) {
-        return null;
-      }
-      return 'Processamento concluído com sucesso.';
+      return null;
     }
   
     if (job.status === 'cancelled') {

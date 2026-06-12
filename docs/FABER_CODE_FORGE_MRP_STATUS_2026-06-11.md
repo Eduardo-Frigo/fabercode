@@ -776,3 +776,37 @@ Impacto operacional:
 - Quem tiver clone antigo do repositorio precisara reclonar ou sincronizar com reset forte/manual, porque a `main` publicada foi substituida.
 - Links para commits antigos da `main` deixam de representar a linha publica principal do projeto.
 - O proximo trabalho deve continuar a partir desta nova baseline publica segura.
+
+## Atualizacao de runtime em 2026-06-12
+
+Nova rodada aplicada no repositorio do Faber Code, ainda sem corrigir manualmente o `THE FORGE`:
+
+- o chat foi ajustado para ficar menos preso a mensagem padrao de planejamento;
+- um novo loop `agentic_tool_loop` foi conectado ao runtime principal;
+- quando a rota do pedido e executavel e o modelo suporta tool calling, o fluxo agora pode seguir direto para execucao sem abrir card de confirmacao manual;
+- o renderer passou a preservar melhor a resposta real do modelo no fim da execucao, em vez de sempre converter tudo para uma frase de sucesso generica.
+
+Arquivos centrais desta rodada:
+
+- `main/services/agentic_tool_loop_service.js`
+- `main.js`
+- `cortex/orchestration/persona_orchestrator.js`
+- `renderer/app_actions.js`
+- `renderer/app_formatters.js`
+
+Validacoes executadas no Faber Code:
+
+- `node --check main.js`
+- `node --check cortex/orchestration/persona_orchestrator.js`
+- `node --check renderer/app_actions.js`
+- `node tests/agentic-tool-loop-service.test.js`
+- `node tests/assistant-flow.test.js`
+- `node tests/renderer-app-formatters.test.js`
+- `git diff --check`
+
+Leitura honesta do estado apos esse corte:
+
+- o Faber ficou mais proximo de um agente real no chat e no disparo de execucao;
+- isso aproxima o comportamento do que se espera de um runtime estilo OpenCode, sem trocar a interface do Faber;
+- porem o caminho agentic novo ainda precisa ser acoplado ao mesmo nivel de staging temporario, rollback e validacao operacional obrigatoria antes de ser considerado completo;
+- por isso, o `THE FORGE` continua sendo o teste correto para a proxima rodada, e nao deve ser corrigido manualmente neste ponto.

@@ -13,6 +13,7 @@ const { createCortexMemorySyncService } = require('./cortex/memory/cortex_memory
 const { createKnowledgeRuntimeService } = require('./cortex/memory/knowledge_runtime_service');
 const { createMemoryEmbeddingProviderService } = require('./cortex/memory/memory_embedding_provider_service');
 const { createPersonaOrchestrator } = require('./cortex/orchestration/persona_orchestrator');
+const { buildAgenticDevelopmentPlan } = require('./cortex/orchestration/agentic_development_plan_service');
 const { createAutomataContractLedgerService } = require('./cortex/orchestration/automata_contract_ledger_service');
 const { buildAcceptanceMatrixFromBriefing } = require('./cortex/orchestration/acceptance_matrix_service');
 const { createArtifactQualityService } = require('./cortex/orchestration/artifact_quality_service');
@@ -52,9 +53,17 @@ const {
   buildProviderFailureReason,
   normalizeProviderFailure,
 } = require('./cortex/providers/provider_failure_service');
-const { createRemoteProviderClients } = require('./cortex/providers/remote_clients');
+const {
+  createRemoteProviderClients,
+  extractOpenAiResponsesText,
+  resolveOpenAiBaseUrl,
+  shouldUseOpenAiResponsesApi,
+} = require('./cortex/providers/remote_clients');
 const { createRwkvProviderClient } = require('./cortex/providers/rwkv_client');
-const { createAiRuntimeSettingsService, normalizeAiProviderName } = require('./cortex/providers/runtime_settings');
+const {
+  createAiRuntimeSettingsService,
+  normalizeAiProviderName,
+} = require('./cortex/providers/runtime_settings');
 const { createAiRuntimeStatusService } = require('./cortex/providers/runtime_status');
 const { createAutomataTools } = require('./cortex/tools/automata_tools');
 const { createCapabilityTools } = require('./cortex/tools/capability_tools');
@@ -149,6 +158,7 @@ const {
   createProjectVerifiedExecutionService,
   shouldVerifyAction: shouldVerifyProjectAction,
 } = require('./main/services/project_verified_execution_service');
+const { createAgenticToolLoopService } = require('./main/services/agentic_tool_loop_service');
 const { createProjectVisualCaptureService } = require('./main/services/project_visual_capture_service');
 const { createProjectVisualValidationRuntimeService } = require('./main/services/project_visual_validation_runtime_service');
 const { createStackRegistryService } = require('./main/services/stack_registry_service');
@@ -1050,6 +1060,7 @@ const {
 const {
   buildCortexPromptContext,
   buildProjectEvolutionContext,
+  buildProjectGraphReport,
   buildProjectGraphContext,
   extractIntentTerms,
 } = projectContextService;
@@ -1567,10 +1578,7 @@ function normalizePersonaRouteDecision(rawRoute, userMessage = '') {
   return {
     ok: true,
     decision: schema.value.decision,
-    response:
-      schema.value.decision === 'execute'
-        ? buildFriendlyExecutionStartResponse(schema.value.executionMessage || userMessage)
-        : schema.value.response,
+    response: schema.value.response,
     executionMessage: sanitizeAssistantText(schema.value.executionMessage || userMessage, userMessage),
     confidence: schema.value.confidence,
     raw: rawRoute,
@@ -2004,6 +2012,145 @@ async function requestPersonaRouteDecision({
         providerFailure: failure,
         provider,
         activeMemory: activeMemorySummary,
+      },
+    };
+  }
+}
+
+async function requestDirectPersonaChat({
+  projectInfo,
+  userMessage = '',
+  attachments = [],
+  contextHint = null,
+  conversationMessages = [],
+  activeMemory = null,
+  routeDecision = null,
+} = {}) {
+  const provider = getSelectedAiProvider();
+  const status = await getAiRuntimeStatus().catch((error) => ({
+    ok: false,
+    provider,
+    reason: 'runtime_status_error',
+    message: error && error.message ? error.message : String(error || ''),
+  }));
+
+  if (!status || !status.ok || !status.ready) {
+    const failure = normalizeProviderFailure(
+      status && (status.message || status.reason) ? status.message || status.reason : 'provider_not_ready',
+      provider,
+      {
+        code: status && status.reason ? status.reason : 'provider_not_ready',
+        category: 'configuration',
+        retryable: false,
+        provider: status && status.provider ? status.provider : provider,
+        source: 'runtime_status',
+      }
+    );
+    return {
+      ok: false,
+      providerUnavailable: true,
+      provider,
+      response: buildAiProviderUnavailableMessage(status || {}),
+      providerFailure: failure,
+      meta: {
+        planner: 'direct_persona_chat',
+        reason: failure.code,
+        provider,
+      },
+    };
+  }
+
+  const timeoutMs = provider === 'rwkv' ? Math.min(AI_REQUEST_TIMEOUT_MS, 120000) : Math.min(AI_REQUEST_TIMEOUT_MS, 45000);
+  const projectSummary = projectInfo
+    ? {
+        rootPath: projectInfo.rootPath || null,
+        stacks: projectInfo.stacks || [],
+        totalFiles: projectInfo.totalFiles || 0,
+        sampleFiles: (projectInfo.files || []).slice(0, 14),
+      }
+    : null;
+  const routeMode = routeDecision && routeDecision.decision ? String(routeDecision.decision).trim() : 'chat';
+  const routeReason =
+    routeDecision && routeDecision.meta && routeDecision.meta.reason
+      ? String(routeDecision.meta.reason).trim()
+      : '';
+  const attachmentSummary = Array.isArray(attachments) && attachments.length
+    ? attachments.map((item) => `${item.name || 'anexo'} (${item.type || 'tipo desconhecido'})`).join(', ')
+    : 'nenhum';
+  const activeMemoryContext =
+    activeMemory && activeMemory.decision && (activeMemory.decision.routeContextText || activeMemory.decision.briefingContextText)
+      ? clipText(activeMemory.decision.routeContextText || activeMemory.decision.briefingContextText, 1600)
+      : '';
+
+  const systemPrompt = [
+    'Você é o Faber Code conversando diretamente com o usuário.',
+    'Responda como um assistente de desenvolvimento natural, claro e humano.',
+    'Não use templates de produto, slogans, CTA, "composição modular", nem listas de caminhos prontos.',
+    'Não diga que alterou arquivos, executou comandos ou validou o projeto se isso ainda não aconteceu.',
+    'Se faltar algo para continuar com segurança, faça no máximo uma pergunta direta.',
+    'Se a mensagem for conversa comum, responda normalmente.',
+    'Se o pedido for técnico mas a rota atual não liberou execução, explique em linguagem simples o que falta ou qual é o próximo passo.',
+    'Mantenha a resposta curta o bastante para caber bem no chat.',
+  ].join(' ');
+
+  const userPrompt = [
+    `Mensagem do usuário: ${String(userMessage || '').trim() || '[mensagem vazia]'}`,
+    `Rota atual: ${routeMode}${routeReason ? ` (${routeReason})` : ''}`,
+    projectSummary ? `Projeto aberto: ${JSON.stringify(projectSummary)}` : 'Projeto aberto: nenhum.',
+    `Anexos: ${attachmentSummary}`,
+    formatConversationMessagesForPrompt(conversationMessages),
+    activeMemoryContext
+      ? formatUntrustedPromptSection(
+          'Memoria ativa operacional',
+          activeMemoryContext,
+          'active_memory',
+          1600
+        )
+      : 'Memória ativa operacional: indisponível.',
+    contextHint
+      ? formatUntrustedJsonPromptSection('Contexto do runtime', contextHint, 'runtime_context', 1400)
+      : 'Contexto do runtime: nenhum.',
+  ].join('\n');
+
+  try {
+    const raw = await callPersonaProviderChat(
+      PERSONA_MODEL_BRAIN,
+      [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      timeoutMs,
+      { options: { num_predict: 900 } }
+    );
+    const response = sanitizeAssistantText(
+      raw,
+      routeDecision && routeDecision.response ? routeDecision.response : 'Estou aqui. Me diga o que você quer fazer.'
+    );
+    return {
+      ok: true,
+      response,
+      provider,
+      meta: {
+        planner: 'direct_persona_chat',
+        reason: routeReason || 'direct_chat_response',
+        provider,
+      },
+    };
+  } catch (error) {
+    const failure = normalizeProviderFailure(error, provider);
+    return {
+      ok: false,
+      providerUnavailable: true,
+      provider,
+      response:
+        routeDecision && routeDecision.response
+          ? routeDecision.response
+          : buildAiProviderFailureMessage(provider, failure),
+      providerFailure: failure,
+      meta: {
+        planner: 'direct_persona_chat',
+        reason: buildProviderFailureReason(failure, 'provider_error', provider),
+        provider,
       },
     };
   }
@@ -2500,6 +2647,136 @@ async function callAiProviderChat(model, messages, timeoutMs = AI_REQUEST_TIMEOU
 
 async function callPersonaProviderChat(model, messages, timeoutMs = AI_REQUEST_TIMEOUT_MS, requestOptions = {}) {
   return callAiProviderChat(model, messages, timeoutMs, requestOptions);
+}
+
+function buildAgenticOpenAiInput(conversationMessages = []) {
+  return (Array.isArray(conversationMessages) ? conversationMessages : [])
+    .map((message) => {
+      const role = String(message && message.role ? message.role : 'user').trim().toLowerCase();
+      const text = String(message && message.content ? message.content : '').trim();
+      if (!text) return null;
+      if (role === 'assistant') {
+        return {
+          role: 'assistant',
+          content: [{ type: 'output_text', text }],
+        };
+      }
+      return {
+        role: 'user',
+        content: [{ type: 'input_text', text }],
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildAgenticToolResultInput(toolResults = []) {
+  return (Array.isArray(toolResults) ? toolResults : [])
+    .map((item) => {
+      const callId = String(item && item.callId ? item.callId : '').trim();
+      if (!callId) return null;
+      return {
+        type: 'function_call_output',
+        call_id: callId,
+        output: typeof item.output === 'string' ? item.output : JSON.stringify(item.output || {}),
+      };
+    })
+    .filter(Boolean);
+}
+
+function parseAgenticToolCalls(responseData = {}) {
+  const output = Array.isArray(responseData && responseData.output) ? responseData.output : [];
+  return output
+    .filter((item) => item && item.type === 'function_call' && item.name)
+    .map((item) => {
+      const rawArguments = typeof item.arguments === 'string' ? item.arguments.trim() : '';
+      let input = {};
+      if (rawArguments) {
+        try {
+          input = JSON.parse(rawArguments);
+        } catch {
+          input = { rawArguments };
+        }
+      }
+      return {
+        id: item.id || item.call_id || '',
+        callId: item.call_id || item.id || '',
+        name: item.name,
+        input,
+      };
+    });
+}
+
+async function requestAgenticModelTurn({
+  previousResponseId = '',
+  systemPrompt = '',
+  conversationMessages = [],
+  toolResults = [],
+  tools = [],
+  timeoutMs = 90000,
+} = {}) {
+  const apiKey = String(getEffectiveOpenAiApiKey() || '').trim();
+  if (!apiKey) {
+    throw new Error('OpenAI api_key_missing: configure uma API key válida antes de usar o loop agentic.');
+  }
+
+  const effectiveModel = sanitizeOpenAiModelName(getEffectiveOpenAiModel() || '');
+  if (!effectiveModel) {
+    throw new Error('OpenAI model_unconfigured: configure um modelo válido antes de usar o loop agentic.');
+  }
+  if (!shouldUseOpenAiResponsesApi(effectiveModel)) {
+    throw new Error(`OpenAI model_unsupported_for_tools: o modelo ${effectiveModel} não suporta o loop agentic com tools.`);
+  }
+
+  const input = previousResponseId
+    ? buildAgenticToolResultInput(toolResults)
+    : buildAgenticOpenAiInput(conversationMessages);
+  if (!input.length) {
+    throw new Error('OpenAI agentic_empty_input: o loop agentic não recebeu contexto suficiente para continuar.');
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 90000));
+  const body = {
+    model: effectiveModel,
+    input,
+    instructions: String(systemPrompt || '').trim(),
+    tools: Array.isArray(tools) && tools.length ? tools : undefined,
+    tool_choice: 'auto',
+    store: false,
+    max_output_tokens: 4096,
+    reasoning: { effort: /\bcodex\b/i.test(effectiveModel) ? 'low' : 'minimal' },
+    text: { verbosity: /\bcodex\b/i.test(effectiveModel) ? 'medium' : 'low' },
+  };
+  if (previousResponseId) {
+    body.previous_response_id = String(previousResponseId);
+  }
+
+  try {
+    const response = await fetch(`${resolveOpenAiBaseUrl(OPENAI_API_BASE_URL)}/responses`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => '');
+      const clipped = String(errorBody || '').replace(/\s+/g, ' ').slice(0, 400);
+      throw new Error(`OpenAI HTTP ${response.status}${clipped ? `: ${clipped}` : ''}`);
+    }
+
+    const data = await response.json();
+    return {
+      responseId: data && data.id ? String(data.id) : '',
+      text: extractOpenAiResponsesText(data),
+      toolCalls: parseAgenticToolCalls(data),
+      raw: data,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function buildExecutionCommandFromAction(action) {
@@ -3297,6 +3574,12 @@ async function runCortexRenderRuntimePlan({ projectInfo, userMessage, attachment
   workGraph.productRouteDecision = productRuntimeContract.routeDecision || null;
   workGraph.workingBrief = productRuntimeContract.workingBrief || null;
   workGraph.buildModeRoute = productRuntimeContract.buildModeRoute || null;
+  workGraph.projectGraph = typeof buildProjectGraphReport === 'function'
+    ? buildProjectGraphReport(projectInfo, effectiveUserMessage, {
+        maxFiles: 18,
+        maxIssues: 16,
+      })
+    : null;
   checkpointCortexRuntime(jobId, workGraph, runtimeBudget, { stage: 'created' });
 
   const brainPass = createRenderPass({
@@ -3408,6 +3691,13 @@ async function runCortexRenderRuntimePlan({ projectInfo, userMessage, attachment
     userMessage: effectiveUserMessage,
     executionIntent,
     workingBrief: productRuntimeContract.workingBrief,
+  });
+  workGraph.agenticPlan = buildAgenticDevelopmentPlan({
+    userMessage: effectiveUserMessage,
+    executionIntent,
+    workingBrief: productRuntimeContract.workingBrief,
+    acceptanceMatrix: workGraph.acceptanceMatrix,
+    projectGraph: workGraph.projectGraph,
   });
   const artifactContext = buildArtifactQualityContextText({
     userMessage: effectiveUserMessage,
@@ -3922,6 +4212,7 @@ const getAiRuntimeStatus = aiRuntimeStatus.getStatus;
 
 let automataExecutorInstance = null;
 let faberCapabilityAdapterServiceInstance = null;
+let agenticToolLoopServiceInstance = null;
 let projectVerifiedExecutionServiceInstance = null;
 let toolRegistryInstance = null;
 const activeExecutionControllersByJobId = new Map();
@@ -4025,6 +4316,7 @@ function resetFaberCapabilityRuntime() {
     faberCapabilityAdapterServiceInstance.closeExternalMcpTransports();
   }
   faberCapabilityAdapterServiceInstance = null;
+  agenticToolLoopServiceInstance = null;
   toolRegistryInstance = null;
 }
 
@@ -4055,6 +4347,27 @@ function executeSearchTextAction(action) {
 
 function executeAction(action) {
   return getToolRegistry().execute('automata.execute_action', action);
+}
+
+function getAgenticToolLoopService() {
+  if (!agenticToolLoopServiceInstance) {
+    agenticToolLoopServiceInstance = createAgenticToolLoopService({
+      appendAuditEvent,
+      appendJobEvent,
+      executeCapability: (input) => getFaberCapabilityAdapterService().executeCapability(input),
+      executeTool: (name, input) => getToolRegistry().execute(name, input),
+      getEffectiveOpenAiModel,
+      getSelectedAiProvider,
+      requestModelTurn: requestAgenticModelTurn,
+      setJobCheckpoint,
+      shouldUseModel: shouldUseOpenAiResponsesApi,
+    });
+  }
+  return agenticToolLoopServiceInstance;
+}
+
+function buildAgenticExecutionPlan(payload = {}) {
+  return getAgenticToolLoopService().buildExecutionPlan(payload);
 }
 
 function getProjectVerifiedExecutionService() {
@@ -4174,6 +4487,7 @@ function getPersonaOrchestrator() {
       appendAuditEvent,
       appendJobEvent,
       appendMemoryEvidence,
+      buildAgenticExecutionPlan,
       buildAiProviderFailureMessage,
       buildConversationOnlyPlan,
       buildPlanWithCortexRuntime,
@@ -4186,6 +4500,7 @@ function getPersonaOrchestrator() {
       markJobPausedForMemory,
       markJobPhase,
       markJobRetryPending,
+      requestDirectPersonaChat,
       requestPersonaRouteDecision,
       resolveActiveMemoryContext,
       resolveProductRoute,
@@ -4498,6 +4813,57 @@ app.whenReady().then(() => {
       const autoRepairMaxPasses = Math.max(0, Math.min(5, Number.isFinite(Number(AUTO_REPAIR_MAX_PASSES)) ? Number(AUTO_REPAIR_MAX_PASSES) : 0));
       const originalUserMessage = initialAction && typeof initialAction.userMessage === 'string' ? initialAction.userMessage : '';
       const originalAttachments = initialAction && Array.isArray(initialAction.attachments) ? initialAction.attachments : [];
+
+      if (initialAction && initialAction.type === 'agentic_tool_loop') {
+        if (jobId) {
+          markJobPhase(jobId, 'execute_pending', {
+            mode: 'agentic_tool_loop',
+          });
+          appendJobEvent(jobId, 'job.agentic_execution_started', {
+            provider: getSelectedAiProvider(),
+            model: getEffectiveOpenAiModel(),
+          });
+        }
+        const agenticResult = await getAgenticToolLoopService().executeAction(initialAction, projectInfo, { jobId });
+        const refreshed = scanProject(rootPath);
+        const finalResult = {
+          ...agenticResult,
+          projectInfo: refreshed,
+          nextSteps: buildNextSteps(refreshed),
+        };
+
+        if (agenticResult && agenticResult.ok) {
+          if (jobId) {
+            setJobCheckpoint(jobId, 'execute_result', {
+              ok: true,
+              agentic: true,
+              modifiedFiles: Array.isArray(agenticResult.modifiedFiles) ? agenticResult.modifiedFiles : [],
+              toolRuns: Array.isArray(agenticResult.toolRuns) ? agenticResult.toolRuns.slice(0, 20) : [],
+            });
+            markJobCompleted(jobId, {
+              agentic: true,
+              modifiedFiles: Array.isArray(agenticResult.modifiedFiles) ? agenticResult.modifiedFiles : [],
+            });
+          }
+          appendAuditEvent('assistant.agentic_execute_success', {
+            rootPath,
+            jobId,
+            modifiedFiles: Array.isArray(agenticResult.modifiedFiles) ? agenticResult.modifiedFiles : [],
+            toolRuns: Array.isArray(agenticResult.toolRuns) ? agenticResult.toolRuns.length : 0,
+          });
+          return finalResult;
+        }
+
+        if (jobId) {
+          markJobFailed(jobId, agenticResult && agenticResult.message ? agenticResult.message : 'agentic_execute_failed', 'execute_failed');
+        }
+        appendAuditEvent('assistant.agentic_execute_failed', {
+          rootPath,
+          jobId,
+          message: agenticResult && agenticResult.message ? agenticResult.message : 'agentic_execute_failed',
+        });
+        return finalResult;
+      }
 
       let currentAction = initialAction;
       let currentProjectInfo = projectInfo;

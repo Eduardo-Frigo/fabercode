@@ -189,7 +189,29 @@ async function run() {
         editContextText: 'Memoria ativa de edicao: preservar arquitetura modular e arquivos existentes.',
       },
     },
-    workGraph: { brief: 'brief text', briefSpec: { pages: [] }, acceptanceCriteria: ['ok'] },
+    workGraph: {
+      brief: 'brief text',
+      briefSpec: { pages: [] },
+      acceptanceCriteria: ['ok'],
+      projectGraph: {
+        version: 1,
+        summary: { issues: 1, missingStoreMembers: 1 },
+        issues: [
+          {
+            id: 'missing_store_contract_member',
+            detail: 'app/page.tsx usa store.snapshot, mas src/store/mrp_store.ts nao declara snapshot.',
+          },
+        ],
+      },
+      agenticPlan: {
+        version: 1,
+        summary: 'Plano agentic de teste.',
+        stages: [
+          { id: 'observe_contracts', validation: ['project_graph_report'] },
+          { id: 'promote_only_if_verified', validation: ['verified_execution'] },
+        ],
+      },
+    },
     runtimeBudget: {
       maxOperationsPerPass: 10,
       maxPromptCharsPerPass: 5000,
@@ -210,6 +232,10 @@ async function run() {
   assert.strictEqual(providerCalls[0].options.options.num_predict, 900);
   assert.strictEqual(providerCalls[0].options.options.response_format.type, 'json_schema');
   assert.ok(providerCalls[0].messages[1].content.includes('brief text'));
+  assert.ok(providerCalls[0].messages[1].content.includes('project_graph_report'));
+  assert.ok(providerCalls[0].messages[1].content.includes('missing_store_contract_member'));
+  assert.ok(providerCalls[0].messages[1].content.includes('agentic_plan'));
+  assert.ok(providerCalls[0].messages[1].content.includes('observe_contracts'));
   assert.ok(providerCalls[0].messages[1].content.includes('mempalace core text'));
   assert.ok(providerCalls[0].messages[1].content.includes('attachment text'));
   assert.ok(providerCalls[0].messages[1].content.includes('Memoria ativa de edicao'));

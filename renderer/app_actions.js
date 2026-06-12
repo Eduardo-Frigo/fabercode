@@ -95,6 +95,90 @@
       if (!actionRoot || !projectRoot) return true;
       return actionRoot === projectRoot;
     }
+
+    async function executePendingAction() {
+      if (!state.pendingAction || !state.selectedProjectInfo) return;
+
+      updateStatus('Estou trabalhando no projeto.');
+      const pendingJobId =
+        (state.pendingAction && state.pendingAction.jobId ? state.pendingAction.jobId : null) ||
+        state.activeJobId ||
+        null;
+      if (pendingJobId) {
+        state.activeJobId = pendingJobId;
+        renderJobProgress({
+          id: pendingJobId,
+          status: 'running',
+          phase: 'execute_pending',
+          progress: { pct: 76 },
+          events: [],
+          attemptsByPhase: {},
+        });
+      }
+
+      const selectedProjectReady = await ensureSelectedProjectInfoReady({ forceRefresh: true });
+      if (!selectedProjectReady || !state.selectedProjectInfo) {
+        appendMessage('assistant', 'Não consegui atualizar o contexto desse projeto no disco antes de executar.');
+        updateStatus('Projeto indisponível para execução');
+        return;
+      }
+      if (!pendingActionMatchesSelectedProject(state.pendingAction, state.selectedProjectInfo)) {
+        appendMessage(
+          'assistant',
+          'Descartei a confirmação pendente porque ela pertencia a outro projeto. Gere a ação novamente no projeto selecionado antes de executar.',
+          { persistToConversation: false }
+        );
+        stopJobPolling();
+        state.activeJobId = null;
+        clearPending();
+        hideJobProgress();
+        updateStatus('Confirmação antiga descartada');
+        return;
+      }
+
+      const result = await api.executePlan(state.pendingAction, state.selectedProjectInfo);
+      if (state.activeJobId) {
+        pollJob(state.activeJobId);
+      }
+      if (!result.ok) {
+        if (result && result.projectInfo && result.projectInfo.rootPath) {
+          state.selectedProjectInfo = result.projectInfo;
+        }
+        state.lastQualityReport = result && result.qualityReport ? result.qualityReport : state.lastQualityReport;
+        if (projectFileTreeController) await projectFileTreeController.refresh();
+        const finalMessage = buildExecutionOutcomeAssistantMessage(result, state.pendingAction, state.lastQualityReport);
+        appendMessage('assistant', finalMessage || result.message || 'Falha ao executar ação.');
+        if (result && result.blockedByPostExecutionValidation) {
+          updateStatus('Validação técnica bloqueou conclusão; correção incremental necessária');
+        } else {
+          updateStatus('Falha na execução');
+        }
+        clearPending();
+        return;
+      }
+
+      if (result && result.projectInfo && result.projectInfo.rootPath) {
+        state.selectedProjectInfo = result.projectInfo;
+      }
+      state.nextSteps = result.nextSteps || state.nextSteps;
+      state.lastQualityReport = result && result.qualityReport ? result.qualityReport : null;
+      renderNextSteps();
+      if (projectFileTreeController) await projectFileTreeController.refresh();
+
+      const finalMessage = buildExecutionOutcomeAssistantMessage(result, state.pendingAction, state.lastQualityReport);
+
+      if (Array.isArray(result.modifiedFiles) && result.modifiedFiles.length) {
+        appendMessage('assistant', finalMessage || result.message || 'Concluído.');
+        appendChangeCard(state.pendingAction, result);
+        showChangeSummary(state.pendingAction, result);
+        showModificationAlert(`Arquivo modificado: ${result.modifiedFiles.join(', ')}`);
+        updateStatus('Alteração aplicada com sucesso');
+      } else {
+        appendMessage('assistant', finalMessage || result.message || 'Concluído.');
+        updateStatus('Ação concluída');
+      }
+      clearPending();
+    }
     
     async function onSend() {
       const userMessage = inputEl.value.trim();
@@ -180,7 +264,7 @@
         return;
       }
     
-      updateStatus('Conversando com a Persona para entender o pedido.');
+      updateStatus('Conversando com o modelo.');
       showPersonaThinkingIndicator();
       const stopLatestJobWatch = watchLatestProjectJob({
         projectId: state.selectedProjectId,
@@ -195,10 +279,10 @@
         renderAttachments();
         appendMessage(
           'assistant',
-          'Não iniciei execução. O fluxo atômico da Persona não está disponível nesta versão, então não posso decidir e planejar com segurança.',
+          'Não iniciei execução. O fluxo de assistente não está disponível nesta versão, então não posso decidir e planejar com segurança.',
           { persistToConversation: true }
         );
-        updateStatus('Persona indisponível.');
+        updateStatus('Assistente indisponível.');
         return;
       }
     
@@ -218,7 +302,7 @@
         renderAttachments();
         appendMessage(
           'assistant',
-          `A Persona não conseguiu decidir o próximo passo pelo provedor selecionado. Detalhe: ${
+          `A IA não conseguiu responder pelo provedor selecionado. Detalhe: ${
             error && error.message ? error.message : String(error || '')
           }`,
           { persistToConversation: true }
@@ -229,9 +313,6 @@
     
       hidePersonaThinkingIndicator();
       stopLatestJobWatch();
-      if (plan && plan.routeDecision && plan.routeDecision.decision !== 'execute' && plan.routeDecision.response) {
-        appendMessage('assistant', plan.routeDecision.response);
-      }
     
       state.attachments = [];
       renderAttachments();
@@ -254,7 +335,7 @@
         if (reason === 'cortex_briefing_clarification_needed') {
           updateStatus('Aguardando suas respostas para fechar o briefing.');
         } else if (reason === 'persona_clarification_needed') {
-          updateStatus('Aguardando alinhamento com a Persona.');
+          updateStatus('Aguardando sua resposta.');
         } else if (plan && plan.meta && plan.meta.providerError) {
           updateStatus('IA desconectada ou indisponível.');
         } else if (reason === 'conversation_only') {
@@ -273,6 +354,11 @@
       }
     
       if (plan && plan.ok && plan.action) {
+        if (plan.meta && plan.meta.autoExecute) {
+          state.pendingAction = plan.action;
+          await executePendingAction();
+          return;
+        }
         showPending(
           `Pronto para executar em uma área temporária. Só aplico no projeto se passar na validação real.`,
           plan.action
@@ -283,87 +369,7 @@
     }
     
     async function onConfirm() {
-      if (!state.pendingAction || !state.selectedProjectInfo) return;
-    
-      updateStatus('Estou corrigindo o erro.');
-      const pendingJobId =
-        (state.pendingAction && state.pendingAction.jobId ? state.pendingAction.jobId : null) ||
-        state.activeJobId ||
-        null;
-      if (pendingJobId) {
-        state.activeJobId = pendingJobId;
-        renderJobProgress({
-          id: pendingJobId,
-          status: 'running',
-          phase: 'execute_pending',
-          progress: { pct: 76 },
-          events: [],
-          attemptsByPhase: {},
-        });
-      }
-    
-      const selectedProjectReady = await ensureSelectedProjectInfoReady({ forceRefresh: true });
-      if (!selectedProjectReady || !state.selectedProjectInfo) {
-        appendMessage('assistant', 'Não consegui atualizar o contexto desse projeto no disco antes de executar.');
-        updateStatus('Projeto indisponível para execução');
-        return;
-      }
-      if (!pendingActionMatchesSelectedProject(state.pendingAction, state.selectedProjectInfo)) {
-        appendMessage(
-          'assistant',
-          'Descartei a confirmação pendente porque ela pertencia a outro projeto. Gere a ação novamente no projeto selecionado antes de executar.',
-          { persistToConversation: false }
-        );
-        stopJobPolling();
-        state.activeJobId = null;
-        clearPending();
-        hideJobProgress();
-        updateStatus('Confirmação antiga descartada');
-        return;
-      }
-    
-      const result = await api.executePlan(state.pendingAction, state.selectedProjectInfo);
-      if (state.activeJobId) {
-        pollJob(state.activeJobId);
-      }
-      if (!result.ok) {
-        if (result && result.projectInfo && result.projectInfo.rootPath) {
-          state.selectedProjectInfo = result.projectInfo;
-        }
-        state.lastQualityReport = result && result.qualityReport ? result.qualityReport : state.lastQualityReport;
-        if (projectFileTreeController) await projectFileTreeController.refresh();
-        const finalMessage = buildExecutionOutcomeAssistantMessage(result, state.pendingAction, state.lastQualityReport);
-        appendMessage('assistant', finalMessage || result.message || 'Falha ao executar ação.');
-        if (result && result.blockedByPostExecutionValidation) {
-          updateStatus('Validação técnica bloqueou conclusão; correção incremental necessária');
-        } else {
-          updateStatus('Falha na execução');
-        }
-        clearPending();
-        return;
-      }
-    
-      if (result && result.projectInfo && result.projectInfo.rootPath) {
-        state.selectedProjectInfo = result.projectInfo;
-      }
-      state.nextSteps = result.nextSteps || state.nextSteps;
-      state.lastQualityReport = result && result.qualityReport ? result.qualityReport : null;
-      renderNextSteps();
-      if (projectFileTreeController) await projectFileTreeController.refresh();
-    
-      const finalMessage = buildExecutionOutcomeAssistantMessage(result, state.pendingAction, state.lastQualityReport);
-    
-      if (Array.isArray(result.modifiedFiles) && result.modifiedFiles.length) {
-        appendMessage('assistant', finalMessage || result.message || 'Concluído.');
-        appendChangeCard(state.pendingAction, result);
-        showChangeSummary(state.pendingAction, result);
-        showModificationAlert(`Arquivo modificado: ${result.modifiedFiles.join(', ')}`);
-        updateStatus('Alteração aplicada com sucesso');
-      } else {
-        appendMessage('assistant', finalMessage || result.message || 'Concluído.');
-        updateStatus('Ação concluída');
-      }
-      clearPending();
+      await executePendingAction();
     }
     
     async function onCancel() {

@@ -797,6 +797,12 @@ function createCortexRenderPassService(dependencies = {}) {
       projectGraphContext
         ? wrapUntrusted('Grafo de imports/exports/tipos/chamadas e contratos relacionados', projectGraphContext, 'project_graph', 5200)
         : null,
+      workGraph && workGraph.projectGraph
+        ? wrapUntrusted('Relatorio estruturado do grafo do projeto', JSON.stringify(workGraph.projectGraph), 'project_graph_report', 4200)
+        : null,
+      workGraph && workGraph.agenticPlan
+        ? wrapUntrusted('Plano agentic de arquitetura e etapas verificaveis', JSON.stringify(workGraph.agenticPlan), 'agentic_plan', 4200)
+        : null,
       diagnosticsContext
         ? wrapUntrusted('Diagnostico tecnico anterior para correcao pontual', diagnosticsContext, 'diagnostics', 1800)
         : null,
@@ -835,6 +841,9 @@ function createCortexRenderPassService(dependencies = {}) {
       '- Não use arquivos genéricos de notas para simular conclusão; edite os artefatos reais do projeto.',
       `- Gere no máximo ${maxOps} operações neste pass.`,
       '- Quando já existirem arquivos no projeto, priorize edição incremental dos arquivos existentes antes de criar uma base nova.',
+      '- Antes de chamar uma API/hook/store/service existente, confirme no relatório do grafo se o membro/export realmente existe; se não existir, edite também o contrato correspondente ou use a API real disponível.',
+      '- Se o relatório do grafo apontar import relativo não resolvido, membro de store inexistente ou persistência incompleta, trate isso como causa raiz do patch atual.',
+      '- Use o plano agentic como ordem de raciocínio: observe contratos, ajuste contratos/tipos, entregue fatia vertical, valide e só então promova.',
       '- Nunca escreva .env, .env.local, .env.* com segredos, .ssh, private_context ou chaves privadas; quando precisar documentar variáveis, use somente .env.example.',
       initMode
         ? '- MODO INIT_PROJECT: você pode estruturar novos arquivos base do projeto conforme briefing.'
@@ -893,6 +902,12 @@ function createCortexRenderPassService(dependencies = {}) {
           : null,
         projectGraphContext
           ? wrapUntrusted('Grafo e contratos essenciais', projectGraphContext, 'project_graph', 2600)
+          : null,
+        workGraph && workGraph.projectGraph
+          ? wrapUntrusted('Relatorio estruturado essencial do grafo', JSON.stringify(workGraph.projectGraph), 'project_graph_report', 2400)
+          : null,
+        workGraph && workGraph.agenticPlan
+          ? wrapUntrusted('Plano agentic essencial', JSON.stringify(workGraph.agenticPlan), 'agentic_plan', 2200)
           : null,
         localDiagnosticsContext
           ? wrapUntrusted('Diagnostico local essencial', localDiagnosticsContext, 'local_diagnostics', 900)

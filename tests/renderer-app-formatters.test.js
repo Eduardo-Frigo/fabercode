@@ -24,6 +24,15 @@ assert.strictEqual(
   true
 );
 
+assert.strictEqual(
+  formatters.shouldSuppressInterimAssistantPlanMessage({
+    response: 'Certo. Vou mexer nisso agora e volto com resultado real.',
+    action: { type: 'agentic_tool_loop' },
+    meta: { reason: 'agentic_tool_loop_ready', autoExecute: true },
+  }),
+  false
+);
+
 const successMessage = formatters.buildExecutionOutcomeAssistantMessage(
   {
     ok: true,
@@ -49,5 +58,18 @@ const blockedMessage = formatters.buildExecutionOutcomeAssistantMessage(
 );
 
 assert.strictEqual(blockedMessage, 'Parei antes de concluir: a validação real encontrou um problema e o projeto foi preservado.');
+
+const agenticMessage = formatters.buildExecutionOutcomeAssistantMessage(
+  {
+    ok: true,
+    agentic: true,
+    modifiedFiles: ['app/page.tsx'],
+    message: 'Consertei o fluxo do chat e já deixei a execução automática ligada.',
+  },
+  {},
+  null
+);
+
+assert.strictEqual(agenticMessage, 'Consertei o fluxo do chat e já deixei a execução automática ligada.');
 
 console.log('renderer-app-formatters.test.js: ok');
