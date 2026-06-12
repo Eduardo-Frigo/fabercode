@@ -718,3 +718,61 @@ Decisao de encerramento deste contexto:
 
 - A autorizacao explicita para commitar foi recebida em 2026-06-12.
 - Este documento registra o ponto exato antes do commit: runtime/orquestracao melhorados, smoke real de cancelamento aprovado, `THE FORGE` preservado como evidencia e reparo funcional completo ainda pendente para o proximo loop.
+
+## Reescrita de historico publico em 2026-06-12
+
+Objetivo desta etapa:
+
+- Auditar o historico publicado no GitHub para decidir se bastava corrigir o estado atual ou se era melhor remover o historico antigo.
+- Garantir que a area publica do repositorio ficasse reduzida ao snapshot seguro atual, sem commits antigos com caminhos locais absolutos ou `package-lock` historico vulneravel.
+
+Auditoria executada antes da decisao:
+
+- `git fetch origin main` para auditar exatamente o que estava publicado.
+- Scan do historico inteiro de `origin/main` por:
+  - chaves OpenAI, Google, GitHub, AWS, Slack, Vercel;
+  - blocos de chave privada;
+  - `.env` versionado;
+  - caminhos absolutos locais e outros sinais de public safety.
+- Auditoria de snapshots historicos de `package-lock.json` com `npm audit --package-lock-only --json`.
+
+Conclusao da auditoria:
+
+- Nao foram encontrados segredos reais no historico publicado:
+  - nenhum `.env` real rastreado;
+  - nenhuma API key ou token real nos pads conhecidos;
+  - nenhuma chave privada versionada.
+- Foram encontrados dois tipos de risco historico:
+  - caminhos absolutos locais em documentacao e um fixture de teste;
+  - snapshots antigos de `package-lock.json` com vulnerabilidades conhecidas, primeiro em cadeias antigas de `electron/electron-builder/tar/tmp` e depois em `tmp < 0.2.6`.
+- O estado atual ja estava seguro:
+  - `npm audit`: `0 vulnerabilities`;
+  - `npm run audit:public`: passou.
+
+Decisao tomada:
+
+- Mesmo sem vazamento de segredo real, foi aprovada a reescrita de historico para reduzir a superficie publica do repositorio.
+- Em vez de reescrever commits um a um, foi criada uma nova raiz publica contendo apenas o snapshot seguro atual.
+
+Procedimento executado:
+
+- Backup local preservado em `backup/pre-public-history-rewrite-2026-06-12`.
+- Branch orfa criada para gerar a nova raiz publica.
+- Snapshot seguro restaurado a partir do backup local.
+- Novo commit raiz criado:
+  - `e9d3f3f5b07878825aa8c044af6b906ed55be270`
+  - `Create sanitized public history baseline`
+- `main` local foi reposicionada para essa nova raiz.
+- `git push --force-with-lease origin main` substituiu o historico antigo no GitHub.
+
+Estado apos a reescrita:
+
+- `origin/main` agora aponta para `e9d3f3f5b07878825aa8c044af6b906ed55be270`.
+- A branch publica passou a ter um unico commit de baseline seguro.
+- O historico antigo permanece somente no backup local, fora da linha publica principal.
+
+Impacto operacional:
+
+- Quem tiver clone antigo do repositorio precisara reclonar ou sincronizar com reset forte/manual, porque a `main` publicada foi substituida.
+- Links para commits antigos da `main` deixam de representar a linha publica principal do projeto.
+- O proximo trabalho deve continuar a partir desta nova baseline publica segura.
