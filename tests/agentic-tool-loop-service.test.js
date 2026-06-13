@@ -88,6 +88,46 @@ async function run() {
   assert.ok(checkpoints.some((entry) => entry.key === 'agentic_loop'));
   assert.ok(events.some((entry) => entry.type === 'job.agentic_tool_called'));
 
+  // Test case for agentic_no_file_changes blocker
+  const failingService = createAgenticToolLoopService({
+    appendJobEvent: () => {},
+    executeCapability: async () => ({ ok: true }),
+    executeTool: async () => ({ ok: true }),
+    getEffectiveOpenAiModel: () => 'gpt-5-codex',
+    getSelectedAiProvider: () => 'openai',
+    requestModelTurn: async () => {
+      return {
+        responseId: 'resp_blocked_1',
+        text: 'Não alterei nada pois o projeto já está correto.',
+        toolCalls: [],
+      };
+    },
+    setJobCheckpoint: () => {},
+    shouldUseModel: () => true,
+  });
+
+  const blockedResult = await failingService.executeAction(
+    {
+      type: 'agentic_tool_loop',
+      userMessage: 'criar arquivo de teste',
+      attachments: [],
+      conversationMessages: [],
+      routeDecision: {
+        productRoute: {
+          capability: 'create_project',
+          executionIntent: 'init_project',
+        },
+      },
+      jobId: 'job-blocked-1',
+    },
+    { id: 'project-1', rootPath: '/tmp/project' },
+    { jobId: 'job-blocked-1' }
+  );
+
+  assert.strictEqual(blockedResult.ok, false);
+  assert.strictEqual(blockedResult.status, 'blocked');
+  assert.deepStrictEqual(blockedResult.errors, ['agentic_no_file_changes']);
+
   console.log('agentic-tool-loop-service.test.js: ok');
 }
 

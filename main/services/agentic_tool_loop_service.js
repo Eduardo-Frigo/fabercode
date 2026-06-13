@@ -4,6 +4,19 @@ function defaultClipText(value = '', maxChars = 12000) {
   return `${text.slice(0, Math.max(0, maxChars - 3))}...`;
 }
 
+function actionRequiresFileChanges(action = {}) {
+  const route = action.routeDecision || {};
+  const productRoute = route.productRoute || {};
+  const text = `${action.userMessage || ''} ${route.executionMessage || ''}`.toLowerCase();
+  return (
+    productRoute.capability === 'create_project' ||
+    productRoute.executionIntent === 'init_project' ||
+    productRoute.capability === 'edit_project' ||
+    productRoute.executionIntent === 'edit_project' ||
+    /\b(criar|crie|gerar|gere|implementar|implemente|arquivos|projeto|app|site|escrever|alterar|altere|modificar|modifique|adicionar|adicione)\b/.test(text)
+  );
+}
+
 function createAgenticToolLoopService(dependencies = {}) {
   const {
     appendAuditEvent = () => {},
@@ -474,6 +487,18 @@ function createAgenticToolLoopService(dependencies = {}) {
       const toolCalls = Array.isArray(turn && turn.toolCalls) ? turn.toolCalls : [];
       if (!toolCalls.length) {
         const finalMessage = allTextParts.filter(Boolean).join('\n\n').trim();
+        const requiresFileChanges = actionRequiresFileChanges(action);
+        if (requiresFileChanges && modifiedFiles.size === 0) {
+          return {
+            ok: false,
+            agentic: true,
+            status: 'blocked',
+            message: 'A execução terminou sem criar ou alterar arquivos no projeto.',
+            errors: ['agentic_no_file_changes'],
+            modifiedFiles: [],
+            toolRuns,
+          };
+        }
         return {
           ok: true,
           agentic: true,

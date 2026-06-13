@@ -20,7 +20,7 @@ O dialogo anexado confirma o cenario: depois de um briefing de criacao complexo,
 
 ### 1. Preferencia indevida por agentic loop antes do pipeline de blueprint
 
-Arquivo: `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/cortex/orchestration/persona_orchestrator.js`
+Arquivo: cortex/orchestration/persona_orchestrator.js
 
 Trecho relevante:
 
@@ -34,7 +34,7 @@ Impacto:
 
 ### 2. Agentic loop aceita "sucesso" sem arquivos modificados
 
-Arquivo: `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/main/services/agentic_tool_loop_service.js`
+Arquivo: main/services/agentic_tool_loop_service.js
 
 Trecho relevante:
 
@@ -47,7 +47,7 @@ Nao existe validacao de obrigatoriedade de artefatos. Para um pedido de criacao,
 
 ### 3. `assistant:execute` marca agentic como concluido sem checar diffs
 
-Arquivo: `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/main.js`
+Arquivo: main.js
 
 Trecho relevante:
 
@@ -68,14 +68,14 @@ Impacto direto nos prints anexados:
 
 ### 4. Tool de escrita existe, mas nao e usada como contrato obrigatorio
 
-Arquivo: `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/main/services/agentic_tool_loop_service.js`
+Arquivo: main/services/agentic_tool_loop_service.js
 
 Trecho relevante:
 
 - linhas 129-150: `write_file` chama `automata.execute_operation_batch`.
 - linhas 153-185: `write_files_batch` tambem chama `automata.execute_operation_batch`.
 
-Arquivo: `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/cortex/automata/core/executor.js`
+Arquivo: cortex/automata/core/executor.js
 
 Trecho relevante:
 
@@ -89,7 +89,7 @@ Conclusao:
 
 ### 5. O pipeline de blueprint para criacao ainda existe, mas ficou atras do agentic loop
 
-Arquivo: `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/main.js`
+Arquivo: main.js
 
 Trecho relevante:
 
@@ -101,7 +101,7 @@ Esse caminho e mais seguro para criacao inicial porque gera operacoes concretas 
 
 ## Evidencias no dialogo anexado
 
-Arquivo anexado: `/Users/eduardofrigo/.codex/attachments/cbd3327d-d50d-4eac-b4ac-11734526e4c2/pasted-text.txt`
+Arquivo anexado: .codex/attachments/cbd3327d-d50d-4eac-b4ac-11734526e4c2/pasted-text.txt
 
 Pontos importantes:
 
@@ -119,7 +119,7 @@ O objetivo nao e copiar UX/UI. As ideias uteis sao de runtime.
 
 ### 1. Tool calls como partes persistidas da sessao
 
-Arquivo: `/Users/eduardofrigo/Desktop/opencode-dev/packages/opencode/src/session/processor.ts`
+Arquivo: opencode-dev/packages/opencode/src/session/processor.ts
 
 - linhas 326-335: cada tool call vira uma parte `type: "tool"` com `state: pending`.
 - linhas 350-368: resultado da tool e normalizado como output/metadata.
@@ -130,12 +130,12 @@ Aplicacao no Faber:
 
 ### 2. Escrita com diff, permissao e evidencia
 
-Arquivo: `/Users/eduardofrigo/Desktop/opencode-dev/packages/opencode/src/tool/write.ts`
+Arquivo: opencode-dev/packages/opencode/src/tool/write.ts
 
 - linhas 53-62: calcula diff e pede permissao `edit`.
 - linhas 64-72: escreve arquivo e publica evento de arquivo editado.
 
-Arquivo: `/Users/eduardofrigo/Desktop/opencode-dev/packages/opencode/src/tool/edit.ts`
+Arquivo: opencode-dev/packages/opencode/src/tool/edit.ts
 
 - linhas 175-186: calcula `additions`, `deletions` e `filediff`.
 - linhas 188-194: injeta diff em metadata da tool.
@@ -147,12 +147,12 @@ Aplicacao no Faber:
 
 ### 3. Snapshot/diff de sessao como fonte de verdade
 
-Arquivo: `/Users/eduardofrigo/Desktop/opencode-dev/packages/opencode/src/session/processor.ts`
+Arquivo: opencode-dev/packages/opencode/src/session/processor.ts
 
 - linhas 676-690: captura snapshot no inicio do step.
 - linhas 693-742: captura snapshot no fim e adiciona parte `patch` se houve arquivos alterados.
 
-Arquivo: `/Users/eduardofrigo/Desktop/opencode-dev/packages/opencode/src/session/summary.ts`
+Arquivo: opencode-dev/packages/opencode/src/session/summary.ts
 
 - linhas 82-99: computa diff entre snapshot inicial/final.
 - linhas 124-126: salva diffs no summary da mensagem.

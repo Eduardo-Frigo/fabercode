@@ -198,6 +198,9 @@
     if (/^cortex_briefing_error\b/i.test(text)) {
       return 'Falha ao consolidar o briefing técnico do Cortex';
     }
+    if (/^agentic_no_file_changes\b/i.test(text)) {
+      return 'A execução terminou sem criar ou alterar arquivos no projeto';
+    }
     const normalized = text
       .replace(/^cortex_[a-z0-9_]+:?/i, '')
       .replace(/^persona_[a-z0-9_]+:?/i, '')

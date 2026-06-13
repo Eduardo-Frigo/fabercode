@@ -23,6 +23,14 @@ function hasExplicitAutomataContractIntent(userMessage = '') {
   );
 }
 
+function shouldPreferCortexRuntimeForRoute(routeDecision) {
+  const productRoute = routeDecision && routeDecision.productRoute ? routeDecision.productRoute : {};
+  return (
+    productRoute.capability === 'create_project' ||
+    productRoute.executionIntent === 'init_project'
+  );
+}
+
 function createPersonaOrchestrator(dependencies = {}) {
   const {
     appendAuditEvent,
@@ -553,7 +561,12 @@ function createPersonaOrchestrator(dependencies = {}) {
 
     let plan = null;
     try {
-      if (routeDecision && routeDecision.decision === 'execute' && typeof buildAgenticExecutionPlan === 'function') {
+      if (
+        routeDecision &&
+        routeDecision.decision === 'execute' &&
+        typeof buildAgenticExecutionPlan === 'function' &&
+        !shouldPreferCortexRuntimeForRoute(routeDecision)
+      ) {
         plan = await buildAgenticExecutionPlan({
           projectInfo,
           userMessage: effectiveUserMessage,

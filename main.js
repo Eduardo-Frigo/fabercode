@@ -2850,6 +2850,19 @@ function parseChatCompletionToolCalls(message = {}) {
     });
 }
 
+function actionRequiresMaterialChange(action = {}) {
+  const route = action.routeDecision || {};
+  const productRoute = route.productRoute || {};
+  const text = `${action.userMessage || ''} ${route.executionMessage || ''}`.toLowerCase();
+  return (
+    productRoute.capability === 'create_project' ||
+    productRoute.executionIntent === 'init_project' ||
+    productRoute.capability === 'edit_project' ||
+    productRoute.executionIntent === 'edit_project' ||
+    /\b(criar|crie|gerar|gere|implementar|implemente|arquivos|projeto|app|site|escrever|alterar|altere|modificar|modifique|adicionar|adicione)\b/.test(text)
+  );
+}
+
 async function requestAgenticModelTurn({
   previousResponseId = '',
   systemPrompt = '',
@@ -5022,22 +5035,43 @@ app.whenReady().then(() => {
         };
 
         if (agenticResult && agenticResult.ok) {
+          const requiresMaterialChange = actionRequiresMaterialChange(initialAction);
+          const changedFiles = Array.isArray(agenticResult.modifiedFiles) ? agenticResult.modifiedFiles : [];
+          if (requiresMaterialChange && changedFiles.length === 0) {
+            const blocked = {
+              ...finalResult,
+              ok: false,
+              status: 'blocked',
+              message: 'A execução terminou sem criar ou alterar arquivos.',
+              errors: ['agentic_no_file_changes'],
+            };
+            if (jobId) {
+              markJobFailed(jobId, 'agentic_no_file_changes', 'execute_validation');
+            }
+            appendAuditEvent('assistant.agentic_execute_failed', {
+              rootPath,
+              jobId,
+              message: 'agentic_no_file_changes',
+            });
+            return blocked;
+          }
+
           if (jobId) {
             setJobCheckpoint(jobId, 'execute_result', {
               ok: true,
               agentic: true,
-              modifiedFiles: Array.isArray(agenticResult.modifiedFiles) ? agenticResult.modifiedFiles : [],
+              modifiedFiles: changedFiles,
               toolRuns: Array.isArray(agenticResult.toolRuns) ? agenticResult.toolRuns.slice(0, 20) : [],
             });
             markJobCompleted(jobId, {
               agentic: true,
-              modifiedFiles: Array.isArray(agenticResult.modifiedFiles) ? agenticResult.modifiedFiles : [],
+              modifiedFiles: changedFiles,
             });
           }
           appendAuditEvent('assistant.agentic_execute_success', {
             rootPath,
             jobId,
-            modifiedFiles: Array.isArray(agenticResult.modifiedFiles) ? agenticResult.modifiedFiles : [],
+            modifiedFiles: changedFiles,
             toolRuns: Array.isArray(agenticResult.toolRuns) ? agenticResult.toolRuns.length : 0,
           });
           return finalResult;

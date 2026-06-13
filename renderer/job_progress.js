@@ -54,6 +54,9 @@
       if (/^cortex_patchfirst_guardrail\b/i.test(text)) {
         return 'Guardrail patch-first bloqueou uma tentativa de recriar o projeto durante edição incremental';
       }
+      if (/^agentic_no_file_changes\b/i.test(text)) {
+        return 'A execução terminou sem criar ou alterar arquivos no projeto';
+      }
       const normalized = text
         .replace(/^cortex_[a-z0-9_]+:?/i, '')
         .replace(/^persona_[a-z0-9_]+:?/i, '')
