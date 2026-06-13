@@ -38,10 +38,12 @@ async function run() {
   assert.strictEqual(legalDefaultPrompt.includes('veterinária'), false);
 
   const clarification = buildCortexBriefingClarificationResponse('criar site', 1, ['Pergunta A?', 'Pergunta B?']);
-  assert.ok(clarification.includes('Estamos quase lá'));
-  assert.ok(clarification.includes('Escolha um caminho curto'));
-  assert.ok(clarification.includes('Ponto principal se quiser detalhar: Pergunta A?'));
-  assert.ok(clarification.includes('composição modular'));
+  assert.ok(clarification.includes('Ainda falta uma decisão'));
+  assert.ok(clarification.includes('Pergunta A?'));
+  assert.ok(clarification.includes('Pode responder do seu jeito'));
+  assert.strictEqual(clarification.includes('Escolha um caminho curto'), false);
+  assert.strictEqual(clarification.includes('composição modular'), false);
+  assert.strictEqual(clarification.includes('CTA principal'), false);
   assert.strictEqual(clarification.includes('padrão institucional premium'), false);
 
   assert.strictEqual(

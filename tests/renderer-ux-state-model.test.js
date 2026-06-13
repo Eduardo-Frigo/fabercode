@@ -235,4 +235,20 @@ assert.strictEqual(completed.progressPct, 100);
 assert.ok(completed.finalSummaryLines.some((line) => /Resultado: execução concluída/.test(line)));
 assert.ok(Array.isArray(completed.finalDetailLines));
 
+const completedWithoutExecution = model.buildJobProgressPresentation({
+  status: 'completed',
+  phase: 'done',
+  events: [{ type: 'job.completed', payload: { reason: 'conversation_only', noFileChanges: true } }],
+});
+assert.strictEqual(completedWithoutExecution.title, 'Resposta concluída');
+assert.strictEqual(completedWithoutExecution.statusLabel, 'Sem execução');
+assert.strictEqual(completedWithoutExecution.tone, 'info');
+assert.strictEqual(completedWithoutExecution.transientStatus, 'Resposta concluída sem alterar arquivos.');
+assert.ok(
+  completedWithoutExecution.finalSummaryLines.some((line) => /Resultado: análise concluída sem execução/.test(line))
+);
+assert.ok(
+  completedWithoutExecution.detailText.includes('Concluí esta rodada como resposta contextual, sem alterar arquivos.')
+);
+
 console.log('renderer-ux-state-model.test.js: ok');

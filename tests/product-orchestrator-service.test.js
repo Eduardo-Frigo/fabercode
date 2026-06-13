@@ -185,6 +185,87 @@ async function run() {
   assert.strictEqual(emptyProjectBriefingContinuation.workingBrief.product.domain, 'gardening');
   assert.strictEqual(emptyProjectBriefingContinuation.meta.routeScore.requiresClarification, false);
 
+  const stackChoiceContinuation = await service.resolveProductRoute({
+    projectInfo: createProjectInfo(),
+    userMessage: 'Quero manter o Next.js com App Router.',
+    conversationMessages: [
+      {
+        role: 'user',
+        text: [
+          'Quero criar uma aplicação colaborativa estilo editor em tempo real.',
+          'Preciso de documentos, presença online, comentários, histórico versionado, autenticação, permissões, organizações e convites.',
+          'Os módulos principais são editor colaborativo, árvore de páginas, painel administrativo, billing, gestão de usuários e auditoria.',
+          'Quero persistência em banco relacional, regras críticas para conflitos de edição, autosave, permissões por papel e trilha de auditoria.',
+          'Os fluxos operáveis precisam cobrir criar workspace, convidar equipe, editar documento, comentar, publicar e restaurar versão anterior.',
+          'Também quero validações e testes esperados para colaboração, integridade de permissões, build, smoke e estabilidade do editor.',
+        ].join(' '),
+      },
+      {
+        role: 'assistant',
+        text: 'Perfeito. Antes de gerar, quero confirmar a stack: seguimos com Next.js ou você prefere React + Vite?',
+      },
+    ],
+  });
+  assert.strictEqual(stackChoiceContinuation.decision, 'execute');
+  assert.strictEqual(stackChoiceContinuation.productRoute.capability, 'create_project');
+  assert.strictEqual(stackChoiceContinuation.productRoute.executionIntent, 'init_project');
+  assert.strictEqual(stackChoiceContinuation.meta.routeScore.requiresClarification, false);
+  assert.match(stackChoiceContinuation.executionMessage, /colaborativ|editor|document/i);
+
+  const directStackChoiceContinuation = await service.resolveProductRoute({
+    projectInfo: createProjectInfo(),
+    userMessage: 'usa o React com Vite',
+    conversationMessages: [
+      {
+        role: 'user',
+        text: [
+          'Quero criar uma aplicação colaborativa estilo editor em tempo real.',
+          'Preciso de documentos, presença online, comentários, histórico versionado, autenticação, permissões, organizações e convites.',
+          'Os módulos principais são editor colaborativo, árvore de páginas, painel administrativo, billing, gestão de usuários e auditoria.',
+          'Quero persistência em banco relacional, regras críticas para conflitos de edição, autosave, permissões por papel e trilha de auditoria.',
+          'Os fluxos operáveis precisam cobrir criar workspace, convidar equipe, editar documento, comentar, publicar e restaurar versão anterior.',
+          'Também quero validações e testes esperados para colaboração, integridade de permissões, build, smoke e estabilidade do editor.',
+        ].join(' '),
+      },
+      {
+        role: 'assistant',
+        text: 'Perfeito. Antes de gerar, quero confirmar a stack: seguimos com Next.js ou você prefere React + Vite?',
+      },
+    ],
+  });
+  assert.strictEqual(directStackChoiceContinuation.decision, 'execute');
+  assert.strictEqual(directStackChoiceContinuation.productRoute.capability, 'create_project');
+  assert.strictEqual(directStackChoiceContinuation.productRoute.executionIntent, 'init_project');
+  assert.strictEqual(directStackChoiceContinuation.meta.routeScore.requiresClarification, false);
+  assert.match(directStackChoiceContinuation.executionMessage, /colaborativ|editor|document/i);
+
+  const indifferenceStackChoiceContinuation = await service.resolveProductRoute({
+    projectInfo: createProjectInfo(),
+    userMessage: 'tanto faz',
+    conversationMessages: [
+      {
+        role: 'user',
+        text: [
+          'Quero criar uma aplicação colaborativa estilo editor em tempo real.',
+          'Preciso de documentos, presença online, comentários, histórico versionado, autenticação, permissões, organizações e convites.',
+          'Os módulos principais são editor colaborativo, árvore de páginas, painel administrativo, billing, gestão de usuários e auditoria.',
+          'Quero persistência em banco relacional, regras críticas para conflitos de edição, autosave, permissões por papel e trilha de auditoria.',
+          'Os fluxos operáveis precisam cobrir criar workspace, convidar equipe, editar documento, comentar, publicar e restaurar versão anterior.',
+          'Também quero validações e testes esperados para colaboração, integridade de permissões, build, smoke e estabilidade do editor.',
+        ].join(' '),
+      },
+      {
+        role: 'assistant',
+        text: 'Perfeito. Antes de gerar, quero confirmar a stack: seguimos com Next.js ou você prefere React + Vite?',
+      },
+    ],
+  });
+  assert.strictEqual(indifferenceStackChoiceContinuation.decision, 'execute');
+  assert.strictEqual(indifferenceStackChoiceContinuation.productRoute.capability, 'create_project');
+  assert.strictEqual(indifferenceStackChoiceContinuation.productRoute.executionIntent, 'init_project');
+  assert.strictEqual(indifferenceStackChoiceContinuation.meta.routeScore.requiresClarification, false);
+  assert.match(indifferenceStackChoiceContinuation.executionMessage, /colaborativ|editor|document/i);
+
   const longBriefingCreate = await service.resolveProductRoute({
     projectInfo: createProjectInfo(),
     userMessage: [

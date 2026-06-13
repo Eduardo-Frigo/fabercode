@@ -2706,53 +2706,75 @@ function parseAgenticToolCalls(responseData = {}) {
     });
 }
 
-async function requestAgenticModelTurn({
-  previousResponseId = '',
-  systemPrompt = '',
-  conversationMessages = [],
-  toolResults = [],
-  tools = [],
-  timeoutMs = 90000,
-} = {}) {
-  const apiKey = String(getEffectiveOpenAiApiKey() || '').trim();
-  if (!apiKey) {
-    throw new Error('OpenAI api_key_missing: configure uma API key válida antes de usar o loop agentic.');
+const accumulatedAgenticMessagesMap = new Map();
+
+async function callChatCompletionsAgentic({
+  endpoint,
+  apiKey,
+  model,
+  previousResponseId,
+  systemPrompt,
+  conversationMessages,
+  toolResults,
+  tools,
+  timeoutMs,
+}) {
+  let messages = [];
+
+  // Cleanup old cache entries (older than 30 minutes)
+  const now = Date.now();
+  for (const [key, value] of accumulatedAgenticMessagesMap.entries()) {
+    if (now - value.timestamp > 30 * 60 * 1000) {
+      accumulatedAgenticMessagesMap.delete(key);
+    }
   }
 
-  const effectiveModel = sanitizeOpenAiModelName(getEffectiveOpenAiModel() || '');
-  if (!effectiveModel) {
-    throw new Error('OpenAI model_unconfigured: configure um modelo válido antes de usar o loop agentic.');
-  }
-  if (!shouldUseOpenAiResponsesApi(effectiveModel)) {
-    throw new Error(`OpenAI model_unsupported_for_tools: o modelo ${effectiveModel} não suporta o loop agentic com tools.`);
-  }
+  if (previousResponseId) {
+    const cachedEntry = accumulatedAgenticMessagesMap.get(previousResponseId);
+    if (!cachedEntry) {
+      throw new Error(`Agentic conversation session not found for ID: ${previousResponseId}`);
+    }
+    messages = [...cachedEntry.messages];
 
-  const input = previousResponseId
-    ? buildAgenticToolResultInput(toolResults)
-    : buildAgenticOpenAiInput(conversationMessages);
-  if (!input.length) {
-    throw new Error('OpenAI agentic_empty_input: o loop agentic não recebeu contexto suficiente para continuar.');
+    for (const result of toolResults) {
+      messages.push({
+        role: 'tool',
+        tool_call_id: result.callId || result.id || '',
+        content: typeof result.output === 'string' ? result.output : JSON.stringify(result.output || {}),
+      });
+    }
+  } else {
+    if (systemPrompt && String(systemPrompt).trim()) {
+      messages.push({
+        role: 'system',
+        content: String(systemPrompt).trim(),
+      });
+    }
+    for (const msg of conversationMessages) {
+      const role = String(msg && msg.role ? msg.role : 'user').trim().toLowerCase();
+      const content = String(msg && msg.content ? msg.content : '').trim();
+      if (content) {
+        messages.push({
+          role: role === 'assistant' ? 'assistant' : 'user',
+          content,
+        });
+      }
+    }
   }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 90000));
+
   const body = {
-    model: effectiveModel,
-    input,
-    instructions: String(systemPrompt || '').trim(),
+    model,
+    messages,
     tools: Array.isArray(tools) && tools.length ? tools : undefined,
-    tool_choice: 'auto',
-    store: false,
-    max_output_tokens: 4096,
-    reasoning: { effort: /\bcodex\b/i.test(effectiveModel) ? 'low' : 'minimal' },
-    text: { verbosity: /\bcodex\b/i.test(effectiveModel) ? 'medium' : 'low' },
+    tool_choice: Array.isArray(tools) && tools.length ? 'auto' : undefined,
+    max_tokens: 4096,
   };
-  if (previousResponseId) {
-    body.previous_response_id = String(previousResponseId);
-  }
 
   try {
-    const response = await fetch(`${resolveOpenAiBaseUrl(OPENAI_API_BASE_URL)}/responses`, {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -2761,21 +2783,187 @@ async function requestAgenticModelTurn({
       body: JSON.stringify(body),
       signal: controller.signal,
     });
+
     if (!response.ok) {
       const errorBody = await response.text().catch(() => '');
       const clipped = String(errorBody || '').replace(/\s+/g, ' ').slice(0, 400);
-      throw new Error(`OpenAI HTTP ${response.status}${clipped ? `: ${clipped}` : ''}`);
+      throw new Error(`Chat Completions HTTP ${response.status}${clipped ? `: ${clipped}` : ''}`);
     }
 
     const data = await response.json();
+    const firstChoice = data.choices && data.choices[0];
+    let text = '';
+    let toolCalls = [];
+
+    if (firstChoice && firstChoice.message) {
+      text = typeof firstChoice.message.content === 'string' ? firstChoice.message.content.trim() : '';
+      toolCalls = parseChatCompletionToolCalls(firstChoice.message);
+    }
+
+    const responseId = data.id || `agentic_chat_comp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+    const assistantMessage = {
+      role: 'assistant',
+      content: text || null,
+    };
+    if (firstChoice && firstChoice.message && Array.isArray(firstChoice.message.tool_calls)) {
+      assistantMessage.tool_calls = firstChoice.message.tool_calls;
+    }
+    messages.push(assistantMessage);
+
+    accumulatedAgenticMessagesMap.set(responseId, {
+      messages,
+      timestamp: Date.now(),
+    });
+
     return {
-      responseId: data && data.id ? String(data.id) : '',
-      text: extractOpenAiResponsesText(data),
-      toolCalls: parseAgenticToolCalls(data),
+      responseId,
+      text,
+      toolCalls,
       raw: data,
     };
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+function parseChatCompletionToolCalls(message = {}) {
+  const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  return toolCalls
+    .filter((tc) => tc && tc.type === 'function' && tc.function && tc.function.name)
+    .map((tc) => {
+      const rawArguments = typeof tc.function.arguments === 'string' ? tc.function.arguments.trim() : '';
+      let input = {};
+      if (rawArguments) {
+        try {
+          input = JSON.parse(rawArguments);
+        } catch {
+          input = { rawArguments };
+        }
+      }
+      return {
+        id: tc.id || '',
+        callId: tc.id || '',
+        name: tc.function.name,
+        input,
+      };
+    });
+}
+
+async function requestAgenticModelTurn({
+  previousResponseId = '',
+  systemPrompt = '',
+  conversationMessages = [],
+  toolResults = [],
+  tools = [],
+  timeoutMs = 90000,
+} = {}) {
+  const provider = String(getSelectedAiProvider() || '').trim().toLowerCase();
+
+  if (provider === 'openai') {
+    const apiKey = String(getEffectiveOpenAiApiKey() || '').trim();
+    if (!apiKey) {
+      throw new Error('OpenAI api_key_missing: configure uma API key válida antes de usar o loop agentic.');
+    }
+
+    const effectiveModel = sanitizeOpenAiModelName(getEffectiveOpenAiModel() || '');
+    if (!effectiveModel) {
+      throw new Error('OpenAI model_unconfigured: configure um modelo válido antes de usar o loop agentic.');
+    }
+
+    if (shouldUseOpenAiResponsesApi(effectiveModel)) {
+      const input = previousResponseId
+        ? buildAgenticToolResultInput(toolResults)
+        : buildAgenticOpenAiInput(conversationMessages);
+      if (!input.length) {
+        throw new Error('OpenAI agentic_empty_input: o loop agentic não recebeu contexto suficiente para continuar.');
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 90000));
+      const body = {
+        model: effectiveModel,
+        input,
+        instructions: String(systemPrompt || '').trim(),
+        tools: Array.isArray(tools) && tools.length ? tools : undefined,
+        tool_choice: 'auto',
+        store: true,
+        max_output_tokens: 4096,
+        reasoning: { effort: /\bcodex\b/i.test(effectiveModel) ? 'low' : 'minimal' },
+        text: { verbosity: /\bcodex\b/i.test(effectiveModel) ? 'medium' : 'low' },
+      };
+      if (previousResponseId) {
+        body.previous_response_id = String(previousResponseId);
+      }
+
+      try {
+        const response = await fetch(`${resolveOpenAiBaseUrl(OPENAI_API_BASE_URL)}/responses`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          const errorBody = await response.text().catch(() => '');
+          const clipped = String(errorBody || '').replace(/\s+/g, ' ').slice(0, 400);
+          throw new Error(`OpenAI HTTP ${response.status}${clipped ? `: ${clipped}` : ''}`);
+        }
+
+        const data = await response.json();
+        return {
+          responseId: data && data.id ? String(data.id) : '',
+          text: extractOpenAiResponsesText(data),
+          toolCalls: parseAgenticToolCalls(data),
+          raw: data,
+        };
+      } finally {
+        clearTimeout(timeout);
+      }
+    } else {
+      const baseUrl = resolveOpenAiBaseUrl(OPENAI_API_BASE_URL);
+      const endpoint = baseUrl.endsWith('/chat/completions') ? baseUrl : baseUrl + '/chat/completions';
+      return callChatCompletionsAgentic({
+        endpoint,
+        apiKey,
+        model: effectiveModel,
+        previousResponseId,
+        systemPrompt,
+        conversationMessages,
+        toolResults,
+        tools,
+        timeoutMs,
+      });
+    }
+  } else if (provider === 'gemini') {
+    const apiKey = String(getEffectiveGeminiApiKey() || '').trim();
+    if (!apiKey) {
+      throw new Error('Gemini api_key_missing: configure uma API key válida antes de usar o loop agentic.');
+    }
+
+    const effectiveModel = sanitizeGeminiModelName(getEffectiveGeminiModel() || '');
+    if (!effectiveModel) {
+      throw new Error('Gemini model_unconfigured: configure um modelo válido antes de usar o loop agentic.');
+    }
+
+    const baseUrl = String(GEMINI_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '');
+    const endpoint = `${baseUrl}/openai/chat/completions`;
+
+    return callChatCompletionsAgentic({
+      endpoint,
+      apiKey,
+      model: effectiveModel,
+      previousResponseId,
+      systemPrompt,
+      conversationMessages,
+      toolResults,
+      tools,
+      timeoutMs,
+    });
+  } else {
+    throw new Error(`Provedor de loop agentic não suportado: ${provider}`);
   }
 }
 
@@ -4356,6 +4544,7 @@ function getAgenticToolLoopService() {
       appendJobEvent,
       executeCapability: (input) => getFaberCapabilityAdapterService().executeCapability(input),
       executeTool: (name, input) => getToolRegistry().execute(name, input),
+      getEffectiveGeminiModel,
       getEffectiveOpenAiModel,
       getSelectedAiProvider,
       requestModelTurn: requestAgenticModelTurn,

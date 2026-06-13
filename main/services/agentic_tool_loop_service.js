@@ -11,6 +11,7 @@ function createAgenticToolLoopService(dependencies = {}) {
     clipText = defaultClipText,
     executeCapability = null,
     executeTool = null,
+    getEffectiveGeminiModel = () => '',
     getEffectiveOpenAiModel = () => '',
     getSelectedAiProvider = () => '',
     requestModelTurn = null,
@@ -22,8 +23,14 @@ function createAgenticToolLoopService(dependencies = {}) {
 
   function supportsAgenticExecution() {
     const provider = String(getSelectedAiProvider() || '').trim().toLowerCase();
-    const model = String(getEffectiveOpenAiModel() || '').trim();
-    return provider === 'openai' && Boolean(model) && shouldUseModel(model);
+    if (provider === 'openai') {
+      const model = String(getEffectiveOpenAiModel() || '').trim();
+      return Boolean(model);
+    }
+    if (provider === 'gemini') {
+      return true;
+    }
+    return false;
   }
 
   function buildProjectSession(projectInfo = {}) {
@@ -54,6 +61,7 @@ function createAgenticToolLoopService(dependencies = {}) {
       'Não peça confirmação extra depois que o pedido já estiver claro.',
       'Prefira ler o projeto antes de escrever, mas não prolongue análise sem necessidade.',
       'Quando modificar algo, valide com terminal, preview ou leitura final dos arquivos sempre que fizer sentido.',
+      'Todos os comandos executados no terminal devem ser 100% não-interativos (sem perguntas/prompts), utilizando flags como -y, --yes ou especificando todos os parâmetros diretamente via CLI (por exemplo, ao criar projetos com npx), já que a entrada do terminal está fechada para digitação interativa (stdin ignora inputs).',
       'Explique no final, em português natural, o que foi feito de verdade e o que ainda ficou pendente.',
       `Projeto ativo: ${rootPath || 'indisponível'}.`,
     ].join(' ');
@@ -263,14 +271,48 @@ function createAgenticToolLoopService(dependencies = {}) {
     ];
   }
 
+  function sanitizeSchemaForStrict(schema) {
+    if (!schema || typeof schema !== 'object') {
+      return { type: 'object', properties: {}, required: [], additionalProperties: false };
+    }
+    const result = { ...schema };
+    if (result.type === 'object') {
+      result.additionalProperties = false;
+      if (!result.properties) {
+        result.properties = {};
+      }
+      const propKeys = Object.keys(result.properties);
+      const newProperties = {};
+      for (const key of propKeys) {
+        newProperties[key] = sanitizeSchemaForStrict(result.properties[key]);
+      }
+      result.properties = newProperties;
+      result.required = propKeys;
+    } else if (result.type === 'array' && result.items) {
+      result.items = sanitizeSchemaForStrict(result.items);
+    }
+    return result;
+  }
+
   function buildToolDefinitions(tools = []) {
-    return tools.map((tool) => ({
-      type: 'function',
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.inputSchema || { type: 'object', additionalProperties: false, properties: {} },
-      strict: true,
-    }));
+    const provider = String(getSelectedAiProvider() || '').trim().toLowerCase();
+    const isStrictSupported = provider === 'openai';
+
+    return tools.map((tool) => {
+      const baseParams = tool.inputSchema || { type: 'object', additionalProperties: false, properties: {} };
+      const parameters = isStrictSupported ? sanitizeSchemaForStrict(baseParams) : baseParams;
+
+      const definition = {
+        type: 'function',
+        name: tool.name,
+        description: tool.description,
+        parameters,
+      };
+      if (isStrictSupported) {
+        definition.strict = true;
+      }
+      return definition;
+    });
   }
 
   function makeToolIndex(tools = []) {
@@ -354,7 +396,7 @@ function createAgenticToolLoopService(dependencies = {}) {
         planner: 'agentic_tool_loop',
         reason: 'agentic_tool_loop_ready',
         autoExecute: true,
-        provider: 'openai',
+        provider: getSelectedAiProvider(),
       },
     };
   }
@@ -363,7 +405,7 @@ function createAgenticToolLoopService(dependencies = {}) {
     if (!supportsAgenticExecution()) {
       return {
         ok: false,
-        message: 'O loop agentic direto só está disponível com provider OpenAI em modelo compatível com tools.',
+        message: 'O loop agentic direto só está disponível com os provedores suportados (OpenAI, Gemini).',
       };
     }
     if (typeof requestModelTurn !== 'function') {
@@ -390,10 +432,11 @@ function createAgenticToolLoopService(dependencies = {}) {
     let pendingToolResults = [];
 
     if (jobId) {
+      const activeProvider = String(getSelectedAiProvider() || '').trim().toLowerCase();
       setJobCheckpoint(jobId, 'agentic_loop', {
         started: true,
-        provider: 'openai',
-        model: getEffectiveOpenAiModel(),
+        provider: activeProvider,
+        model: activeProvider === 'gemini' ? getEffectiveGeminiModel() : getEffectiveOpenAiModel(),
       });
     }
 

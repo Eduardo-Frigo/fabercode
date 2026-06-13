@@ -102,6 +102,7 @@
     "test:runtime-budget": "node tests/runtime-budget.test.js",
     "test:briefing-service": "node tests/briefing-service.test.js",
     "test:acceptance-matrix": "node tests/acceptance-matrix-service.test.js",
+    "test:agentic-development-plan": "node tests/agentic-development-plan-service.test.js",
     "test:render-pass-service": "node tests/render-pass-service.test.js",
     "test:validation-service": "node tests/validation-service.test.js",
     "test:repair-validation-service": "node tests/repair-validation-service.test.js",

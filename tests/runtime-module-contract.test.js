@@ -54,9 +54,24 @@ const graphRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'faber-project-graph-'))
 try {
   fs.mkdirSync(path.join(graphRoot, 'app'), { recursive: true });
   fs.mkdirSync(path.join(graphRoot, 'src', 'store'), { recursive: true });
+  fs.mkdirSync(path.join(graphRoot, 'prisma'), { recursive: true });
+  fs.writeFileSync(
+    path.join(graphRoot, 'package.json'),
+    JSON.stringify({
+      scripts: { build: 'next build', test: 'vitest run', prisma: 'prisma validate' },
+      dependencies: { '@prisma/client': '^5.0.0' },
+      devDependencies: { prisma: '^5.0.0' },
+    }),
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(graphRoot, 'prisma', 'schema.prisma'),
+    'generator client { provider = "prisma-client-js" }\n\ndatasource db { provider = "postgresql"\n url = env("DATABASE_URL") }\n',
+    'utf8'
+  );
   fs.writeFileSync(
     path.join(graphRoot, 'app', 'page.tsx'),
-    "import { useForgeMrpStore } from '../src/store/mrp_store';\nexport default function Page(){ const store = useForgeMrpStore(); return <main>{store.snapshot.items.length}</main>; }\n",
+    "import { useForgeMrpStore } from '../src/store/mrp_store';\nimport { missingHelper } from './missing_helper';\nexport default function Page(){ const store = useForgeMrpStore(); missingHelper(); return <main>{store.snapshot.items.length}</main>; }\n",
     'utf8'
   );
   fs.writeFileSync(
@@ -67,7 +82,7 @@ try {
   const graphContext = projectContext.buildProjectGraphContext(
     {
       rootPath: graphRoot,
-      files: ['app/page.tsx', 'src/store/mrp_store.ts'],
+      files: ['package.json', 'prisma/schema.prisma', 'app/page.tsx', 'src/store/mrp_store.ts'],
     },
     'Repare Property snapshot does not exist'
   );
@@ -75,8 +90,49 @@ try {
   assert.ok(graphContext.includes('src/store/mrp_store.ts'));
   assert.ok(graphContext.includes('store.snapshot'));
   assert.ok(graphContext.includes('nao declara snapshot'));
+  assert.ok(graphContext.includes('unresolved_relative_import'));
+  assert.ok(graphContext.includes('Persistencia incompleta'));
+
+  const graphReport = projectContext.buildProjectGraphReport(
+    {
+      rootPath: graphRoot,
+      files: ['package.json', 'prisma/schema.prisma', 'app/page.tsx', 'src/store/mrp_store.ts'],
+    },
+    'Repare Property snapshot does not exist e implemente Postgres real'
+  );
+  assert.strictEqual(graphReport.summary.missingStoreMembers, 1);
+  assert.strictEqual(graphReport.summary.unresolvedImports, 1);
+  assert.ok(graphReport.persistence.required);
+  assert.ok(graphReport.persistence.missing.includes('docker_compose'));
+  assert.ok(graphReport.issues.some((issue) => issue.id === 'incomplete_persistence_contract'));
 } finally {
   fs.rmSync(graphRoot, { recursive: true, force: true });
+}
+
+const sqliteGraphRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'faber-project-graph-sqlite-'));
+try {
+  fs.mkdirSync(path.join(sqliteGraphRoot, 'prisma'), { recursive: true });
+  fs.writeFileSync(
+    path.join(sqliteGraphRoot, 'package.json'),
+    JSON.stringify({ dependencies: { '@prisma/client': '^5.0.0' }, devDependencies: { prisma: '^5.0.0' } }),
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(sqliteGraphRoot, 'prisma', 'schema.prisma'),
+    'generator client { provider = "prisma-client-js" }\n\ndatasource db { provider = "sqlite"\n url = env("DATABASE_URL") }\n',
+    'utf8'
+  );
+  const sqliteReport = projectContext.buildProjectGraphReport(
+    {
+      rootPath: sqliteGraphRoot,
+      files: ['package.json', 'prisma/schema.prisma'],
+    },
+    'Ajuste texto da tela inicial.'
+  );
+  assert.strictEqual(sqliteReport.persistence.required, false);
+  assert.strictEqual(sqliteReport.summary.incompletePersistence, 0);
+} finally {
+  fs.rmSync(sqliteGraphRoot, { recursive: true, force: true });
 }
 
 const attachmentContext = createAttachmentContextService({

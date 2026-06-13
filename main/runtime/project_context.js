@@ -364,12 +364,164 @@ function createProjectContextService(dependencies = {}) {
     return new RegExp(`\\b${escaped}\\b\\s*[:=?(]`).test(String(content || ''));
   }
 
-  function buildProjectGraphContext(projectInfo, userMessage, {
+  function extractProjectGraphCalls(content = '') {
+    const calls = [];
+    const source = String(content || '');
+    const pattern = /\b([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*\(/g;
+    const ignored = new Set([
+      'if',
+      'for',
+      'while',
+      'switch',
+      'catch',
+      'function',
+      'return',
+      'typeof',
+      'new',
+      'class',
+    ]);
+    let match = null;
+    while ((match = pattern.exec(source))) {
+      const name = match[1];
+      if (!name || ignored.has(name)) continue;
+      calls.push(name);
+    }
+    return Array.from(new Set(calls)).slice(0, 60);
+  }
+
+  function readProjectJson(projectInfo = {}, relPath = '') {
+    const content = readProjectGraphFile(projectInfo, relPath);
+    if (!content) return null;
+    try {
+      return JSON.parse(content);
+    } catch {
+      return null;
+    }
+  }
+
+  function packageHasScript(packageJson = null, scriptName = '') {
+    return Boolean(packageJson && packageJson.scripts && packageJson.scripts[scriptName]);
+  }
+
+  function packageHasDependency(packageJson = null, dependencyName = '') {
+    if (!packageJson || !dependencyName) return false;
+    return Boolean(
+      (packageJson.dependencies && packageJson.dependencies[dependencyName]) ||
+        (packageJson.devDependencies && packageJson.devDependencies[dependencyName])
+    );
+  }
+
+  function hasKnownFileMatching(knownFiles = new Set(), predicate = () => false) {
+    for (const relPath of knownFiles) {
+      if (predicate(relPath)) return true;
+    }
+    return false;
+  }
+
+  function buildPersistenceGraphSignals(projectInfo = {}, knownFiles = new Set(), intentText = '') {
+    const packageJson = readProjectJson(projectInfo, 'package.json');
+    const prismaSchema = readProjectGraphFile(projectInfo, 'prisma/schema.prisma');
+    const normalizedIntent = String(intentText || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+    const hasPrismaSchema = knownFiles.has('prisma/schema.prisma');
+    const hasPrismaDependency =
+      packageHasDependency(packageJson, '@prisma/client') ||
+      packageHasDependency(packageJson, 'prisma');
+    const usesPostgres = /provider\s*=\s*"postgresql"/i.test(prismaSchema);
+    const explicitPostgres = /\bpostgres(?:ql)?\b/.test(normalizedIntent);
+    const explicitPersistence = /\b(banco|database|persist|migration|migracao|seed|prisma)\b/.test(normalizedIntent);
+    const requestedPersistenceSurface = hasPrismaSchema || hasPrismaDependency || usesPostgres || explicitPersistence;
+    if (!requestedPersistenceSurface) {
+      return {
+        required: false,
+        signals: [],
+        missing: [],
+      };
+    }
+    const required = usesPostgres || explicitPostgres || (explicitPersistence && hasPrismaDependency);
+    const signals = [
+      hasPrismaSchema ? 'prisma_schema' : '',
+      hasPrismaDependency ? 'prisma_dependency' : '',
+      usesPostgres ? 'postgres_provider' : '',
+      explicitPersistence ? 'persistence_requested' : '',
+      explicitPostgres ? 'postgres_requested' : '',
+    ].filter(Boolean);
+    if (!required) {
+      return {
+        required: false,
+        signals,
+        missing: [],
+      };
+    }
+
+    const checks = [
+      {
+        id: 'docker_compose',
+        ok: knownFiles.has('docker-compose.yml') || knownFiles.has('compose.yml'),
+        detail: 'docker-compose.yml/compose.yml com Postgres local',
+      },
+      {
+        id: 'migration',
+        ok: hasKnownFileMatching(knownFiles, (relPath) => /^prisma\/migrations\/[^/]+\/migration\.sql$/i.test(relPath)),
+        detail: 'prisma/migrations/**/migration.sql',
+      },
+      {
+        id: 'seed',
+        ok:
+          knownFiles.has('scripts/seed.mjs') ||
+          knownFiles.has('scripts/seed.js') ||
+          knownFiles.has('prisma/seed.ts') ||
+          knownFiles.has('prisma/seed.js') ||
+          Boolean(packageJson && packageJson.prisma && packageJson.prisma.seed),
+        detail: 'seed executavel',
+      },
+      {
+        id: 'prisma_client',
+        ok: knownFiles.has('src/server/prisma.ts') || knownFiles.has('src/lib/prisma.ts') || knownFiles.has('lib/prisma.ts'),
+        detail: 'PrismaClient compartilhado em modulo de servidor',
+      },
+      {
+        id: 'repository',
+        ok: hasKnownFileMatching(knownFiles, (relPath) =>
+          /(^|\/)(repositories?|.*repository|.*_repository)\.(ts|js)$|^src\/server\/.*repository\.(ts|js)$/i.test(relPath)
+        ),
+        detail: 'repository/service usando persistencia real',
+      },
+      {
+        id: 'api_route',
+        ok: hasKnownFileMatching(knownFiles, (relPath) => /^app\/api\/.+\/route\.(ts|js)$/i.test(relPath)),
+        detail: 'API route/server boundary para UI',
+      },
+      {
+        id: 'db_check',
+        ok: packageHasScript(packageJson, 'db:check'),
+        detail: 'script db:check',
+      },
+    ];
+
+    return {
+      required,
+      signals,
+      missing: checks.filter((check) => !check.ok).map((check) => check.id),
+      checks,
+    };
+  }
+
+  function buildProjectGraphReport(projectInfo, userMessage, {
     maxFiles = 16,
     maxIssues = 12,
-    totalMaxChars = 5200,
   } = {}) {
-    if (!projectInfo || !projectInfo.rootPath || !Array.isArray(projectInfo.files)) return '';
+    if (!projectInfo || !projectInfo.rootPath || !Array.isArray(projectInfo.files)) {
+      return {
+        version: 1,
+        files: [],
+        issues: [],
+        persistence: { required: false, signals: [], missing: [] },
+        summary: { files: 0, issues: 0, unresolvedImports: 0, missingStoreMembers: 0 },
+      };
+    }
 
     const knownFiles = new Set(
       projectInfo.files
@@ -393,13 +545,19 @@ function createProjectContextService(dependencies = {}) {
       const content = readProjectGraphFile(projectInfo, file.relPath);
       if (!content) continue;
       const imports = extractProjectGraphImports(content);
+      const resolvedImports = imports
+        .map((specifier) => resolveProjectGraphImport(file.relPath, specifier, knownFiles))
+        .filter(Boolean);
+      const unresolvedRelativeImports = imports
+        .filter((specifier) => String(specifier || '').startsWith('.'))
+        .filter((specifier) => !resolveProjectGraphImport(file.relPath, specifier, knownFiles));
       graphByPath.set(file.relPath, {
         relPath: file.relPath,
         imports,
-        resolvedImports: imports
-          .map((specifier) => resolveProjectGraphImport(file.relPath, specifier, knownFiles))
-          .filter(Boolean),
+        resolvedImports,
+        unresolvedRelativeImports,
         exports: extractProjectGraphExports(content),
+        calls: extractProjectGraphCalls(content),
         storeVariables: extractStoreVariableNames(content),
         content,
       });
@@ -423,6 +581,7 @@ function createProjectContextService(dependencies = {}) {
             if (fileDeclaresProperty(storeNode.content, member)) continue;
             issues.push({
               id: 'missing_store_contract_member',
+              severity: 'error',
               file: node.relPath,
               relatedFile: storeTarget,
               detail: `${node.relPath} usa ${variableName}.${member}, mas ${storeTarget} nao declara ${member}.`,
@@ -432,16 +591,73 @@ function createProjectContextService(dependencies = {}) {
       }
     }
 
-    const lines = ['Grafo de projeto para edicao/reparo:'];
     for (const node of graphByPath.values()) {
+      for (const specifier of node.unresolvedRelativeImports || []) {
+        issues.push({
+          id: 'unresolved_relative_import',
+          severity: 'error',
+          file: node.relPath,
+          relatedFile: specifier,
+          detail: `${node.relPath} importa ${specifier}, mas nenhum arquivo relacionado foi encontrado no projeto.`,
+        });
+      }
+    }
+
+    const persistence = buildPersistenceGraphSignals(projectInfo, knownFiles, userMessage);
+    for (const missing of persistence.missing || []) {
+      issues.push({
+        id: 'incomplete_persistence_contract',
+        severity: 'warning',
+        file: 'project',
+        relatedFile: missing,
+        detail: `Persistencia detectada, mas falta ${missing}.`,
+      });
+    }
+
+    const files = Array.from(graphByPath.values()).map((node) => ({
+      relPath: node.relPath,
+      imports: node.imports.slice(0, 20),
+      resolvedImports: node.resolvedImports.slice(0, 20),
+      unresolvedRelativeImports: (node.unresolvedRelativeImports || []).slice(0, 20),
+      exports: node.exports.slice(0, 20),
+      calls: node.calls.slice(0, 24),
+      storeVariables: node.storeVariables.slice(0, 12),
+    }));
+    const limitedIssues = issues.slice(0, maxIssues);
+
+    return {
+      version: 1,
+      files,
+      issues: limitedIssues,
+      persistence,
+      summary: {
+        files: files.length,
+        issues: limitedIssues.length,
+        unresolvedImports: limitedIssues.filter((issue) => issue.id === 'unresolved_relative_import').length,
+        missingStoreMembers: limitedIssues.filter((issue) => issue.id === 'missing_store_contract_member').length,
+        incompletePersistence: limitedIssues.filter((issue) => issue.id === 'incomplete_persistence_contract').length,
+      },
+    };
+  }
+
+  function formatProjectGraphReport(report = {}, { totalMaxChars = 5200 } = {}) {
+    const lines = ['Grafo de projeto para edicao/reparo:'];
+    for (const node of report.files || []) {
       lines.push(`- ${node.relPath}`);
       if (node.imports.length) lines.push(`  imports: ${node.imports.slice(0, 10).join(', ')}`);
       if (node.resolvedImports.length) lines.push(`  arquivos relacionados: ${node.resolvedImports.slice(0, 10).join(', ')}`);
       if (node.exports.length) lines.push(`  exports: ${node.exports.slice(0, 12).join(', ')}`);
+      if (node.calls.length) lines.push(`  chamadas: ${node.calls.slice(0, 12).join(', ')}`);
     }
-    if (issues.length) {
+    if (report.persistence && report.persistence.required) {
+      lines.push(`Persistencia detectada: ${report.persistence.signals.join(', ') || 'sinais fracos'}`);
+      if (report.persistence.missing && report.persistence.missing.length) {
+        lines.push(`Persistencia incompleta: falta ${report.persistence.missing.join(', ')}`);
+      }
+    }
+    if (report.issues && report.issues.length) {
       lines.push('Contratos suspeitos detectados:');
-      issues.slice(0, maxIssues).forEach((issue) => {
+      report.issues.forEach((issue) => {
         lines.push(`- [${issue.id}] ${issue.detail}`);
       });
     }
@@ -449,7 +665,18 @@ function createProjectContextService(dependencies = {}) {
     return clipTextPreserveLines(lines.join('\n'), totalMaxChars);
   }
 
+  function buildProjectGraphContext(projectInfo, userMessage, {
+    maxFiles = 16,
+    maxIssues = 12,
+    totalMaxChars = 5200,
+  } = {}) {
+    const report = buildProjectGraphReport(projectInfo, userMessage, { maxFiles, maxIssues });
+    if (!report.files.length && !report.issues.length) return '';
+    return formatProjectGraphReport(report, { totalMaxChars });
+  }
+
   return {
+    buildProjectGraphReport,
     buildProjectGraphContext,
     buildCortexPromptContext,
     buildProjectEvolutionContext,

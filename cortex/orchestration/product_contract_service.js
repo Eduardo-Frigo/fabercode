@@ -67,7 +67,7 @@ function hasExploratoryConversationSignal(userMessage = '') {
 
 function isAffirmativeContinuation(userMessage = '') {
   const normalized = normalizeIntentText(userMessage);
-  return /^(sim|s|ok|certo|isso|pode|pode sim|pode gerar|gera|gerar|continue|continuar|segue|pode seguir|claro|faca|fazer|manda ver|vamos|prossiga|tente novamente|retente)$/.test(
+  return /^(sim|s|ok|certo|isso|pode|pode sim|pode gerar|gera|gerar|continue|continuar|segue|pode seguir|claro|faca|fazer|manda ver|vamos|prossiga|tente novamente|retente|tanto faz|qualquer|qualquer um|indiferente|tanto fez|voce decide|você decide|o que achar melhor)$/.test(
     normalized
   );
 }
@@ -130,6 +130,14 @@ function looksLikeProjectBriefContinuation(userMessage = '') {
   );
 }
 
+function looksLikeTechnicalChoiceContinuation(userMessage = '') {
+  const normalized = stripNegatedRoutingClauses(normalizeIntentText(userMessage));
+  if (!normalized || isGreetingOrSmallTalk(userMessage)) return false;
+  const choiceVerb = /\b(quero manter|manter|mantem|mantém|prefiro|prefere|vamos de|vamos usar|usar|use|usa|escolho|escolher|opto|optar|vou de|va de|vai de|com|utilizar|utilize|utiliza|primeira|segunda|primeiro|segundo|opcao|opção)\b/;
+  const stackOrTool = /\b(next|nextjs|next\.js|react|vite|electron|tailwind|typescript|javascript|node|prisma|drizzle|postgres|postgresql|sqlite|mysql|supabase|firebase|yjs|websocket|ws|app router|pages router)\b/;
+  return stackOrTool.test(normalized) || (choiceVerb.test(normalized) && /\b(primeir|segund|terceir|quarta|opcao|opçao|opção|primeiro|segundo)\b/.test(normalized));
+}
+
 function hasNewProjectContinuationSignal(userMessage = '') {
   const normalized = stripNegatedRoutingClauses(normalizeIntentText(userMessage));
   if (!normalized || isGreetingOrSmallTalk(userMessage)) return false;
@@ -177,7 +185,11 @@ function shouldUseConversationForRouting(current = '', conversationMessages = []
   if (currentMessageOwnsExistingProjectEdit({ current, projectInfo })) return false;
   if (isAffirmativeContinuation(current)) return hasProjectCreationContext(recentConversation);
   return hasProjectCreationContext(recentConversation) &&
-    (looksLikeProjectBriefContinuation(current) || hasNewProjectContinuationSignal(current));
+    (
+      looksLikeProjectBriefContinuation(current) ||
+      looksLikeTechnicalChoiceContinuation(current) ||
+      hasNewProjectContinuationSignal(current)
+    );
 }
 
 function buildRoutingSourceMessage({ userMessage = '', contextHint = null, conversationMessages = [], projectInfo = null } = {}) {

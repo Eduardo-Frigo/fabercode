@@ -115,33 +115,28 @@ function compactStandaloneText(value = '', max = 1600) {
 
 function getCortexBriefingClarificationQuestions() {
   return [
-    'Você quer que eu gere primeiro com conteúdo placeholder (rápido para validar estrutura) ou com conteúdo específico final (mais detalhado)?',
-    'Qual é o objetivo principal do projeto (ex.: captar leads, agendar consultas, vender serviço)?',
-    'Quais páginas/seções são obrigatórias (ex.: Início, Serviços, Sobre, Depoimentos, Contato)?',
-    'Quais funcionalidades são obrigatórias (ex.: formulário, WhatsApp, login, dashboard, CRUD)?',
-    'Qual é o CTA principal e a ação esperada do usuário final?',
+    'O que esse projeto precisa fazer primeiro para já ser útil?',
+    'Quais funcionalidades são indispensáveis nesta primeira versão?',
+    'Existe alguma restrição técnica ou visual que eu não posso ignorar?',
   ];
 }
 
 function buildCortexBriefingClarificationResponse(userMessage, attempts = 0, customQuestions = []) {
-  const intro = attempts > 0
-    ? 'Estamos quase lá. Falta só escolher o nível de autonomia antes de gerar.'
-    : 'Perfeito. Posso seguir sem transformar isso em questionário.';
-
   const questions = Array.isArray(customQuestions) && customQuestions.length
     ? customQuestions.slice(0, 5)
     : getCortexBriefingClarificationQuestions();
 
-  const mainQuestion = questions[0] || 'Você prefere que eu use placeholders agora ou espere detalhes específicos?';
+  const mainQuestion = questions[0] || 'O que esse projeto precisa fazer primeiro para já ser útil?';
+  const intro = attempts > 0
+    ? 'Ainda falta uma decisão para eu não chutar no escuro.'
+    : 'Posso seguir, mas antes preciso entender uma coisa.';
 
   return [
     intro,
     '',
-    'Escolha um caminho curto:',
-    '- "composição modular": eu gero agora com placeholders bem estruturados e peças editáveis.',
-    '- ou me responda em uma frase o objetivo, as seções indispensáveis e o CTA principal.',
+    mainQuestion,
     '',
-    `Ponto principal se quiser detalhar: ${mainQuestion}`,
+    'Pode responder do seu jeito, em uma frase mesmo.',
   ].join('\n');
 }
 

@@ -79,14 +79,15 @@
       }
       const labels = {
         created: 'Fila criada',
-        cortex_intake: 'Intake Cortex',
-        cortex_briefing: 'Briefing da Persona',
-        cortex_render_pass: 'Render do Executor',
+        cortex_intake: 'Entendendo pedido',
+        cortex_briefing: 'Lendo contexto',
+        cortex_render_pass: 'Preparando mudança',
         cortex_validation: 'Validação',
         execute_validation: 'Validação técnica',
-        persona_plan: 'Planejamento da Persona',
+        persona_plan: 'Planejamento',
+        awaiting_user_input: 'Aguardando você',
         awaiting_user_confirmation: 'Aguardando confirmação',
-        execute_pending: 'Execução do Executor',
+        execute_pending: 'Executando',
         paused_memory_pressure: 'Pausado por memória',
         persona_done: 'Planejamento concluído',
         cortex_briefing_retry_exhausted: 'Briefing esgotado',
@@ -121,7 +122,9 @@
     }
 
     function buildTechnicalTimeline(job) {
-      const events = Array.isArray(job && job.events) ? job.events.slice(0, 10) : [];
+      const events = Array.isArray(job && job.events)
+        ? job.events.filter((event) => String((event && event.type) || '') !== 'job.checkpoint_saved').slice(0, 10)
+        : [];
       if (!events.length) return [];
 
       return events.map((event) => {
@@ -227,10 +230,6 @@
         if (type === 'job.failed') {
           const reason = compactReason(payload.reason);
           return `${ts} Falha final${reason ? ` — ${reason}` : ''}`.trim();
-        }
-        if (type === 'job.checkpoint_saved') {
-          const key = payload.key ? `checkpoint ${payload.key}` : 'checkpoint salvo';
-          return `${ts} ${key}`.trim();
         }
         if (type === 'job.created') return `${ts} Job iniciado`.trim();
 

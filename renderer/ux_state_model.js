@@ -54,14 +54,15 @@
   function mapJobPhaseLabel(phase) {
     const labels = {
       created: 'Fila criada',
-      cortex_intake: 'Intake Cortex',
-      cortex_briefing: 'Briefing da Persona',
-      cortex_render_pass: 'Render do Executor',
+      cortex_intake: 'Entendendo pedido',
+      cortex_briefing: 'Lendo contexto',
+      cortex_render_pass: 'Preparando mudança',
       cortex_validation: 'Validação',
       execute_validation: 'Validação técnica',
-      persona_plan: 'Planejamento da Persona',
+      persona_plan: 'Planejamento',
+      awaiting_user_input: 'Aguardando você',
       awaiting_user_confirmation: 'Aguardando confirmação',
-      execute_pending: 'Execução do Executor',
+      execute_pending: 'Executando',
       paused_memory_pressure: 'Pausado por memória',
       persona_done: 'Planejamento concluído',
       cortex_briefing_retry_exhausted: 'Briefing esgotado',
@@ -80,6 +81,7 @@
     'persona_plan',
     'cortex_intake',
     'cortex_briefing',
+    'awaiting_user_input',
     'cortex_render_pass',
     'cortex_validation',
     'awaiting_user_confirmation',
@@ -90,6 +92,21 @@
 
   function normalizeJobEvents(job) {
     return Array.isArray(job && job.events) ? job.events.filter(Boolean) : [];
+  }
+
+  function readLatestJobEventPayload(job, type) {
+    const events = normalizeJobEvents(job);
+    const match = events.find((event) => String((event && event.type) || '') === type);
+    const payload = match && match.payload && typeof match.payload === 'object' ? match.payload : null;
+    return payload || null;
+  }
+
+  function isCompletedWithoutExecution(job) {
+    if (!job || String(job.status || '').toLowerCase() !== 'completed') return false;
+    const payload = readLatestJobEventPayload(job, 'job.completed');
+    if (!payload) return false;
+    const reason = normalizeText(payload.reason || '');
+    return payload.noFileChanges === true || reason === 'conversation_only' || reason === 'edit_needs_target';
   }
 
   function buildJobPhaseSteps(job) {
@@ -209,6 +226,7 @@
 
   function inferJobTone(job) {
     const status = String(job && job.status ? job.status : '').toLowerCase();
+    if (status === 'completed' && isCompletedWithoutExecution(job)) return 'info';
     if (status === 'completed') return 'success';
     if (status === 'failed') return 'danger';
     if (status === 'cancelled' || status === 'retry_pending') return 'warning';
@@ -217,7 +235,11 @@
 
   function buildTransientJobStatus(job) {
     if (!job || !job.status) return '';
-    if (job.status === 'completed') return 'Processamento concluído com sucesso.';
+    if (job.status === 'completed') {
+      return isCompletedWithoutExecution(job)
+        ? 'Resposta concluída sem alterar arquivos.'
+        : 'Processamento concluído com sucesso.';
+    }
     if (job.status === 'failed') return 'Não consegui concluir esta rodada.';
     if (job.status === 'cancelled') return 'Ação cancelada. Nenhum arquivo foi alterado.';
     if (job.status === 'retry_pending') {
@@ -241,7 +263,7 @@
   function buildJobTitle(job) {
     if (!job) return 'Processando';
     if (job.status === 'failed') return 'Não consegui concluir essa execução';
-    if (job.status === 'completed') return 'Execução concluída';
+    if (job.status === 'completed') return isCompletedWithoutExecution(job) ? 'Resposta concluída' : 'Execução concluída';
     if (job.status === 'retry_pending') return 'Vou tentar novamente em instantes';
     if (job.status === 'cancelled') return 'Execução cancelada';
     return 'Trabalhando no projeto';
@@ -249,7 +271,7 @@
 
   function buildJobStatusLabel(job) {
     if (!job) return 'Aguardando';
-    if (job.status === 'completed') return 'Concluído';
+    if (job.status === 'completed') return isCompletedWithoutExecution(job) ? 'Sem execução' : 'Concluído';
     if (job.status === 'failed') return 'Falha';
     if (job.status === 'cancelled') return 'Cancelado';
     if (job.status === 'retry_pending') return 'Aguardando retentativa';
@@ -267,7 +289,10 @@
   function buildTechnicalTimeline(job, options = {}) {
     const limit = Math.max(1, Math.min(80, Number(options.limit || 8)));
     const newestFirst = options.newestFirst !== false;
-    const sourceEvents = normalizeJobEvents(job);
+    const sourceEvents = normalizeJobEvents(job).filter((event) => {
+      const type = String((event && event.type) || '');
+      return type !== 'job.checkpoint_saved';
+    });
     const events = (newestFirst ? sourceEvents : sourceEvents.slice().reverse()).slice(0, limit);
     if (!events.length) return [];
 
@@ -370,14 +395,12 @@
         return `${ts} Patch determinístico - ${[status, kind, operations, files].filter(Boolean).join(' · ')}`.trim();
       }
 
-      if (type === 'job.completed') return `${ts} Processamento concluído`.trim();
+      if (type === 'job.completed') {
+        return `${ts} ${payload.noFileChanges ? 'Resposta concluída sem execução' : 'Processamento concluído'}`.trim();
+      }
       if (type === 'job.failed') {
         const reason = compactUxReason(payload.reason);
         return `${ts} Falha final${reason ? ` - ${reason}` : ''}`.trim();
-      }
-      if (type === 'job.checkpoint_saved') {
-        const key = payload.key ? `checkpoint ${payload.key}` : 'checkpoint salvo';
-        return `${ts} ${key}`.trim();
       }
       if (type === 'job.created') return `${ts} Job iniciado`.trim();
 
@@ -388,9 +411,12 @@
   function buildFinalSummaryLines(job, phaseSteps = []) {
     if (!job || !['completed', 'failed', 'cancelled'].includes(String(job.status || '').toLowerCase())) return [];
     const status = String(job.status || '').toLowerCase();
+    const completedWithoutExecution = isCompletedWithoutExecution(job);
     const result =
       status === 'completed'
-        ? 'Resultado: execução concluída.'
+        ? completedWithoutExecution
+          ? 'Resultado: análise concluída sem execução.'
+          : 'Resultado: execução concluída.'
         : status === 'cancelled'
           ? 'Resultado: execução cancelada.'
           : 'Resultado: execução não concluída.';
@@ -482,9 +508,11 @@
 
     if (includePhaseLine) {
       if (phase === 'persona_plan' || phase === 'cortex_intake' || phase === 'cortex_briefing') {
-        lines.push('Estou lendo o briefing, o grafo do projeto e os arquivos relacionados antes de editar.');
+        lines.push('Estou lendo o pedido e o projeto antes de tocar nos arquivos.');
+      } else if (phase === 'awaiting_user_input') {
+        lines.push('Preciso de uma resposta sua para continuar sem adivinhar.');
       } else if (phase === 'cortex_render_pass') {
-        lines.push('Estou transformando o plano em operações de arquivo verificáveis.');
+        lines.push('Estou preparando a mudança em arquivos reais.');
       } else if (phase === 'cortex_validation') {
         lines.push('Estou validando o patch antes de permitir execução ou promoção para o projeto real.');
       } else if (phase === 'awaiting_user_confirmation') {
@@ -494,7 +522,11 @@
       } else if (phase === 'execute_validation') {
         lines.push('Estou rodando build, testes, smoke visual e coletando evidência do resultado.');
       } else if (status === 'completed') {
-        lines.push('Concluí esta rodada porque a validação real passou.');
+        lines.push(
+          isCompletedWithoutExecution(job)
+            ? 'Concluí esta rodada como resposta contextual, sem alterar arquivos.'
+            : 'Concluí esta rodada porque a validação real passou.'
+        );
       }
     }
 
