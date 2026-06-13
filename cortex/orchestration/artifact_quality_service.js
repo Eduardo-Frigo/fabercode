@@ -729,6 +729,29 @@ function createArtifactQualityService(dependencies = {}) {
     }
 
     const writes = collectOperationWrites(operations);
+    const writtenFiles = Array.from(writes.keys());
+    const hasAppFiles = writtenFiles.some((file) => {
+      const fileName = file.split('/').pop() || '';
+      if (!fileName || fileName.startsWith('.')) return false;
+      if (/^(readme|license|changelog)(\.[a-z0-9]+)?$/i.test(fileName)) return false;
+      if (/^(package|composer|tsconfig)\.json$/i.test(fileName)) return false;
+      if (/^(docker-compose|next\.config|tailwind\.config|postcss\.config|vite\.config)\.(ya?ml|js|ts|mjs|cjs)$/i.test(fileName)) return false;
+      if (/^(yarn\.lock|package-lock\.json|pnpm-lock\.yaml|bun\.lockb)$/i.test(fileName)) return false;
+      return true;
+    });
+
+    if (!hasAppFiles) {
+      return {
+        enabled: false,
+        score: 100,
+        minScore: minArtifactQualityScore,
+        passesMinimum: true,
+        checks: {},
+        issues: [],
+        guidance: [],
+        expectations,
+      };
+    }
     const htmlContent = readCandidateContent(writes, projectRootPath, ['index.html', 'index.php']);
     const phpContent = readCandidateContent(writes, projectRootPath, ['index.php']);
     const nextPageContent = readCandidateContent(writes, projectRootPath, [

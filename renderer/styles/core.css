@@ -884,6 +884,30 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.job-progress-head:hover {
+  opacity: 0.85;
+}
+
+.job-progress-head::after {
+  content: '▼';
+  font-size: 0.55rem;
+  color: #a9b4c2;
+  transition: transform 0.2s ease;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.job-progress.collapsed .job-progress-head::after {
+  transform: rotate(-90deg);
+}
+
+.job-progress.collapsed .job-progress-detail,
+.job-progress.collapsed .job-progress-meter {
+  display: none !important;
 }
 
 .job-progress-head strong {

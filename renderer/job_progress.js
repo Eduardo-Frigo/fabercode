@@ -11,6 +11,18 @@
     };
     const uxStateModel = window.FaberUxStateModel || null;
 
+    // Toggle collapse on header click, persisting it in localStorage
+    const header = elements.root ? elements.root.querySelector('.job-progress-head') : null;
+    if (header && elements.root) {
+      const isCollapsed = localStorage.getItem('faber-job-progress-collapsed') === 'true';
+      elements.root.classList.toggle('collapsed', isCollapsed);
+
+      header.addEventListener('click', () => {
+        const currentlyCollapsed = elements.root.classList.toggle('collapsed');
+        localStorage.setItem('faber-job-progress-collapsed', currentlyCollapsed ? 'true' : 'false');
+      });
+    }
+
     function buildTransientStatus(job) {
       if (uxStateModel && typeof uxStateModel.buildJobProgressPresentation === 'function') {
         const presentation = uxStateModel.buildJobProgressPresentation(job);
