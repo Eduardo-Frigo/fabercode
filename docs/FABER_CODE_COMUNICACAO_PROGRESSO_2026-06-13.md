@@ -20,5 +20,12 @@ Este documento resume as melhorias e correções implementadas no Faber Code par
 * **Indicação Visual (Chevron):** Adicionamos regras CSS em [core.css](file:///Users/eduardofrigo/Desktop/Faber%20code/localcode-studio-architecture-base/renderer/styles/core.css) para exibir um ícone de chevron indicador (`▼`) à direita no cabeçalho do painel de progresso, com uma transição suave de rotação (gira para `-90deg` apontando para o lado) quando recolhido.
 * **Otimização de Espaço:** Quando o painel está no estado recolhido (`.collapsed`), todos os elementos de detalhes de fases (`.job-progress-detail`) e a barra de progresso (`.job-progress-meter`) são ocultados usando `display: none !important;`, permitindo que o usuário visualize a tela inteira sem perder espaço visual ou de capturas de tela.
 
+## 4. Otimização do Loop Agentico e Recuperação contra Respostas Vazias (Conversational Stalling)
+* **Reforço de Prompt no System Instructions:** Modificamos a instrução do sistema no [agentic_tool_loop_service.js](file:///Users/eduardofrigo/Desktop/Faber%20code/localcode-studio-architecture-base/main/services/agentic_tool_loop_service.js) para explicitar ao modelo que ele está na fase de execução direta. O prompt agora proíbe expressamente respostas de texto puramente conversacionais (como *"Entendi"*, *"Vou começar"*, etc.) sem chamadas de ferramentas, garantindo que o agente comece a codificar imediatamente.
+* **Caminho de Recuperação e Segunda Chance (Recovery Path):** Implementamos um tratamento no loop de execução para os casos em que o modelo, na primeira rodada (passo 0), decide responder apenas com texto e sem chamadas de ferramentas. Em vez de abortar o processo imediatamente com o erro *"A execução terminou sem criar ou alterar arquivos no projeto"*, o serviço agora:
+  1. Registra a resposta de texto no histórico da conversa;
+  2. Insere um lembrete do sistema alertando o modelo de que ele deve utilizar as ferramentas de escrita ou comando;
+  3. Reseta o ID de resposta temporária e permite que o loop continue para um segundo passo, dando ao modelo a oportunidade de se auto-corrigir e chamar as ferramentas adequadas de forma totalmente automática.
+
 ---
 Todos os testes de contrato e integração passaram com sucesso. O projeto está totalmente pronto para o commit e continuidade do fluxo de scaffolding inicial do Papyrus.
