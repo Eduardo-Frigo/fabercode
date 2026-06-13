@@ -1,6 +1,7 @@
 const {
   hasAnyScannedFiles,
   hasApplicationSurfaceFiles,
+  isAffirmativeContinuation,
   normalizeIntentText,
 } = require('./execution_intent');
 
@@ -298,13 +299,15 @@ function buildProductIntake({
   const complexApplication = !pendingBriefing && !currentEditOverridesContextScaffold && hasComplexApplicationSignal(intentSource);
   const complexBriefSufficient = complexApplication && hasComplexBriefSignal(intentSource);
   const mcpFreedomAllowed = complexApplication && hasMcpFreedomSignal(intentSource);
+  const isAffirmative = isAffirmativeContinuation(raw);
   const requiresComplexBriefing = Boolean(
     complexApplication &&
       !complexBriefSufficient &&
       !defaultAuthorized &&
       !mcpFreedomAllowed &&
       !continuationCreate &&
-      !selfContainedBrief
+      !selfContainedBrief &&
+      !isAffirmative
   );
 
   const searchObject = /\b(arquivo|arquivos|texto|frase|mensagem|string|codigo)\b/.test(normalized);

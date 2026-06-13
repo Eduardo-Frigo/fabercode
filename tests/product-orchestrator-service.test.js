@@ -266,6 +266,60 @@ async function run() {
   assert.strictEqual(indifferenceStackChoiceContinuation.meta.routeScore.requiresClarification, false);
   assert.match(indifferenceStackChoiceContinuation.executionMessage, /colaborativ|editor|document/i);
 
+  const perfectExecuteContinuation = await service.resolveProductRoute({
+    projectInfo: createProjectInfo(),
+    userMessage: 'Perfeito, pode executar',
+    conversationMessages: [
+      {
+        role: 'user',
+        text: 'Quero criar uma aplicação colaborativa estilo editor em tempo real.'
+      },
+      {
+        role: 'assistant',
+        text: 'Segue a proposta inicial. Stack: React + TypeScript + WebSocket...'
+      }
+    ]
+  });
+  assert.strictEqual(perfectExecuteContinuation.decision, 'execute');
+  assert.strictEqual(perfectExecuteContinuation.productRoute.capability, 'create_project');
+  assert.strictEqual(perfectExecuteContinuation.productRoute.executionIntent, 'init_project');
+
+  const suggestedExecuteContinuation = await service.resolveProductRoute({
+    projectInfo: createProjectInfo(),
+    userMessage: 'Pode executar o que você sugeriu,',
+    conversationMessages: [
+      {
+        role: 'user',
+        text: 'Quero criar uma aplicação colaborativa estilo editor em tempo real.'
+      },
+      {
+        role: 'assistant',
+        text: 'Segue a proposta inicial. Stack: React + TypeScript + WebSocket...'
+      }
+    ]
+  });
+  assert.strictEqual(suggestedExecuteContinuation.decision, 'execute');
+  assert.strictEqual(suggestedExecuteContinuation.productRoute.capability, 'create_project');
+  assert.strictEqual(suggestedExecuteContinuation.productRoute.executionIntent, 'init_project');
+
+  const followPlanContinuation = await service.resolveProductRoute({
+    projectInfo: createProjectInfo(),
+    userMessage: 'Vamos seguir seu plano',
+    conversationMessages: [
+      {
+        role: 'user',
+        text: 'Quero criar uma aplicação colaborativa estilo editor em tempo real.'
+      },
+      {
+        role: 'assistant',
+        text: 'Segue a proposta inicial. Stack: React + TypeScript + WebSocket...'
+      }
+    ]
+  });
+  assert.strictEqual(followPlanContinuation.decision, 'execute');
+  assert.strictEqual(followPlanContinuation.productRoute.capability, 'create_project');
+  assert.strictEqual(followPlanContinuation.productRoute.executionIntent, 'init_project');
+
   const longBriefingCreate = await service.resolveProductRoute({
     projectInfo: createProjectInfo(),
     userMessage: [
@@ -1067,10 +1121,10 @@ async function run() {
     }),
     userMessage: 'melhore o hero para ficar mais profissional',
   });
-  assert.strictEqual(aiRouterCalls, 0);
+  assert.strictEqual(aiRouterCalls, 1);
   assert.strictEqual(aiEdit.decision, 'execute');
-  assert.strictEqual(aiEdit.meta.reason, 'build_mode_existing_project_edit');
-  assert.strictEqual(aiEdit.executionMessage, 'melhore o hero para ficar mais profissional');
+  assert.strictEqual(aiEdit.meta.reason, 'ai_product_edit_accepted');
+  assert.strictEqual(aiEdit.executionMessage, 'ajustar a seção hero do projeto');
 
   const guardedService = createService({
     requestAiProductRouteDecision: async () => ({
@@ -1086,7 +1140,7 @@ async function run() {
     userMessage: 'criar site em Next.js',
   });
   assert.strictEqual(guardedMissingProject.decision, 'clarify');
-  assert.strictEqual(guardedMissingProject.meta.reason, 'missing_project_for_work');
+  assert.strictEqual(guardedMissingProject.meta.reason, 'policy_gate_missing_project');
 
   const blueprintOverrideService = createService({
     requestAiProductRouteDecision: async () => ({

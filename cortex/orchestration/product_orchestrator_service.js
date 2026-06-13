@@ -26,16 +26,11 @@ function shouldRequestAiProductRoute({ productFacts = {}, buildModeRoute = null 
   if (routeScore && routeScore.requiresClarification) return false;
   if (
     signals.searchIntent ||
-    signals.deterministicEdit ||
-    signals.scaffoldIntent ||
-    signals.editIntent ||
-    signals.defaultAuthorized ||
-    signals.exploratoryConversation
+    signals.deterministicEdit
   ) {
     return false;
   }
-  const mode = buildModeRoute && buildModeRoute.mode ? String(buildModeRoute.mode) : '';
-  return !mode || mode === 'conversation_only';
+  return true;
 }
 
 function createProductOrchestratorService(dependencies = {}) {

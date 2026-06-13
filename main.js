@@ -2089,7 +2089,7 @@ async function requestDirectPersonaChat({
     'Não diga que alterou arquivos, executou comandos ou validou o projeto se isso ainda não aconteceu.',
     'Se faltar algo para continuar com segurança, faça no máximo uma pergunta direta.',
     'Se a mensagem for conversa comum, responda normalmente.',
-    'Se o pedido for técnico mas a rota atual não liberou execução, explique em linguagem simples o que falta ou qual é o próximo passo.',
+    'Se o pedido for técnico, explique de forma simples que o usuário pode confirmar digitando "pode executar" ou "confirmar".',
     'Mantenha a resposta curta o bastante para caber bem no chat.',
   ].join(' ');
 
@@ -4418,6 +4418,39 @@ let projectVerifiedExecutionServiceInstance = null;
 let toolRegistryInstance = null;
 const activeExecutionControllersByJobId = new Map();
 
+const sessionPermissions = {
+  terminalAlwaysAllow: false,
+  writeAlwaysAllow: false,
+};
+
+function askUserPermission(title, message, detail, buttons) {
+  if (typeof dialog === 'undefined') return 2; // Deny by default
+  try {
+    return dialog.showMessageBoxSync(mainWindow, {
+      type: 'question',
+      buttons: buttons || ['Permitir Uma Vez', 'Sempre Permitir nesta Sessão', 'Negar'],
+      defaultId: 0,
+      cancelId: 2,
+      title: title || 'Faber Code - Permissão de Ferramenta',
+      message: message,
+      detail: detail,
+    });
+  } catch (error) {
+    console.error('Erro ao exibir diálogo de permissão:', error);
+    return 2; // Deny
+  }
+}
+
+function hasAppFiles(rootPath) {
+  if (!rootPath) return false;
+  try {
+    const info = scanProject(rootPath);
+    return hasApplicationSurfaceFilesForBlueprintGuard(info);
+  } catch (err) {
+    return false;
+  }
+}
+
 function createExecutionCancelledError(jobId = '') {
   const error = new Error('Ação cancelada pelo usuário. Nenhum arquivo foi alterado.');
   error.code = 'job_cancelled';
@@ -4491,7 +4524,7 @@ function getAutomataExecutor() {
 function getFaberCapabilityAdapterService() {
   if (!faberCapabilityAdapterServiceInstance) {
     const externalMcpRegistry = externalMcpServerRegistryService.listServers({ includeSecrets: true });
-    faberCapabilityAdapterServiceInstance = createFaberCapabilityAdapterService({
+    const service = createFaberCapabilityAdapterService({
       captureProjectPreview: projectVisualCaptureService.captureProjectPreview,
       fs,
       getProjectGitStatus,
@@ -4508,6 +4541,41 @@ function getFaberCapabilityAdapterService() {
       setJobCheckpoint,
       terminalService: projectTerminalService,
     });
+
+    const originalExecute = service.executeCapability;
+    service.executeCapability = async function(request = {}) {
+      const capability = request.capability;
+      const action = request.action;
+      if (capability === 'terminal' && action === 'run_command') {
+        const rootPath = request.projectSession && request.projectSession.rootPath ? request.projectSession.rootPath : '';
+        if (rootPath && !hasAppFiles(rootPath)) {
+          // Allow automatically during scaffolding
+        } else if (!sessionPermissions.terminalAlwaysAllow) {
+          const command = request.payload && request.payload.command ? request.payload.command : '';
+          const choice = askUserPermission(
+            'Permissão de Terminal',
+            'O Faber Code está solicitando permissão para executar o seguinte comando no terminal do projeto:',
+            `$ ${command}`,
+            ['Permitir Uma Vez', 'Sempre Permitir nesta Sessão', 'Negar']
+          );
+          if (choice === 0) {
+            // Allow once
+          } else if (choice === 1) {
+            sessionPermissions.terminalAlwaysAllow = true;
+          } else {
+            return {
+              ok: false,
+              status: 'blocked',
+              message: 'A execução do comando foi negada pelo usuário.',
+              errors: ['permission_denied']
+            };
+          }
+        }
+      }
+      return originalExecute.call(service, request);
+    };
+
+    faberCapabilityAdapterServiceInstance = service;
   }
   return faberCapabilityAdapterServiceInstance;
 }
@@ -4530,6 +4598,46 @@ function getToolRegistry() {
     for (const tool of createCapabilityTools(getFaberCapabilityAdapterService())) {
       toolRegistryInstance.register(tool);
     }
+
+    const originalExecute = toolRegistryInstance.execute;
+    toolRegistryInstance.execute = function(name, input) {
+      const tool = toolRegistryInstance.get(name);
+      if (tool && tool.permission === 'write') {
+        const rootPath = input && input.rootPath ? input.rootPath : '';
+        if (rootPath && !hasAppFiles(rootPath)) {
+          // Allow automatically during scaffolding
+        } else if (!sessionPermissions.writeAlwaysAllow) {
+          let details = '';
+          if (name === 'automata.execute_operation_batch') {
+            const ops = Array.isArray(input.operations) ? input.operations : [];
+            details = ops.map(op => `• [${op.op || 'write'}] ${op.path}`).join('\n');
+          } else if (name === 'automata.apply_file_patch') {
+            details = `• [patch] ${input.targetFile}`;
+          } else {
+            details = `• [tool] ${name}`;
+          }
+          const choice = askUserPermission(
+            'Permissão de Escrita',
+            'O Faber Code está solicitando permissão para modificar/criar arquivos no projeto:',
+            details || 'Modificação de arquivos',
+            ['Permitir Uma Vez', 'Sempre Permitir nesta Sessão', 'Negar']
+          );
+          if (choice === 0) {
+            // Allow once
+          } else if (choice === 1) {
+            sessionPermissions.writeAlwaysAllow = true;
+          } else {
+            return {
+              ok: false,
+              status: 'blocked',
+              message: 'A gravação de arquivos foi negada pelo usuário.',
+              errors: ['permission_denied']
+            };
+          }
+        }
+      }
+      return originalExecute.call(toolRegistryInstance, name, input);
+    };
   }
   return toolRegistryInstance;
 }
@@ -4563,6 +4671,7 @@ function getAgenticToolLoopService() {
       requestModelTurn: requestAgenticModelTurn,
       setJobCheckpoint,
       shouldUseModel: shouldUseOpenAiResponsesApi,
+      maxSteps: 40,
     });
   }
   return agenticToolLoopServiceInstance;

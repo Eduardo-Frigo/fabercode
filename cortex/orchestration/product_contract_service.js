@@ -2,6 +2,7 @@ const {
   hasAnyScannedFiles,
   hasApplicationSurfaceFiles,
   hasExplicitProjectRebuildIntent,
+  isAffirmativeContinuation,
   normalizeIntentText,
 } = require('./execution_intent');
 const {
@@ -65,12 +66,7 @@ function hasExploratoryConversationSignal(userMessage = '') {
   );
 }
 
-function isAffirmativeContinuation(userMessage = '') {
-  const normalized = normalizeIntentText(userMessage);
-  return /^(sim|s|ok|certo|isso|pode|pode sim|pode gerar|gera|gerar|continue|continuar|segue|pode seguir|claro|faca|fazer|manda ver|vamos|prossiga|tente novamente|retente|tanto faz|qualquer|qualquer um|indiferente|tanto fez|voce decide|você decide|o que achar melhor)$/.test(
-    normalized
-  );
-}
+
 
 function isProjectEmpty(projectInfo = null) {
   if (!projectInfo) return false;

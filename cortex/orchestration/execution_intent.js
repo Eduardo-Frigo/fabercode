@@ -73,10 +73,22 @@ function resolveExecutionIntentFromContext({
   return scaffoldIntent ? 'init_project' : 'edit_project';
 }
 
+function isAffirmativeContinuation(userMessage = '') {
+  const normalized = normalizeIntentText(userMessage).replace(/[.,;:!?]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (/^(sim|s|ok|certo|isso|pode|pode sim|pode gerar|gera|gerar|continue|continuar|segue|pode seguir|claro|faca|fazer|manda ver|vamos|prossiga|tente novamente|retente|tanto faz|qualquer|qualquer um|indiferente|tanto fez|voce decide|você decide|o que achar melhor|perfeito|pode executar|executar|rodar|pode rodar|aplicar|pode aplicar|iniciar|pode iniciar)$/.test(normalized)) {
+    return true;
+  }
+  if (/\b(vamos seguir seu plano|siga o plano|seguir o plano|seguir plano|pode seguir com o plano|vamos seguir com o plano|vamos em frente|pode comecar|pode iniciar|pode rodar|pode executar|pode fazer)\b/i.test(normalized)) {
+    return true;
+  }
+  return /^(perfeito|sim|certo|ok)?\s*(pode\s+)?(executar|seguir|rodar|gerar|fazer|aplicar|iniciar|mudar|alterar)(\s+(o\s+que\s+voce\s+sugeriu|com\s+isso|a\s+execucao|o\s+projeto|os\s+arquivos|as\s+alteracoes))?$/i.test(normalized);
+}
+
 module.exports = {
   hasAnyScannedFiles,
   hasApplicationSurfaceFiles,
   hasExplicitProjectRebuildIntent,
+  isAffirmativeContinuation,
   normalizeIntentText,
   resolveExecutionIntentFromContext,
   stripNegatedIntentClauses,

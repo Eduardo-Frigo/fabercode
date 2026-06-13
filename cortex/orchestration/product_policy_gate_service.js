@@ -756,7 +756,10 @@ function createProductPolicyGateService() {
       return fallbackRoute;
     }
     if (signals.requiresComplexBriefing) {
-      return fallbackRoute;
+      const bypass = canCreateInitialProject || (normalizedAiRoute && normalizedAiRoute.decision === 'execute');
+      if (!bypass) {
+        return fallbackRoute;
+      }
     }
 
     if (!normalizedAiRoute) {
@@ -809,7 +812,8 @@ function createProductPolicyGateService() {
       !signals.scaffoldIntent &&
       !signals.editIntent &&
       !signals.searchIntent &&
-      !signals.deterministicEdit
+      !signals.deterministicEdit &&
+      !(normalizedAiRoute && normalizedAiRoute.decision === 'execute')
     ) {
       return {
         ...fallbackRoute,
@@ -821,7 +825,7 @@ function createProductPolicyGateService() {
       };
     }
 
-    if (signals.pendingBriefing) {
+    if (signals.pendingBriefing && !(normalizedAiRoute && normalizedAiRoute.decision === 'execute')) {
       return {
         ...fallbackRoute,
         aiRoute: normalizedAiRoute.raw,
@@ -837,7 +841,8 @@ function createProductPolicyGateService() {
       routeScore.noExecutionPreferred &&
       !signals.diagnosticIntent &&
       !signals.searchIntent &&
-      !signals.deterministicEdit
+      !signals.deterministicEdit &&
+      !(normalizedAiRoute && normalizedAiRoute.decision === 'execute')
     ) {
       return {
         ...fallbackRoute,
@@ -849,7 +854,7 @@ function createProductPolicyGateService() {
       };
     }
 
-    if (shouldClarifyRouteScore(routeScore, signals)) {
+    if (shouldClarifyRouteScore(routeScore, signals) && !(normalizedAiRoute && normalizedAiRoute.decision === 'execute')) {
       return {
         ...fallbackRoute,
         aiRoute: normalizedAiRoute.raw,
@@ -1012,7 +1017,7 @@ function createProductPolicyGateService() {
     }
 
     if (normalizedAiRoute.decision === 'execute' && normalizedAiRoute.capability === 'create_project') {
-      if (canCreateInitialProject && signals.enoughForInitialCreate) {
+      if (canCreateInitialProject) {
         return buildRoute({
           decision: 'execute',
           response: normalizedAiRoute.response || fallbackRoute.response,
