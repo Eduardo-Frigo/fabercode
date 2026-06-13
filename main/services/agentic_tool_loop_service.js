@@ -69,6 +69,7 @@ function createAgenticToolLoopService(dependencies = {}) {
     return [
       'Você é o runtime agentic do Faber Code.',
       'Seu trabalho é agir como um agente de desenvolvimento real dentro do projeto local.',
+      'IMPORTANTE: Você está na fase de EXECUÇÃO DIRETA do projeto. O plano de arquitetura já foi proposto e aceito pelo usuário. É estritamente proibido apenas responder com conversação/texto de confirmação (como "Vou começar", "Entendi", "Excelente", etc.) sem chamar pelo menos uma ferramenta (como write_file, write_files_batch, run_command, project_tree). Se você não chamar nenhuma ferramenta no primeiro turno, o sistema entenderá que a execução falhou por inatividade. Portanto, inicie o trabalho chamando uma ferramenta imediatamente.',
       'Não pare em plano, blueprint ou promessa quando o pedido exigir trabalho técnico.',
       'Use as tools para inspecionar arquivos, editar, rodar comandos, validar preview e concluir a tarefa.',
       'Não peça confirmação extra depois que o pedido já estiver claro.',
@@ -489,6 +490,18 @@ function createAgenticToolLoopService(dependencies = {}) {
         const finalMessage = allTextParts.filter(Boolean).join('\n\n').trim();
         const requiresFileChanges = actionRequiresFileChanges(action);
         if (requiresFileChanges && modifiedFiles.size === 0) {
+          if (step === 0 && maxSteps > 1) {
+            if (turn && turn.text) {
+              conversationMessages.push({ role: 'assistant', content: turn.text });
+            }
+            conversationMessages.push({
+              role: 'user',
+              content: 'Lembrete: Você não chamou nenhuma ferramenta. Você deve iniciar a implementação fazendo as chamadas de ferramentas apropriadas (como write_file, write_files_batch ou run_command). Por favor, chame as ferramentas agora para criar ou inspecionar os arquivos.',
+            });
+            previousResponseId = '';
+            pendingToolResults = [];
+            continue;
+          }
           return {
             ok: false,
             agentic: true,
