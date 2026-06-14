@@ -67,18 +67,18 @@ function createAgenticToolLoopService(dependencies = {}) {
   function buildSystemPrompt(projectInfo = {}) {
     const rootPath = projectInfo && projectInfo.rootPath ? String(projectInfo.rootPath) : '';
     return [
-      'Você é o runtime agentic do Faber Code.',
-      'Seu trabalho é agir como um agente de desenvolvimento real dentro do projeto local.',
-      'IMPORTANTE: Você está na fase de EXECUÇÃO DIRETA do projeto. O plano de arquitetura já foi proposto e aceito pelo usuário. É estritamente proibido apenas responder com conversação/texto de confirmação (como "Vou começar", "Entendi", "Excelente", etc.) sem chamar pelo menos uma ferramenta (como write_file, write_files_batch, run_command, project_tree). Se você não chamar nenhuma ferramenta no primeiro turno, o sistema entenderá que a execução falhou por inatividade. Portanto, inicie o trabalho chamando uma ferramenta imediatamente.',
-      'Não pare em plano, blueprint ou promessa quando o pedido exigir trabalho técnico.',
-      'Use as tools para inspecionar arquivos, editar, rodar comandos, validar preview e concluir a tarefa.',
-      'Não peça confirmação extra depois que o pedido já estiver claro.',
-      'Prefira ler o projeto antes de escrever, mas não prolongue análise sem necessidade.',
-      'Quando modificar algo, valide com terminal, preview ou leitura final dos arquivos sempre que fizer sentido.',
-      'Todos os comandos executados no terminal devem ser 100% não-interativos (sem perguntas/prompts), utilizando flags como -y, --yes ou especificando todos os parâmetros diretamente via CLI (por exemplo, ao criar projetos com npx), já que a entrada do terminal está fechada para digitação interativa (stdin ignora inputs).',
-      'Explique no final, em português natural, o que foi feito de verdade e o que ainda ficou pendente.',
+      'Você é o runtime agentic do Faber Code. Seu trabalho é agir como um engenheiro de software sênior direto no projeto.',
+      'IMPORTANTE: Você está na fase de EXECUÇÃO. Não responda apenas com texto (ex: "Vou começar"). Você deve chamar ferramentas imediatamente.',
+      '## Diretrizes de Edição (CRÍTICO)',
+      '1. PREFIRA EDITAR A REESCREVER: Nunca use write_file para modificar um arquivo existente inteiro. Sempre use `edit_file_fuzzy`.',
+      '2. COMO USAR edit_file_fuzzy: Copie um bloco único e exato do arquivo (targetContent) e forneça a nova versão (replacementContent). O sistema ignora espaços e indentações para te ajudar a encontrar o bloco.',
+      '3. NUNCA DEIXE CÓDIGO QUEBRADO: Se você criar ou modificar arquivos de código (TS, JS, etc), use `run_command` para rodar linters (`npm run lint`), checagem de tipos (`npx tsc --noEmit`) ou testes ANTES de concluir a tarefa.',
+      '4. AUTO-CORREÇÃO: Se um comando de terminal falhar com erros de sintaxe ou lint, analise a saída de erro e chame a ferramenta de edição para corrigir o arquivo.',
+      '5. COMANDOS NÃO-INTERATIVOS: Qualquer comando no `run_command` deve ter flags como -y ou --yes. Não use comandos que exigem input do usuário.',
+      '## Conclusão',
+      'Sempre chame a ferramenta `finish_task` para indicar que você terminou, não importa se foi um sucesso ou se você encontrou um bloqueio instransponível.',
       `Projeto ativo: ${rootPath || 'indisponível'}.`,
-    ].join(' ');
+    ].join('\n');
   }
 
   function buildBoundTools(projectInfo = {}) {
@@ -196,6 +196,43 @@ function createAgenticToolLoopService(dependencies = {}) {
               content: String(entry.content || ''),
             })),
           }),
+      },
+      {
+        name: 'edit_file_fuzzy',
+        description: 'Edita um arquivo existente substituindo um bloco de texto por outro de forma tolerante a falhas.',
+        inputSchema: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['path', 'targetContent', 'replacementContent'],
+          properties: {
+            path: { type: 'string' },
+            targetContent: { type: 'string' },
+            replacementContent: { type: 'string' },
+          },
+        },
+        execute: async (input = {}) =>
+          runTool('automata.edit_file_fuzzy', {
+            rootPath,
+            targetFile: input.path,
+            targetContent: String(input.targetContent || ''),
+            replacementContent: String(input.replacementContent || ''),
+          }),
+      },
+      {
+        name: 'finish_task',
+        description: 'Encerra a execução do agente. Chame esta ferramenta quando terminar tudo ou não puder prosseguir.',
+        inputSchema: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['status', 'summary'],
+          properties: {
+            status: { type: 'string', enum: ['success', 'failure'] },
+            summary: { type: 'string', description: 'Resumo do que foi feito e do que ficou pendente.' },
+          },
+        },
+        execute: async (input = {}) => {
+          return { ok: true, status: input.status, message: 'Tarefa encerrada: ' + input.summary, _isFinishTask: true };
+        },
       },
       {
         name: 'run_command',
@@ -339,8 +376,11 @@ function createAgenticToolLoopService(dependencies = {}) {
 
   function collectModifiedFilesFromResult(toolName, input, result) {
     const files = new Set();
-    if (toolName === 'write_file' && input && input.path) files.add(String(input.path));
-    if (toolName === 'write_files_batch') {
+    if ((toolName === 'write_file' || toolName === 'automata.apply_file_patch') && input) {
+      const p = input.path || input.targetFile;
+      if (p) files.add(String(p));
+    }
+    if (toolName === 'write_files_batch' || toolName === 'automata.execute_operation_batch') {
       for (const entry of Array.isArray(input && input.operations) ? input.operations : []) {
         if (entry && entry.path) files.add(String(entry.path));
       }
@@ -366,7 +406,17 @@ function createAgenticToolLoopService(dependencies = {}) {
       logs: result && Array.isArray(result.logs) ? result.logs.slice(0, 4) : [],
       data: result && result.data ? result.data : null,
     };
-    return clipText(JSON.stringify(summary), 14000);
+    
+    // Safely truncate large string data before stringify
+    if (summary.data && typeof summary.data.content === 'string' && summary.data.content.length > 13000) {
+      summary.data.content = summary.data.content.slice(0, 13000) + '... [TRUNCATED]';
+    }
+    if (summary.logs && summary.logs[0] && typeof summary.logs[0] === 'string' && summary.logs[0].length > 13000) {
+      summary.logs[0] = summary.logs[0].slice(0, 13000) + '... [TRUNCATED]';
+    }
+    
+    const raw = JSON.stringify(summary, null, 2);
+    return raw.length > 14000 ? raw.slice(0, 13997) + '...' : raw;
   }
 
   function buildConversationMessages(conversationMessages = [], userMessage = '', attachments = []) {
@@ -381,11 +431,42 @@ function createAgenticToolLoopService(dependencies = {}) {
       if (!content) continue;
       messages.push({ role, content });
     }
-    const attachmentSummary = summarizeAttachments(attachments);
-    const currentMessage = attachmentSummary
-      ? `${String(userMessage || '').trim()}\n\nAnexos: ${attachmentSummary}`
-      : String(userMessage || '').trim();
-    if (currentMessage) messages.push({ role: 'user', content: currentMessage });
+    const contentArr = [];
+    if (userMessage) {
+      contentArr.push({ type: 'text', text: String(userMessage).trim() });
+    }
+    
+    if (Array.isArray(attachments)) {
+      const fs = require('fs');
+      for (const att of attachments) {
+        if (att && att.path && (att.type.startsWith('image/') || att.path.match(/\.(png|jpe?g|gif|webp)$/i))) {
+          try {
+            if (fs.existsSync(att.path)) {
+              const base64 = fs.readFileSync(att.path, 'base64');
+              let mime = att.type || 'image/jpeg';
+              if (att.path.endsWith('.png')) mime = 'image/png';
+              else if (att.path.endsWith('.webp')) mime = 'image/webp';
+              else if (att.path.endsWith('.gif')) mime = 'image/gif';
+              contentArr.push({
+                type: 'image_url',
+                image_url: { url: `data:${mime};base64,${base64}` }
+              });
+            }
+          } catch (e) {}
+        }
+      }
+    }
+    
+    if (contentArr.length > 0) {
+      messages.push({ role: 'user', content: contentArr });
+    } else {
+      const attachmentSummary = summarizeAttachments(attachments);
+      const fallbackMessage = attachmentSummary
+        ? `${String(userMessage || '').trim()}\n\nAnexos: ${attachmentSummary}`
+        : String(userMessage || '').trim();
+      if (fallbackMessage) messages.push({ role: 'user', content: fallbackMessage });
+    }
+    
     return messages;
   }
 
@@ -444,6 +525,11 @@ function createAgenticToolLoopService(dependencies = {}) {
     const toolRuns = [];
     let previousResponseId = '';
     let pendingToolResults = [];
+    let isFinished = false;
+    let finishReason = '';
+    
+    // Doom Loop Detector State
+    const recentFailedToolCalls = [];
 
     if (jobId) {
       const activeProvider = String(getSelectedAiProvider() || '').trim().toLowerCase();
@@ -486,31 +572,19 @@ function createAgenticToolLoopService(dependencies = {}) {
       }
 
       const toolCalls = Array.isArray(turn && turn.toolCalls) ? turn.toolCalls : [];
-      if (!toolCalls.length) {
+      if (!toolCalls.length && !isFinished) {
         const finalMessage = allTextParts.filter(Boolean).join('\n\n').trim();
-        const requiresFileChanges = actionRequiresFileChanges(action);
-        if (requiresFileChanges && modifiedFiles.size === 0) {
-          if (step === 0 && maxSteps > 1) {
-            if (turn && turn.text) {
-              conversationMessages.push({ role: 'assistant', content: turn.text });
-            }
-            conversationMessages.push({
-              role: 'user',
-              content: 'Lembrete: Você não chamou nenhuma ferramenta. Você deve iniciar a implementação fazendo as chamadas de ferramentas apropriadas (como write_file, write_files_batch ou run_command). Por favor, chame as ferramentas agora para criar ou inspecionar os arquivos.',
-            });
-            previousResponseId = '';
-            pendingToolResults = [];
-            continue;
+        if (step === 0 && maxSteps > 1) {
+          if (turn && turn.text) {
+            conversationMessages.push({ role: 'assistant', content: turn.text });
           }
-          return {
-            ok: false,
-            agentic: true,
-            status: 'blocked',
-            message: 'A execução terminou sem criar ou alterar arquivos no projeto.',
-            errors: ['agentic_no_file_changes'],
-            modifiedFiles: [],
-            toolRuns,
-          };
+          conversationMessages.push({
+            role: 'user',
+            content: 'Lembrete: Você não chamou nenhuma ferramenta. Você DEVE usar tools para interagir com o projeto e concluir a tarefa.',
+          });
+          previousResponseId = '';
+          pendingToolResults = [];
+          continue;
         }
         return {
           ok: true,
@@ -533,6 +607,17 @@ function createAgenticToolLoopService(dependencies = {}) {
           continue;
         }
 
+        // Doom Loop Check
+        const currentCallKey = `${tool.name}:${JSON.stringify(call.input || {})}`;
+        const identicalFails = recentFailedToolCalls.filter(k => k === currentCallKey).length;
+        if (identicalFails >= 2) {
+          pendingToolResults.push({
+            callId: call && call.callId ? call.callId : call && call.id ? call.id : '',
+            output: JSON.stringify({ ok: false, message: 'SISTEMA: Você repetiu esta exata chamada falha múltiplas vezes. Você está preso em um DOOM LOOP. Por favor, tente uma abordagem completamente diferente ou encerre usando finish_task.' }),
+          });
+          continue;
+        }
+
         if (jobId) {
           appendJobEvent(jobId, 'job.agentic_tool_called', {
             step: step + 1,
@@ -543,6 +628,10 @@ function createAgenticToolLoopService(dependencies = {}) {
         let result = null;
         try {
           result = await tool.execute(call.input || {});
+          if (result && result._isFinishTask) {
+            isFinished = true;
+            finishReason = result.message;
+          }
         } catch (error) {
           result = {
             ok: false,
@@ -550,6 +639,11 @@ function createAgenticToolLoopService(dependencies = {}) {
             message: error && error.message ? error.message : String(error || ''),
             errors: ['agentic_tool_execution_failed'],
           };
+        }
+
+        if (!result.ok) {
+          recentFailedToolCalls.push(currentCallKey);
+          if (recentFailedToolCalls.length > 10) recentFailedToolCalls.shift();
         }
 
         collectModifiedFilesFromResult(tool.name, call.input || {}, result).forEach((file) => modifiedFiles.add(file));
@@ -574,6 +668,16 @@ function createAgenticToolLoopService(dependencies = {}) {
           callId: call && call.callId ? call.callId : call && call.id ? call.id : '',
           output: summarizeToolResultForModel(result),
         });
+      }
+
+      if (isFinished) {
+        return {
+          ok: true,
+          agentic: true,
+          message: finishReason,
+          modifiedFiles: [...modifiedFiles],
+          toolRuns,
+        };
       }
     }
 

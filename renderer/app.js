@@ -840,8 +840,8 @@ async function persistConversationMessage(role, text) {
   if (conversationController) await conversationController.persistConversationMessage(role, text);
 }
 
-function appendMessage(role, text, options = {}) {
-  if (conversationController) conversationController.appendMessage(role, text, options);
+function appendMessage(role, text, attachments = [], options = {}) {
+  if (conversationController) conversationController.appendMessage(role, text, attachments, options);
 }
 
 function renderChatForActiveConversation() {

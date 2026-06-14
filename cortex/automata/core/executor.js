@@ -204,6 +204,62 @@ function createAutomataExecutor(dependencies = {}) {
         continue;
       }
 
+      if (operation.op === 'delete_file') {
+        const targetKind = getPathKind(absolutePath);
+        if (targetKind === 'directory' || targetKind === 'other') {
+          return { ok: false, message: `Não foi possível deletar pasta usando delete_file: ${normalizedPath}` };
+        }
+        if (!fileSnapshots.has(absolutePath)) {
+          let snapshotContent = '';
+          if (targetKind === 'file') {
+            try {
+              snapshotContent = fs.readFileSync(absolutePath, 'utf8');
+            } catch {
+              return { ok: false, message: `Não foi possível preparar rollback para arquivo: ${normalizedPath}` };
+            }
+          }
+          fileSnapshots.set(absolutePath, {
+            absolutePath,
+            existed: targetKind === 'file',
+            content: snapshotContent,
+          });
+        }
+        preparedOperations.push({ ...operation, absolutePath });
+        continue;
+      }
+
+      if (operation.op === 'delete_dir') {
+        const targetKind = getPathKind(absolutePath);
+        if (targetKind === 'file' || targetKind === 'other') {
+          return { ok: false, message: `Não foi possível deletar arquivo usando delete_dir: ${normalizedPath}` };
+        }
+        if (targetKind === 'directory') {
+          rememberDirectorySnapshot(directorySnapshots, absolutePath);
+          const backupFilesRecursively = (dirPath) => {
+            const items = fs.readdirSync(dirPath);
+            for (const item of items) {
+              const fullPath = path.join(dirPath, item);
+              const stat = fs.statSync(fullPath);
+              if (stat.isFile()) {
+                if (!fileSnapshots.has(fullPath)) {
+                  fileSnapshots.set(fullPath, {
+                    absolutePath: fullPath,
+                    existed: true,
+                    content: fs.readFileSync(fullPath, 'utf8'),
+                  });
+                }
+              } else if (stat.isDirectory()) {
+                rememberDirectorySnapshot(directorySnapshots, fullPath);
+                backupFilesRecursively(fullPath);
+              }
+            }
+          };
+          backupFilesRecursively(absolutePath);
+        }
+        preparedOperations.push({ ...operation, absolutePath });
+        continue;
+      }
+
       const targetKind = getPathKind(absolutePath);
       if (targetKind === 'directory' || targetKind === 'other') {
         return { ok: false, message: `Não foi possível escrever sobre caminho não textual: ${normalizedPath}` };
@@ -386,7 +442,7 @@ function createAutomataExecutor(dependencies = {}) {
       if (!operation || typeof operation !== 'object') {
         return { ok: false, message: 'Operação inválida no lote.' };
       }
-      if (!['mkdir', 'write_file', 'append_file'].includes(operation.op)) {
+      if (!['mkdir', 'write_file', 'append_file', 'delete_file', 'delete_dir'].includes(operation.op)) {
         return { ok: false, message: `Operação de lote não suportada: ${operation.op}` };
       }
       const normalizedPath = normalizeRequestedRelativePath(operation.path);
@@ -413,6 +469,26 @@ function createAutomataExecutor(dependencies = {}) {
 
         if (operation.op === 'mkdir') {
           fs.mkdirSync(absolutePath, { recursive: true });
+          continue;
+        }
+
+        if (operation.op === 'delete_file') {
+          if (fs.existsSync(absolutePath)) {
+            fs.rmSync(absolutePath, { force: true });
+            const rel = normalizeRelativePathForDiff(normalizedPath);
+            modifiedFiles.push(rel);
+            mergeDiffStatsEntry(diffStats, rel, { added: 0, deleted: 1 });
+          }
+          continue;
+        }
+
+        if (operation.op === 'delete_dir') {
+          if (fs.existsSync(absolutePath)) {
+            fs.rmSync(absolutePath, { recursive: true, force: true });
+            const rel = normalizeRelativePathForDiff(normalizedPath);
+            modifiedFiles.push(rel);
+            mergeDiffStatsEntry(diffStats, rel, { added: 0, deleted: 1 });
+          }
           continue;
         }
 
@@ -476,6 +552,106 @@ function createAutomataExecutor(dependencies = {}) {
         ? `Lote executado com sucesso. Arquivos atualizados: ${uniqueFiles.join(', ')}`
         : 'Lote executado com sucesso.',
       humanSummary: action && action.humanSummary ? action.humanSummary : null,
+    };
+  }
+
+  function escapeRegExp(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function executeEditFileFuzzyAction(action) {
+    assertReady();
+    const rootPath = action.rootPath;
+    const targetFile = normalizeRequestedRelativePath(action.targetFile);
+    
+    if (!rootPath || !targetFile) {
+      return { ok: false, message: 'Arquivo alvo ausente para edição.' };
+    }
+    
+    const absoluteTarget = path.join(rootPath, targetFile);
+    if (!isInsideRoot(rootPath, absoluteTarget)) {
+      return { ok: false, message: 'Operação bloqueada fora da raiz do projeto.' };
+    }
+    
+    const physicalCheck = resolvePhysicalPathForWrite(rootPath, absoluteTarget);
+    if (!physicalCheck.ok) {
+      return { ok: false, message: physicalCheck.message };
+    }
+    
+    const sensitivePath = blockSensitiveAutomataPath(targetFile);
+    if (sensitivePath) return sensitivePath;
+
+    if (!fs.existsSync(absoluteTarget)) {
+      return { ok: false, message: `O arquivo não existe para ser editado: ${targetFile}` };
+    }
+
+    const currentContent = fs.readFileSync(absoluteTarget, 'utf8');
+    const targetContent = String(action.targetContent || '');
+    const replacementContent = String(action.replacementContent || '');
+
+    if (!targetContent) {
+      return { ok: false, message: 'Conteúdo alvo para substituição não pode ser vazio.' };
+    }
+
+    let nextContent = null;
+
+    // Estratégia 1: Match exato
+    if (currentContent.includes(targetContent)) {
+      const count = currentContent.split(targetContent).length - 1;
+      if (count > 1) {
+        return { ok: false, message: `A string alvo aparece ${count} vezes no arquivo. Forneça um bloco de código mais específico para evitar substituição no lugar errado.` };
+      }
+      nextContent = currentContent.replace(targetContent, replacementContent);
+    } else {
+      // Estratégia 2: Match fuzzy ignorando espaços/indentação
+      const normalizedCurrent = currentContent.replace(/\r\n/g, '\n');
+      const regexParts = targetContent.trim().split(/\s+/).map(escapeRegExp);
+      const fuzzyRegex = new RegExp(regexParts.join('\\s+'));
+      
+      const match = normalizedCurrent.match(fuzzyRegex);
+      if (match) {
+        const count = normalizedCurrent.match(new RegExp(fuzzyRegex.source, 'g')).length;
+        if (count > 1) {
+          return { ok: false, message: `A string alvo (ignorando espaços) aparece ${count} vezes no arquivo. Forneça um bloco de código mais específico.` };
+        }
+        nextContent = normalizedCurrent.replace(fuzzyRegex, replacementContent);
+      }
+    }
+
+    if (nextContent === null) {
+      return { 
+        ok: false, 
+        message: 'Não foi possível encontrar o bloco de código exato para substituir. Verifique se o conteúdo alvo existe no arquivo (copie exatamente do arquivo original) e tente novamente.' 
+      };
+    }
+
+    if (isCssOperationPath(targetFile)) {
+      nextContent = normalizeCssImportOrder(nextContent);
+    }
+
+    if (currentContent === nextContent) {
+      return {
+        ok: true,
+        modifiedFiles: [],
+        diffStats: {},
+        message: `Nenhuma alteração de conteúdo em ${targetFile}.`,
+      };
+    }
+
+    fs.writeFileSync(absoluteTarget, nextContent, 'utf8');
+
+    const diffStats = {};
+    mergeDiffStatsEntry(diffStats, targetFile, computeLineChangeStats(currentContent, nextContent));
+
+    if (Object.keys(diffStats).length) {
+      ingestRuntimeDiffStats(rootPath, diffStats);
+    }
+
+    return {
+      ok: true,
+      modifiedFiles: [targetFile],
+      diffStats,
+      message: `Arquivo editado com sucesso: ${targetFile}`,
     };
   }
 
@@ -609,6 +785,10 @@ function createAutomataExecutor(dependencies = {}) {
       return executeSearchTextAction(action);
     }
 
+    if (action.type === 'edit_file_fuzzy') {
+      return executeEditFileFuzzyAction(action);
+    }
+
     return executePatchAction(action);
   }
 
@@ -617,6 +797,7 @@ function createAutomataExecutor(dependencies = {}) {
     executeOperationBatchAction,
     executePatchAction,
     executeSearchTextAction,
+    executeEditFileFuzzyAction,
   };
 }
 

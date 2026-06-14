@@ -1103,6 +1103,13 @@ textarea::placeholder {
   white-space: nowrap;
 }
 
+.attachment-thumb {
+  max-width: 24px;
+  max-height: 24px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
 .attachment-remove {
   border: 0;
   background: transparent;

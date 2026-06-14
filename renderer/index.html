@@ -201,8 +201,11 @@
 
             <div id="job-progress" class="job-progress hidden">
               <div class="job-progress-head">
-                <strong id="job-progress-title">Processando</strong>
-                <span id="job-progress-status">Aguardando</span>
+                <div style="display: flex; flex-direction: column; flex-grow: 1;">
+                  <strong id="job-progress-title">Processando</strong>
+                  <span id="job-progress-status">Aguardando</span>
+                </div>
+                <button id="btn-job-cancel" class="btn btn-muted" style="margin-left: auto; height: fit-content; padding: 4px 8px; font-size: 0.8em;" title="Parar execução">Parar</button>
               </div>
               <div id="job-progress-detail" class="job-progress-detail"></div>
             </div>

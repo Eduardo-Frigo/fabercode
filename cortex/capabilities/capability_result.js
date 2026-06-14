@@ -69,6 +69,7 @@ function buildCapabilityResult(input = {}) {
     message: evidence.message,
     projectSession: evidence.projectSession,
     evidence,
+    data: evidence.data,
     result: input.result && typeof input.result === 'object' ? input.result : {},
   };
 }

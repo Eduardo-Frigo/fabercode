@@ -2752,8 +2752,11 @@ async function callChatCompletionsAgentic({
     }
     for (const msg of conversationMessages) {
       const role = String(msg && msg.role ? msg.role : 'user').trim().toLowerCase();
-      const content = String(msg && msg.content ? msg.content : '').trim();
-      if (content) {
+      const rawContent = msg && msg.content ? msg.content : '';
+      const isArray = Array.isArray(rawContent);
+      const content = isArray ? rawContent : String(rawContent).trim();
+      
+      if (isArray ? content.length > 0 : content) {
         messages.push({
           role: role === 'assistant' ? 'assistant' : 'user',
           content,
@@ -2851,16 +2854,7 @@ function parseChatCompletionToolCalls(message = {}) {
 }
 
 function actionRequiresMaterialChange(action = {}) {
-  const route = action.routeDecision || {};
-  const productRoute = route.productRoute || {};
-  const text = `${action.userMessage || ''} ${route.executionMessage || ''}`.toLowerCase();
-  return (
-    productRoute.capability === 'create_project' ||
-    productRoute.executionIntent === 'init_project' ||
-    productRoute.capability === 'edit_project' ||
-    productRoute.executionIntent === 'edit_project' ||
-    /\b(criar|crie|gerar|gere|implementar|implemente|arquivos|projeto|app|site|escrever|alterar|altere|modificar|modifique|adicionar|adicione)\b/.test(text)
-  );
+  return false;
 }
 
 async function requestAgenticModelTurn({
@@ -5079,6 +5073,16 @@ app.whenReady().then(() => {
       contextHint: contextHint || null,
       conversationMessages: conversationMessages || [],
     });
+  });
+
+  registerIpcHandler('job:cancel', async (_, payload) => {
+    const jobId = payload && payload.jobId ? String(payload.jobId) : null;
+    if (jobId) {
+      abortActiveJobExecution(jobId, 'cancelled_by_user');
+      markJobCancelled(jobId, 'cancelled_by_user');
+      return { ok: true };
+    }
+    return { ok: false };
   });
 
   registerIpcHandler('assistant:plan', async (_, payload) => {

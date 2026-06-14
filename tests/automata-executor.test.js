@@ -66,7 +66,7 @@ async function run() {
       rootPath: projectRoot,
       operations: [
         { op: 'write_file', path: 'valid.txt', content: 'valid' },
-        { op: 'delete_file', path: 'invalid.txt' },
+        { op: 'unsupported_op', path: 'invalid.txt' },
       ],
     });
     assert.strictEqual(partialBatch.ok, false);
@@ -230,6 +230,46 @@ async function run() {
     const normalizedCss = fs.readFileSync(path.join(projectRoot, 'app', 'globals.css'), 'utf8');
     assert.ok(normalizedCss.startsWith('@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap");'));
     assert.strictEqual(/body\s*\{[^}]*\}\s*@import/i.test(normalizedCss), false);
+
+    // Test delete_file and delete_dir
+    const testFile = path.join(projectRoot, 'to_be_deleted.txt');
+    fs.writeFileSync(testFile, 'hello delete', 'utf8');
+    const testDir = path.join(projectRoot, 'folder_to_delete');
+    fs.mkdirSync(testDir, { recursive: true });
+    fs.writeFileSync(path.join(testDir, 'file1.txt'), 'content1', 'utf8');
+
+    // Test successful deletion batch
+    const deleteBatch = executor.executeOperationBatchAction({
+      rootPath: projectRoot,
+      operations: [
+        { op: 'delete_file', path: 'to_be_deleted.txt' },
+        { op: 'delete_dir', path: 'folder_to_delete' },
+      ],
+    });
+    assert.strictEqual(deleteBatch.ok, true);
+    assert.ok(deleteBatch.modifiedFiles.includes('to_be_deleted.txt'));
+    assert.ok(deleteBatch.modifiedFiles.includes('folder_to_delete'));
+    assert.strictEqual(fs.existsSync(testFile), false);
+    assert.strictEqual(fs.existsSync(testDir), false);
+
+    // Test rollback of deletion batch
+    fs.writeFileSync(testFile, 'hello delete rollback', 'utf8');
+    fs.mkdirSync(testDir, { recursive: true });
+    fs.writeFileSync(path.join(testDir, 'file1.txt'), 'content1 rollback', 'utf8');
+
+    const failingDeleteBatch = executor.executeOperationBatchAction({
+      rootPath: projectRoot,
+      operations: [
+        { op: 'delete_file', path: 'to_be_deleted.txt' },
+        { op: 'delete_dir', path: 'folder_to_delete' },
+        { op: 'unsupported_op', path: 'fail.txt' },
+      ],
+    });
+    assert.strictEqual(failingDeleteBatch.ok, false);
+    assert.strictEqual(fs.existsSync(testFile), true);
+    assert.strictEqual(fs.readFileSync(testFile, 'utf8'), 'hello delete rollback');
+    assert.strictEqual(fs.existsSync(path.join(testDir, 'file1.txt')), true);
+    assert.strictEqual(fs.readFileSync(path.join(testDir, 'file1.txt'), 'utf8'), 'content1 rollback');
 
     console.log('automata-executor.test.js: ok');
   } finally {

@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld('localcodeApi', {
   openProjectLatestVersion: (payload) => ipcRenderer.invoke('project:git:open-latest', payload),
   openProjectDeploy: (payload) => ipcRenderer.invoke('project:deploy:open', payload),
   routePersonaRequest: (payload) => ipcRenderer.invoke('assistant:route', payload),
+  cancelJob: (payload) => ipcRenderer.invoke('job:cancel', payload),
   buildPlan: (payload) => ipcRenderer.invoke('assistant:plan', payload),
   sendAssistantMessage: (payload) => ipcRenderer.invoke('assistant:message', payload),
   executePlan: (action, projectInfo) => ipcRenderer.invoke('assistant:execute', action, projectInfo),

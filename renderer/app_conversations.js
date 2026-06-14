@@ -50,7 +50,7 @@
       return state.conversationMessagesById[conversationId];
     }
     
-    async function persistConversationMessage(role, text) {
+    async function persistConversationMessage(role, text, attachments = []) {
       const projectId = state.selectedProjectId;
       const conversationId = getActiveConversationId(projectId);
       if (!projectId || !conversationId) return;
@@ -61,6 +61,7 @@
           conversationId,
           role,
           text,
+          attachments,
           meta: { mode: state.uiMode },
         });
       } catch {
@@ -68,7 +69,7 @@
       }
     }
     
-    function appendMessage(role, text, options = {}) {
+    function appendMessage(role, text, attachments = [], options = {}) {
       const { persistToConversation = true } = options;
     
       // Evita spam visual quando o mesmo erro/resposta é reenviado em loop de retentativa.
@@ -80,11 +81,11 @@
     
       if (persistToConversation && conversationId) {
         ensureConversationMessagesBucket(conversationId);
-        state.conversationMessagesById[conversationId].push({ role, text, createdAt: new Date().toISOString() });
-        persistConversationMessage(role, text);
+        state.conversationMessagesById[conversationId].push({ role, text, attachments, createdAt: new Date().toISOString() });
+        persistConversationMessage(role, text, attachments);
       }
     
-      renderMessageBubble(role, text);
+      renderMessageBubble(role, text, attachments);
       renderWelcomePanel();
       if (chatController) chatController.scrollToBottom();
     }
@@ -107,7 +108,7 @@
       }
     
       messages.forEach((message) => {
-        renderMessageBubble(message.role, message.text);
+        renderMessageBubble(message.role, message.text, message.attachments || []);
       });
       renderWelcomePanel();
       if (chatController) chatController.scrollToBottom();

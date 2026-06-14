@@ -8,6 +8,7 @@
       title: document.getElementById('job-progress-title'),
       status: document.getElementById('job-progress-status'),
       detail: document.getElementById('job-progress-detail'),
+      cancelBtn: document.getElementById('btn-job-cancel'),
     };
     const uxStateModel = window.FaberUxStateModel || null;
 
@@ -17,9 +18,30 @@
       const isCollapsed = localStorage.getItem('faber-job-progress-collapsed') === 'true';
       elements.root.classList.toggle('collapsed', isCollapsed);
 
-      header.addEventListener('click', () => {
+      header.addEventListener('click', (e) => {
+        if (e.target && (e.target.tagName === 'BUTTON' || e.target.closest('button'))) return;
         const currentlyCollapsed = elements.root.classList.toggle('collapsed');
         localStorage.setItem('faber-job-progress-collapsed', currentlyCollapsed ? 'true' : 'false');
+      });
+    }
+
+    if (elements.cancelBtn) {
+      elements.cancelBtn.addEventListener('click', () => {
+        const appState = window.FaberAppState || {};
+        const jobContext = appState.lastJobContext;
+        if (jobContext && jobContext.jobId) {
+          elements.cancelBtn.disabled = true;
+          elements.cancelBtn.textContent = 'Parando...';
+          window.api.cancelJob({ jobId: jobContext.jobId }).then(() => {
+            setTimeout(() => {
+              elements.cancelBtn.disabled = false;
+              elements.cancelBtn.textContent = 'Parar';
+            }, 2000);
+          }).catch(() => {
+            elements.cancelBtn.disabled = false;
+            elements.cancelBtn.textContent = 'Parar';
+          });
+        }
       });
     }
 
@@ -585,6 +607,11 @@
               ? 'Vou tentar novamente em instantes'
               : 'Trabalhando no projeto';
       if (elements.title) elements.title.textContent = presentation ? presentation.title : titleByStatus;
+
+      if (elements.cancelBtn) {
+        const isTerminal = ['completed', 'failed', 'cancelled'].includes(String(job.status || '').toLowerCase());
+        elements.cancelBtn.style.display = isTerminal ? 'none' : 'block';
+      }
 
       const phaseLabel = mapPhaseLabel(job.phase);
       const statusLabel =

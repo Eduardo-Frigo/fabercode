@@ -226,7 +226,7 @@
     
       await ensureActiveConversationForSend(visibleUserMessage);
       clearTransientChatNotices();
-      appendMessage('user', composedUserMessage);
+      appendMessage('user', composedUserMessage, attachmentsPayload);
       inputEl.value = '';
       resetTextareaHeight();
     

@@ -320,6 +320,12 @@ function createFaberCapabilityAdapterService(dependencies = {}) {
 
       let sessionId = payload.sessionId;
       let createdSession = null;
+      if (sessionId) {
+        const check = terminalService.getSession(sessionId);
+        if (!check.ok) {
+          sessionId = null;
+        }
+      }
       if (!sessionId) {
         const created = terminalService.createSession({
           rootPath: projectSession.rootPath,

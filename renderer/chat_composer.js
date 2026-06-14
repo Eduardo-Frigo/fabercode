@@ -97,6 +97,13 @@
           renderAttachments();
         };
 
+        if (file.path && (file.type.startsWith('image/') || file.path.match(/\.(png|jpe?g|gif|webp)$/i))) {
+          const img = document.createElement('img');
+          img.className = 'attachment-thumb';
+          img.src = `file://${file.path}`;
+          chip.append(img);
+        }
+
         chip.append(name, remove);
         elements.attachmentList.appendChild(chip);
       });
@@ -120,11 +127,38 @@
       renderAttachments();
     }
 
-    function renderMessageBubble(role, text) {
+    function renderMessageBubble(role, text, attachments = []) {
       if (!elements.chatLog) return null;
       const div = document.createElement('div');
       div.className = `msg ${role}`;
       div.textContent = text;
+      
+      if (attachments && attachments.length > 0) {
+        const attachContainer = document.createElement('div');
+        attachContainer.className = 'msg-attachments';
+        attachContainer.style.display = 'flex';
+        attachContainer.style.gap = '8px';
+        attachContainer.style.marginTop = '8px';
+        attachContainer.style.flexWrap = 'wrap';
+
+        attachments.forEach(att => {
+          if (att.path && (att.type.startsWith('image/') || att.path.match(/\.(png|jpe?g|gif|webp)$/i))) {
+            const img = document.createElement('img');
+            img.src = `file://${att.path}`;
+            img.style.maxHeight = '120px';
+            img.style.maxWidth = '100%';
+            img.style.borderRadius = '4px';
+            attachContainer.appendChild(img);
+          } else {
+            const pill = document.createElement('div');
+            pill.className = 'attachment-chip';
+            pill.textContent = att.name || 'Anexo';
+            attachContainer.appendChild(pill);
+          }
+        });
+        div.appendChild(attachContainer);
+      }
+      
       elements.chatLog.appendChild(div);
       return div;
     }
@@ -352,6 +386,29 @@
       }
       if (elements.input) {
         elements.input.addEventListener('input', autoResizeTextarea);
+      }
+      
+      // Drag and Drop
+      if (elements.chatLog) {
+        const dropZone = elements.chatLog.parentElement; // chat container
+        dropZone.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZone.style.opacity = '0.7';
+        });
+        dropZone.addEventListener('dragleave', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZone.style.opacity = '1';
+        });
+        dropZone.addEventListener('drop', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZone.style.opacity = '1';
+          if (e.dataTransfer && e.dataTransfer.files) {
+            addImageFiles(e.dataTransfer.files);
+          }
+        });
       }
     }
 
