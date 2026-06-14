@@ -27,5 +27,16 @@ Este documento resume as melhorias e correções implementadas no Faber Code par
   2. Insere um lembrete do sistema alertando o modelo de que ele deve utilizar as ferramentas de escrita ou comando;
   3. Reseta o ID de resposta temporária e permite que o loop continue para um segundo passo, dando ao modelo a oportunidade de se auto-corrigir e chamar as ferramentas adequadas de forma totalmente automática.
 
+## 5. Resolução de Fricção de Permissões (Bypass de Popups no Processo de Execução)
+* **Bypass de Modais de Confirmação:** Modificamos o manipulador IPC da chamada de execução `assistant:execute` no arquivo [main.js](file:///Users/eduardofrigo/Desktop/Faber%20code/localcode-studio-architecture-base/main.js). Sempre que o usuário confirma e inicia um plano a partir do chat (clicando em *"Confirmar e Executar"*), as permissões de escrita e terminal da sessão (`sessionPermissions.writeAlwaysAllow` e `sessionPermissions.terminalAlwaysAllow`) são definidas automaticamente como `true`. Isso impede o surgimento de caixas de diálogo modais nativas adicionais do Electron durante a execução do lote de patches ou comandos do terminal, pois a autorização já foi fornecida de forma explícita pelo usuário na interface do chat.
+
+## 6. Correções de Compilação e Alias de Importação no Papyrus
+* **Backend de CommonJS com tsconfig-paths:**
+  - Removemos a declaração `"type": "module"` do `package.json` do backend do Papyrus, fazendo com que ele execute em modo CommonJS de forma estável.
+  - Atualizamos a configuração do TypeScript em `tsconfig.json` do backend para utilizar `"module": "CommonJS"` e mapear `@/*` para resolver qualquer importação direta.
+  - Adicionamos a dependência `tsconfig-paths` e configuramos o script de desenvolvimento para executar via `ts-node-dev -r tsconfig-paths/register --respawn --transpile-only src/server.ts`, resolvendo o erro *"Must use import to load ES Module"*.
+* **Frontend com Alias no Vite:**
+  - Atualizamos o arquivo `vite.config.ts` do frontend do Papyrus para importar `fileURLToPath` e configurar a chave `resolve.alias` mapeando o caractere `@` para o diretório `./src`. Isso resolveu o erro do Vite que impedia a compilação do arquivo `Editor.tsx` por não localizar a dependência `@/hooks/useCollaborativeEditor`.
+
 ---
 Todos os testes de contrato e integração passaram com sucesso. O projeto está totalmente pronto para o commit e continuidade do fluxo de scaffolding inicial do Papyrus.
