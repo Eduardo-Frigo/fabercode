@@ -124,6 +124,9 @@ const chatController = window.FaberChatComposer
         state.attachments = Array.isArray(attachments) ? attachments : [];
       },
       onVisibilityChange: renderWelcomePanel,
+      openFile: async (relativePath, options = {}) => {
+        if (projectFileEditorController) await projectFileEditorController.open(relativePath, options);
+      },
     })
   : null;
 conversationController = window.FaberAppConversations

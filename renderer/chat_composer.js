@@ -348,24 +348,58 @@
       review.type = 'button';
       review.className = 'change-summary-strip__review';
       review.textContent = 'Revisar';
-      review.onclick = () => {
-        const existing = elements.chatLog
-          ? Array.from(elements.chatLog.querySelectorAll('.change-card')).pop()
-          : null;
-        const card = existing || appendChangeCard(action, result);
-        if (card && typeof card.scrollIntoView === 'function') {
-          card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      
+      const targetFile = action && action.targetFile ? action.targetFile : summary.files[0] || '';
+      review.onclick = async () => {
+        if (targetFile && typeof options.openFile === 'function') {
+          await options.openFile(targetFile, { line: 1 });
+        } else {
+          const existing = elements.chatLog
+            ? Array.from(elements.chatLog.querySelectorAll('.change-card')).pop()
+            : null;
+          const card = existing || appendChangeCard(action, result);
+          if (card && typeof card.scrollIntoView === 'function') {
+            card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          }
         }
       };
 
-      elements.changeSummary.append(label, review);
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'change-summary-strip__close';
+      closeBtn.innerHTML = '&times;';
+      closeBtn.style.background = 'transparent';
+      closeBtn.style.border = 'none';
+      closeBtn.style.color = 'inherit';
+      closeBtn.style.cursor = 'pointer';
+      closeBtn.style.marginLeft = '8px';
+      closeBtn.style.fontSize = '16px';
+      closeBtn.onclick = clearChangeSummary;
+
+      elements.changeSummary.append(label, review, closeBtn);
       elements.changeSummary.classList.remove('hidden');
       onVisibilityChange();
     }
 
     function showModificationAlert(message) {
       if (!elements.modificationAlert) return;
-      elements.modificationAlert.textContent = message;
+      elements.modificationAlert.innerHTML = '';
+      
+      const textSpan = document.createElement('span');
+      textSpan.textContent = message;
+      
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.innerHTML = '&times;';
+      closeBtn.style.background = 'transparent';
+      closeBtn.style.border = 'none';
+      closeBtn.style.color = 'inherit';
+      closeBtn.style.cursor = 'pointer';
+      closeBtn.style.marginLeft = '12px';
+      closeBtn.style.fontSize = '16px';
+      closeBtn.onclick = () => elements.modificationAlert.classList.add('hidden');
+
+      elements.modificationAlert.append(textSpan, closeBtn);
       elements.modificationAlert.classList.remove('hidden');
       setTimeout(() => {
         elements.modificationAlert.classList.add('hidden');

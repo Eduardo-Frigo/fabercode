@@ -320,6 +320,8 @@
       const suppressInterim = shouldSuppressInterimAssistantPlanMessage(plan);
       if (!suppressInterim && plan && plan.response) {
         appendMessage('assistant', plan.response);
+      } else if (plan && plan.ok && plan.action && plan.meta && plan.meta.autoExecute) {
+        appendMessage('assistant', plan.executionMessage || plan.response || 'Certo, vou começar o ajuste do projeto!');
       }
       if (plan && plan.automataContractSuggestion && automataContractsController) {
         automataContractsController.appendContractPreview(plan.automataContractSuggestion);
