@@ -62,16 +62,56 @@
 
     stage.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const zoomFactor = 1.05;
-      if (e.deltaY < 0) {
-        zoomLevel = Math.min(2.0, zoomLevel * zoomFactor);
+      
+      // Touchpad pinch-zoom (ctrlKey) OR Alt/Option + scroll (altKey)
+      if (e.ctrlKey || e.altKey) {
+        const zoomFactor = 1.08;
+        if (e.deltaY < 0) {
+          zoomLevel = Math.min(2.0, zoomLevel * zoomFactor);
+        } else {
+          zoomLevel = Math.max(0.3, zoomLevel / zoomFactor);
+        }
+        if (zoomSlider) zoomSlider.value = zoomLevel;
+        if (zoomValueEl) zoomValueEl.textContent = `${Math.round(zoomLevel * 100)}%`;
+        updateTransform();
       } else {
-        zoomLevel = Math.max(0.3, zoomLevel / zoomFactor);
+        // Normal scroll = pan (Illustrator style)
+        // Shift + scroll pans horizontally
+        if (e.shiftKey) {
+          panOffset.x -= e.deltaY;
+        } else {
+          panOffset.y -= e.deltaY;
+          panOffset.x -= e.deltaX;
+        }
+        updateTransform();
       }
-      if (zoomSlider) zoomSlider.value = zoomLevel;
-      if (zoomValueEl) zoomValueEl.textContent = `${Math.round(zoomLevel * 100)}%`;
-      updateTransform();
     });
+
+    const handleKeyDown = (e) => {
+      const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+      if (isCmdOrCtrl) {
+        if (e.key === '=' || e.key === '+') {
+          e.preventDefault();
+          zoomLevel = Math.min(2.0, zoomLevel * 1.1);
+          if (zoomSlider) zoomSlider.value = zoomLevel;
+          if (zoomValueEl) zoomValueEl.textContent = `${Math.round(zoomLevel * 100)}%`;
+          updateTransform();
+          onMapChanged();
+        } else if (e.key === '-') {
+          e.preventDefault();
+          zoomLevel = Math.max(0.3, zoomLevel / 1.1);
+          if (zoomSlider) zoomSlider.value = zoomLevel;
+          if (zoomValueEl) zoomValueEl.textContent = `${Math.round(zoomLevel * 100)}%`;
+          updateTransform();
+          onMapChanged();
+        } else if (e.key === '0') {
+          e.preventDefault();
+          resetZoom();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
 
     if (zoomSlider) {
       zoomSlider.addEventListener('input', () => {
@@ -134,6 +174,24 @@
       if (node.type === 'group') {
         el.style.width = `${node.size.width}px`;
         el.style.height = `${node.size.height}px`;
+      }
+
+      if (node.parentId) {
+        el.classList.add('inside-group');
+      }
+
+      // Group cover banner preview
+      if (node.type === 'group' && node.assetId) {
+        const coverPreview = document.createElement('div');
+        coverPreview.className = 'map-node-cover-preview';
+        const img = document.createElement('img');
+        const pathVal = node.assetId;
+        const rootInfo = api.getSelectedProjectInfo ? api.getSelectedProjectInfo() : null;
+        img.src = (pathVal.startsWith('Map assets') && rootInfo && rootInfo.rootPath)
+          ? `file://${path.join(rootInfo.rootPath, pathVal)}`
+          : pathVal;
+        coverPreview.appendChild(img);
+        el.appendChild(coverPreview);
       }
 
       // Title
@@ -200,6 +258,21 @@
           node.position.y += dy;
           el.style.left = `${node.position.x}px`;
           el.style.top = `${node.position.y}px`;
+
+          // Drag children together if this is a group
+          if (node.type === 'group') {
+            const children = nodes.filter((n) => n.parentId === node.id);
+            children.forEach((child) => {
+              child.position.x += dx;
+              child.position.y += dy;
+              const childEl = content.querySelector(`.map-node#${child.id}`);
+              if (childEl) {
+                childEl.style.left = `${child.position.x}px`;
+                childEl.style.top = `${child.position.y}px`;
+              }
+            });
+          }
+
           dragStart = { x: mvEvent.clientX, y: mvEvent.clientY };
           drawEdges();
         };
@@ -207,6 +280,41 @@
         const handleMouseUp = () => {
           window.removeEventListener('mousemove', handleMouseMove);
           window.removeEventListener('mouseup', handleMouseUp);
+
+          // If this is not a group, check if it was dropped inside a group card
+          if (node.type !== 'group') {
+            const nodeWidth = el.offsetWidth || 220;
+            const nodeHeight = el.offsetHeight || 120;
+            const nodeCenterX = node.position.x + nodeWidth / 2;
+            const nodeCenterY = node.position.y + nodeHeight / 2;
+
+            let newParentId = null;
+            for (const otherNode of nodes) {
+              if (otherNode.type === 'group' && otherNode.id !== node.id) {
+                const groupEl = content.querySelector(`.map-node#${otherNode.id}`);
+                const groupWidth = groupEl ? groupEl.offsetWidth : 320;
+                const groupHeight = groupEl ? groupEl.offsetHeight : 240;
+
+                const withinX = nodeCenterX >= otherNode.position.x && nodeCenterX <= (otherNode.position.x + groupWidth);
+                const withinY = nodeCenterY >= otherNode.position.y && nodeCenterY <= (otherNode.position.y + groupHeight);
+
+                if (withinX && withinY) {
+                  newParentId = otherNode.id;
+                  break;
+                }
+              }
+            }
+
+            if (node.parentId !== newParentId) {
+              node.parentId = newParentId;
+              if (newParentId) {
+                el.classList.add('inside-group');
+              } else {
+                el.classList.remove('inside-group');
+              }
+            }
+          }
+
           onMapChanged();
         };
 
@@ -228,7 +336,7 @@
       const y = e.clientY - rect.top;
 
       tempEdgeLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      tempEdgeLine.setAttribute('stroke', '#45f3ff');
+      tempEdgeLine.setAttribute('stroke', '#50c985');
       tempEdgeLine.setAttribute('stroke-width', '2');
       tempEdgeLine.setAttribute('stroke-dasharray', '4');
       edgesSvg.appendChild(tempEdgeLine);
@@ -343,6 +451,23 @@
         // Remove existing media preview if any
         const prevMedia = el.querySelector('.map-node-media-preview');
         if (prevMedia) prevMedia.remove();
+
+        // Remove existing cover preview if any
+        const prevCover = el.querySelector('.map-node-cover-preview');
+        if (prevCover) prevCover.remove();
+
+        if (node.type === 'group' && node.assetId) {
+          const coverPreview = document.createElement('div');
+          coverPreview.className = 'map-node-cover-preview';
+          const img = document.createElement('img');
+          const pathVal = node.assetId;
+          const rootInfo = api.getSelectedProjectInfo ? api.getSelectedProjectInfo() : null;
+          img.src = (pathVal.startsWith('Map assets') && rootInfo && rootInfo.rootPath)
+            ? `file://${path.join(rootInfo.rootPath, pathVal)}`
+            : pathVal;
+          coverPreview.appendChild(img);
+          el.insertBefore(coverPreview, el.firstChild);
+        }
 
         if (node.type === 'image' && (node.assetId || node.content)) {
           const preview = document.createElement('div');

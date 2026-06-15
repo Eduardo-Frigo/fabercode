@@ -205,9 +205,9 @@
       inspectorContent.value = node.content || '';
       inspectorTags.value = Array.isArray(node.tags) ? node.tags.join(', ') : '';
 
-      // Only show upload button for image node types
+      // Only show upload button for image or group node types
       if (inspectorAssetField) {
-        inspectorAssetField.style.display = node.type === 'image' ? 'block' : 'none';
+        inspectorAssetField.style.display = (node.type === 'image' || node.type === 'group') ? 'block' : 'none';
       }
 
       inspector.classList.add('open');

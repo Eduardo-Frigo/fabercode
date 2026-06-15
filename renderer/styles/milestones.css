@@ -35,9 +35,9 @@ body.mode-milestones #workspace-milestones-panel {
 }
 
 .btn-milestones-render {
-  background: rgba(69, 243, 255, 0.1);
-  border: 1px solid rgba(69, 243, 255, 0.3);
-  color: #45f3ff;
+  background: rgba(80, 201, 133, 0.1);
+  border: 1px solid rgba(80, 201, 133, 0.3);
+  color: #50c985;
   border-radius: 4px;
   padding: 4px 10px;
   font-size: 0.75rem;
@@ -46,7 +46,7 @@ body.mode-milestones #workspace-milestones-panel {
 }
 
 .btn-milestones-render:hover {
-  background: #45f3ff;
+  background: #50c985;
   color: #0b0c10;
 }
 
@@ -97,10 +97,10 @@ body.mode-milestones #workspace-milestones-panel {
 }
 
 .milestone-item.status-active .milestone-marker {
-  border-color: #45f3ff;
-  background: #45f3ff;
+  border-color: #50c985;
+  background: #50c985;
   color: #0b0c10;
-  box-shadow: 0 0 12px rgba(69, 243, 255, 0.4);
+  box-shadow: 0 0 12px rgba(80, 201, 133, 0.4);
 }
 
 .milestone-item.status-done .milestone-marker,
@@ -134,8 +134,8 @@ body.mode-milestones #workspace-milestones-panel {
 }
 
 .milestone-item.status-active .milestone-card {
-  background: rgba(69, 243, 255, 0.03);
-  border-color: rgba(69, 243, 255, 0.2);
+  background: rgba(80, 201, 133, 0.03);
+  border-color: rgba(80, 201, 133, 0.2);
 }
 
 .milestone-title {
@@ -157,7 +157,7 @@ body.mode-milestones #workspace-milestones-panel {
 }
 
 .status-badge-ready { background: rgba(255,255,255,0.08); color: #c5c6c7; }
-.status-badge-active { background: rgba(69, 243, 255, 0.15); color: #45f3ff; }
+.status-badge-active { background: rgba(80, 201, 133, 0.15); color: #50c985; }
 .status-badge-done { background: rgba(46, 204, 113, 0.15); color: #2ecc71; }
 .status-badge-blocked { background: rgba(231, 76, 60, 0.15); color: #e74c3c; }
 .status-badge-planned { background: transparent; border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.4); }
@@ -189,7 +189,7 @@ body.mode-milestones #workspace-milestones-panel {
 
 .milestone-task-item input[type="checkbox"] {
   margin-top: 2px;
-  accent-color: #45f3ff;
+  accent-color: #50c985;
 }
 
 .milestone-task-item.task-done span {
@@ -216,7 +216,7 @@ body.mode-milestones #workspace-milestones-panel {
 .milestone-detail-block strong {
   font-size: 0.72rem;
   text-transform: uppercase;
-  color: #45f3ff;
+  color: #50c985;
 }
 
 .milestone-detail-block p {
@@ -245,19 +245,19 @@ body.mode-milestones #workspace-milestones-panel {
 }
 
 .btn-milestone-action:hover {
-  border-color: #45f3ff;
-  background: rgba(69, 243, 255, 0.05);
+  border-color: #50c985;
+  background: rgba(80, 201, 133, 0.05);
 }
 
 .btn-milestone-action.btn-action-primary {
-  background: #45f3ff;
-  border-color: #45f3ff;
+  background: #50c985;
+  border-color: #50c985;
   color: #0b0c10;
   font-weight: 600;
 }
 
 .btn-milestone-action.btn-action-primary:hover {
-  background: #24d2de;
+  background: #3fa669;
 }
 
 /* Related Git area in milestone details */
@@ -293,9 +293,9 @@ body.mode-milestones #workspace-milestones-panel {
 }
 
 .project-panel-btn.milestones-btn.active {
-  background: rgba(69, 243, 255, 0.15) !important;
-  border-color: rgba(69, 243, 255, 0.4) !important;
-  color: #45f3ff !important;
+  background: rgba(80, 201, 133, 0.15) !important;
+  border-color: rgba(80, 201, 133, 0.4) !important;
+  color: #50c985 !important;
 }
 
 .project-milestones-count {

@@ -46,7 +46,7 @@
 
 .application-map-controls button:hover {
   background: rgba(255, 255, 255, 0.08);
-  color: #45f3ff;
+  color: #50c985;
 }
 
 .application-map-controls .zoom-slider-container {
@@ -63,7 +63,7 @@
   background: rgba(255, 255, 255, 0.15);
   border-radius: 2px;
   outline: none;
-  accent-color: #45f3ff;
+  accent-color: #50c985;
 }
 
 /* Toolbar */
@@ -101,7 +101,12 @@
 .application-map-toolbar button:hover,
 .application-map-toolbar button.active {
   background: rgba(255, 255, 255, 0.08);
-  color: #45f3ff;
+  color: #50c985;
+}
+
+.application-map-toolbar button svg {
+  width: 20px;
+  height: 20px;
 }
 
 /* Infinite Canvas stage */
@@ -151,15 +156,15 @@
 
 .application-map-canvas-edges path {
   fill: none;
-  stroke: rgba(69, 243, 255, 0.45);
+  stroke: rgba(80, 201, 133, 0.45);
   stroke-width: 2.5;
   transition: stroke 0.2s ease;
 }
 
 .application-map-canvas-edges path.active {
-  stroke: #45f3ff;
+  stroke: #50c985;
   stroke-width: 3.5;
-  filter: drop-shadow(0 0 6px rgba(69, 243, 255, 0.6));
+  filter: drop-shadow(0 0 6px rgba(80, 201, 133, 0.6));
 }
 
 /* Nodes / Cards */
@@ -179,13 +184,13 @@
 }
 
 .map-node:hover {
-  border-color: rgba(69, 243, 255, 0.5);
-  box-shadow: 0 8px 32px rgba(69, 243, 255, 0.15);
+  border-color: rgba(80, 201, 133, 0.5);
+  box-shadow: 0 8px 32px rgba(80, 201, 133, 0.15);
 }
 
 .map-node.selected {
-  border-color: #45f3ff;
-  box-shadow: 0 0 0 1px #45f3ff, 0 12px 40px rgba(69, 243, 255, 0.25);
+  border-color: #50c985;
+  box-shadow: 0 0 0 1px #50c985, 0 12px 40px rgba(80, 201, 133, 0.25);
   z-index: 20;
 }
 
@@ -202,8 +207,8 @@
 .map-node-type {
   font-size: 0.65rem;
   text-transform: uppercase;
-  color: #45f3ff;
-  background: rgba(69, 243, 255, 0.1);
+  color: #50c985;
+  background: rgba(80, 201, 133, 0.1);
   padding: 2px 6px;
   border-radius: 4px;
   font-weight: 600;
@@ -228,7 +233,7 @@
   width: 10px;
   height: 10px;
   background: #1a1d26;
-  border: 2px solid rgba(69, 243, 255, 0.6);
+  border: 2px solid rgba(80, 201, 133, 0.6);
   border-radius: 50%;
   z-index: 15;
   cursor: pointer;
@@ -237,7 +242,7 @@
 
 .map-node-port:hover {
   transform: scale(1.3);
-  background: #45f3ff;
+  background: #50c985;
 }
 
 .map-node-port.port-left { left: -6px; top: 50%; transform: translateY(-50%); }
@@ -246,17 +251,39 @@
 .map-node-port.port-bottom { bottom: -6px; left: 50%; transform: translateX(-50%); }
 
 /* Group Node specific styling */
-.map-node-group {
+.map-node.node-group {
   min-width: 300px;
   min-height: 200px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px dashed rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 16px;
   z-index: 5;
 }
 
-.map-node-group.selected {
-  border-color: #45f3ff;
+.map-node.node-group.selected {
+  border-color: #50c985;
+}
+
+.map-node.inside-group {
+  border-style: dotted !important;
+  border-color: rgba(255, 255, 255, 0.3) !important;
+}
+
+/* Cover Image Banner for Group nodes */
+.map-node-cover-preview {
+  width: 100%;
+  height: 90px;
+  overflow: hidden;
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  margin-bottom: 8px;
+}
+
+.map-node-cover-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 /* Media nodes (Image / Video) */
@@ -334,7 +361,7 @@
 .inspector-field label {
   font-size: 0.75rem;
   text-transform: uppercase;
-  color: #45f3ff;
+  color: #50c985;
   letter-spacing: 0.5px;
 }
 
@@ -354,7 +381,7 @@
 .inspector-field input:focus,
 .inspector-field textarea:focus,
 .inspector-field select:focus {
-  border-color: #45f3ff;
+  border-color: #50c985;
 }
 
 .inspector-field textarea {
@@ -408,5 +435,5 @@
 
 .center-tab.active {
   background: rgba(255, 255, 255, 0.08);
-  color: #45f3ff;
+  color: #50c985;
 }
