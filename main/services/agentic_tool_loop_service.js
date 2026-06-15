@@ -75,6 +75,7 @@ function createAgenticToolLoopService(dependencies = {}) {
       '3. NUNCA DEIXE CÓDIGO QUEBRADO: Se você criar ou modificar arquivos de código (TS, JS, etc), use `run_command` para rodar linters (`npm run lint`), checagem de tipos (`npx tsc --noEmit`) ou testes ANTES de concluir a tarefa.',
       '4. AUTO-CORREÇÃO: Se um comando de terminal falhar com erros de sintaxe ou lint, analise a saída de erro e chame a ferramenta de edição para corrigir o arquivo.',
       '5. COMANDOS NÃO-INTERATIVOS: Qualquer comando no `run_command` deve ter flags como -y ou --yes. Não use comandos que exigem input do usuário.',
+      '6. MAPA DA APLICAÇÃO E MILESTONES: O projeto utiliza um Mapa da Aplicação (JSON em `.faber/application-map.json`, Markdowns em `docs/application-map/`) e Milestones (JSON em `.faber/milestones.json`, Markdowns em `docs/milestones/`). Ao criar, modificar ou remover componentes/arquivos ou concluir etapas, certifique-se de manter esses arquivos de documentação e planejamento sincronizados e atualizados.',
       '## Conclusão',
       'Sempre chame a ferramenta `finish_task` para indicar que você terminou, não importa se foi um sucesso ou se você encontrou um bloqueio instransponível.',
       `Projeto ativo: ${rootPath || 'indisponível'}.`,
@@ -526,6 +527,7 @@ function createAgenticToolLoopService(dependencies = {}) {
     let previousResponseId = '';
     let pendingToolResults = [];
     let isFinished = false;
+  let lastFinishResult = null;
     let finishReason = '';
     
     // Doom Loop Detector State
@@ -586,6 +588,16 @@ function createAgenticToolLoopService(dependencies = {}) {
           pendingToolResults = [];
           continue;
         }
+        if (actionRequiresFileChanges(action) && modifiedFiles.size === 0) {
+          return {
+            ok: false,
+            status: 'blocked',
+            errors: ['agentic_no_file_changes'],
+            message: 'Sem alterações de arquivos requeridas.',
+            modifiedFiles: [],
+            toolRuns,
+          };
+        }
         return {
           ok: true,
           agentic: true,
@@ -631,6 +643,9 @@ function createAgenticToolLoopService(dependencies = {}) {
           if (result && result._isFinishTask) {
             isFinished = true;
             finishReason = result.message;
+            lastFinishResult = result;
+            // Preserve status from finish_task for later checks
+            result.finishTaskStatus = result.status;
           }
         } catch (error) {
           result = {
@@ -671,6 +686,16 @@ function createAgenticToolLoopService(dependencies = {}) {
       }
 
       if (isFinished) {
+        if (actionRequiresFileChanges(action) && modifiedFiles.size === 0 && lastFinishResult && lastFinishResult.status === 'success') {
+          return {
+            ok: false,
+            status: 'blocked',
+            errors: ['agentic_no_file_changes'],
+            message: 'Sem alterações de arquivos requeridas ao finalizar.',
+            modifiedFiles: [],
+            toolRuns,
+          };
+        }
         return {
           ok: true,
           agentic: true,
@@ -688,6 +713,8 @@ function createAgenticToolLoopService(dependencies = {}) {
 
     return {
       ok: false,
+      status: 'step_limit',
+      errors: ['agentic_step_limit_exceeded'],
       message: `O loop agentic atingiu o limite de ${maxSteps} passos antes de concluir.`,
       modifiedFiles: [...modifiedFiles],
       toolRuns,

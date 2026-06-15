@@ -2,7 +2,7 @@
   const DEFAULT_STORAGE_KEY = 'faber.workspaceLayout.v1';
   const DEFAULT_ONBOARDING_KEY = 'faber.workspaceLayout.onboarding.v1';
   const WORKSPACE_MODES = new Set(['chat', 'ide']);
-  const PANEL_SLOTS = new Set(['projects', 'files', 'terminal', 'automations', 'cortex']);
+  const PANEL_SLOTS = new Set(['projects', 'files', 'terminal', 'automations', 'cortex', 'milestones']);
   const TERMINAL_DOCKS = new Set(['right', 'bottom']);
   const WORKSPACE_TOOL_ZONES = new Set(['left', 'center', 'right', 'bottom', 'hidden']);
   const DEFAULT_TOOL_PLACEMENTS = Object.freeze({
@@ -12,6 +12,7 @@
     terminal: 'right',
     automations: 'right',
     cortex: 'right',
+    milestones: 'right',
   });
 
   const DEFAULT_PREFERENCES = {
@@ -183,6 +184,7 @@
       doc.body.dataset.workspaceToolTerminal = preferences.toolPlacements.terminal;
       doc.body.dataset.workspaceToolAutomations = preferences.toolPlacements.automations;
       doc.body.dataset.workspaceToolCortex = preferences.toolPlacements.cortex;
+      doc.body.dataset.workspaceToolMilestones = preferences.toolPlacements.milestones;
       doc.body.classList.toggle('workspace-left-collapsed', Boolean(preferences.leftCollapsed));
       doc.body.classList.toggle('workspace-right-collapsed', Boolean(preferences.rightCollapsed));
     }

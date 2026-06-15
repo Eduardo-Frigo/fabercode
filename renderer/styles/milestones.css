@@ -1,0 +1,317 @@
+#workspace-milestones-panel {
+  padding: 16px;
+  overflow-y: auto;
+  height: 100%;
+  color: #e8e8e8;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: #1a1d26;
+}
+
+body.mode-milestones .panel-right > .next-steps-box:first-of-type,
+body.mode-milestones #modification-alert,
+body.mode-milestones #incremental-mode-badge,
+body.mode-milestones #cortex-learning-box {
+  display: none !important;
+}
+
+body.mode-milestones #workspace-milestones-panel {
+  display: block !important;
+}
+
+.milestones-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+}
+
+.milestones-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+.btn-milestones-render {
+  background: rgba(69, 243, 255, 0.1);
+  border: 1px solid rgba(69, 243, 255, 0.3);
+  color: #45f3ff;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-milestones-render:hover {
+  background: #45f3ff;
+  color: #0b0c10;
+}
+
+/* Timeline */
+.milestones-timeline {
+  position: relative;
+  padding-left: 28px;
+}
+
+.milestones-timeline::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.milestone-item {
+  position: relative;
+  margin-bottom: 24px;
+}
+
+.milestone-marker {
+  position: absolute;
+  left: -28px;
+  top: 2px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #1a1d26;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  display: grid;
+  place-items: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.5);
+  z-index: 2;
+  transition: all 0.3s ease;
+}
+
+/* Markers by Status */
+.milestone-item.status-ready .milestone-marker {
+  border-color: #8892b0;
+  color: #fff;
+  box-shadow: 0 0 8px rgba(136, 146, 176, 0.2);
+}
+
+.milestone-item.status-active .milestone-marker {
+  border-color: #45f3ff;
+  background: #45f3ff;
+  color: #0b0c10;
+  box-shadow: 0 0 12px rgba(69, 243, 255, 0.4);
+}
+
+.milestone-item.status-done .milestone-marker,
+.milestone-item.status-committed .milestone-marker {
+  border-color: #2ecc71;
+  background: #2ecc71;
+  color: #fff;
+  box-shadow: 0 0 8px rgba(46, 204, 113, 0.3);
+}
+
+.milestone-item.status-blocked .milestone-marker {
+  border-color: #e74c3c;
+  background: #e74c3c;
+  color: #fff;
+  box-shadow: 0 0 8px rgba(231, 76, 60, 0.3);
+}
+
+/* Item Content Card */
+.milestone-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.milestone-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.milestone-item.status-active .milestone-card {
+  background: rgba(69, 243, 255, 0.03);
+  border-color: rgba(69, 243, 255, 0.2);
+}
+
+.milestone-title {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fff;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.milestone-status-badge {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+}
+
+.status-badge-ready { background: rgba(255,255,255,0.08); color: #c5c6c7; }
+.status-badge-active { background: rgba(69, 243, 255, 0.15); color: #45f3ff; }
+.status-badge-done { background: rgba(46, 204, 113, 0.15); color: #2ecc71; }
+.status-badge-blocked { background: rgba(231, 76, 60, 0.15); color: #e74c3c; }
+.status-badge-planned { background: transparent; border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.4); }
+
+.milestone-summary {
+  font-size: 0.78rem;
+  color: rgba(232, 232, 232, 0.6);
+  line-height: 1.4;
+  margin-bottom: 10px;
+}
+
+/* Tasks inside Milestone */
+.milestone-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding-top: 10px;
+  margin-top: 8px;
+}
+
+.milestone-task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.76rem;
+  color: rgba(232, 232, 232, 0.8);
+}
+
+.milestone-task-item input[type="checkbox"] {
+  margin-top: 2px;
+  accent-color: #45f3ff;
+}
+
+.milestone-task-item.task-done span {
+  text-decoration: line-through;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+/* Detail Box (shown only when milestone is active or clicked) */
+.milestone-details-section {
+  margin-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.milestone-detail-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.milestone-detail-block strong {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  color: #45f3ff;
+}
+
+.milestone-detail-block p {
+  margin: 0;
+  font-size: 0.76rem;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.milestone-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.btn-milestone-action {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  color: #fff;
+  padding: 6px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+}
+
+.btn-milestone-action:hover {
+  border-color: #45f3ff;
+  background: rgba(69, 243, 255, 0.05);
+}
+
+.btn-milestone-action.btn-action-primary {
+  background: #45f3ff;
+  border-color: #45f3ff;
+  color: #0b0c10;
+  font-weight: 600;
+}
+
+.btn-milestone-action.btn-action-primary:hover {
+  background: #24d2de;
+}
+
+/* Related Git area in milestone details */
+.milestone-git-files {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  padding: 8px;
+  font-family: monospace;
+  font-size: 0.7rem;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.git-file-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.git-file-row.matched {
+  color: #2ecc71;
+  background: rgba(46, 204, 113, 0.05);
+}
+
+.git-file-row.other {
+  color: #e67e22;
+  background: rgba(230, 126, 34, 0.05);
+}
+
+.project-panel-btn.milestones-btn {
+  position: relative;
+}
+
+.project-panel-btn.milestones-btn.active {
+  background: rgba(69, 243, 255, 0.15) !important;
+  border-color: rgba(69, 243, 255, 0.4) !important;
+  color: #45f3ff !important;
+}
+
+.project-milestones-count {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  background: #e74c3c;
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 17px;
+  text-align: center;
+}
+

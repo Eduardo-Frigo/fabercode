@@ -10,6 +10,8 @@
     <title>Faber Code</title>
     <link rel="stylesheet" href="./styles/preloader-critical.css" />
     <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles/application-map.css" />
+    <link rel="stylesheet" href="./styles/milestones.css" />
     <link rel="stylesheet" href="../node_modules/codemirror/lib/codemirror.css" />
     <link rel="stylesheet" href="../node_modules/codemirror/theme/material-darker.css" />
   </head>
@@ -172,6 +174,10 @@
       <main class="panel panel-center">
         <div class="panel-header">
           <h2 id="center-title" class="center-title-hidden" aria-hidden="true"></h2>
+          <div id="center-tabs" class="center-tabs hidden">
+            <button id="btn-tab-chat" class="center-tab active">Chat</button>
+            <button id="btn-tab-map" class="center-tab">Mapa da Aplicação</button>
+          </div>
           <span class="status-pill" id="status-pill">Aguardando projeto</span>
         </div>
 
@@ -187,6 +193,73 @@
           </section>
 
           <div id="workspace-center-tools-zone" class="workspace-center-tools-zone" data-workspace-runtime-zone="center-tools"></div>
+
+          <section id="workspace-map-region" class="workspace-tool-region workspace-tool-region--map hidden" data-workspace-runtime-tool="map" aria-label="Mapa da Aplicação">
+            <div class="application-map-container">
+              <!-- Controls -->
+              <div class="application-map-controls">
+                <button id="btn-map-render">Renderizar Mapa</button>
+                <button id="btn-map-ai">Perguntar à IA</button>
+                <div class="zoom-slider-container">
+                  <span>Zoom:</span>
+                  <input type="range" id="map-zoom-slider" min="0.3" max="2" step="0.05" value="1">
+                  <span id="map-zoom-value">100%</span>
+                  <button id="btn-map-zoom-reset" style="padding: 2px 8px; font-size: 0.75rem;">Reset</button>
+                </div>
+              </div>
+
+              <!-- Toolbar -->
+              <div class="application-map-toolbar">
+                <button id="btn-map-tool-select" class="active" title="Selecionar/Arrastar">🖱️</button>
+                <button id="btn-map-tool-add-group" title="Adicionar Grupo">📦</button>
+                <button id="btn-map-tool-add-card" title="Adicionar Card de Texto">📝</button>
+                <button id="btn-map-tool-add-image" title="Adicionar Card de Imagem">🖼️</button>
+                <button id="btn-map-tool-add-decision" title="Adicionar Decisão">💡</button>
+                <button id="btn-map-tool-connect" title="Conectar Cards">🔗</button>
+                <button id="btn-map-clear" title="Limpar Mapa">🗑️</button>
+              </div>
+
+              <!-- Canvas stage -->
+              <div id="application-map-canvas-stage" class="application-map-canvas-stage">
+                <div id="application-map-canvas-grid" class="application-map-canvas-grid"></div>
+                <div id="application-map-canvas-content" class="application-map-canvas-content"></div>
+                <svg id="application-map-canvas-edges" class="application-map-canvas-edges"></svg>
+              </div>
+
+              <!-- Inspector -->
+              <div id="application-map-inspector" class="application-map-inspector">
+                <div class="application-map-inspector-header">
+                  <strong>Detalhes do Item</strong>
+                  <button id="btn-map-inspector-close" style="background:transparent; border:none; color:#fff; font-size:1.2rem; cursor:pointer;">&times;</button>
+                </div>
+                <div class="application-map-inspector-body">
+                  <div class="inspector-field">
+                    <label for="inspector-node-title">Título</label>
+                    <input type="text" id="inspector-node-title">
+                  </div>
+                  <div class="inspector-field">
+                    <label for="inspector-node-desc">Descrição</label>
+                    <textarea id="inspector-node-desc"></textarea>
+                  </div>
+                  <div class="inspector-field">
+                    <label for="inspector-node-content">Conteúdo (Markdown / Link)</label>
+                    <textarea id="inspector-node-content" style="min-height: 120px;"></textarea>
+                  </div>
+                  <div class="inspector-field" id="inspector-asset-upload-field" style="display:none;">
+                    <label>Selecionar Imagem</label>
+                    <input type="file" id="map-asset-file-input" accept="image/*">
+                  </div>
+                  <div class="inspector-field">
+                    <label for="inspector-node-tags">Tags (separadas por vírgula)</label>
+                    <input type="text" id="inspector-node-tags">
+                  </div>
+                </div>
+                <div class="application-map-inspector-footer">
+                  <button id="btn-map-delete-node" class="btn-delete-node">Excluir Item</button>
+                </div>
+              </div>
+            </div>
+          </section>
 
           <section id="workspace-chat-region" class="workspace-tool-region workspace-tool-region--chat" data-workspace-runtime-tool="chat">
             <div id="chat-log" class="chat-log"></div>
@@ -314,6 +387,16 @@
             Ainda não há regras ou memórias registradas nesta sessão.
           </div>
         </div>
+
+        <div id="workspace-milestones-panel" class="next-steps-box hidden workspace-tool-region workspace-tool-region--milestones" data-workspace-runtime-tool="milestones">
+          <div class="milestones-header">
+            <h3>Milestones</h3>
+            <button id="btn-milestones-render" class="btn-milestones-render">Renderizar</button>
+          </div>
+          <div id="milestones-timeline-content" class="milestones-timeline">
+            <!-- Rendered dynamically -->
+          </div>
+        </div>
       
         <div id="workspace-actions-region" class="panel-right-footer workspace-tool-region workspace-tool-region--actions" data-workspace-runtime-tool="automations">
           <div class="project-panel-footer">
@@ -328,10 +411,13 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 4 4-4 4m6 2h8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
               <span>Terminal</span>
             </button>
-            <button id="btn-automata-contracts" class="project-panel-btn automata-contracts-btn" type="button" title="Revisar contratos Automata staged" aria-label="Contratos Automata">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h9l3 3v13H6V4Zm9 0v4h4M9 11h6M9 15h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              <span>Contratos</span>
-              <small id="automata-contracts-count" class="automata-contracts-count hidden">0</small>
+            <button id="btn-project-milestones" class="project-panel-btn milestones-btn" type="button" title="Milestones do projeto" aria-label="Milestones">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path>
+                <line x1="4" y1="22" x2="4" y2="15"></line>
+              </svg>
+              <span>Milestones</span>
+              <small id="project-milestones-count" class="project-milestones-count hidden">0</small>
             </button>
             <button id="btn-project-deploy" class="project-panel-btn" type="button" title="Executar projeto localmente">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5L8 5.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -914,6 +1000,9 @@
     <script src="./job_progress.js"></script>
     <script src="./panel_layout.js"></script>
     <script src="./automata_contracts.js"></script>
+    <script src="./application_map_canvas.js"></script>
+    <script src="./application_map.js"></script>
+    <script src="./milestones_panel.js"></script>
     <script src="./project_tools_support.js"></script>
     <script src="./project_tools_github_deploy.js"></script>
     <script src="./project_tools_git.js"></script>

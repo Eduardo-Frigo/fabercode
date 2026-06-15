@@ -84,6 +84,12 @@ const { registerOrchestrationHandlers } = require('./main/ipc/orchestration_hand
 const { registerPreviewHandlers } = require('./main/ipc/preview_handlers');
 const { registerProjectHandlers } = require('./main/ipc/project_handlers');
 const { registerTerminalHandlers } = require('./main/ipc/terminal_handlers');
+const { registerApplicationMapHandlers } = require('./main/ipc/application_map_handlers');
+const { registerMilestoneHandlers } = require('./main/ipc/milestone_handlers');
+const { createApplicationMapService } = require('./main/services/application_map_service');
+const { createApplicationMapRenderService } = require('./main/services/application_map_render_service');
+const { createMilestoneService } = require('./main/services/milestone_service');
+const { createMilestoneGitStatusService } = require('./main/services/milestone_git_status_service');
 const { createIpcSecurity } = require('./main/security/ipc_security');
 const { createProjectAccess } = require('./main/security/project_access');
 const { createSecretStore } = require('./main/security/secret_store');
@@ -4744,6 +4750,11 @@ const {
   stageProjectGitFiles,
 } = projectGitService;
 
+const applicationMapService = createApplicationMapService({ fs, path });
+const applicationMapRenderService = createApplicationMapRenderService({ fs, path, mapService: applicationMapService });
+const milestoneService = createMilestoneService({ fs, path });
+const milestoneGitStatusService = createMilestoneGitStatusService({ gitService: projectGitService, milestoneService });
+
 const githubIntegrationService = createGithubIntegrationService({
   fs,
   path,
@@ -5047,6 +5058,22 @@ app.whenReady().then(() => {
     registryService: externalMcpServerRegistryService,
     registerIpcHandler,
     resetCapabilityRuntime: resetFaberCapabilityRuntime,
+  });
+
+  registerApplicationMapHandlers({
+    authorizeProjectRoot,
+    mapService: applicationMapService,
+    renderService: applicationMapRenderService,
+    registerIpcHandler,
+    appendAuditEvent,
+  });
+
+  registerMilestoneHandlers({
+    authorizeProjectRoot,
+    milestoneService,
+    milestoneGitStatusService,
+    registerIpcHandler,
+    appendAuditEvent,
   });
 
   registerIpcHandler('window:toggle-maximize', () => {

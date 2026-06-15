@@ -150,6 +150,24 @@ const automataContractsController = window.FaberAutomataContracts
       onVisibilityChange: renderWelcomePanel,
     })
   : null;
+const applicationMapController = window.FaberApplicationMap
+  ? window.FaberApplicationMap.createApplicationMapController({
+      api: window.localcodeApi,
+      getSelectedProjectId: () => state.selectedProjectId,
+      getSelectedProjectInfo: () => state.selectedProjectInfo,
+      appendMessage,
+    })
+  : null;
+const milestonesPanelController = window.FaberMilestonesPanel
+  ? window.FaberMilestonesPanel.createMilestonesPanelController({
+      api: window.localcodeApi,
+      getSelectedProjectId: () => state.selectedProjectId,
+      getSelectedProjectInfo: () => state.selectedProjectInfo,
+      appendMessage,
+      updateStatus,
+      getTerminalController: () => projectTerminalController,
+    })
+  : null;
 jobController = window.FaberAppJobs
   ? window.FaberAppJobs.createAppJobController({
       api: window.localcodeApi,
@@ -441,6 +459,8 @@ projectController = window.FaberAppProjects
         projectSidebarController,
         projectStateModalController,
         projectTerminalController,
+        applicationMapController,
+        milestonesPanelController,
       },
       elements: { incrementalModeBadgeEl },
       state,
@@ -1243,6 +1263,8 @@ async function bootstrap() {
   if (automataContractsController) {
     state.automataContractSummary = await automataContractsController.refreshSummary();
   }
+  if (applicationMapController) applicationMapController.init();
+  if (milestonesPanelController) milestonesPanelController.init();
 
   try {
     state.aiRuntimeStatus = await window.localcodeApi.getAiStatus();

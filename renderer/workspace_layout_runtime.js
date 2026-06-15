@@ -1,11 +1,11 @@
 (function () {
-  const TOOL_ORDER = ['projects', 'files', 'terminal', 'cortex', 'automations', 'chat'];
+  const TOOL_ORDER = ['projects', 'files', 'terminal', 'cortex', 'automations', 'chat', 'milestones'];
   const ZONE_ORDER = {
-    left: ['projects', 'files', 'cortex', 'automations', 'terminal', 'chat'],
+    left: ['projects', 'files', 'cortex', 'automations', 'terminal', 'chat', 'milestones'],
     center: ['chat'],
-    'center-tools': ['files', 'cortex', 'automations'],
-    right: ['files', 'terminal', 'cortex', 'automations', 'chat', 'projects'],
-    bottom: ['terminal', 'automations', 'cortex'],
+    'center-tools': ['files', 'cortex', 'automations', 'milestones'],
+    right: ['files', 'terminal', 'cortex', 'automations', 'chat', 'projects', 'milestones'],
+    bottom: ['terminal', 'automations', 'cortex', 'milestones'],
   };
 
   function normalizePreferences(preferences = {}) {
@@ -27,6 +27,7 @@
         terminal: preferences.terminalDock === 'bottom' ? 'bottom' : 'right',
         automations: 'right',
         cortex: 'right',
+        milestones: 'right',
         ...(preferences.toolPlacements || {}),
       },
     };
@@ -57,6 +58,7 @@
         terminal: byId('project-terminal-panel'),
         automations: byId('workspace-actions-region'),
         cortex: byId('cortex-learning-box'),
+        milestones: byId('workspace-milestones-panel'),
       };
     }
 

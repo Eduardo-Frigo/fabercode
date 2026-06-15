@@ -19,6 +19,8 @@
       projectSidebarController = null,
       projectStateModalController = null,
       projectTerminalController = null,
+      applicationMapController = null,
+      milestonesPanelController = null,
     } = controllers;
     const {
       appendMessage = () => {},
@@ -72,6 +74,8 @@
       if (projectFileEditorController) projectFileEditorController.reset();
       if (projectTerminalController) projectTerminalController.resetForNoProject();
       if (automataContractsController) automataContractsController.reset();
+      if (applicationMapController) applicationMapController.resetForNoProject();
+      if (milestonesPanelController) milestonesPanelController.resetForNoProject();
       clearPending();
       if (chatController) chatController.clearMessages();
       updateStatus('Aguardando projeto');
@@ -331,6 +335,12 @@
       }
       if (automataContractsController) {
         state.automataContractSummary = await automataContractsController.refreshSummary();
+      }
+      if (applicationMapController) {
+        await applicationMapController.loadProjectMap(project.id);
+      }
+      if (milestonesPanelController) {
+        await milestonesPanelController.refresh();
       }
     
       try {
