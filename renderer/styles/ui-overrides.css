@@ -349,4 +349,77 @@ textarea,
   font-size: 0.68rem !important;
 }
 
-.icon-btn {
+/* Sidebar Project spacing, guide lines and custom styles */
+.projects-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px !important;
+  padding: 12px 8px !important;
+}
+
+.project-item {
+  border: 1px solid rgba(255, 255, 255, 0.03) !important;
+  border-radius: 8px !important;
+  background: rgba(255, 255, 255, 0.01) !important;
+  padding: 4px !important;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  overflow: hidden;
+}
+
+.project-item:hover {
+  background: rgba(255, 255, 255, 0.02) !important;
+  border-color: rgba(80, 201, 133, 0.1) !important;
+}
+
+.project-item.active {
+  background: rgba(80, 201, 133, 0.03) !important;
+  border-color: rgba(80, 201, 133, 0.25) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2) !important;
+}
+
+.project-sub-items {
+  position: relative;
+  border-left: 1px dashed rgba(80, 201, 133, 0.25) !important;
+  margin-left: 16px !important;
+  padding-left: 12px !important;
+  margin-top: 6px !important;
+  margin-bottom: 6px !important;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.project-sub-header {
+  font-family: inherit;
+  font-size: 0.68rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.05em !important;
+  color: rgba(80, 201, 133, 0.6) !important;
+  margin-top: 10px !important;
+  margin-bottom: 4px !important;
+  text-transform: uppercase;
+}
+
+.project-tree-actions {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  max-width: 96px !important;
+}
+
+.project-mini-btn-map.active {
+  background: rgba(80, 201, 133, 0.15) !important;
+  color: #50c985 !important;
+  border-color: rgba(80, 201, 133, 0.3) !important;
+}
+
+.conversation-item {
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.conversation-item.active {
+  background: rgba(80, 201, 133, 0.12) !important;
+  color: #50c985 !important;
+  font-weight: 600;
+}

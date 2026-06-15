@@ -13,6 +13,7 @@ class FakeElement {
     this.parent = parent;
     this.textContent = '';
     this.value = '';
+    this.style = {};
     this.classList = {
       add: (className) => {
         const classes = new Set(this.className.split(/\s+/).filter(Boolean));
@@ -122,8 +123,8 @@ assert.strictEqual(expanded.p1, true, 'clicking outside the project list must ke
 
 const emptyListArea = new FakeElement([], listEl);
 controller.handleOutsidePointerDown({ target: emptyListArea });
-assert.strictEqual(expanded.p1, false, 'clicking the empty project-list area should collapse expanded projects');
-assert.strictEqual(collapsedCount, 1, 'collapse should happen only for the empty project-list area');
+assert.strictEqual(expanded.p1, true, 'clicking the empty project-list area should keep projects expanded');
+assert.strictEqual(collapsedCount, 0, 'collapse should not happen');
 
 const renderedList = new FakeElement();
 const renderController = sidebar.createProjectSidebarController({
@@ -209,7 +210,8 @@ async function testCollapsedRailHeaderOnlyExpandsProject() {
 
   const expandedProject = localList.children[0];
   const conversationTree = expandedProject.children[1];
-  const conversationButton = conversationTree.children[0].children[0];
+  const conversationList = conversationTree.children[1];
+  const conversationButton = conversationList.children[0].children[0];
   await conversationButton.listeners.click({ stopPropagation: () => {} });
   assert.strictEqual(selectedConversations, 1, 'conversation click should open the conversation');
   assert.strictEqual(localBody.classList.contains('project-rail-menu-open'), false, 'conversation selection should close the lightbox');

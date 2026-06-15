@@ -75,6 +75,26 @@
           await openAiSettingsModal();
         });
       }
+      const projectFilesBtnEl = document.getElementById('btn-project-files');
+      if (projectFilesBtnEl) {
+        projectFilesBtnEl.addEventListener('click', () => {
+          if (typeof setUiMode === 'function') {
+            setUiMode('default');
+          }
+          document.body.classList.remove('mode-milestones');
+          document.body.classList.remove('mode-map-chat');
+          
+          const milestonesBtn = document.getElementById('btn-project-milestones');
+          if (milestonesBtn) milestonesBtn.classList.remove('active');
+          const mapAiBtn = document.getElementById('btn-map-ai');
+          if (mapAiBtn) mapAiBtn.classList.remove('active');
+          
+          projectFilesBtnEl.classList.add('active');
+          
+          const rightPanelTitle = document.getElementById('right-panel-title');
+          if (rightPanelTitle) rightPanelTitle.textContent = 'Arquivos';
+        });
+      }
       if (projectGitBtnEl) {
         projectGitBtnEl.addEventListener('click', onProjectGitClick);
       }

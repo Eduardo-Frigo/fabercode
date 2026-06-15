@@ -155,8 +155,9 @@
       if (!(target instanceof Element)) return;
       if (target.closest('.project-item')) return;
       if (elements.contextMenu && elements.contextMenu.contains(target)) return;
-      if (elements.list && !elements.list.contains(target)) return;
-      collapseExpandedProjects();
+      // We do not collapse expanded project items on clicking empty sidebar space
+      // if (elements.list && !elements.list.contains(target)) return;
+      // collapseExpandedProjects();
     }
 
     function renderEmpty(sourceLength) {
@@ -232,7 +233,7 @@
         renameBtn.className = 'conversation-rename-btn';
         renameBtn.title = 'Renomear conversa';
         renameBtn.setAttribute('aria-label', 'Renomear conversa');
-        renameBtn.textContent = '✎';
+        renameBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
         renameBtn.addEventListener('click', async (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -313,19 +314,62 @@
       menuBtn.className = 'project-mini-btn project-mini-btn-menu';
       menuBtn.title = 'Opções do projeto';
       menuBtn.setAttribute('aria-label', 'Opções do projeto');
-      menuBtn.textContent = '⋯';
+      menuBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="width: 13px; height: 13px;"><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/><circle cx="5" cy="12" r="1.5"/></svg>`;
       menuBtn.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
         showContextMenu(id, event.clientX, event.clientY);
       });
 
-      actions.append(newConvBtn, menuBtn);
+      const mapBtn = document.createElement('button');
+      mapBtn.type = 'button';
+      const isMapActive = getSelectedProjectId() === id && document.getElementById('btn-tab-map')?.classList.contains('active');
+      mapBtn.className = 'project-mini-btn project-mini-btn-map' + (isMapActive ? ' active' : '');
+      mapBtn.title = 'Mapa da Aplicação';
+      mapBtn.setAttribute('aria-label', 'Mapa da Aplicação');
+      mapBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 13px; height: 13px;"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>`;
+      
+      mapBtn.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const railMenuMode = isRailMenuOpen() || isInsideRailMenu(mapBtn);
+        if (getSelectedProjectId() !== id) {
+          await onSelectProject(id);
+        }
+        const tabMap = document.getElementById('btn-tab-map');
+        if (tabMap) tabMap.click();
+        if (railMenuMode) setRailMenuOpen(false);
+        render();
+      });
+
+      actions.append(mapBtn, newConvBtn, menuBtn);
       headerBtn.append(createProjectIcon(expanded), createProjectRailIcon(), nameEl, actions);
       wrapper.appendChild(headerBtn);
 
       if (expanded) {
-        wrapper.appendChild(renderConversationList(id));
+        const subItemsContainer = document.createElement('div');
+        subItemsContainer.className = 'project-sub-items';
+        subItemsContainer.style.paddingLeft = '24px';
+        subItemsContainer.style.display = 'flex';
+        subItemsContainer.style.flexDirection = 'column';
+        subItemsContainer.style.gap = '2px';
+        subItemsContainer.style.marginTop = '4px';
+
+        // 2. Chat / Conversas subheader
+        const chatHeader = document.createElement('div');
+        chatHeader.className = 'project-sub-header';
+        chatHeader.style.fontSize = '0.7rem';
+        chatHeader.style.color = 'rgba(255,255,255,0.3)';
+        chatHeader.style.marginTop = '6px';
+        chatHeader.style.marginBottom = '2px';
+        chatHeader.style.fontWeight = '600';
+        chatHeader.style.letterSpacing = '0.5px';
+        chatHeader.style.paddingLeft = '8px';
+        chatHeader.textContent = 'CONVERSAS';
+
+        subItemsContainer.appendChild(chatHeader);
+        subItemsContainer.appendChild(renderConversationList(id));
+        wrapper.appendChild(subItemsContainer);
       }
 
       return wrapper;

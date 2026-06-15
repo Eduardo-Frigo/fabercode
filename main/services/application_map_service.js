@@ -157,6 +157,47 @@ function createApplicationMapService(dependencies = {}) {
     }
   }
 
+  function importAssetBase64(rootPath, base64Data, fileName, kind = 'other') {
+    try {
+      const filename = path.basename(fileName);
+      const safeKind = String(kind || 'other').replace(/[^a-zA-Z0-9_-]/g, '');
+      const relativeDestDir = path.join('Map assets', safeKind);
+      const destDir = path.join(rootPath, relativeDestDir);
+      
+      if (!fs.existsSync(destDir)) {
+        fs.mkdirSync(destDir, { recursive: true });
+      }
+      
+      const destPath = path.join(destDir, filename);
+      const base64Clean = base64Data.replace(/^data:image\/\w+;base64,/, '');
+      fs.writeFileSync(destPath, Buffer.from(base64Clean, 'base64'));
+      
+      const relativeFilePath = path.join(relativeDestDir, filename);
+      
+      const assetsIndexFile = path.join(ensureFaberDir(rootPath), 'map-assets-index.json');
+      let index = [];
+      if (fs.existsSync(assetsIndexFile)) {
+        try {
+          index = JSON.parse(fs.readFileSync(assetsIndexFile, 'utf8'));
+        } catch {}
+      }
+      const assetRecord = {
+        id: 'asset-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+        originalName: filename,
+        projectRelativePath: relativeFilePath.replace(/\\/g, '/'),
+        kind: safeKind,
+        importedAt: new Date().toISOString(),
+      };
+      index.push(assetRecord);
+      fs.writeFileSync(assetsIndexFile, JSON.stringify(index, null, 2), 'utf8');
+      
+      return { ok: true, asset: assetRecord };
+    } catch (e) {
+      console.error('Failed to import base64 asset', e);
+      return { ok: false, message: e.message || String(e) };
+    }
+  }
+
   return {
     getMap,
     saveMap,
@@ -165,6 +206,7 @@ function createApplicationMapService(dependencies = {}) {
     upsertEdge,
     removeEdge,
     importAsset,
+    importAssetBase64,
   };
 }
 

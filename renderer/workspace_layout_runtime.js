@@ -1,11 +1,11 @@
 (function () {
-  const TOOL_ORDER = ['projects', 'files', 'terminal', 'cortex', 'automations', 'chat', 'milestones'];
+  const TOOL_ORDER = ['projects', 'files', 'terminal', 'cortex', 'chat', 'milestones', 'automations'];
   const ZONE_ORDER = {
-    left: ['projects', 'files', 'cortex', 'automations', 'terminal', 'chat', 'milestones'],
+    left: ['projects', 'files', 'cortex', 'terminal', 'chat', 'milestones', 'automations'],
     center: ['chat'],
-    'center-tools': ['files', 'cortex', 'automations', 'milestones'],
-    right: ['files', 'terminal', 'cortex', 'automations', 'chat', 'projects', 'milestones'],
-    bottom: ['terminal', 'automations', 'cortex', 'milestones'],
+    'center-tools': ['files', 'cortex', 'milestones', 'automations'],
+    right: ['files', 'terminal', 'cortex', 'chat', 'projects', 'milestones', 'automations'],
+    bottom: ['terminal', 'cortex', 'milestones', 'automations'],
   };
 
   function normalizePreferences(preferences = {}) {

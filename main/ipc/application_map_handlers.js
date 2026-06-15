@@ -55,6 +55,9 @@ function registerApplicationMapHandlers(dependencies = {}) {
   registerIpcHandler('application-map:asset:import', (_, payload = {}) => {
     const auth = authorizeProjectRoot(payload && payload.rootPath ? String(payload.rootPath) : '');
     if (!auth.ok) return auth;
+    if (payload.base64Data && payload.fileName) {
+      return mapService.importAssetBase64(auth.rootPath, payload.base64Data, payload.fileName, payload.kind || 'other');
+    }
     return mapService.importAsset(auth.rootPath, payload.sourcePath || '', payload.kind || 'other');
   });
 

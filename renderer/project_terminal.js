@@ -192,7 +192,10 @@
       if (!elements.panel) return;
       const info = getProjectInfo();
       const hasProject = Boolean(info && info.rootPath);
-      if (elements.button) elements.button.disabled = !hasProject;
+      if (elements.button) {
+        elements.button.disabled = !hasProject;
+        elements.button.classList.toggle('active', Boolean(hasProject && terminalState.panelOpen));
+      }
       if (!hasProject || !terminalState.panelOpen) {
         elements.panel.classList.add('hidden');
         if (lightbox.root) {

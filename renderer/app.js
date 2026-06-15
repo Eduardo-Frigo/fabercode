@@ -972,6 +972,19 @@ function setUiMode(mode) {
   }
   if (document.body) {
     document.body.classList.toggle('mode-cortex', cortexActive);
+    if (cortexActive) {
+      document.body.classList.remove('mode-milestones');
+      document.body.classList.remove('mode-map-chat');
+      const milestonesBtn = document.getElementById('btn-project-milestones');
+      if (milestonesBtn) milestonesBtn.classList.remove('active');
+      const mapAiBtn = document.getElementById('btn-map-ai');
+      if (mapAiBtn) mapAiBtn.classList.remove('active');
+    }
+  }
+
+  const filesBtn = document.getElementById('btn-project-files');
+  if (filesBtn) {
+    filesBtn.classList.toggle('active', !cortexActive);
   }
 
   if (inputEl) {

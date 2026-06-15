@@ -53,7 +53,17 @@
         const cortexBtn = document.getElementById('btn-cortex-mode');
         if (cortexBtn) cortexBtn.classList.remove('active');
 
+        // Hide map chat if open
+        document.body.classList.remove('mode-map-chat');
+        const mapAiBtn = document.getElementById('btn-map-ai');
+        if (mapAiBtn) mapAiBtn.classList.remove('active');
+
         refresh();
+      }
+
+      const filesBtn = document.getElementById('btn-project-files');
+      if (filesBtn) {
+        filesBtn.classList.toggle('active', !active);
       }
     }
 

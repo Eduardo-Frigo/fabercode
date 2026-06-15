@@ -504,7 +504,9 @@ body.workspace-right-collapsed .panel-right .workspace-collapse-btn {
 body.workspace-right-collapsed #right-panel-title,
 body.workspace-right-collapsed #incremental-mode-badge,
 body.workspace-right-collapsed .workspace-tool-region--files,
-body.workspace-right-collapsed .workspace-tool-region--cortex {
+body.workspace-right-collapsed .workspace-tool-region--cortex,
+body.workspace-right-collapsed #workspace-milestones-panel,
+body.workspace-right-collapsed #workspace-map-chat-panel {
   display: none !important;
 }
 

@@ -142,6 +142,11 @@
 .project-panel-btn:hover {
   background: rgba(255,255,255,0.14);
 }
+.project-panel-btn.active {
+  background: rgba(80, 201, 133, 0.15) !important;
+  border-color: rgba(80, 201, 133, 0.4) !important;
+  color: #50c985 !important;
+}
 
 .project-panel-btn:disabled {
   opacity: 0.45;
