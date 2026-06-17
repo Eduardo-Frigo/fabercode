@@ -20,7 +20,7 @@ body.mode-milestones #workspace-milestones-panel {
 
 .milestones-header {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   padding-bottom: 12px;
@@ -28,10 +28,7 @@ body.mode-milestones #workspace-milestones-panel {
 }
 
 .milestones-header h3 {
-  margin: 0;
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: #fff;
+  display: none;
 }
 
 .btn-milestones-render {
@@ -314,4 +311,3 @@ body.mode-milestones #workspace-milestones-panel {
   line-height: 17px;
   text-align: center;
 }
-

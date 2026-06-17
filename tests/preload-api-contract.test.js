@@ -135,6 +135,11 @@ async function assertInvoke(methodName, args, expectedChannel, expectedArgs = ar
   await assertInvoke('revealFileInFolder', [{ projectInfo: {}, relativePath: 'src/app.js' }], 'file:reveal');
   await assertInvoke('readProjectFile', [{ projectInfo: {}, relativePath: 'src/app.js' }], 'file:read');
   await assertInvoke(
+    'previewProjectImage',
+    [{ projectInfo: {}, relativePath: 'src/image.png' }],
+    'file:preview-image'
+  );
+  await assertInvoke(
     'writeProjectFile',
     [{ projectInfo: {}, relativePath: 'src/app.js', content: 'ok' }],
     'file:write'
@@ -152,6 +157,11 @@ async function assertInvoke(methodName, args, expectedChannel, expectedArgs = ar
     'stageProjectGitFiles',
     [{ rootPath: '/tmp/app', files: ['src/app.js'] }],
     'project:git:stage'
+  );
+  await assertInvoke(
+    'unstageProjectGitFiles',
+    [{ rootPath: '/tmp/app', files: ['src/app.js'] }],
+    'project:git:unstage'
   );
   await assertInvoke(
     'commitProjectGitFiles',

@@ -102,6 +102,10 @@
         }
       });
 
+      if (canvasController) {
+        canvasController.setTool('select');
+      }
+
       // Zoom Controls
       const btnReset = container.querySelector('#btn-map-zoom-reset');
       if (btnReset) {
@@ -420,6 +424,9 @@
         if (chatRegion) chatRegion.classList.add('hidden');
         if (mapRegion) mapRegion.classList.remove('hidden');
         if (welcomePanel) welcomePanel.classList.add('hidden');
+        if (canvasController) {
+          canvasController.setTool('select');
+        }
 
         // Draw connections after tab is shown and dimensions are computed
         setTimeout(() => {

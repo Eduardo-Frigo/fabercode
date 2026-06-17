@@ -1051,7 +1051,13 @@ function setUiMode(mode) {
 
   const filesBtn = document.getElementById('btn-project-files');
   if (filesBtn) {
-    filesBtn.classList.toggle('active', !cortexActive);
+    const otherModeActive = document.body
+      ? document.body.classList.contains('mode-git')
+        || document.body.classList.contains('mode-terminal')
+        || document.body.classList.contains('mode-milestones')
+        || document.body.classList.contains('mode-map-chat')
+      : false;
+    filesBtn.classList.toggle('active', !cortexActive && !otherModeActive);
   }
 
   if (inputEl) {

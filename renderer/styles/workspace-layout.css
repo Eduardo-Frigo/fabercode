@@ -129,6 +129,11 @@ body.mode-cortex .workspace-center-tools-zone:not(:has(> *:not(.hidden):not(.wor
   flex: 1;
 }
 
+.panel-right {
+  container-type: inline-size;
+  container-name: right-panel;
+}
+
 #right-panel-title {
   white-space: nowrap;
   overflow: hidden;

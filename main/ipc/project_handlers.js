@@ -28,6 +28,7 @@ function registerProjectHandlers(dependencies = {}) {
     shell,
     stageProjectGitFiles,
     rollbackProjectGitFiles,
+    unstageProjectGitFiles,
     writeProjectsSnapshot,
   } = dependencies;
 
@@ -64,6 +65,7 @@ function registerProjectHandlers(dependencies = {}) {
     requireDependency('shell', shell);
     requireDependency('stageProjectGitFiles', stageProjectGitFiles);
     requireDependency('rollbackProjectGitFiles', rollbackProjectGitFiles);
+    requireDependency('unstageProjectGitFiles', unstageProjectGitFiles);
     requireDependency('writeProjectsSnapshot', writeProjectsSnapshot);
   }
 
@@ -387,6 +389,13 @@ function registerProjectHandlers(dependencies = {}) {
     if (!authorization.ok) return authorization;
     const files = payload && Array.isArray(payload.files) ? payload.files : [];
     return stageProjectGitFiles(authorization.rootPath, files);
+  });
+
+  registerIpcHandler('project:git:unstage', async (_, payload) => {
+    const authorization = authorizeProjectRoot(payload && payload.rootPath ? String(payload.rootPath) : '');
+    if (!authorization.ok) return authorization;
+    const files = payload && Array.isArray(payload.files) ? payload.files : [];
+    return unstageProjectGitFiles(authorization.rootPath, files);
   });
 
   registerIpcHandler('project:git:rollback', async (_, payload) => {

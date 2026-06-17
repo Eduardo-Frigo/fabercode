@@ -110,6 +110,7 @@ async function runProjectHandlersTest(tempRoot) {
     },
     rollbackProjectGitFiles: async (_rootPath, files) => ({ ok: true, rolledBack: files }),
     stageProjectGitFiles: async (_rootPath, files) => ({ ok: true, stagedFiles: files }),
+    unstageProjectGitFiles: async (_rootPath, files) => ({ ok: true, unstagedFiles: files }),
     writeProjectsSnapshot: (snapshot) => {
       projects = Array.isArray(snapshot && snapshot.projects) ? snapshot.projects.map(normalizeProjectRecord) : [];
     },
@@ -173,7 +174,7 @@ async function runProjectHandlersTest(tempRoot) {
     },
   });
 
-  assert.strictEqual(Object.keys(handlers).filter((channel) => channel.startsWith('project')).length, 31);
+  assert.strictEqual(Object.keys(handlers).filter((channel) => channel.startsWith('project')).length, 32);
 
   const addResult = await handlers['projects:add']();
   assert.strictEqual(addResult.ok, true);
@@ -264,6 +265,9 @@ async function runProjectHandlersTest(tempRoot) {
   const stageGitResult = await handlers['project:git:stage'](null, { rootPath: projectRoot, files: ['git.js'] });
   assert.deepStrictEqual(stageGitResult.stagedFiles, ['git.js']);
 
+  const unstageGitResult = await handlers['project:git:unstage'](null, { rootPath: projectRoot, files: ['git.js'] });
+  assert.deepStrictEqual(unstageGitResult.unstagedFiles, ['git.js']);
+
   const commitGitResult = await handlers['project:git:commit'](null, { rootPath: projectRoot, message: 'Teste', files: ['git.js'] });
   assert.strictEqual(commitGitResult.committed, true);
   assert.deepStrictEqual(committedPayloads[0], { rootPath: projectRoot, message: 'Teste', files: ['git.js'] });
@@ -315,7 +319,7 @@ async function runFileHandlersTest(tempRoot) {
     },
   });
 
-  assert.deepStrictEqual(Object.keys(handlers).sort(), ['file:read', 'file:rename', 'file:reveal', 'file:write']);
+  assert.deepStrictEqual(Object.keys(handlers).sort(), ['file:preview-image', 'file:read', 'file:rename', 'file:reveal', 'file:write']);
 
   const projectInfo = { rootPath: projectRoot };
   const writeResult = handlers['file:write'](null, {
@@ -337,6 +341,13 @@ async function runFileHandlersTest(tempRoot) {
   const readResult = handlers['file:read'](null, { projectInfo, relativePath: 'src/example.txt' });
   assert.strictEqual(readResult.ok, true);
   assert.strictEqual(readResult.content, 'hello');
+
+  const imagePath = path.join(projectRoot, 'src', 'image.png');
+  fs.writeFileSync(imagePath, Buffer.from('89504e470d0a1a0a', 'hex'));
+  const imageResult = handlers['file:preview-image'](null, { projectInfo, relativePath: 'src/image.png' });
+  assert.strictEqual(imageResult.ok, true);
+  assert.strictEqual(imageResult.mimeType, 'image/png');
+  assert.ok(String(imageResult.dataUrl || '').startsWith('data:image/png;base64,'));
 
   const invalidRename = handlers['file:rename'](null, {
     projectInfo,

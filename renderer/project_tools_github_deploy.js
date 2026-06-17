@@ -76,8 +76,8 @@
         'Publicação e Deploy (GitHub)',
         auth && auth.authenticated ? 'Publicar, enviar ou clonar pelo GitHub.' : 'Conecte o GitHub local para publicar.',
         activeStep === 'deploy' ? 'active' : hasCommit ? 'idle' : 'locked',
-        createToolIconMark('github'),
-        { key: 'deploy' }
+        null,
+        { key: 'deploy', leadingIcon: createToolIconMark('github'), compactTitle: 'GitHub' }
       );
       if (!hasCommit) {
         appendGitStepEmpty(deployStep.content, 'Deploy aparece depois que existir ao menos um commit.');

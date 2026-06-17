@@ -366,8 +366,7 @@
             <div class="project-terminal-actions">
               <button id="project-terminal-placement" type="button" class="project-terminal-icon-btn" title="Alternar posição" aria-label="Alternar posição">↕</button>
               <button id="project-terminal-new-tab" type="button" class="project-terminal-icon-btn" title="Novo terminal" aria-label="Novo terminal">+</button>
-              <button id="project-terminal-clear" type="button" class="project-terminal-icon-btn" title="Limpar terminal" aria-label="Limpar terminal">⌫</button>
-              <button id="project-terminal-stop" type="button" class="project-terminal-icon-btn" title="Interromper comando" aria-label="Interromper comando">■</button>
+              <button id="project-terminal-stop" type="button" class="project-terminal-icon-btn" title="Fechar terminal atual" aria-label="Fechar terminal atual">×</button>
               <button id="project-terminal-minimize" type="button" class="project-terminal-icon-btn" title="Minimizar terminal" aria-label="Minimizar terminal">−</button>
               <button id="project-terminal-close" type="button" class="project-terminal-icon-btn" title="Fechar terminal" aria-label="Fechar terminal">×</button>
             </div>
@@ -637,6 +636,11 @@
       <div class="project-file-modal__dialog" role="dialog" aria-modal="true" aria-label="Visualizador de arquivo">
         <div class="project-file-modal__head">
           <strong id="project-file-modal-title">Arquivo</strong>
+          <div id="project-file-modal-image-nav" class="project-file-modal__image-nav" aria-hidden="true">
+            <button id="project-file-modal-prev" type="button" class="project-file-modal__nav-btn" aria-label="Imagem anterior">←</button>
+            <span id="project-file-modal-image-counter" class="project-file-modal__image-counter">1/1</span>
+            <button id="project-file-modal-next" type="button" class="project-file-modal__nav-btn" aria-label="Próxima imagem">→</button>
+          </div>
           <button id="project-file-modal-close" type="button" class="project-file-modal__close">×</button>
         </div>
         <div class="project-file-modal__tools">
@@ -650,6 +654,7 @@
             <textarea id="project-file-editor" class="project-file-editor" spellcheck="false"></textarea>
           </div>
         </div>
+        <div id="project-file-image-stage" class="project-file-image-stage hidden" aria-hidden="true"></div>
       </div>
     </div>
 

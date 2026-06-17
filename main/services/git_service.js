@@ -483,6 +483,27 @@ function createProjectGitService(dependencies = {}) {
     return { ...worktree, ok: true, stagedFiles: selectedFiles };
   }
 
+  async function unstageProjectGitFiles(rootPath, files = []) {
+    requireDependency('runCommand', runCommand);
+
+    const safeRoot = String(rootPath || '').trim();
+    const normalizedFiles = normalizeGitSelectedPaths(files);
+    if (!normalizedFiles.ok) return normalizedFiles;
+    const selectedFiles = normalizedFiles.files;
+    if (!safeRoot) return { ok: false, message: 'rootPath é obrigatório.' };
+    if (!selectedFiles.length) return { ok: false, message: 'Selecione ao menos um arquivo para remover do stage.' };
+
+    const result = await runCommand('git', ['-C', safeRoot, 'restore', '--staged', '--', ...selectedFiles], { timeoutMs: 6000 });
+    if (!result.ok) {
+      return {
+        ok: false,
+        message: String(result.stderr || result.stdout || 'Não consegui remover os arquivos do stage.').trim(),
+      };
+    }
+    const worktree = await getProjectGitWorktree(safeRoot);
+    return { ...worktree, ok: true, unstagedFiles: selectedFiles };
+  }
+
   async function rollbackProjectGitFiles(rootPath, files = []) {
     requireDependency('runCommand', runCommand);
     const fs = require('fs');
@@ -622,6 +643,7 @@ function createProjectGitService(dependencies = {}) {
     parseDiffHunkFirstLine,
     parsePorcelainStatusLine,
     stageProjectGitFiles,
+    unstageProjectGitFiles,
     rollbackProjectGitFiles,
   };
 }

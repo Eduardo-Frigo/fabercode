@@ -295,6 +295,11 @@
 
       if (elements.tabs) {
         elements.tabs.innerHTML = '';
+        const sessionWrap = document.createElement('div');
+        sessionWrap.className = 'project-terminal-tabs__sessions';
+        const actionWrap = document.createElement('div');
+        actionWrap.className = 'project-terminal-tabs__actions';
+
         sessions.forEach((session) => {
           const tab = document.createElement('button');
           tab.type = 'button';
@@ -307,8 +312,13 @@
             if (key) terminalState.activeSessionByProject[key] = session.id;
             render();
           });
-          elements.tabs.appendChild(tab);
+          sessionWrap.appendChild(tab);
         });
+
+        if (elements.newTab) actionWrap.appendChild(elements.newTab);
+        if (elements.stop) actionWrap.appendChild(elements.stop);
+
+        elements.tabs.append(sessionWrap, actionWrap);
       }
 
       if (elements.body) {
@@ -336,8 +346,7 @@
 
       const isRunning = activeSession && activeSession.status === 'running';
       if (elements.input) elements.input.disabled = !activeSession || isRunning;
-      if (elements.stop) elements.stop.disabled = !isRunning;
-      if (elements.clear) elements.clear.disabled = !activeSession;
+      if (elements.stop) elements.stop.disabled = !activeSession;
       if (elements.close) elements.close.disabled = false;
       if (elements.minimize) {
         elements.minimize.textContent = terminalState.panelMinimized ? '▣' : '−';
@@ -522,7 +531,8 @@
       if (result && result.ok) {
         removeSessionForActiveProject(activeSession.id);
         if (!getSessionsForActiveProject().length) {
-          terminalState.panelOpen = false;
+          closePanel();
+          return;
         }
         render();
       }
@@ -541,8 +551,7 @@
       if (elements.button) elements.button.addEventListener('click', open);
       if (elements.form) elements.form.addEventListener('submit', runCommand);
       if (elements.newTab) elements.newTab.addEventListener('click', createTab);
-      if (elements.clear) elements.clear.addEventListener('click', clearSession);
-      if (elements.stop) elements.stop.addEventListener('click', stopCommand);
+      if (elements.stop) elements.stop.addEventListener('click', closeSession);
       if (elements.close) elements.close.addEventListener('click', closePanel);
       if (elements.minimize) {
         elements.minimize.addEventListener('click', () => {

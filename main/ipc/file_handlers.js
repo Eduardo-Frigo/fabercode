@@ -118,6 +118,63 @@ function registerFileHandlers(dependencies = {}) {
     };
   });
 
+  registerIpcHandler('file:preview-image', (_, payload) => {
+    const { projectInfo, relativePath } = payload || {};
+    if (!projectInfo || !relativePath) {
+      return { ok: false, message: 'Parâmetros inválidos para preview de imagem.' };
+    }
+
+    const resolved = resolveAuthorizedProjectPath(projectInfo, relativePath);
+    if (!resolved.ok) return resolved;
+    const normalizedRelative = resolved.relativePath;
+    const abs = resolved.absolutePath;
+    if (!fs.existsSync(abs)) {
+      return { ok: false, message: 'Arquivo não encontrado.' };
+    }
+
+    let stat;
+    try {
+      stat = fs.statSync(abs);
+    } catch (error) {
+      return { ok: false, message: `Falha ao ler metadados: ${error.message}` };
+    }
+
+    if (!stat.isFile()) {
+      return { ok: false, message: 'O caminho informado não é um arquivo.' };
+    }
+
+    const MAX_PREVIEW_IMAGE_BYTES = 16 * 1024 * 1024;
+    if (stat.size > MAX_PREVIEW_IMAGE_BYTES) {
+      return {
+        ok: false,
+        message: `Imagem muito grande para preview no painel (máximo ${Math.round(MAX_PREVIEW_IMAGE_BYTES / (1024 * 1024))} MB).`,
+      };
+    }
+
+    let buffer;
+    try {
+      buffer = fs.readFileSync(abs);
+    } catch (error) {
+      return { ok: false, message: `Falha ao abrir imagem: ${error.message}` };
+    }
+
+    const lower = normalizedRelative.toLowerCase();
+    let mimeType = 'image/png';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) mimeType = 'image/jpeg';
+    else if (lower.endsWith('.gif')) mimeType = 'image/gif';
+    else if (lower.endsWith('.webp')) mimeType = 'image/webp';
+    else if (lower.endsWith('.svg')) mimeType = 'image/svg+xml';
+
+    return {
+      ok: true,
+      relativePath: normalizedRelative,
+      mimeType,
+      dataUrl: `data:${mimeType};base64,${buffer.toString('base64')}`,
+      size: stat.size,
+      updatedAt: stat.mtime.toISOString(),
+    };
+  });
+
   registerIpcHandler('file:rename', (_, payload) => {
     try {
       const projectInfo = payload && payload.projectInfo ? payload.projectInfo : null;

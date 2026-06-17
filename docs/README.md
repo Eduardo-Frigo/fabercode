@@ -77,6 +77,7 @@ Para GitHub, a ordem recomendada e:
 
 - [FABER_CODE_PREVIEW_VISUAL_AUTH_2026-05-25.md](FABER_CODE_PREVIEW_VISUAL_AUTH_2026-05-25.md)
 - [FABER_CODE_WORKSPACE_IDE_UX_2026-05-25.md](FABER_CODE_WORKSPACE_IDE_UX_2026-05-25.md)
+- [FABER_CODE_CHANGES_2026-06-17.md](FABER_CODE_CHANGES_2026-06-17.md): rodada consolidada de UX, Git, terminal e pré-visualização de imagens.
 
 ### Arquitetura modular
 

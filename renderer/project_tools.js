@@ -168,7 +168,7 @@
         if (gitBtn) gitBtn.classList.add('active');
 
         const rightPanelTitle = document.getElementById('right-panel-title');
-        if (rightPanelTitle) rightPanelTitle.textContent = title || 'Git';
+        if (rightPanelTitle) rightPanelTitle.textContent = 'Git';
 
         if (document.body.classList.contains('workspace-right-collapsed')) {
           const rightToggle = document.getElementById('workspace-collapse-right');

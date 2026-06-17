@@ -71,6 +71,11 @@ const ids = {
   'project-file-modal': new FakeElement('div', 'hidden'),
   'project-file-modal-title': new FakeElement('h2'),
   'project-file-modal-content': new FakeElement('div'),
+  'project-file-image-stage': new FakeElement('div', 'hidden'),
+  'project-file-modal-image-nav': new FakeElement('div'),
+  'project-file-modal-prev': new FakeElement('button'),
+  'project-file-modal-next': new FakeElement('button'),
+  'project-file-modal-image-counter': new FakeElement('span'),
   'project-file-modal-close': new FakeElement('button'),
   'project-file-editor': new FakeElement('textarea'),
   'project-file-lines': new FakeElement('pre'),
@@ -109,6 +114,19 @@ const controller = sandbox.window.FaberProjectFileEditor.createProjectFileEditor
     readProjectFile: async () => {
       throw new Error('image preview should not read file content');
     },
+    getProjectFilesTree: async () => ({
+      ok: true,
+      rows: [
+        { path: 'assets/a.png', type: 'file' },
+        { path: 'assets/bad.jpg"onerror="alert(1).jpg', type: 'file' },
+      ],
+    }),
+    previewProjectImage: async ({ relativePath }) => ({
+      ok: true,
+      relativePath,
+      dataUrl: 'data:image/jpeg;base64,ZmFiZXI=',
+      mimeType: 'image/jpeg',
+    }),
     writeProjectFile: async () => ({ ok: true }),
   },
   getProjectInfo: () => ({
@@ -119,14 +137,17 @@ const controller = sandbox.window.FaberProjectFileEditor.createProjectFileEditor
 (async () => {
   await controller.open('assets/bad.jpg"onerror="alert(1).jpg');
 
-  const content = ids['project-file-modal-content'];
-  assert.strictEqual(content.children.length, 1, 'image preview should append a DOM image node');
-  const image = content.children[0];
+  const imageStage = ids['project-file-image-stage'];
+  assert.strictEqual(imageStage.children.length, 1, 'image preview should render into the dedicated image stage');
+  const viewer = imageStage.children[0];
+  assert.strictEqual(viewer.className, 'project-file-image-viewer');
+  const figure = viewer.children[0];
+  const image = figure.children[0];
   assert.strictEqual(image.tagName, 'IMG');
-  assert.strictEqual(content.innerHTML.includes('onerror'), false, 'image preview must not build user paths through HTML');
-  assert.ok(String(image.src || '').startsWith('file:///tmp/faber%20project/assets/'));
-  assert.strictEqual(String(image.src || '').includes('"'), false, 'image src should encode quotes from file names');
-  assert.ok(String(image.src || '').includes('%22onerror%3D%22alert(1).jpg'));
+  assert.strictEqual(imageStage.innerHTML.includes('onerror'), false, 'image preview must not build user paths through HTML');
+  assert.strictEqual(String(image.src || ''), 'data:image/jpeg;base64,ZmFiZXI=');
+  assert.strictEqual(ids['project-file-modal-image-counter'].textContent, '2/2');
+  assert.strictEqual(ids['project-file-modal-title'].textContent, 'bad.jpg"onerror="alert(1).jpg');
 
   console.log('renderer-file-editor.test.js: ok');
 })().catch((error) => {

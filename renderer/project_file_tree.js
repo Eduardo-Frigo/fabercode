@@ -165,6 +165,11 @@
         line.dataset.path = row.path || '';
         line.dataset.dir = isDir ? '1' : '0';
         if (hasDiff) line.dataset.firstLine = String(firstLine);
+        if (!isDir) {
+          line.tabIndex = 0;
+          line.setAttribute('role', 'button');
+          line.setAttribute('aria-label', `Abrir ${relPath}`);
+        }
 
         let chevron;
         if (isDir) {
@@ -302,6 +307,18 @@
           const jump = event.target && event.target.closest ? event.target.closest('.project-tree-diff-jump') : null;
           const line = jump ? Number(jump.dataset.line || row.dataset.firstLine || 1) : Number(row.dataset.firstLine || 1);
           await options.onOpenFile(row.dataset.path || '', { line: Math.max(1, line || 1) });
+        }
+      });
+
+      rootEl.addEventListener('keydown', async (event) => {
+        const row = event.target && event.target.closest ? event.target.closest('.project-tree-row') : null;
+        if (!row || row.dataset.dir === '1') return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        if (typeof options.onOpenFile === 'function') {
+          await options.onOpenFile(row.dataset.path || '', {
+            line: Math.max(1, Number(row.dataset.firstLine || 1) || 1),
+          });
         }
       });
 

@@ -4748,6 +4748,7 @@ const {
   getProjectGitStatus,
   initProjectGitRepository,
   stageProjectGitFiles,
+  unstageProjectGitFiles,
   rollbackProjectGitFiles,
 } = projectGitService;
 
@@ -5009,6 +5010,7 @@ app.whenReady().then(() => {
     scanProject,
     shell,
     stageProjectGitFiles,
+    unstageProjectGitFiles,
     rollbackProjectGitFiles,
     writeProjectsSnapshot,
   });

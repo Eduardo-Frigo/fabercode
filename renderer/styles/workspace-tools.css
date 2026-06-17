@@ -148,6 +148,18 @@
   color: #50c985 !important;
 }
 
+body.mode-git #btn-project-files.active {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  color: #ececec !important;
+}
+
+body.mode-git #btn-project-git {
+  background: rgba(80, 201, 133, 0.15) !important;
+  border-color: rgba(80, 201, 133, 0.4) !important;
+  color: #50c985 !important;
+}
+
 .project-panel-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -224,7 +236,7 @@
 }
 
 .project-terminal-lightbox .project-terminal-title span {
-  flex: 0 1 auto;
+  display: none;
 }
 
 .project-terminal-lightbox #project-terminal-placement,
@@ -258,8 +270,8 @@
 }
 
 .project-terminal-head {
-  min-height: 58px;
-  padding: 10px 12px;
+  min-height: 44px;
+  padding: 8px 12px 6px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -280,39 +292,22 @@
 }
 
 .project-terminal-title strong {
-  flex: 0 1 auto;
-  min-width: min(100%, 110px);
   color: #f0f2f5;
   font-size: 0.82rem;
   letter-spacing: 0;
   text-transform: uppercase;
 }
 
+body:not(.project-terminal-lightbox-open) .project-terminal-title strong {
+  display: none;
+}
+
 .project-terminal-title span {
-  flex: 1 1 100%;
-  max-width: 100%;
-  color: rgba(226,230,238,0.64);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.7rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  display: none;
 }
 
 .project-terminal-status {
-  flex: 0 0 auto;
-  max-width: 100% !important;
-  align-self: flex-start;
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 999px;
-  padding: 4px 9px;
-  color: rgba(230,236,244,0.72) !important;
-  background: rgba(255,255,255,0.04);
-  font-family: var(--font-main) !important;
-  font-size: 0.64rem !important;
-  font-weight: 750;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  display: none;
 }
 
 .project-terminal-status[data-status='running'] {
@@ -352,13 +347,31 @@
 }
 
 .project-terminal-tabs {
-  min-height: 46px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 12px 6px;
+  overflow-x: auto;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.project-terminal-tabs__sessions,
+.project-terminal-tabs__actions {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+}
+
+.project-terminal-tabs__sessions {
+  flex: 1 1 auto;
   overflow-x: auto;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.project-terminal-tabs__actions {
+  flex: 0 0 auto;
 }
 
 .project-terminal-tab {
@@ -596,6 +609,10 @@ body:not(.workspace-right-collapsed) .right-tool-lightbox__panel {
   font-size: 0.82rem;
 }
 
+.workspace-tool-region--git .milestones-header h3 {
+  display: none;
+}
+
 .right-tool-section__head span,
 .right-tool-git-summary span,
 .right-tool-git-step__head span,
@@ -733,6 +750,24 @@ body:not(.workspace-right-collapsed) .right-tool-lightbox__panel {
   color: rgba(244, 244, 244, 0.86);
   font-size: 0.72rem;
   font-weight: 800;
+}
+
+.right-tool-git-step__badge--icon {
+  padding: 0;
+}
+
+.right-tool-git-step__badge--icon .right-tool-icon-mark {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  background: transparent;
+  color: rgba(244, 244, 244, 0.92);
+}
+
+.right-tool-git-step__badge--icon .right-tool-icon-mark svg {
+  width: 18px;
+  height: 18px;
+  transform: none;
 }
 
 .right-tool-git-step__content {
@@ -906,6 +941,136 @@ body:not(.workspace-right-collapsed) .right-tool-lightbox__panel {
   line-height: 1.28;
 }
 
+@container right-panel (max-width: 430px) {
+  .workspace-tool-region--git .right-tool-git-summary strong {
+    font-size: 0;
+    line-height: 0;
+  }
+
+  .workspace-tool-region--git .right-tool-git-summary strong::before {
+    content: attr(data-compact-title);
+    font-size: 0.72rem;
+    line-height: 1.2;
+    color: #f2f4f1;
+  }
+
+  .workspace-tool-region--git .right-tool-git-count {
+    min-width: 30px;
+    min-height: 30px;
+    padding: 3px 7px 4px;
+    display: inline-grid;
+    place-items: center;
+    gap: 0;
+    line-height: 1;
+    font-size: 0;
+    text-align: center;
+  }
+
+  .workspace-tool-region--git .right-tool-git-count::before {
+    content: attr(data-compact-label);
+    display: block;
+    color: rgba(240, 240, 240, 0.72);
+    font-size: 0.56rem;
+    font-weight: 800;
+    line-height: 1.05;
+    letter-spacing: 0.01em;
+  }
+
+  .workspace-tool-region--git .right-tool-git-count::after {
+    content: attr(data-compact-value);
+    display: block;
+    color: #f2f4f1;
+    font-size: 0.74rem;
+    font-weight: 800;
+    line-height: 1.1;
+  }
+
+  .workspace-tool-region--git .milestones-header {
+    padding-bottom: 8px;
+    margin-bottom: 10px;
+  }
+
+  .workspace-tool-region--git .right-tool-git-step__head strong {
+    font-size: 0;
+    line-height: 0;
+  }
+
+  .workspace-tool-region--git .right-tool-git-step__head strong::before {
+    content: attr(data-compact-title);
+    font-size: 0.76rem;
+    line-height: 1.2;
+    color: #f2f4f1;
+  }
+
+  .workspace-tool-region--git .right-tool-section__head span,
+  .workspace-tool-region--git .right-tool-git-file-chip__summary,
+  .workspace-tool-region--git .right-tool-file-folder,
+  .workspace-tool-region--git .right-tool-git-file-chip__meta,
+  .workspace-tool-region--git .right-tool-git-step__head > div > span,
+  .workspace-tool-region--git .right-tool-empty {
+    display: none;
+  }
+
+  .workspace-tool-region--git .right-tool-git-summary {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .workspace-tool-region--git .right-tool-git-counts {
+    gap: 6px;
+    align-items: flex-start;
+  }
+
+  .workspace-tool-region--git .right-tool-git-flow--clean .right-tool-git-step__content,
+  .workspace-tool-region--git .right-tool-git-selection,
+  .workspace-tool-region--git .right-tool-actions-row,
+  .workspace-tool-region--git .right-tool-git-file-list,
+  .workspace-tool-region--git .right-tool-git-file-chip__summary,
+  .workspace-tool-region--git .right-tool-git-file-chip__meta,
+  .workspace-tool-region--git .right-tool-file-folder,
+  .workspace-tool-region--git .right-tool-commit-summary,
+  .workspace-tool-region--git .right-tool-input {
+    display: none !important;
+  }
+
+  .workspace-tool-region--git .right-tool-git-file-chip {
+    padding: 7px 8px;
+    gap: 8px;
+  }
+
+  .workspace-tool-region--git .right-tool-git-file-list {
+    max-height: 180px;
+  }
+
+  .workspace-tool-region--git .right-tool-git-step {
+    padding: 10px;
+  }
+
+  .workspace-tool-region--git .right-tool-git-step__toggle {
+    display: none;
+  }
+
+  .workspace-tool-region--terminal .project-terminal-head {
+    display: none;
+  }
+
+  .workspace-tool-region--terminal .project-terminal-panel {
+    min-height: 0;
+    height: auto;
+  }
+
+  .workspace-tool-region--terminal .project-terminal-body {
+    flex: 0 0 auto;
+  }
+
+  .workspace-tool-region--terminal .project-terminal-output {
+    padding-top: 12px;
+    padding-bottom: 0;
+    max-height: 46vh;
+    overflow: auto;
+  }
+}
+
 .right-tool-git-selection {
   display: flex;
   flex-wrap: wrap;
@@ -1020,6 +1185,10 @@ body:not(.workspace-right-collapsed) .right-tool-lightbox__panel {
   gap: 8px;
 }
 
+.workspace-tool-region--git .right-tool-actions-row {
+  gap: 6px;
+}
+
 .right-tool-action {
   min-height: 34px;
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -1028,6 +1197,13 @@ body:not(.workspace-right-collapsed) .right-tool-lightbox__panel {
   background: rgba(255, 255, 255, 0.07);
   color: #f2f2f2;
   cursor: pointer;
+}
+
+.workspace-tool-region--git .right-tool-action {
+  min-height: 30px;
+  padding: 5px 10px;
+  border-radius: 9px;
+  font-size: 0.72rem;
 }
 
 .right-tool-action--primary {
@@ -1053,6 +1229,11 @@ body:not(.workspace-right-collapsed) .right-tool-lightbox__panel {
   border-color: rgba(255, 125, 134, 0.46);
   background: rgba(219, 68, 85, 0.92);
   color: #ffffff;
+  font-weight: 700;
+}
+
+.workspace-tool-region--git .right-tool-action--primary,
+.workspace-tool-region--git .right-tool-action--danger {
   font-weight: 700;
 }
 
@@ -1365,6 +1546,39 @@ body:not(.workspace-right-collapsed) .right-tool-lightbox__panel {
   cursor: pointer;
 }
 
+.project-file-modal__image-nav {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.project-file-modal__nav-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.07);
+  color: #f2f2f2;
+  cursor: pointer;
+  display: inline-grid;
+  place-items: center;
+  font-size: 0.82rem;
+}
+
+.project-file-modal__nav-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.project-file-modal__image-counter {
+  min-width: 56px;
+  text-align: center;
+  color: rgba(241, 241, 241, 0.72);
+  font-size: 0.68rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .project-file-modal__content {
   margin: 0;
   padding: 12px;
@@ -1374,6 +1588,101 @@ body:not(.workspace-right-collapsed) .right-tool-lightbox__panel {
   line-height: 1.45;
   color: #e5e5e5;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.project-file-image-stage {
+  display: none;
+  flex: 1 1 auto;
+  overflow: auto;
+  min-height: min(72vh, 760px);
+  padding: 20px;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(255, 255, 255, 0.06), transparent 42%),
+    #090b0d;
+}
+
+.project-file-image-stage.hidden {
+  display: none !important;
+}
+
+.project-file-modal--image .project-file-modal__tools,
+.project-file-modal--image .project-file-editor-wrap,
+.project-file-modal--image .project-file-save,
+.project-file-modal--image .project-file-status {
+  display: none !important;
+}
+
+.project-file-modal--image .project-file-modal__image-nav {
+  display: inline-flex;
+}
+
+.project-file-modal--image .project-file-image-stage {
+  display: flex;
+}
+
+.project-file-modal--image .project-file-modal__dialog {
+  width: min(1160px, calc(100vw - 28px));
+  max-height: calc(100vh - 28px);
+  background: rgba(8, 9, 12, 0.98);
+}
+
+.project-file-image-viewer {
+  width: 100%;
+  display: grid;
+  place-items: center;
+  gap: 14px;
+}
+
+.project-file-image-figure {
+  width: 100%;
+  margin: 0;
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+}
+
+.project-file-image {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 160px);
+  object-fit: contain;
+  border-radius: 12px;
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.55);
+  background: #0c0d10;
+}
+
+.project-file-image-caption {
+  width: min(100%, 960px);
+  display: grid;
+  gap: 4px;
+  text-align: center;
+}
+
+.project-file-image-caption strong {
+  color: #f5f6f7;
+  font-size: 0.8rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-file-image-caption span {
+  color: rgba(240, 240, 240, 0.62);
+  font-size: 0.68rem;
+  word-break: break-word;
+}
+
+.project-file-image-fallback {
+  margin: 0;
+  color: rgba(240, 240, 240, 0.6);
+  font-size: 0.72rem;
+}
+
+.project-file-image-fallback.hidden {
+  display: none;
 }
 
 :root {

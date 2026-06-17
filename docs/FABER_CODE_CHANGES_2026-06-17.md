@@ -155,6 +155,53 @@ A função `collectProjectFilesTree` foi reescrita com travessia **DFS pré-orde
 
 ---
 
+## 9. Rodada Final da Janela: Pré-visualização de Imagens e Respiro do Painel
+
+Nesta parte final da janela, o foco foi manter o **editor de código como fluxo principal** e, ao mesmo tempo, permitir uma experiência correta de **pré-visualização de imagens** dentro do painel de arquivos.
+
+### 9.1 Preview de imagem com lightbox sem substituir o editor
+**`main/ipc/file_handlers.js`**
+- Adicionado o handler de IPC para ler imagens do projeto e devolver `dataUrl` seguro para visualização.
+
+**`preload.js`**
+- Exposto `previewProjectImage` na API do renderer.
+
+**`renderer/project_file_editor.js`**
+- O editor continua responsável por arquivos de texto/código.
+- Imagens agora abrem em modo de pré-visualização dedicado, sem tentar tratá-las como código.
+- A visualização usa um estágio próprio para imagem, preservando o fluxo do editor.
+- A navegação entre imagens da mesma pasta funciona com setas esquerda/direita e contador de posição.
+
+**`renderer/index.html`**
+- Inserido o container dedicado `#project-file-image-stage`.
+- Controles de navegação da lightbox foram integrados ao cabeçalho da modal.
+
+**`renderer/styles/workspace-tools.css`**
+- Adicionados estilos para o estágio de imagem e para ocultar o conteúdo de código quando o modo de imagem está ativo.
+- A modal de imagem passou a ter apresentação separada do editor, evitando conflito com regras legadas.
+
+**`renderer/project_file_tree.js`**
+- Entradas de arquivo ficaram acessíveis via teclado e prontas para disparar a pré-visualização.
+
+**`tests/renderer-file-editor.test.js`**
+- Testes atualizados para validar o novo fluxo da lightbox, o uso de `dataUrl` e a separação entre imagem e editor.
+
+### 9.2 Diagnóstico da limitação e solução adotada
+- O problema identificado foi que a pré-visualização de imagem estava competindo com a área do editor e com estilos legados da modal.
+- A correção adotada foi **separar a stage de imagem do stage de código**, mantendo a edição textual como prioridade e usando a imagem apenas quando o arquivo selecionado for visual.
+- Com isso, o editor de código continua sendo o recurso principal da ferramenta, e o visualizador de imagem vira um componente dedicado e controlado.
+
+### 9.3 Validações executadas
+- `node --check renderer/project_file_editor.js`
+- `node --check renderer/project_file_tree.js`
+- `node --check main/ipc/file_handlers.js`
+- `node --check preload.js`
+- `node tests/preload-api-contract.test.js`
+- `node tests/ipc-handlers.test.js`
+- `node tests/renderer-file-editor.test.js`
+
+---
+
 ## Arquivos Modificados (28 arquivos, +1172 / -235 linhas)
 
 | Caminho | Alteração Principal |

@@ -5,6 +5,11 @@
       modal: document.getElementById('project-file-modal'),
       title: document.getElementById('project-file-modal-title'),
       content: document.getElementById('project-file-modal-content'),
+      imageStage: document.getElementById('project-file-image-stage'),
+      imageNav: document.getElementById('project-file-modal-image-nav'),
+      imagePrev: document.getElementById('project-file-modal-prev'),
+      imageNext: document.getElementById('project-file-modal-next'),
+      imageCounter: document.getElementById('project-file-modal-image-counter'),
       closeButton: document.getElementById('project-file-modal-close'),
       editor: document.getElementById('project-file-editor'),
       lines: document.getElementById('project-file-lines'),
@@ -21,6 +26,8 @@
     let isDirty = false;
     let codeEditor = null;
     let codeEditorBound = false;
+    let currentImageGallery = [];
+    let currentImageIndex = -1;
 
     function getProjectInfo() {
       return typeof options.getProjectInfo === 'function' ? options.getProjectInfo() : null;
@@ -138,10 +145,6 @@
       }
     }
 
-    function isImageFilePath(path) {
-      return /\.(png|jpe?g|gif|webp|svg)$/i.test(String(path || '').trim());
-    }
-
     function escapeHtml(value) {
       return String(value || '')
         .replace(/&/g, '&amp;')
@@ -149,31 +152,203 @@
         .replace(/>/g, '&gt;');
     }
 
-    function encodeFileUrlPath(absPath) {
-      return String(absPath || '')
-        .split('/')
-        .map((part, index) => (index === 0 && part === '' ? '' : encodeURIComponent(part)))
-        .join('/');
+    function getBaseName(filePath) {
+      const normalized = String(filePath || '').replace(/\\/g, '/');
+      const parts = normalized.split('/').filter(Boolean);
+      return parts[parts.length - 1] || normalized || 'arquivo';
     }
 
-    function buildImageFileUrl(rootPath, relativePath) {
-      const root = String(rootPath || '').replace(/\/+$/, '');
-      const rel = String(relativePath || '').replace(/^\/+/, '');
-      return 'file://' + encodeFileUrlPath(root + '/' + rel);
+    function getParentPath(filePath) {
+      const normalized = String(filePath || '').replace(/\\/g, '/').replace(/\/+$/, '');
+      const parts = normalized.split('/').filter(Boolean);
+      parts.pop();
+      return parts.join('/');
     }
 
-    function renderImagePreview(rootPath, relativePath) {
-      if (!elements.content) return;
-      elements.content.innerHTML = '';
+    function isImageFilePath(path) {
+      return /\.(png|jpe?g|gif|webp|svg)$/i.test(String(path || '').trim());
+    }
+
+    function setImageGalleryState(items, index) {
+      currentImageGallery = Array.isArray(items) ? items.slice() : [];
+      const safeIndex = currentImageGallery.length
+        ? Math.min(Math.max(0, Number(index || 0) || 0), currentImageGallery.length - 1)
+        : -1;
+      currentImageIndex = safeIndex;
+
+      const hasGallery = currentImageGallery.length > 1 && safeIndex >= 0;
+      if (elements.imageNav) {
+        elements.imageNav.setAttribute('aria-hidden', hasGallery ? 'false' : 'true');
+        elements.imageNav.style.display = hasGallery ? '' : 'none';
+      }
+      if (elements.imagePrev) {
+        elements.imagePrev.disabled = !hasGallery || safeIndex <= 0;
+      }
+      if (elements.imageNext) {
+        elements.imageNext.disabled = !hasGallery || safeIndex < 0 || safeIndex >= currentImageGallery.length - 1;
+      }
+      if (elements.imageCounter) {
+        elements.imageCounter.textContent = hasGallery ? `${safeIndex + 1}/${currentImageGallery.length}` : '1/1';
+      }
+    }
+
+    async function buildImageGallery(rootPath, relativePath) {
+      const fallback = { items: [relativePath], index: 0 };
+      if (!api || typeof api.getProjectFilesTree !== 'function') return fallback;
+
+      try {
+        const result = await api.getProjectFilesTree({ rootPath });
+        const rows = result && result.ok && Array.isArray(result.rows) ? result.rows : [];
+        const targetDir = getParentPath(relativePath);
+        const items = rows
+          .filter((row) => {
+            const rowPath = String(row && row.path ? row.path : '').replace(/\\/g, '/');
+            const isDir = row && (row.type === 'dir' || row.kind === 'dir' || row.isDir === true);
+            return !isDir && isImageFilePath(rowPath) && getParentPath(rowPath) === targetDir;
+          })
+          .map((row) => String(row.path || '').replace(/\\/g, '/'));
+        const uniqueItems = items.filter((item, index) => items.indexOf(item) === index);
+        const index = Math.max(0, uniqueItems.indexOf(String(relativePath || '').replace(/\\/g, '/')));
+        return uniqueItems.length ? { items: uniqueItems, index } : fallback;
+      } catch {
+        return fallback;
+      }
+    }
+
+    async function renderImagePreview(rootPath, relativePath, previewOptions = {}) {
+      if (!elements.imageStage) return;
+      elements.imageStage.innerHTML = '';
+
+      const viewer = document.createElement('div');
+      viewer.className = 'project-file-image-viewer';
+
+      const figure = document.createElement('figure');
+      figure.className = 'project-file-image-figure';
+
       const image = document.createElement('img');
-      image.src = buildImageFileUrl(rootPath, relativePath);
+      image.className = 'project-file-image';
       image.alt = String(relativePath || '');
-      image.loading = 'lazy';
-      image.style.maxWidth = '100%';
-      image.style.height = 'auto';
-      image.style.display = 'block';
-      image.style.margin = '0 auto';
-      elements.content.appendChild(image);
+      image.loading = 'eager';
+      image.decoding = 'async';
+
+      const caption = document.createElement('figcaption');
+      caption.className = 'project-file-image-caption';
+      const captionTitle = document.createElement('strong');
+      captionTitle.textContent = relativePath ? getBaseName(relativePath) : 'Imagem';
+      const captionPath = document.createElement('span');
+      captionPath.textContent = String(relativePath || '');
+      caption.append(captionTitle, captionPath);
+
+      const fallback = document.createElement('p');
+      fallback.className = 'project-file-image-fallback';
+      fallback.textContent = 'Carregando imagem...';
+
+      image.addEventListener('load', () => {
+        fallback.textContent = '';
+        fallback.classList.add('hidden');
+      });
+      image.addEventListener('error', () => {
+        fallback.textContent = 'Não foi possível carregar esta imagem.';
+        fallback.classList.remove('hidden');
+      });
+
+      let previewResult = null;
+      try {
+        previewResult = api.previewProjectImage
+          ? await api.previewProjectImage({ projectInfo: { rootPath }, relativePath })
+          : null;
+      } catch (error) {
+        previewResult = {
+          ok: false,
+          message: error && error.message ? error.message : 'Não foi possível carregar esta imagem.',
+        };
+      }
+
+      if (previewResult && previewResult.ok && previewResult.dataUrl) {
+        image.src = previewResult.dataUrl;
+      } else {
+        fallback.textContent = (previewResult && previewResult.message) || 'Não foi possível carregar esta imagem.';
+        fallback.classList.remove('hidden');
+      }
+
+      figure.append(image, fallback, caption);
+      viewer.appendChild(figure);
+      elements.imageStage.appendChild(viewer);
+
+      if (elements.imageCounter) {
+        const galleryIndex = Math.max(0, Number(previewOptions.galleryIndex || 0) || 0);
+        const gallerySize = Math.max(1, Number(previewOptions.gallerySize || 1) || 1);
+        elements.imageCounter.textContent = `${galleryIndex + 1}/${gallerySize}`;
+      }
+    }
+
+    async function openImagePreview(projectInfo, relativePath, options = {}) {
+      const rootPath = projectInfo && projectInfo.rootPath ? projectInfo.rootPath : '';
+      if (!rootPath || !relativePath) return;
+
+      currentPath = relativePath;
+
+      const explicitGallery = Array.isArray(options.gallery) ? options.gallery.slice() : null;
+      const galleryState = explicitGallery
+        ? {
+            items: explicitGallery.filter(Boolean),
+            index: Math.max(0, Number(options.galleryIndex || 0) || 0),
+          }
+        : await buildImageGallery(rootPath, relativePath);
+
+      setImageGalleryState(galleryState.items, galleryState.index);
+
+      if (elements.modal) elements.modal.classList.add('project-file-modal--image');
+      if (codeEditor) {
+        const wrap = codeEditor.getWrapperElement();
+        if (wrap) wrap.style.display = 'none';
+      }
+      if (elements.editor) elements.editor.style.display = 'none';
+      if (elements.saveButton) elements.saveButton.style.display = 'none';
+      if (elements.lines) elements.lines.style.display = 'none';
+      if (elements.imageStage) {
+        elements.imageStage.classList.remove('hidden');
+        elements.imageStage.setAttribute('aria-hidden', 'false');
+      }
+
+      if (elements.title) {
+        elements.title.textContent = getBaseName(relativePath);
+      }
+
+      try {
+        await renderImagePreview(rootPath, relativePath, {
+          galleryIndex: currentImageIndex >= 0 ? currentImageIndex : galleryState.index,
+          gallerySize: currentImageGallery.length || 1,
+        });
+      } catch (error) {
+        if (elements.imageStage) {
+          elements.imageStage.innerHTML = '';
+          const fallback = document.createElement('p');
+          fallback.className = 'project-file-image-fallback';
+          fallback.textContent = error && error.message ? error.message : 'Não foi possível carregar esta imagem.';
+          elements.imageStage.appendChild(fallback);
+        }
+      }
+
+      if (elements.modal) {
+        elements.modal.classList.remove('hidden');
+        elements.modal.setAttribute('aria-hidden', 'false');
+      }
+      setDirty(false);
+      return true;
+    }
+
+    async function navigateImagePreview(step) {
+      if (!currentImageGallery.length || currentImageIndex < 0) return false;
+      const nextIndex = currentImageIndex + step;
+      if (nextIndex < 0 || nextIndex >= currentImageGallery.length) return false;
+      const projectInfo = getProjectInfo();
+      if (!projectInfo) return false;
+      await openImagePreview(projectInfo, currentImageGallery[nextIndex], {
+        gallery: currentImageGallery,
+        galleryIndex: nextIndex,
+      });
+      return true;
     }
 
     function syntaxHighlightText(content, filePath) {
@@ -343,11 +518,18 @@
       elements.modal.classList.add('hidden');
       elements.modal.setAttribute('aria-hidden', 'true');
 
+      if (elements.imageStage) {
+        elements.imageStage.innerHTML = '';
+        elements.imageStage.classList.add('hidden');
+        elements.imageStage.setAttribute('aria-hidden', 'true');
+      }
       if (elements.content) {
         elements.content.innerHTML = '';
         elements.content.style.display = '';
         elements.content.style.whiteSpace = '';
+        elements.content.classList.remove('project-file-modal__content--image');
       }
+      if (elements.modal) elements.modal.classList.remove('project-file-modal--image');
       if (codeEditor) {
         codeEditor.setValue('');
         const wrap = codeEditor.getWrapperElement();
@@ -364,6 +546,7 @@
         elements.lines.style.display = '';
         elements.lines.scrollTop = 0;
       }
+      setImageGalleryState([], -1);
 
       currentPath = null;
       originalContent = '';
@@ -414,29 +597,15 @@
       }
 
       currentPath = relativePath;
-      if (elements.title) elements.title.textContent = relativePath;
+      if (elements.title) elements.title.textContent = isImageFilePath(relativePath) ? getBaseName(relativePath) : relativePath;
       if (elements.status) elements.status.textContent = 'Sem alterações';
 
       if (isImageFilePath(relativePath)) {
-        if (codeEditor) {
-          const wrap = codeEditor.getWrapperElement();
-          if (wrap) wrap.style.display = 'none';
-        }
-        if (elements.editor) elements.editor.style.display = 'none';
-        if (elements.saveButton) elements.saveButton.style.display = 'none';
-        if (elements.lines) elements.lines.style.display = 'none';
-        if (elements.content) {
-          elements.content.style.display = 'block';
-          elements.content.style.whiteSpace = 'normal';
-          renderImagePreview(projectInfo.rootPath, relativePath);
-        }
-        if (elements.modal) {
-          elements.modal.classList.remove('hidden');
-          elements.modal.setAttribute('aria-hidden', 'false');
-        }
-        setDirty(false);
-        return;
+        await openImagePreview(projectInfo, relativePath);
+        return true;
       }
+
+      setImageGalleryState([], -1);
 
       const result = await api.readProjectFile({
         projectInfo,
@@ -454,9 +623,16 @@
 
       const cm = ensureCodeEditor();
       if (cm) {
+        if (elements.modal) elements.modal.classList.remove('project-file-modal--image');
+        if (elements.imageStage) {
+          elements.imageStage.classList.add('hidden');
+          elements.imageStage.setAttribute('aria-hidden', 'true');
+          elements.imageStage.innerHTML = '';
+        }
         if (elements.content) {
           elements.content.style.display = 'none';
           elements.content.innerHTML = '';
+          elements.content.classList.remove('project-file-modal__content--image');
         }
         if (elements.lines) elements.lines.style.display = 'none';
         setEditorMode(relativePath);
@@ -465,10 +641,17 @@
         if (wrap) wrap.style.display = 'block';
         if (elements.editor) elements.editor.style.display = 'none';
       } else {
+        if (elements.modal) elements.modal.classList.remove('project-file-modal--image');
+        if (elements.imageStage) {
+          elements.imageStage.classList.add('hidden');
+          elements.imageStage.setAttribute('aria-hidden', 'true');
+          elements.imageStage.innerHTML = '';
+        }
         if (elements.content) {
           elements.content.style.display = 'block';
           elements.content.style.whiteSpace = 'pre';
           elements.content.innerHTML = '';
+          elements.content.classList.remove('project-file-modal__content--image');
         }
         if (elements.lines) elements.lines.style.display = 'block';
       }
@@ -559,6 +742,18 @@
         });
       }
 
+      if (elements.imagePrev) {
+        elements.imagePrev.addEventListener('click', async () => {
+          await navigateImagePreview(-1);
+        });
+      }
+
+      if (elements.imageNext) {
+        elements.imageNext.addEventListener('click', async () => {
+          await navigateImagePreview(1);
+        });
+      }
+
       if (elements.modal) {
         elements.modal.addEventListener('click', async (event) => {
           if (event.target && event.target.dataset && event.target.dataset.close === '1') {
@@ -570,6 +765,19 @@
       document.addEventListener('keydown', async (event) => {
         if (event.key === 'Escape' && isOpen()) {
           await close();
+          return;
+        }
+        if (!isOpen() || !elements.modal || !elements.modal.classList.contains('project-file-modal--image')) {
+          return;
+        }
+        if (event.key === 'ArrowLeft') {
+          event.preventDefault();
+          await navigateImagePreview(-1);
+          return;
+        }
+        if (event.key === 'ArrowRight') {
+          event.preventDefault();
+          await navigateImagePreview(1);
         }
       });
     }

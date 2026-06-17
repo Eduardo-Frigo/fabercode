@@ -71,6 +71,19 @@
       };
     }
 
+    function updateStageCursor() {
+      if (!stage) return;
+      if (isPanning) {
+        stage.style.cursor = 'grabbing';
+        return;
+      }
+      if (currentTool === 'hand' || isSpaceHeld) {
+        stage.style.cursor = 'grab';
+        return;
+      }
+      stage.style.cursor = 'default';
+    }
+
     stage.addEventListener('mousedown', (e) => {
       if (e.target === stage || e.target.id === 'application-map-canvas-grid' || e.target.tagName === 'svg') {
         if (currentTool === 'connect') {
@@ -83,7 +96,7 @@
         if (currentTool === 'hand' || isSpaceHeld) {
           isPanning = true;
           panStart = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y };
-          stage.style.cursor = 'grabbing';
+          updateStageCursor();
         } else {
           isSelecting = true;
           const rect = stage.getBoundingClientRect();
@@ -220,7 +233,7 @@
     window.addEventListener('mouseup', () => {
       if (isPanning) {
         isPanning = false;
-        stage.style.cursor = currentTool === 'hand' ? 'grab' : 'default';
+        updateStageCursor();
         onMapChanged();
       }
       if (isSelecting) {
@@ -311,7 +324,7 @@
           return;
         }
         isSpaceHeld = true;
-        stage.style.cursor = 'grab';
+        updateStageCursor();
         e.preventDefault();
       }
     });
@@ -319,7 +332,7 @@
     window.addEventListener('keyup', (e) => {
       if (e.key === ' ') {
         isSpaceHeld = false;
-        stage.style.cursor = currentTool === 'hand' ? 'grab' : 'default';
+        updateStageCursor();
       }
     });
 
@@ -1123,7 +1136,7 @@
       if (tool !== 'connect') {
         clearConnectionSource();
       }
-      stage.style.cursor = tool === 'hand' ? 'grab' : 'default';
+      updateStageCursor();
       onToolChanged(tool);
     }
 
