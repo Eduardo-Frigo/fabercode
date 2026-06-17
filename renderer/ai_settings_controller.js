@@ -385,12 +385,12 @@
       setHelpLink(row.providerHint || row.provider);
     }
 
-    function removeCustomApiDraft(customId) {
+    async function removeCustomApiDraft(customId) {
       if (!draft || !customId) return;
       const entry = draft.customApis.find((item) => item.id === customId);
       if (!entry) return;
       const label = entry.apiLabel || humanizeProviderName(entry.providerName || translate('customApis'));
-      const confirmed = window.confirm(`Remover "${label}" das APIs salvas? A remoção só será gravada ao clicar em Salvar.`);
+      const confirmed = await window.faberConfirm(`Remover "${label}" das APIs salvas? A remoção só será gravada ao clicar em Salvar.`);
       if (!confirmed) return;
 
       draft.customApis = draft.customApis.filter((item) => item.id !== customId);
@@ -405,7 +405,7 @@
       setHelpLink(draft.selectedProvider);
     }
 
-    function clearBuiltinRemoteProviderDraft(provider) {
+    async function clearBuiltinRemoteProviderDraft(provider) {
       if (!draft) return;
       const normalized = normalizeKnownProvider(provider);
       const config = normalized === 'openai'
@@ -418,7 +418,7 @@
       if (!config) return;
 
       const label = normalized === 'openai' ? 'OpenAI API' : normalized === 'gemini' ? 'Gemini API' : 'SambaNova API';
-      const confirmed = window.confirm(`Remover "${label}" da lista de APIs do projeto? O provedor continuará disponível para adicionar novamente.`);
+      const confirmed = await window.faberConfirm(`Remover "${label}" da lista de APIs do projeto? O provedor continuará disponível para adicionar novamente.`);
       if (!confirmed) return;
 
       setBuiltInProviderDisabled(normalized, true);
@@ -542,12 +542,12 @@
         }
 
         if (row.kind === 'custom' && row.customId) {
-          actions.appendChild(createApiActionButton(translate('remove'), 'btn btn-danger', () => {
-            removeCustomApiDraft(row.customId);
+          actions.appendChild(createApiActionButton(translate('remove'), 'btn btn-danger', async () => {
+            await removeCustomApiDraft(row.customId);
           }));
         } else if (row.kind === 'builtin' && (row.provider === 'openai' || row.provider === 'gemini' || row.provider === 'sambanova')) {
-          actions.appendChild(createApiActionButton(translate('remove'), 'btn btn-danger', () => {
-            clearBuiltinRemoteProviderDraft(row.provider);
+          actions.appendChild(createApiActionButton(translate('remove'), 'btn btn-danger', async () => {
+            await clearBuiltinRemoteProviderDraft(row.provider);
           }));
         }
 

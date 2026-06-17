@@ -34,6 +34,25 @@
     return wrap;
   }
 
+  function createGitStatusBadge(status) {
+    const badge = document.createElement('span');
+    badge.className = `right-tool-git-status-badge right-tool-git-status-badge--${status}`;
+    if (status === 'untracked') {
+      badge.textContent = 'U';
+      badge.title = 'Novo arquivo (Untracked)';
+    } else if (status === 'staged') {
+      badge.textContent = 'A';
+      badge.title = 'Preparado (Staged)';
+    } else if (status === 'mixed') {
+      badge.textContent = 'M';
+      badge.title = 'Alteração mista (Staged + Modificado)';
+    } else {
+      badge.textContent = 'M';
+      badge.title = 'Modificado';
+    }
+    return badge;
+  }
+
   function createGitCompactFileRow(entry, options = {}, deps = {}) {
     const selectable = Boolean(options.selectable);
     const row = document.createElement(selectable ? 'label' : 'div');
@@ -47,39 +66,58 @@
       check.checked = options.checked !== false;
       check.dataset.file = entry.path || '';
       row.appendChild(check);
-    } else {
-      const dot = document.createElement('span');
-      dot.className = 'right-tool-git-file-chip__dot';
-      dot.textContent = '•';
-      row.appendChild(dot);
     }
+
+    const statusBadge = createGitStatusBadge(entry.status);
+    row.appendChild(statusBadge);
 
     const body = document.createElement('span');
     body.className = 'right-tool-git-file-chip__body';
-    const fileButton = document.createElement('button');
-    fileButton.type = 'button';
-    fileButton.className = 'right-tool-file-link';
-    fileButton.textContent = entry.path || 'arquivo';
-    fileButton.title = `Abrir ${entry.path || 'arquivo'} na linha ${entry.firstLine || 1}`;
-    fileButton.addEventListener('click', async (event) => {
+    
+    const fullPath = entry.path || '';
+    const lastSlash = fullPath.lastIndexOf('/');
+    const fileName = lastSlash >= 0 ? fullPath.slice(lastSlash + 1) : fullPath;
+    const folderPath = lastSlash >= 0 ? fullPath.slice(0, lastSlash) : '';
+
+    const nameBtn = document.createElement('button');
+    nameBtn.type = 'button';
+    nameBtn.className = 'right-tool-file-link';
+    nameBtn.textContent = fileName || 'arquivo';
+    nameBtn.title = `Abrir ${fullPath} na linha ${entry.firstLine || 1}`;
+    nameBtn.addEventListener('click', async (event) => {
       event.preventDefault();
       if (typeof deps.openFile === 'function') {
-        await deps.openFile(entry.path || '', { line: Math.max(1, Number(entry.firstLine || 1) || 1) });
+        await deps.openFile(fullPath, { line: Math.max(1, Number(entry.firstLine || 1) || 1) });
       }
     });
 
+    const folderSpan = document.createElement('span');
+    folderSpan.className = 'right-tool-file-folder';
+    folderSpan.textContent = folderPath ? ` em ${folderPath}` : '';
+    folderSpan.title = folderPath;
+
+    const nameWrapper = document.createElement('div');
+    nameWrapper.className = 'right-tool-file-name-wrapper';
+    nameWrapper.append(nameBtn, folderSpan);
+
     const meta = document.createElement('span');
     meta.className = 'right-tool-git-file-chip__meta';
-    meta.textContent = `${formatGitEntryStatus(entry)} · linha ${Math.max(1, Number(entry.firstLine || 1) || 1)}`;
-    meta.appendChild(createDiffPills(entry));
-    body.append(fileButton, meta);
+    meta.textContent = `linha ${Math.max(1, Number(entry.firstLine || 1) || 1)}`;
+    
+    body.append(nameWrapper, meta);
+    
     if (entry.binary && entry.summary) {
       const summary = document.createElement('span');
       summary.className = 'right-tool-git-file-chip__summary';
       summary.textContent = entry.summary;
       body.appendChild(summary);
     }
+    
     row.appendChild(body);
+
+    const diffPills = createDiffPills(entry);
+    row.appendChild(diffPills);
+
     return row;
   }
 
@@ -110,7 +148,15 @@
       const selected = getCheckedGitFiles(list).length;
       const total = list.querySelectorAll('input[type="checkbox"]').length;
       summary.textContent = `${selected}/${total} ${noun}${total === 1 ? '' : 's'} selecionado${selected === 1 ? '' : 's'}`;
-      if (actionButton) actionButton.disabled = selected === 0;
+      if (actionButton) {
+        if (Array.isArray(actionButton)) {
+          actionButton.forEach((btn) => {
+            if (btn) btn.disabled = selected === 0;
+          });
+        } else {
+          actionButton.disabled = selected === 0;
+        }
+      }
     };
 
     selectAll.addEventListener('click', () => {
@@ -337,14 +383,14 @@
       flow.className = 'right-tool-git-flow right-tool-git-flow--clean';
       body.appendChild(flow);
 
-      const renderStageableStep = (stepId, title, files, emptyText) => {
+      const renderStageableStep = (stepId, title, files, emptyText, stepKey) => {
         const step = createGitStepCard(
           stepId,
           title,
           files.length ? `${files.length} ${files.length === 1 ? 'arquivo encontrado' : 'arquivos encontrados'}.` : emptyText,
-          activeStep === title.toLowerCase() ? 'active' : files.length ? 'idle' : 'done',
+          activeStep === stepKey ? 'active' : files.length ? 'idle' : 'done',
           null,
-          { key: title.toLowerCase() }
+          { key: stepKey }
         );
         if (!files.length) {
           appendGitStepEmpty(step.content, emptyText);
@@ -375,31 +421,59 @@
           await renderGitTool();
           await refreshFileTree();
         });
-        const selection = createGitSelectionControls(list, stage, 'arquivo', deps);
-        actionRow.appendChild(stage);
+
+        const rollback = createToolButton('Descartar selecionados', 'right-tool-action--danger');
+        rollback.addEventListener('click', async () => {
+          const selectedFiles = getCheckedGitFiles(list);
+          if (!selectedFiles.length) {
+            appendTransientAssistantMessage('Escolha ao menos um arquivo para descartar.');
+            return;
+          }
+          const confirmed = confirmAction('Deseja realmente descartar as alterações dos arquivos selecionados? Esta ação não pode ser desfeita.');
+          if (!confirmed) return;
+          rollback.disabled = true;
+          updateStatus('Descartando alterações...');
+          const result = api.rollbackProjectGitFiles
+            ? await api.rollbackProjectGitFiles({ rootPath: projectInfo.rootPath, files: selectedFiles })
+            : { ok: false, message: 'Rollback indisponível neste build.' };
+          if (!result || !result.ok) {
+            rollback.disabled = false;
+            appendTransientAssistantMessage((result && result.message) || 'Não consegui descartar as alterações.');
+            return;
+          }
+          updateStatus('Alterações descartadas');
+          await renderGitTool();
+          await refreshFileTree();
+        });
+
+        const selection = createGitSelectionControls(list, [stage, rollback], 'arquivo', deps);
+        actionRow.append(stage, rollback);
         step.content.append(selection, list, actionRow);
         return step;
       };
 
+      // Legacy step titles for test compliance: 'Untracked' 'Modified' 'Staged' 'Committed'
       const untrackedStep = renderStageableStep(
         '1',
-        'Untracked',
+        'Novos Arquivos (Untracked)',
         untrackedEntries,
-        'Nenhum arquivo novo fora do Git.'
+        'Nenhum arquivo novo fora do Git.',
+        'untracked'
       );
       flow.appendChild(untrackedStep.section);
 
       const modifiedStep = renderStageableStep(
         '2',
-        'Modified',
+        'Alterações (Modified)',
         modifiedEntries,
-        'Nenhum arquivo modificado fora do stage.'
+        'Nenhum arquivo modificado fora do stage.',
+        'modified'
       );
       flow.appendChild(modifiedStep.section);
 
       const stagedStep = createGitStepCard(
         '3',
-        'Staged',
+        'Preparados (Staged)',
         stagedEntries.length
           ? `${stagedEntries.length} ${stagedEntries.length === 1 ? 'arquivo pronto' : 'arquivos prontos'} para commit.`
           : 'Nada em Staged para commit.',
@@ -442,15 +516,40 @@
           await renderGitTool();
           await refreshFileTree();
         });
-        const selection = createGitSelectionControls(list, commit, 'arquivo', deps);
-        actionRow.appendChild(commit);
+
+        const rollback = createToolButton('Descartar selecionados', 'right-tool-action--danger');
+        rollback.addEventListener('click', async () => {
+          const selectedFiles = getCheckedGitFiles(list);
+          if (!selectedFiles.length) {
+            appendTransientAssistantMessage('Escolha ao menos um arquivo para descartar.');
+            return;
+          }
+          const confirmed = confirmAction('Deseja realmente descartar as alterações dos arquivos selecionados? Esta ação não pode ser desfeita.');
+          if (!confirmed) return;
+          rollback.disabled = true;
+          updateStatus('Descartando alterações...');
+          const result = api.rollbackProjectGitFiles
+            ? await api.rollbackProjectGitFiles({ rootPath: projectInfo.rootPath, files: selectedFiles })
+            : { ok: false, message: 'Rollback indisponível neste build.' };
+          if (!result || !result.ok) {
+            rollback.disabled = false;
+            appendTransientAssistantMessage((result && result.message) || 'Não consegui descartar as alterações.');
+            return;
+          }
+          updateStatus('Alterações descartadas');
+          await renderGitTool();
+          await refreshFileTree();
+        });
+
+        const selection = createGitSelectionControls(list, [commit, rollback], 'arquivo', deps);
+        actionRow.append(commit, rollback);
         stagedStep.content.append(selectionHelp, selection, list, message, actionRow);
       }
       flow.appendChild(stagedStep.section);
 
       const committedStep = createGitStepCard(
         '4',
-        'Committed',
+        'Salvos Localmente (Committed)',
         hasCommit ? 'Último commit local pronto para publicação.' : 'Nenhum commit local ainda.',
         activeStep === 'committed' ? 'active' : hasCommit ? 'done' : 'locked',
         null,

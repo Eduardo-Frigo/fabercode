@@ -13,6 +13,8 @@
     let rows = [];
     let diffStats = {};
     let currentContextPath = null;
+    const collapsedPaths = new Set();
+    let currentProjectId = null;
 
     function getProjectInfo() {
       return typeof options.getProjectInfo === 'function' ? options.getProjectInfo() : null;
@@ -88,7 +90,20 @@
         return;
       }
 
-      const visibleRows = Array.isArray(rows) ? rows : [];
+      const isCollapsedDescendant = (path) => {
+        const normalizedPath = String(path || '').split('\\').join('/');
+        for (const collapsed of collapsedPaths) {
+          if (normalizedPath === collapsed) continue;
+          if (normalizedPath.startsWith(collapsed + '/')) {
+            return true;
+          }
+        }
+        return false;
+      };
+
+      const visibleRows = (Array.isArray(rows) ? rows : []).filter(row => {
+        return !isCollapsedDescendant(row.path);
+      });
       const visibleDiffStats = diffStats && typeof diffStats === 'object' ? diffStats : {};
 
       if (!visibleRows.length) {
@@ -151,6 +166,19 @@
         line.dataset.dir = isDir ? '1' : '0';
         if (hasDiff) line.dataset.firstLine = String(firstLine);
 
+        let chevron;
+        if (isDir) {
+          chevron = document.createElement('span');
+          chevron.className = 'project-tree-chevron';
+          if (collapsedPaths.has(row.path)) {
+            chevron.classList.add('collapsed');
+          }
+          chevron.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>`;
+        } else {
+          chevron = document.createElement('span');
+          chevron.className = 'project-tree-chevron-spacer';
+        }
+
         const icon = document.createElement('span');
         icon.className = 'project-tree-icon';
         icon.innerHTML = getFileTreeIconSvg(kind);
@@ -159,7 +187,7 @@
         label.className = 'project-tree-label';
         label.textContent = name;
 
-        line.append(icon, label);
+        line.append(chevron, icon, label);
 
         if (!isDir) {
           if (hasDiff) {
@@ -217,6 +245,12 @@
         return;
       }
 
+      const projectId = projectInfo.id || projectInfo.rootPath;
+      if (currentProjectId !== projectId) {
+        currentProjectId = projectId;
+        collapsedPaths.clear();
+      }
+
       if (!api || typeof api.getProjectFilesTree !== 'function') {
         rows = [];
         diffStats = {};
@@ -253,7 +287,17 @@
 
       rootEl.addEventListener('click', async (event) => {
         const row = event.target && event.target.closest ? event.target.closest('.project-tree-row') : null;
-        if (!row || row.dataset.dir === '1') return;
+        if (!row) return;
+        if (row.dataset.dir === '1') {
+          const path = row.dataset.path;
+          if (collapsedPaths.has(path)) {
+            collapsedPaths.delete(path);
+          } else {
+            collapsedPaths.add(path);
+          }
+          render();
+          return;
+        }
         if (typeof options.onOpenFile === 'function') {
           const jump = event.target && event.target.closest ? event.target.closest('.project-tree-diff-jump') : null;
           const line = jump ? Number(jump.dataset.line || row.dataset.firstLine || 1) : Number(row.dataset.firstLine || 1);
@@ -263,8 +307,9 @@
 
       rootEl.addEventListener('contextmenu', (event) => {
         const row = event.target && event.target.closest ? event.target.closest('.project-tree-row') : null;
-        if (!row || row.dataset.dir === '1') return;
+        if (!row) return;
         event.preventDefault();
+        if (row.dataset.dir === '1') return; // Context menu only for files for now
         if (typeof options.onContextMenu === 'function') {
           options.onContextMenu(row.dataset.path || '', event.clientX, event.clientY);
           return;

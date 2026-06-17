@@ -63,7 +63,7 @@
     const updateStatus = typeof options.updateStatus === 'function' ? options.updateStatus : () => {};
     const confirmAction = typeof options.confirmAction === 'function'
       ? options.confirmAction
-      : (message) => window.confirm(message);
+      : (message) => window.faberConfirm ? window.faberConfirm(message) : window.confirm(message);
     function appendTransientAssistantMessage(text) {
       appendMessage('assistant', text, { persistToConversation: false });
     }
@@ -141,6 +141,51 @@
 
     function openToolSurface(title, subtitle = '', kind = '') {
       const surface = ensureToolSurface();
+
+      if (kind === 'git' || kind === 'github') {
+        surface.root.classList.add('hidden');
+        surface.root.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('right-tool-lightbox-open');
+
+        document.body.classList.add('mode-git');
+        document.body.classList.remove('mode-terminal');
+        document.body.classList.remove('mode-cortex');
+        document.body.classList.remove('mode-milestones');
+        document.body.classList.remove('mode-map-chat');
+
+        const cortexBtn = document.getElementById('btn-cortex-mode');
+        if (cortexBtn) cortexBtn.classList.remove('active');
+        const milestonesBtn = document.getElementById('btn-project-milestones');
+        if (milestonesBtn) milestonesBtn.classList.remove('active');
+        const mapAiBtn = document.getElementById('btn-map-ai');
+        if (mapAiBtn) mapAiBtn.classList.remove('active');
+        const terminalBtn = document.getElementById('btn-project-terminal');
+        if (terminalBtn) terminalBtn.classList.remove('active');
+        const filesBtn = document.getElementById('btn-project-files');
+        if (filesBtn) filesBtn.classList.remove('active');
+
+        const gitBtn = document.getElementById('btn-project-git');
+        if (gitBtn) gitBtn.classList.add('active');
+
+        const rightPanelTitle = document.getElementById('right-panel-title');
+        if (rightPanelTitle) rightPanelTitle.textContent = title || 'Git';
+
+        if (document.body.classList.contains('workspace-right-collapsed')) {
+          const rightToggle = document.getElementById('workspace-collapse-right');
+          if (rightToggle) rightToggle.click();
+        }
+
+        if (terminalController) {
+          terminalController.closePanel();
+        }
+
+        const gitPanelContent = document.getElementById('git-panel-content');
+        if (gitPanelContent) {
+          gitPanelContent.innerHTML = '';
+          return gitPanelContent;
+        }
+      }
+
       surface.title.textContent = title;
       surface.subtitle.textContent = subtitle;
       surface.body.innerHTML = '';
@@ -448,7 +493,7 @@
         return;
       }
 
-      const confirmed = confirmAction(
+      const confirmed = await confirmAction(
         `Publicar este projeto no GitHub como ${planResult.plan.repoFullName || publishOptions.repoName}?`
       );
       if (!confirmed) {

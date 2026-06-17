@@ -660,29 +660,44 @@ body.mode-cortex #workspace-files-region {
 
 /* Card Edit Button */
 .map-node-edit-btn {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  color: rgba(232, 232, 232, 0.95);
-  padding: 5px;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50% !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  color: rgba(232, 232, 232, 0.95) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
   cursor: pointer;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s ease;
+  padding: 0 !important;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  z-index: 25;
+  transition: all 0.2s ease;
+}
+.map-node-edit-btn svg {
+  width: 12px !important;
+  height: 12px !important;
+  stroke: currentColor !important;
+  fill: none !important;
+  display: block !important;
 }
 .map-node-edit-btn:hover {
-  color: #50c985;
-  background: rgba(80, 201, 133, 0.2);
-  border-color: rgba(80, 201, 133, 0.4);
-  box-shadow: 0 2px 8px rgba(80, 201, 133, 0.15);
+  color: #50c985 !important;
+  background: rgba(80, 201, 133, 0.2) !important;
+  border-color: rgba(80, 201, 133, 0.4) !important;
+  box-shadow: 0 2px 8px rgba(80, 201, 133, 0.15) !important;
 }
 
 /* Clean Image Cards */
 .map-node.node-image.has-image {
+  width: 220px;
+  height: 120px;
   padding: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 .map-node.node-image.has-image .map-node-header,
 .map-node.node-image.has-image .map-node-title,
@@ -693,8 +708,26 @@ body.mode-cortex #workspace-files-region {
   margin-top: 0;
   width: 100%;
   height: 100%;
-  border-radius: 0;
-  background: transparent;
+  border: none;
+  border-radius: 10px;
+  overflow: hidden;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+.map-node.node-image.has-image .map-node-media-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Marquee selection outline */
+.map-selection-marquee {
+  position: absolute;
+  border: 1.5px dashed #50c985;
+  background: rgba(80, 201, 133, 0.12);
+  pointer-events: none;
+  z-index: 9999;
 }
 
 /* Connection Source Card Highlight */
@@ -703,4 +736,18 @@ body.mode-cortex #workspace-files-region {
   box-shadow: 0 0 0 2px #50c985, 0 12px 40px rgba(80, 201, 133, 0.4) !important;
   outline: 2px dashed #50c985;
   outline-offset: 4px;
+}
+
+/* Sidebar visibilities for Git & Terminal */
+body.mode-git #workspace-files-region,
+body.mode-terminal #workspace-files-region {
+  display: none !important;
+}
+body.mode-git #workspace-git-panel {
+  display: block !important;
+}
+body.mode-terminal #project-terminal-panel {
+  display: flex !important;
+  margin: 10px 0 0 0 !important;
+  height: calc(100% - 10px);
 }

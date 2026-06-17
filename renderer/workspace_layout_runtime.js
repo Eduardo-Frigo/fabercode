@@ -1,11 +1,11 @@
 (function () {
-  const TOOL_ORDER = ['projects', 'files', 'terminal', 'cortex', 'chat', 'milestones', 'automations'];
+  const TOOL_ORDER = ['projects', 'files', 'terminal', 'cortex', 'chat', 'git', 'milestones', 'automations'];
   const ZONE_ORDER = {
-    left: ['projects', 'files', 'cortex', 'terminal', 'chat', 'milestones', 'automations'],
+    left: ['projects', 'files', 'cortex', 'terminal', 'chat', 'git', 'milestones', 'automations'],
     center: ['chat'],
-    'center-tools': ['files', 'cortex', 'milestones', 'automations'],
-    right: ['files', 'terminal', 'cortex', 'chat', 'projects', 'milestones', 'automations'],
-    bottom: ['terminal', 'cortex', 'milestones', 'automations'],
+    'center-tools': ['files', 'cortex', 'git', 'milestones', 'automations'],
+    right: ['files', 'terminal', 'cortex', 'chat', 'projects', 'git', 'milestones', 'automations'],
+    bottom: ['terminal', 'cortex', 'git', 'milestones', 'automations'],
   };
 
   function normalizePreferences(preferences = {}) {
@@ -28,6 +28,7 @@
         automations: 'right',
         cortex: 'right',
         milestones: 'right',
+        git: 'right',
         ...(preferences.toolPlacements || {}),
       },
     };
@@ -59,6 +60,7 @@
         automations: byId('workspace-actions-region'),
         cortex: byId('cortex-learning-box'),
         milestones: byId('workspace-milestones-panel'),
+        git: byId('workspace-git-panel'),
       };
     }
 

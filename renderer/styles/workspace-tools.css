@@ -238,13 +238,14 @@
 }
 
 .project-terminal-lightbox .project-terminal-output {
-  min-height: 390px;
+  min-height: 0;
   max-height: none;
-  padding: 18px 20px;
-  background: #040607;
+  padding: 18px 20px 8px;
+  background: transparent;
   background-image: none;
   color: #e8f0ec;
   font-size: 0.82rem;
+  overflow: visible;
 }
 
 .project-terminal-lightbox .project-terminal-form {
@@ -386,20 +387,20 @@
   flex: 1;
   display: flex;
   flex-direction: column;
+  background: rgba(4, 7, 10, 0.78);
+  overflow-y: auto;
 }
 
 .project-terminal-output {
-  flex: 1;
-  min-height: 220px;
-  max-height: min(48vh, 520px);
+  flex: 0 0 auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
   margin: 0;
-  padding: 16px 18px;
-  overflow: auto;
+  padding: 16px 18px 4px;
+  overflow: visible;
   color: #dce7e2;
-  background:
-    linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
-    rgba(4, 7, 10, 0.78);
-  background-size: 100% 30px, auto;
+  background: transparent;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.78rem;
   line-height: 1.55;
@@ -408,30 +409,29 @@
 }
 
 .project-terminal-form {
-  min-height: 56px;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 38px;
+  min-height: auto;
+  display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
-  border-top: 1px solid rgba(255,255,255,0.09);
-  background: rgba(255,255,255,0.035);
+  padding: 0 18px 16px;
+  border-top: 0;
+  background: transparent;
 }
 
 .project-terminal-prompt {
-  color: rgba(126,240,176,0.86);
+  color: #50c985;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
 }
 
 #project-terminal-input {
-  width: 100%;
+  flex: 1;
   border: 0;
   outline: 0;
   background: transparent;
   color: #f2f6f3;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
 }
 
 #project-terminal-input:disabled {
@@ -439,13 +439,13 @@
 }
 
 .project-terminal-run {
-  width: 38px;
-  height: 36px;
-  border: 1px solid rgba(255,255,255,0.17);
-  border-radius: 10px;
-  background: rgba(255,255,255,0.07);
-  color: #f1f3f7;
-  cursor: pointer;
+  display: none !important;
+}
+
+#project-terminal-placement,
+#project-terminal-minimize,
+#project-terminal-close {
+  display: none !important;
 }
 
 .panel-right {
@@ -782,14 +782,19 @@ body:not(.workspace-right-collapsed) .right-tool-lightbox__panel {
 
 .right-tool-git-file-chip {
   min-width: 0;
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  display: flex !important;
   align-items: center;
-  gap: 8px;
-  padding: 8px 9px;
+  gap: 10px;
+  padding: 8px 10px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-  background: rgba(8, 10, 12, 0.42);
+  border-radius: 8px;
+  background: rgba(14, 16, 20, 0.45);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.right-tool-git-file-chip:hover {
+  background: rgba(20, 24, 30, 0.6);
+  border-color: rgba(255, 255, 255, 0.14);
 }
 
 .right-tool-git-file-chip--selectable {
@@ -797,36 +802,101 @@ body:not(.workspace-right-collapsed) .right-tool-lightbox__panel {
 }
 
 .right-tool-git-file-chip input {
-  width: 15px;
-  height: 15px;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
   margin: 0;
   accent-color: #50c985;
+  cursor: pointer;
 }
 
-.right-tool-git-file-chip__dot {
-  color: rgba(126, 240, 176, 0.78);
-  font-size: 1.1rem;
-  line-height: 1;
-  text-align: center;
+.right-tool-git-status-badge {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  user-select: none;
+}
+
+.right-tool-git-status-badge--untracked {
+  background: rgba(14, 52, 34, 0.7);
+  color: #8effc7;
+  border: 1px solid rgba(110, 238, 170, 0.3);
+}
+
+.right-tool-git-status-badge--staged {
+  background: rgba(16, 44, 87, 0.7);
+  color: #a4cdff;
+  border: 1px solid rgba(120, 180, 255, 0.3);
+}
+
+.right-tool-git-status-badge--modified,
+.right-tool-git-status-badge--mixed {
+  background: rgba(69, 46, 15, 0.7);
+  color: #ffd27f;
+  border: 1px solid rgba(255, 212, 128, 0.3);
 }
 
 .right-tool-git-file-chip__body {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.right-tool-git-file-chip__meta {
+  flex: 1;
   min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 7px;
-  color: rgba(240, 240, 240, 0.52);
-  font-size: 0.66rem;
-  line-height: 1.25;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.right-tool-file-name-wrapper {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.right-tool-file-link {
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 600;
+  color: #a4cdff;
+  font-size: 0.78rem;
+  border: none;
+  background: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.right-tool-file-link:hover {
+  text-decoration: underline;
+  color: #cce3ff;
+}
+
+.right-tool-file-folder {
+  font-size: 0.65rem;
+  color: rgba(255, 255, 255, 0.4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.right-tool-git-file-chip__meta {
+  font-size: 0.65rem;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.right-tool-diff-pills {
+  flex-shrink: 0;
+  display: flex;
+  gap: 4px;
+  font-size: 0.65rem;
 }
 
 .right-tool-git-file-chip__summary {
@@ -973,6 +1043,20 @@ body:not(.workspace-right-collapsed) .right-tool-lightbox__panel {
 }
 
 .right-tool-action--primary:disabled {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(242, 242, 242, 0.54);
+  box-shadow: none;
+}
+
+.right-tool-action--danger {
+  border-color: rgba(255, 125, 134, 0.46);
+  background: rgba(219, 68, 85, 0.92);
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.right-tool-action--danger:disabled {
   border-color: rgba(255, 255, 255, 0.14);
   background: rgba(255, 255, 255, 0.08);
   color: rgba(242, 242, 242, 0.54);

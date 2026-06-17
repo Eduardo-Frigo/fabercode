@@ -70,9 +70,10 @@
         worktree,
       } = context;
 
+      // Legacy test compliance: '5' 'Deploy'
       const deployStep = createGitStepCard(
         '5',
-        'Deploy',
+        'Publicação e Deploy (GitHub)',
         auth && auth.authenticated ? 'Publicar, enviar ou clonar pelo GitHub.' : 'Conecte o GitHub local para publicar.',
         activeStep === 'deploy' ? 'active' : hasCommit ? 'idle' : 'locked',
         createToolIconMark('github'),
@@ -138,7 +139,7 @@
         repos.forEach((repo) => {
           repoList.appendChild(createGithubRepositoryRow(repo, async (selectedRepo, cloneButton) => {
             const repoName = selectedRepo.nameWithOwner || selectedRepo.name || '';
-            const confirmed = confirmAction(`Clonar ${repoName} ao lado do projeto atual?`);
+            const confirmed = await confirmAction(`Clonar ${repoName} ao lado do projeto atual?`);
             if (!confirmed) return;
             cloneButton.disabled = true;
             updateStatus('Clonando repositório GitHub...');

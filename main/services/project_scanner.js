@@ -154,37 +154,74 @@ function createProjectScanner(dependencies = {}) {
   function collectProjectFilesTree(rootPath, maxFiles = 1400) {
     const safeRoot = path.resolve(String(rootPath || ''));
     const rows = [];
-    const stack = [{ rel: '', abs: safeRoot, depth: 0 }];
+
+    let rootEntries = [];
+    try {
+      rootEntries = fs.readdirSync(safeRoot, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+
+    rootEntries.sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) return -1;
+      if (!a.isDirectory() && b.isDirectory()) return 1;
+      return a.name.localeCompare(b.name, 'pt-BR');
+    });
+
+    const stack = [];
+    for (let i = rootEntries.length - 1; i >= 0; i -= 1) {
+      const entry = rootEntries[i];
+      if (entry.name.startsWith('.') && entry.name !== '.env') continue;
+      if (entry.isDirectory() && excludedDirSet.has(entry.name)) continue;
+
+      const relPath = entry.name;
+      const absPath = path.join(safeRoot, entry.name);
+      stack.push({
+        type: entry.isDirectory() ? 'dir' : 'file',
+        path: relPath,
+        abs: absPath,
+        depth: 0,
+        name: entry.name,
+      });
+    }
 
     while (stack.length && rows.length < maxFiles) {
       const current = stack.pop();
-      let entries = [];
-      try {
-        entries = fs.readdirSync(current.abs, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-
-      entries.sort((a, b) => {
-        if (a.isDirectory() && !b.isDirectory()) return -1;
-        if (!a.isDirectory() && b.isDirectory()) return 1;
-        return a.name.localeCompare(b.name, 'pt-BR');
+      rows.push({
+        type: current.type,
+        path: current.path,
+        depth: current.depth,
+        name: current.name,
       });
 
-      for (let i = entries.length - 1; i >= 0; i -= 1) {
-        const entry = entries[i];
-        if (entry.name.startsWith('.') && entry.name !== '.env') continue;
-        if (entry.isDirectory() && excludedDirSet.has(entry.name)) continue;
+      if (current.type === 'dir') {
+        let entries = [];
+        try {
+          entries = fs.readdirSync(current.abs, { withFileTypes: true });
+        } catch {
+          continue;
+        }
 
-        const relPath = current.rel ? path.posix.join(current.rel, entry.name) : entry.name;
-        const absPath = path.join(current.abs, entry.name);
+        entries.sort((a, b) => {
+          if (a.isDirectory() && !b.isDirectory()) return -1;
+          if (!a.isDirectory() && b.isDirectory()) return 1;
+          return a.name.localeCompare(b.name, 'pt-BR');
+        });
 
-        if (entry.isDirectory()) {
-          rows.push({ type: 'dir', path: relPath, depth: current.depth, name: entry.name });
-          stack.push({ rel: relPath, abs: absPath, depth: current.depth + 1 });
-        } else if (entry.isFile()) {
-          rows.push({ type: 'file', path: relPath, depth: current.depth, name: entry.name });
-          if (rows.length >= maxFiles) break;
+        for (let i = entries.length - 1; i >= 0; i -= 1) {
+          const entry = entries[i];
+          if (entry.name.startsWith('.') && entry.name !== '.env') continue;
+          if (entry.isDirectory() && excludedDirSet.has(entry.name)) continue;
+
+          const relPath = path.posix.join(current.path, entry.name);
+          const absPath = path.join(current.abs, entry.name);
+          stack.push({
+            type: entry.isDirectory() ? 'dir' : 'file',
+            path: relPath,
+            abs: absPath,
+            depth: current.depth + 1,
+            name: entry.name,
+          });
         }
       }
     }

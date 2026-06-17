@@ -4748,6 +4748,7 @@ const {
   getProjectGitStatus,
   initProjectGitRepository,
   stageProjectGitFiles,
+  rollbackProjectGitFiles,
 } = projectGitService;
 
 const applicationMapService = createApplicationMapService({ fs, path });
@@ -5008,6 +5009,7 @@ app.whenReady().then(() => {
     scanProject,
     shell,
     stageProjectGitFiles,
+    rollbackProjectGitFiles,
     writeProjectsSnapshot,
   });
 

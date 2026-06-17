@@ -103,12 +103,22 @@ body.workspace-left-collapsed {
 }
 
 .workspace-bottom-zone:empty,
-.workspace-center-tools-zone:empty {
-  display: none;
+.workspace-center-tools-zone:empty,
+.workspace-center-tools-zone:not(:has(> *:not(.hidden):not(.workspace-runtime-hidden))),
+.workspace-bottom-zone:not(:has(> *:not(.hidden):not(.workspace-runtime-hidden))) {
+  display: none !important;
 }
 
-.workspace-zone-shell--left .left-actions-row {
-  margin-top: 44px;
+body.mode-git .workspace-center-tools-zone:not(:has(> *:not(.hidden):not(.workspace-runtime-hidden):not(.workspace-tool-region--files))),
+body.mode-terminal .workspace-center-tools-zone:not(:has(> *:not(.hidden):not(.workspace-runtime-hidden):not(.workspace-tool-region--files))),
+body.mode-milestones .workspace-center-tools-zone:not(:has(> *:not(.hidden):not(.workspace-runtime-hidden):not(.workspace-tool-region--files))),
+body.mode-map-chat .workspace-center-tools-zone:not(:has(> *:not(.hidden):not(.workspace-runtime-hidden):not(.workspace-tool-region--files))),
+body.mode-cortex .workspace-center-tools-zone:not(:has(> *:not(.hidden):not(.workspace-runtime-hidden):not(.workspace-tool-region--files))) {
+  display: none !important;
+}
+
+.panel-header {
+  position: relative;
 }
 
 .panel-header-main {
@@ -116,6 +126,19 @@ body.workspace-left-collapsed {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  flex: 1;
+}
+
+#right-panel-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+
+.incremental-mode-badge {
+  flex-shrink: 0;
 }
 
 .workspace-collapse-btn {
@@ -213,6 +236,7 @@ body.workspace-left-collapsed #workspace-restore-left {
 
 body.workspace-left-collapsed .panel-left {
   display: flex !important;
+  flex-direction: column !important;
   align-items: center;
   overflow: hidden;
 }
@@ -479,6 +503,7 @@ body.workspace-left-collapsed .left-mini-action {
 
 body.workspace-right-collapsed .panel-right {
   display: flex !important;
+  flex-direction: column !important;
   align-items: center;
   overflow: hidden;
 }
@@ -503,10 +528,13 @@ body.workspace-right-collapsed .panel-right .workspace-collapse-btn {
 
 body.workspace-right-collapsed #right-panel-title,
 body.workspace-right-collapsed #incremental-mode-badge,
-body.workspace-right-collapsed .workspace-tool-region--files,
-body.workspace-right-collapsed .workspace-tool-region--cortex,
-body.workspace-right-collapsed #workspace-milestones-panel,
-body.workspace-right-collapsed #workspace-map-chat-panel {
+body.workspace-right-collapsed #workspace-right-zone > *:not(#workspace-actions-region),
+body.workspace-right-collapsed #workspace-right-zone #workspace-files-region,
+body.workspace-right-collapsed #workspace-right-zone #project-terminal-panel,
+body.workspace-right-collapsed #workspace-right-zone #cortex-learning-box,
+body.workspace-right-collapsed #workspace-right-zone #workspace-milestones-panel,
+body.workspace-right-collapsed #workspace-right-zone #workspace-git-panel,
+body.workspace-right-collapsed #workspace-right-zone #workspace-map-chat-panel {
   display: none !important;
 }
 
@@ -580,7 +608,7 @@ body[data-workspace-mode='ide'] .project-terminal-panel {
   max-height: min(44vh, 420px);
 }
 
-.workspace-bottom-zone .project-terminal-output {
+.workspace-bottom-zone .project-terminal-body {
   min-height: 126px;
   max-height: min(30vh, 300px);
 }

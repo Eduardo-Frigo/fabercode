@@ -215,6 +215,9 @@
                 <button id="btn-map-tool-select" class="active" title="Selecionar/Arrastar">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 3 7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="m13 13 6 6"/></svg>
                 </button>
+                <button id="btn-map-tool-hand" title="Mão (Arrastar Página)">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2v3M14 10V4a2 2 0 0 0-2-2 2 2 0 0 0-2 2v6M10 10.5V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2v8M6 14v-1.5a2 2 0 0 0-2-2 2 2 0 0 0-2 2v6c0 4.42 3.58 8 8 8h3a8 8 0 0 0 8-8v-3.5a2 2 0 0 0-2-2 2 2 0 0 0-2 2z"/></svg>
+                </button>
                 <button id="btn-map-tool-add-group" title="Adicionar Grupo">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
                 </button>
@@ -407,6 +410,15 @@
             <button id="btn-milestones-render" class="btn-milestones-render">Renderizar</button>
           </div>
           <div id="milestones-timeline-content" class="milestones-timeline">
+            <!-- Rendered dynamically -->
+          </div>
+        </div>
+
+        <div id="workspace-git-panel" class="next-steps-box hidden workspace-tool-region workspace-tool-region--git" data-workspace-runtime-tool="git">
+          <div class="milestones-header">
+            <h3>Git</h3>
+          </div>
+          <div id="git-panel-content" class="git-panel-content" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
             <!-- Rendered dynamically -->
           </div>
         </div>
@@ -992,6 +1004,17 @@
         <div class="unsaved-exit-modal__actions">
           <button id="unsaved-exit-no" type="button" class="unsaved-exit-btn unsaved-exit-btn--primary">Não</button>
           <button id="unsaved-exit-yes" type="button" class="unsaved-exit-btn unsaved-exit-btn--ghost">Sim</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="faber-confirm-modal" class="unsaved-exit-modal hidden" aria-hidden="true">
+      <div id="faber-confirm-backdrop" class="unsaved-exit-modal__backdrop"></div>
+      <div class="unsaved-exit-modal__dialog" role="dialog" aria-modal="true" aria-label="Confirmação">
+        <p id="faber-confirm-text" class="unsaved-exit-modal__text"></p>
+        <div class="unsaved-exit-modal__actions">
+          <button id="faber-confirm-no" type="button" class="unsaved-exit-btn unsaved-exit-btn--ghost">Cancelar</button>
+          <button id="faber-confirm-yes" type="button" class="unsaved-exit-btn unsaved-exit-btn--primary">Confirmar</button>
         </div>
       </div>
     </div>

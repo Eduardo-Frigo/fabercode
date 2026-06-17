@@ -640,7 +640,7 @@
         return;
       }
       if (action === 'delete') {
-        const confirmed = !window.confirm || window.confirm('Apagar esta memória do Cortex?');
+        const confirmed = !window.faberConfirm || await window.faberConfirm('Apagar esta memória do Cortex?');
         if (!confirmed) return;
       }
       await runMemoryLifecycle({

@@ -102,6 +102,7 @@ body:not(.cm-ready) #project-file-editor {
 .unsaved-exit-modal__text {
   margin: 0;
   color: #eceef4;
+  font-family: var(--font-main), sans-serif;
   font-size: 1.05rem;
   line-height: 1.35;
   font-weight: 600;
@@ -121,15 +122,15 @@ body:not(.cm-ready) #project-file-editor {
   border: 1px solid rgba(255,255,255,0.18);
   background: rgba(255,255,255,0.06);
   color: #e7e7eb;
-  font-family: var(--font-main);
+  font-family: var(--font-main), sans-serif;
   font-size: 0.86rem;
   font-weight: 600;
   cursor: pointer;
 }
 
 .unsaved-exit-btn--primary {
-  border-color: rgba(79, 127, 255, 0.72);
-  background: linear-gradient(180deg, rgba(67,115,245,0.92), rgba(54,96,216,0.92));
+  border-color: rgba(80, 201, 133, 0.72);
+  background: linear-gradient(180deg, rgba(80, 201, 133, 0.92), rgba(64, 171, 110, 0.92));
   color: #f7f9ff;
 }
 

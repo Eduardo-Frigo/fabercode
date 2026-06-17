@@ -139,7 +139,7 @@
     }
 
     function isImageFilePath(path) {
-      return /\.(png|jpe?g|gif|webp|svg)$/i.test(String(path || ''));
+      return /\.(png|jpe?g|gif|webp|svg)$/i.test(String(path || '').trim());
     }
 
     function escapeHtml(value) {
@@ -277,7 +277,7 @@
     async function promptUnsavedExitWithoutSaving() {
       const { unsavedModal, unsavedNo, unsavedYes, unsavedBackdrop } = elements;
       if (!unsavedModal || !unsavedNo || !unsavedYes || !unsavedBackdrop) {
-        return window.confirm('Você alterou o projeto, deseja sair sem salvar?');
+        return window.faberConfirm ? await window.faberConfirm('Você alterou o projeto, deseja sair sem salvar?') : window.confirm('Você alterou o projeto, deseja sair sem salvar?');
       }
 
       return new Promise((resolve) => {
@@ -401,6 +401,16 @@
       if (isDirty && isOpen() && currentPath && currentPath !== relativePath) {
         const closed = await close();
         if (!closed) return;
+      }
+
+      if (codeEditor) {
+        codeEditor.setValue('');
+      }
+      if (elements.editor) {
+        elements.editor.value = '';
+      }
+      if (elements.content) {
+        elements.content.innerHTML = '';
       }
 
       currentPath = relativePath;

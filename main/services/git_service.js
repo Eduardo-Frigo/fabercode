@@ -483,6 +483,59 @@ function createProjectGitService(dependencies = {}) {
     return { ...worktree, ok: true, stagedFiles: selectedFiles };
   }
 
+  async function rollbackProjectGitFiles(rootPath, files = []) {
+    requireDependency('runCommand', runCommand);
+    const fs = require('fs');
+    const path = require('path');
+
+    const safeRoot = String(rootPath || '').trim();
+    const normalizedFiles = normalizeGitSelectedPaths(files);
+    if (!normalizedFiles.ok) return normalizedFiles;
+    const selectedFiles = normalizedFiles.files;
+    if (!safeRoot) return { ok: false, message: 'rootPath é obrigatório.' };
+    if (!selectedFiles.length) return { ok: false, message: 'Selecione ao menos um arquivo para restaurar.' };
+
+    const worktree = await getProjectGitWorktree(safeRoot);
+    const untrackedSet = new Set(
+      (worktree.entries || [])
+        .filter((e) => e.status === 'untracked')
+        .map((e) => String(e.path || '').trim())
+    );
+
+    const filesToGitRestore = [];
+    const filesToUnlink = [];
+
+    for (const file of selectedFiles) {
+      if (untrackedSet.has(file)) {
+        filesToUnlink.push(file);
+      } else {
+        filesToGitRestore.push(file);
+      }
+    }
+
+    if (filesToGitRestore.length) {
+      await runCommand('git', ['-C', safeRoot, 'restore', '--staged', '--', ...filesToGitRestore], { timeoutMs: 6000 });
+      const restoreResult = await runCommand('git', ['-C', safeRoot, 'restore', '--', ...filesToGitRestore], { timeoutMs: 6000 });
+      if (!restoreResult.ok) {
+        await runCommand('git', ['-C', safeRoot, 'checkout', '--', ...filesToGitRestore], { timeoutMs: 6000 });
+      }
+    }
+
+    for (const file of filesToUnlink) {
+      try {
+        const fullPath = path.resolve(safeRoot, file);
+        if (fs.existsSync(fullPath)) {
+          fs.unlinkSync(fullPath);
+        }
+      } catch (err) {
+        console.error('Failed to unlink untracked file:', file, err);
+      }
+    }
+
+    const nextWorktree = await getProjectGitWorktree(safeRoot);
+    return { ...nextWorktree, ok: true, rolledBackFiles: selectedFiles };
+  }
+
   async function listStagedProjectGitFiles(rootPath) {
     requireDependency('runCommand', runCommand);
 
@@ -569,6 +622,7 @@ function createProjectGitService(dependencies = {}) {
     parseDiffHunkFirstLine,
     parsePorcelainStatusLine,
     stageProjectGitFiles,
+    rollbackProjectGitFiles,
   };
 }
 

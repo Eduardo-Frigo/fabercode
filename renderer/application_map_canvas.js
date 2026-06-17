@@ -22,6 +22,8 @@
     let edges = [];
     let selectedNodeId = null;
     let selectedEdgeId = null;
+    let selectedNodeIds = new Set();
+    let isSpaceHeld = false;
 
     function getAssetFileUrl(rootPath, assetPath) {
       if (!rootPath || !assetPath) return '';
@@ -53,24 +55,60 @@
     let currentTool = 'select'; // select, add-group, add-card, add-image, add-decision, connect
 
     // Pan & Zoom handlers
-    stage.addEventListener('mousedown', (e) => {
-      // If we clicked directly on the stage or grid, deselect node and edge
-      if (e.target === stage || e.target.id === 'application-map-canvas-grid' || e.target.tagName === 'svg') {
-        selectedEdgeId = null;
-        selectedNodeId = null;
-        stage.querySelectorAll('.map-node').forEach((n) => n.classList.remove('selected'));
-        onNodeSelected(null);
-        drawEdges();
+    let isSelecting = false;
+    let selectStart = { x: 0, y: 0 };
+    let marqueeEl = null;
 
+    function getNodeBounds(node) {
+      const nodeEl = stage.querySelector(`.map-node#${node.id}`);
+      const width = nodeEl ? nodeEl.offsetWidth : (node.type === 'group' ? (node.size ? node.size.width : 320) : 220);
+      const height = nodeEl ? nodeEl.offsetHeight : (node.type === 'group' ? (node.size ? node.size.height : 240) : 120);
+      return {
+        x1: node.position.x,
+        y1: node.position.y,
+        x2: node.position.x + width,
+        y2: node.position.y + height
+      };
+    }
+
+    stage.addEventListener('mousedown', (e) => {
+      if (e.target === stage || e.target.id === 'application-map-canvas-grid' || e.target.tagName === 'svg') {
         if (currentTool === 'connect') {
           cancelConnection();
           clearConnectionSource();
           setTool('select');
           return;
         }
-        isPanning = true;
-        panStart = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y };
-        stage.style.cursor = 'grabbing';
+
+        if (currentTool === 'hand' || isSpaceHeld) {
+          isPanning = true;
+          panStart = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y };
+          stage.style.cursor = 'grabbing';
+        } else {
+          isSelecting = true;
+          const rect = stage.getBoundingClientRect();
+          selectStart = {
+            x: (e.clientX - rect.left - panOffset.x) / zoomLevel,
+            y: (e.clientY - rect.top - panOffset.y) / zoomLevel
+          };
+
+          marqueeEl = document.createElement('div');
+          marqueeEl.className = 'map-selection-marquee';
+          marqueeEl.style.left = `${selectStart.x}px`;
+          marqueeEl.style.top = `${selectStart.y}px`;
+          marqueeEl.style.width = '0px';
+          marqueeEl.style.height = '0px';
+          content.appendChild(marqueeEl);
+
+          if (!e.shiftKey) {
+            selectedNodeIds.clear();
+            selectedNodeId = null;
+            stage.querySelectorAll('.map-node').forEach((n) => n.classList.remove('selected'));
+            onNodeSelected(null);
+          }
+          selectedEdgeId = null;
+          drawEdges();
+        }
       }
     });
 
@@ -142,6 +180,38 @@
         panOffset.y = e.clientY - panStart.y;
         updateTransform();
       }
+      if (isSelecting && marqueeEl) {
+        const rect = stage.getBoundingClientRect();
+        const currentX = (e.clientX - rect.left - panOffset.x) / zoomLevel;
+        const currentY = (e.clientY - rect.top - panOffset.y) / zoomLevel;
+
+        const x = Math.min(selectStart.x, currentX);
+        const y = Math.min(selectStart.y, currentY);
+        const w = Math.abs(selectStart.x - currentX);
+        const h = Math.abs(selectStart.y - currentY);
+
+        marqueeEl.style.left = `${x}px`;
+        marqueeEl.style.top = `${y}px`;
+        marqueeEl.style.width = `${w}px`;
+        marqueeEl.style.height = `${h}px`;
+
+        nodes.forEach((node) => {
+          const bounds = getNodeBounds(node);
+          const intersects = !(bounds.x1 > x + w || bounds.x2 < x || bounds.y1 > y + h || bounds.y2 < y);
+          const nodeEl = stage.querySelector(`.map-node#${node.id}`);
+          if (nodeEl) {
+            if (intersects) {
+              nodeEl.classList.add('selected');
+              selectedNodeIds.add(node.id);
+            } else {
+              if (!e.shiftKey) {
+                nodeEl.classList.remove('selected');
+                selectedNodeIds.delete(node.id);
+              }
+            }
+          }
+        });
+      }
       if (isConnecting && tempEdgeLine) {
         updateTempConnectionLine(e.clientX, e.clientY);
       }
@@ -150,7 +220,24 @@
     window.addEventListener('mouseup', () => {
       if (isPanning) {
         isPanning = false;
-        stage.style.cursor = 'grab';
+        stage.style.cursor = currentTool === 'hand' ? 'grab' : 'default';
+        onMapChanged();
+      }
+      if (isSelecting) {
+        isSelecting = false;
+        if (marqueeEl) {
+          marqueeEl.remove();
+          marqueeEl = null;
+        }
+        if (selectedNodeIds.size > 0) {
+          const firstId = Array.from(selectedNodeIds)[0];
+          selectedNodeId = firstId;
+          const node = nodes.find(n => n.id === firstId);
+          onNodeSelected(node, false);
+        } else {
+          selectedNodeId = null;
+          onNodeSelected(null);
+        }
         onMapChanged();
       }
     });
@@ -160,12 +247,10 @@
       
       // Touchpad pinch-zoom (ctrlKey) OR Alt/Option + scroll (altKey)
       if (e.ctrlKey || e.altKey) {
-        const zoomFactor = 1.08;
-        if (e.deltaY < 0) {
-          zoomLevel = Math.min(2.0, zoomLevel * zoomFactor);
-        } else {
-          zoomLevel = Math.max(0.3, zoomLevel / zoomFactor);
-        }
+        const scale = 0.005;
+        const zoomFactor = 1 - e.deltaY * scale;
+        const clampedFactor = Math.max(0.9, Math.min(1.1, zoomFactor));
+        zoomLevel = Math.max(0.3, Math.min(2.0, zoomLevel * clampedFactor));
         if (zoomSlider) zoomSlider.value = zoomLevel;
         if (zoomValueEl) zoomValueEl.textContent = `${Math.round(zoomLevel * 100)}%`;
         updateTransform();
@@ -209,7 +294,7 @@
             return;
           }
           e.preventDefault();
-          if (selectedNodeId) {
+          if (selectedNodeIds.size > 0 || selectedNodeId) {
             deleteSelectedNode();
           } else if (selectedEdgeId) {
             deleteSelectedEdge();
@@ -219,6 +304,24 @@
     };
 
     window.addEventListener('keydown', handleKeyDown);
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === ' ' && !isSpaceHeld) {
+        if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.isContentEditable)) {
+          return;
+        }
+        isSpaceHeld = true;
+        stage.style.cursor = 'grab';
+        e.preventDefault();
+      }
+    });
+
+    window.addEventListener('keyup', (e) => {
+      if (e.key === ' ') {
+        isSpaceHeld = false;
+        stage.style.cursor = currentTool === 'hand' ? 'grab' : 'default';
+      }
+    });
 
     if (zoomSlider) {
       zoomSlider.addEventListener('input', () => {
@@ -305,10 +408,10 @@
       });
 
       // Restore selection styling
-      if (currentSelectedId) {
-        const selectedEl = content.querySelector(`.map-node#${currentSelectedId}`);
+      selectedNodeIds.forEach((id) => {
+        const selectedEl = content.querySelector(`.map-node#${id}`);
         if (selectedEl) selectedEl.classList.add('selected');
-      }
+      });
 
       drawEdges();
     }
@@ -340,6 +443,7 @@
         const coverPreview = document.createElement('div');
         coverPreview.className = 'map-node-cover-preview';
         const img = document.createElement('img');
+        img.draggable = false;
         const pathVal = node.assetId;
         const rootInfo = getSelectedProjectInfo();
         img.src = (pathVal.startsWith('Map assets') && rootInfo && rootInfo.rootPath)
@@ -369,7 +473,7 @@
         e.stopPropagation();
         selectNode(node.id, true);
       });
-      header.appendChild(editBtn);
+      el.appendChild(editBtn);
 
       el.appendChild(header);
 
@@ -387,6 +491,7 @@
         const preview = document.createElement('div');
         preview.className = 'map-node-media-preview';
         const img = document.createElement('img');
+        img.draggable = false;
         const pathVal = node.assetId || node.content;
         const rootInfo = getSelectedProjectInfo();
         img.src = (pathVal.startsWith('Map assets') && rootInfo && rootInfo.rootPath)
@@ -429,7 +534,7 @@
 
         selectedEdgeId = null;
         drawEdges();
-        selectNode(node.id);
+        selectNode(node.id, false, e);
         if (currentTool === 'connect') return;
 
         dragStart = { x: e.clientX, y: e.clientY };
@@ -443,26 +548,44 @@
             hasDragged = true;
           }
 
-          node.position.x += dx;
-          node.position.y += dy;
-          
-          if (node.type !== 'group' && node.parentId) {
-            constrainChildNodePosition(node);
+          if (selectedNodeIds.has(node.id)) {
+            selectedNodeIds.forEach((id) => {
+              const n = nodes.find((item) => item.id === id);
+              if (n) {
+                n.position.x += dx;
+                n.position.y += dy;
+                if (n.type !== 'group' && n.parentId) {
+                  constrainChildNodePosition(n);
+                }
+                const nodeEl = content.querySelector(`.map-node#${n.id}`);
+                if (nodeEl) {
+                  nodeEl.style.left = `${n.position.x}px`;
+                  nodeEl.style.top = `${n.position.y}px`;
+                }
+              }
+            });
+          } else {
+            node.position.x += dx;
+            node.position.y += dy;
+            if (node.type !== 'group' && node.parentId) {
+              constrainChildNodePosition(node);
+            }
+            el.style.left = `${node.position.x}px`;
+            el.style.top = `${node.position.y}px`;
           }
-          
-          el.style.left = `${node.position.x}px`;
-          el.style.top = `${node.position.y}px`;
 
           // Drag children together if this is a group
           if (node.type === 'group') {
             const children = nodes.filter((n) => n.parentId === node.id);
             children.forEach((child) => {
-              child.position.x += dx;
-              child.position.y += dy;
-              const childEl = content.querySelector(`.map-node#${child.id}`);
-              if (childEl) {
-                childEl.style.left = `${child.position.x}px`;
-                childEl.style.top = `${child.position.y}px`;
+              if (!selectedNodeIds.has(child.id)) {
+                child.position.x += dx;
+                child.position.y += dy;
+                const childEl = content.querySelector(`.map-node#${child.id}`);
+                if (childEl) {
+                  childEl.style.left = `${child.position.x}px`;
+                  childEl.style.top = `${child.position.y}px`;
+                }
               }
             });
           } else {
@@ -705,13 +828,48 @@
     }
 
     // Node Selection
-    function selectNode(id, openEdit = false) {
-      selectedNodeId = id;
-      stage.querySelectorAll('.map-node').forEach((n) => {
-        n.classList.toggle('selected', n.id === id);
-      });
-      const node = nodes.find((n) => n.id === id);
-      onNodeSelected(node, openEdit);
+    function selectNode(id, openEdit = false, event = null) {
+      if (!id) {
+        selectedNodeIds.clear();
+        selectedNodeId = null;
+        stage.querySelectorAll('.map-node').forEach((n) => n.classList.remove('selected'));
+        onNodeSelected(null, openEdit);
+        return;
+      }
+
+      const isShift = event && event.shiftKey;
+
+      if (isShift) {
+        if (selectedNodeIds.has(id)) {
+          selectedNodeIds.delete(id);
+          const nodeEl = stage.querySelector(`.map-node#${id}`);
+          if (nodeEl) nodeEl.classList.remove('selected');
+        } else {
+          selectedNodeIds.add(id);
+          const nodeEl = stage.querySelector(`.map-node#${id}`);
+          if (nodeEl) nodeEl.classList.add('selected');
+        }
+
+        if (selectedNodeIds.size > 0) {
+          selectedNodeId = Array.from(selectedNodeIds)[0];
+          const node = nodes.find((n) => n.id === selectedNodeId);
+          onNodeSelected(node, openEdit);
+        } else {
+          selectedNodeId = null;
+          onNodeSelected(null, openEdit);
+        }
+      } else {
+        if (!selectedNodeIds.has(id)) {
+          selectedNodeIds.clear();
+          selectedNodeIds.add(id);
+        }
+        selectedNodeId = id;
+        stage.querySelectorAll('.map-node').forEach((n) => {
+          n.classList.toggle('selected', selectedNodeIds.has(n.id));
+        });
+        const node = nodes.find((n) => n.id === id);
+        onNodeSelected(node, openEdit);
+      }
     }
 
     function getSelectedNode() {
@@ -719,23 +877,42 @@
     }
 
     function deleteSelectedNode() {
-      if (!selectedNodeId) return;
-      
-      // Orphan children
-      nodes.forEach((n) => {
-        if (n.parentId === selectedNodeId) {
-          n.parentId = null;
-        }
-      });
+      if (selectedNodeIds.size > 1) {
+        selectedNodeIds.forEach((id) => {
+          nodes.forEach((n) => {
+            if (n.parentId === id) {
+              n.parentId = null;
+            }
+          });
+          nodes = nodes.filter((n) => n.id !== id);
+          edges = edges.filter((e) => e.sourceNodeId !== id && e.targetNodeId !== id);
+          const el = stage.querySelector(`.map-node#${id}`);
+          if (el) el.remove();
+        });
+        selectedNodeIds.clear();
+        selectedNodeId = null;
+        renderAllNodes();
+        onNodeSelected(null);
+        onMapChanged();
+      } else {
+        if (!selectedNodeId) return;
 
-      nodes = nodes.filter((n) => n.id !== selectedNodeId);
-      edges = edges.filter((e) => e.sourceNodeId !== selectedNodeId && e.targetNodeId !== selectedNodeId);
-      const el = stage.querySelector(`.map-node#${selectedNodeId}`);
-      if (el) el.remove();
-      selectedNodeId = null;
-      renderAllNodes();
-      onNodeSelected(null);
-      onMapChanged();
+        nodes.forEach((n) => {
+          if (n.parentId === selectedNodeId) {
+            n.parentId = null;
+          }
+        });
+
+        nodes = nodes.filter((n) => n.id !== selectedNodeId);
+        edges = edges.filter((e) => e.sourceNodeId !== selectedNodeId && e.targetNodeId !== selectedNodeId);
+        const el = stage.querySelector(`.map-node#${selectedNodeId}`);
+        if (el) el.remove();
+        selectedNodeIds.delete(selectedNodeId);
+        selectedNodeId = null;
+        renderAllNodes();
+        onNodeSelected(null);
+        onMapChanged();
+      }
     }
 
     function updateSelectedNode(updatedData) {
@@ -764,6 +941,7 @@
           const coverPreview = document.createElement('div');
           coverPreview.className = 'map-node-cover-preview';
           const img = document.createElement('img');
+          img.draggable = false;
           const pathVal = node.assetId;
           const rootInfo = getSelectedProjectInfo();
           img.src = (pathVal.startsWith('Map assets') && rootInfo && rootInfo.rootPath)
@@ -777,6 +955,7 @@
           const preview = document.createElement('div');
           preview.className = 'map-node-media-preview';
           const img = document.createElement('img');
+          img.draggable = false;
           const pathVal = node.assetId || node.content;
           const rootInfo = getSelectedProjectInfo();
           img.src = (pathVal.startsWith('Map assets') && rootInfo && rootInfo.rootPath)
@@ -944,11 +1123,12 @@
       if (tool !== 'connect') {
         clearConnectionSource();
       }
+      stage.style.cursor = tool === 'hand' ? 'grab' : 'default';
       onToolChanged(tool);
     }
 
-    function clearMap() {
-      if (confirm('Deseja limpar todo o mapa da aplicação?')) {
+    async function clearMap() {
+      if (await window.faberConfirm('Deseja limpar todo o mapa da aplicação?')) {
         nodes = [];
         edges = [];
         content.innerHTML = '';

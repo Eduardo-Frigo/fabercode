@@ -434,6 +434,17 @@
     }
     
     async function onProjectGitClick() {
+      if (document.body.classList.contains('mode-git')) {
+        document.body.classList.remove('mode-git');
+        const gitBtn = document.getElementById('btn-project-git');
+        if (gitBtn) gitBtn.classList.remove('active');
+
+        const filesBtn = document.getElementById('btn-project-files');
+        if (filesBtn) filesBtn.classList.add('active');
+        const rightPanelTitle = document.getElementById('right-panel-title');
+        if (rightPanelTitle) rightPanelTitle.textContent = 'Arquivos';
+        return;
+      }
       if (projectToolsController) await projectToolsController.publishToGithub();
     }
     

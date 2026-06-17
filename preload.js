@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld('localcodeApi', {
   initProjectGitRepository: (payload) => ipcRenderer.invoke('project:git:init', payload),
   stageProjectGitFiles: (payload) => ipcRenderer.invoke('project:git:stage', payload),
   commitProjectGitFiles: (payload) => ipcRenderer.invoke('project:git:commit', payload),
+  rollbackProjectGitFiles: (payload) => ipcRenderer.invoke('project:git:rollback', payload),
   getGithubAuthStatus: () => ipcRenderer.invoke('project:github:auth-status'),
   listGithubRepositories: (payload) => ipcRenderer.invoke('project:github:list-repos', payload),
   cloneGithubRepository: (payload) => ipcRenderer.invoke('project:github:clone', payload),

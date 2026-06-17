@@ -137,6 +137,19 @@
     function closePanel() {
       terminalState.panelOpen = false;
       terminalState.panelMinimized = false;
+
+      const placement = getTerminalPlacement();
+      if (placement === 'right') {
+        document.body.classList.remove('mode-terminal');
+
+        const filesBtn = document.getElementById('btn-project-files');
+        if (filesBtn) filesBtn.classList.add('active');
+        if (elements.button) elements.button.classList.remove('active');
+
+        const rightPanelTitle = document.getElementById('right-panel-title');
+        if (rightPanelTitle) rightPanelTitle.textContent = 'Arquivos';
+      }
+
       render();
     }
 
@@ -167,6 +180,26 @@
 
     function placePanel() {
       if (!elements.panel) return;
+      const placement = getTerminalPlacement();
+
+      if (placement === 'right') {
+        const rightZone = document.getElementById('workspace-right-zone');
+        const actionsRegion = document.getElementById('workspace-actions-region');
+        if (rightZone && elements.panel.parentElement !== rightZone) {
+          if (actionsRegion && actionsRegion.parentElement === rightZone) {
+            rightZone.insertBefore(elements.panel, actionsRegion);
+          } else {
+            rightZone.appendChild(elements.panel);
+          }
+        }
+        if (lightbox.root) {
+          lightbox.root.classList.add('hidden');
+          lightbox.root.setAttribute('aria-hidden', 'true');
+          document.body.classList.remove('project-terminal-lightbox-open');
+        }
+        return;
+      }
+
       if (terminalState.panelOpen) {
         const surface = ensureLightbox();
         if (elements.panel.parentElement !== surface.shell) {
@@ -174,7 +207,6 @@
         }
         return;
       }
-      const placement = getTerminalPlacement();
       const bottomZone = document.getElementById('workspace-bottom-zone');
       const rightZone = document.getElementById('workspace-right-zone');
       const filesRegion = document.getElementById('workspace-files-region');
@@ -203,20 +235,62 @@
           lightbox.root.setAttribute('aria-hidden', 'true');
           document.body.classList.remove('project-terminal-lightbox-open');
         }
+        const placement = getTerminalPlacement();
+        if (placement === 'right') {
+          document.body.classList.remove('mode-terminal');
+        }
         return;
       }
 
       placePanel();
-      if (lightbox.root) {
-        lightbox.root.classList.remove('hidden');
-        lightbox.root.setAttribute('aria-hidden', 'false');
-        document.body.classList.add('project-terminal-lightbox-open');
+      const placement = getTerminalPlacement();
+      if (placement === 'right') {
+        document.body.classList.add('mode-terminal');
+        document.body.classList.remove('mode-git');
+        document.body.classList.remove('mode-cortex');
+        document.body.classList.remove('mode-milestones');
+        document.body.classList.remove('mode-map-chat');
+
+        const cortexBtn = document.getElementById('btn-cortex-mode');
+        if (cortexBtn) cortexBtn.classList.remove('active');
+        const milestonesBtn = document.getElementById('btn-project-milestones');
+        if (milestonesBtn) milestonesBtn.classList.remove('active');
+        const mapAiBtn = document.getElementById('btn-map-ai');
+        if (mapAiBtn) mapAiBtn.classList.remove('active');
+        const gitBtn = document.getElementById('btn-project-git');
+        if (gitBtn) gitBtn.classList.remove('active');
+        const filesBtn = document.getElementById('btn-project-files');
+        if (filesBtn) filesBtn.classList.remove('active');
+
+        if (elements.button) elements.button.classList.add('active');
+
+        const rightPanelTitle = document.getElementById('right-panel-title');
+        if (rightPanelTitle) rightPanelTitle.textContent = 'Terminal';
+
+        if (document.body.classList.contains('workspace-right-collapsed')) {
+          const rightToggle = document.getElementById('workspace-collapse-right');
+          if (rightToggle) rightToggle.click();
+        }
+
+        if (lightbox.root) {
+          lightbox.root.classList.add('hidden');
+          lightbox.root.setAttribute('aria-hidden', 'true');
+          document.body.classList.remove('project-terminal-lightbox-open');
+        }
+      } else {
+        if (lightbox.root) {
+          lightbox.root.classList.remove('hidden');
+          lightbox.root.setAttribute('aria-hidden', 'false');
+          document.body.classList.add('project-terminal-lightbox-open');
+        }
+        document.body.classList.remove('mode-terminal');
       }
+
       const sessions = getSessionsForActiveProject();
       const activeSession = getActiveSession();
       elements.panel.classList.remove('hidden');
       elements.panel.classList.toggle('is-minimized', Boolean(terminalState.panelMinimized));
-      elements.panel.dataset.placement = getTerminalPlacement();
+      elements.panel.dataset.placement = placement;
       elements.panel.dataset.sessionStatus = activeSession ? activeSession.status || 'idle' : 'empty';
 
       if (elements.tabs) {
@@ -252,7 +326,11 @@
         const nextOutput = activeSession ? activeSession.output || '' : 'Nenhum terminal aberto.\n';
         if (elements.output.textContent !== nextOutput) {
           elements.output.textContent = nextOutput;
-          elements.output.scrollTop = elements.output.scrollHeight;
+          if (elements.body) {
+            elements.body.scrollTop = elements.body.scrollHeight;
+          } else {
+            elements.output.scrollTop = elements.output.scrollHeight;
+          }
         }
       }
 
@@ -265,7 +343,6 @@
         elements.minimize.textContent = terminalState.panelMinimized ? '▣' : '−';
       }
       if (elements.placement) {
-        const placement = getTerminalPlacement();
         elements.placement.textContent = placement === 'bottom' ? '▥' : '▤';
         elements.placement.title = placement === 'bottom'
           ? 'Mover terminal para o painel direito'
@@ -299,6 +376,15 @@
         notify('Selecione um projeto antes de abrir o terminal.');
         return;
       }
+
+      setTerminalPlacement('right');
+
+      const placement = getTerminalPlacement();
+      if (placement === 'right' && terminalState.panelOpen) {
+        closePanel();
+        return;
+      }
+
       terminalState.panelOpen = true;
       terminalState.panelMinimized = false;
       await refresh({ createIfEmpty: true });
@@ -468,6 +554,21 @@
         elements.placement.addEventListener('click', () => {
           setTerminalPlacement(getTerminalPlacement() === 'bottom' ? 'right' : 'bottom');
           render();
+        });
+      }
+      if (elements.body) {
+        elements.body.addEventListener('click', () => {
+          if (elements.input && !elements.input.disabled) {
+            elements.input.focus();
+          }
+        });
+      }
+      if (elements.output) {
+        elements.output.addEventListener('click', () => {
+          const selection = window.getSelection ? window.getSelection().toString() : '';
+          if (!selection && elements.input && !elements.input.disabled) {
+            elements.input.focus();
+          }
         });
       }
       document.addEventListener('keydown', (event) => {

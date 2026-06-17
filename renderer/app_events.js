@@ -27,6 +27,7 @@
       projectTerminalController = null,
       welcomeProjectModalController = null,
       accountGateController = null,
+      workspaceLayoutController = null,
     } = controllers;
     const {
       closeAiSettingsModal = () => {},
@@ -78,16 +79,34 @@
       const projectFilesBtnEl = document.getElementById('btn-project-files');
       if (projectFilesBtnEl) {
         projectFilesBtnEl.addEventListener('click', () => {
+          if (document.body.classList.contains('workspace-right-collapsed')) {
+            if (workspaceLayoutController) {
+              workspaceLayoutController.updatePreferences({ rightCollapsed: false }, { persist: true });
+            } else {
+              const rightToggle = document.getElementById('workspace-collapse-right');
+              if (rightToggle) rightToggle.click();
+            }
+          }
           if (typeof setUiMode === 'function') {
             setUiMode('default');
           }
           document.body.classList.remove('mode-milestones');
           document.body.classList.remove('mode-map-chat');
+          document.body.classList.remove('mode-terminal');
+          document.body.classList.remove('mode-git');
           
           const milestonesBtn = document.getElementById('btn-project-milestones');
           if (milestonesBtn) milestonesBtn.classList.remove('active');
           const mapAiBtn = document.getElementById('btn-map-ai');
           if (mapAiBtn) mapAiBtn.classList.remove('active');
+          const gitBtn = document.getElementById('btn-project-git');
+          if (gitBtn) gitBtn.classList.remove('active');
+          const terminalBtn = document.getElementById('btn-project-terminal');
+          if (terminalBtn) terminalBtn.classList.remove('active');
+          
+          if (projectTerminalController) {
+            projectTerminalController.closePanel();
+          }
           
           projectFilesBtnEl.classList.add('active');
           

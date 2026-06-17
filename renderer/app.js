@@ -1,3 +1,57 @@
+window.faberConfirm = function(message) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('faber-confirm-modal');
+    const text = document.getElementById('faber-confirm-text');
+    const btnNo = document.getElementById('faber-confirm-no');
+    const btnYes = document.getElementById('faber-confirm-yes');
+    const backdrop = document.getElementById('faber-confirm-backdrop');
+    if (!modal || !text || !btnNo || !btnYes) {
+      resolve(window.confirm(message));
+      return;
+    }
+
+    text.textContent = message;
+    modal.classList.remove('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+
+    setTimeout(() => {
+      try {
+        btnYes.focus({ preventScroll: true });
+      } catch (_) {
+        btnYes.focus();
+      }
+    }, 0);
+
+    const cleanup = (result) => {
+      modal.classList.add('hidden');
+      modal.setAttribute('aria-hidden', 'true');
+      btnNo.removeEventListener('click', onNo);
+      btnYes.removeEventListener('click', onYes);
+      if (backdrop) backdrop.removeEventListener('click', onNo);
+      document.removeEventListener('keydown', onKeydown);
+      resolve(result);
+    };
+
+    const onNo = () => cleanup(false);
+    const onYes = () => cleanup(true);
+    const onKeydown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        cleanup(false);
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        cleanup(true);
+      }
+    };
+
+    btnNo.addEventListener('click', onNo);
+    btnYes.addEventListener('click', onYes);
+    if (backdrop) backdrop.addEventListener('click', onNo);
+    document.addEventListener('keydown', onKeydown);
+  });
+};
+
 let state;
 let conversationController = null;
 let projectController = null;
@@ -156,6 +210,7 @@ const applicationMapController = window.FaberApplicationMap
       getSelectedProjectId: () => state.selectedProjectId,
       getSelectedProjectInfo: () => state.selectedProjectInfo,
       appendMessage,
+      getTerminalController: () => projectTerminalController,
     })
   : null;
 const milestonesPanelController = window.FaberMilestonesPanel
@@ -222,6 +277,7 @@ const projectToolsController = window.FaberProjectTools
       getSelectedProjectInfo: () => state.selectedProjectInfo,
       requestTextInput: requestTextInputDialog,
       appendMessage,
+      confirmAction: window.faberConfirm,
       openFile: async (relativePath, options = {}) => {
         if (projectFileEditorController) await projectFileEditorController.open(relativePath, options);
       },
@@ -551,6 +607,7 @@ eventsController = window.FaberAppEvents
         projectStateModalController,
         projectTerminalController,
         welcomeProjectModalController,
+        workspaceLayoutController,
       },
       elements: {
         appDragRegionEl,
@@ -975,10 +1032,20 @@ function setUiMode(mode) {
     if (cortexActive) {
       document.body.classList.remove('mode-milestones');
       document.body.classList.remove('mode-map-chat');
+      document.body.classList.remove('mode-git');
+      document.body.classList.remove('mode-terminal');
       const milestonesBtn = document.getElementById('btn-project-milestones');
       if (milestonesBtn) milestonesBtn.classList.remove('active');
       const mapAiBtn = document.getElementById('btn-map-ai');
       if (mapAiBtn) mapAiBtn.classList.remove('active');
+      const gitBtn = document.getElementById('btn-project-git');
+      if (gitBtn) gitBtn.classList.remove('active');
+      const terminalBtn = document.getElementById('btn-project-terminal');
+      if (terminalBtn) terminalBtn.classList.remove('active');
+
+      if (projectTerminalController) {
+        projectTerminalController.closePanel();
+      }
     }
   }
 

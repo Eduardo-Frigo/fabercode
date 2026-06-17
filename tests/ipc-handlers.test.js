@@ -108,6 +108,7 @@ async function runProjectHandlersTest(tempRoot) {
     shell: {
       openExternal: async (url) => openedUrls.push(url),
     },
+    rollbackProjectGitFiles: async (_rootPath, files) => ({ ok: true, rolledBack: files }),
     stageProjectGitFiles: async (_rootPath, files) => ({ ok: true, stagedFiles: files }),
     writeProjectsSnapshot: (snapshot) => {
       projects = Array.isArray(snapshot && snapshot.projects) ? snapshot.projects.map(normalizeProjectRecord) : [];
@@ -172,7 +173,7 @@ async function runProjectHandlersTest(tempRoot) {
     },
   });
 
-  assert.strictEqual(Object.keys(handlers).filter((channel) => channel.startsWith('project')).length, 30);
+  assert.strictEqual(Object.keys(handlers).filter((channel) => channel.startsWith('project')).length, 31);
 
   const addResult = await handlers['projects:add']();
   assert.strictEqual(addResult.ok, true);

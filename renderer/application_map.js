@@ -4,6 +4,7 @@
     const getSelectedProjectId = typeof options.getSelectedProjectId === 'function' ? options.getSelectedProjectId : () => '';
     const getSelectedProjectInfo = typeof options.getSelectedProjectInfo === 'function' ? options.getSelectedProjectInfo : () => null;
     const appendMessage = typeof options.appendMessage === 'function' ? options.appendMessage : () => {};
+    const getTerminalController = typeof options.getTerminalController === 'function' ? options.getTerminalController : () => null;
 
     const container = document.getElementById('workspace-map-region');
     const tabChat = document.getElementById('btn-tab-chat');
@@ -55,7 +56,7 @@
           persistTools.forEach((otherId) => {
             const b = container.querySelector(`#${otherId}`);
             if (b) {
-              const expectedId = tool === 'select' ? 'btn-map-tool-select' : 'btn-map-tool-connect';
+              const expectedId = tool === 'select' ? 'btn-map-tool-select' : 'btn-map-tool-hand';
               b.classList.toggle('active', otherId === expectedId);
             }
           });
@@ -63,7 +64,7 @@
       });
 
       // Bind toolbar actions
-      const persistTools = ['btn-map-tool-select', 'btn-map-tool-connect'];
+      const persistTools = ['btn-map-tool-select', 'btn-map-tool-hand'];
       const creationTools = [
         { id: 'btn-map-tool-add-group', type: 'group' },
         { id: 'btn-map-tool-add-card', type: 'text' },
@@ -79,7 +80,7 @@
               const b = container.querySelector(`#${otherId}`);
               if (b) b.classList.toggle('active', otherId === id);
             });
-            const tool = id === 'btn-map-tool-select' ? 'select' : 'connect';
+            const tool = id === 'btn-map-tool-select' ? 'select' : 'hand';
             canvasController.setTool(tool);
           });
         }
@@ -112,8 +113,8 @@
       // Clear
       const btnClear = container.querySelector('#btn-map-clear');
       if (btnClear) {
-        btnClear.addEventListener('click', () => {
-          canvasController.clearMap();
+        btnClear.addEventListener('click', async () => {
+          await canvasController.clearMap();
         });
       }
 
@@ -121,7 +122,7 @@
       const btnRender = container.querySelector('#btn-map-render');
       if (btnRender) {
         btnRender.addEventListener('click', async () => {
-          const confirmed = confirm("Você revisou o projeto antes de renderizar o mapa da aplicação?");
+          const confirmed = await window.faberConfirm("Você revisou o projeto antes de renderizar o mapa da aplicação?");
           if (!confirmed) return;
 
           const rootPath = getSelectedProjectInfo()?.rootPath;
@@ -293,10 +294,21 @@
         btnAi.addEventListener('click', () => {
           document.body.classList.remove('mode-milestones');
           document.body.classList.remove('mode-cortex');
+          document.body.classList.remove('mode-git');
+          document.body.classList.remove('mode-terminal');
           const cortexBtn = document.getElementById('btn-cortex-mode');
           if (cortexBtn) cortexBtn.classList.remove('active');
           const milestonesBtn = document.getElementById('btn-project-milestones');
           if (milestonesBtn) milestonesBtn.classList.remove('active');
+          const gitBtn = document.getElementById('btn-project-git');
+          if (gitBtn) gitBtn.classList.remove('active');
+          const terminalBtn = document.getElementById('btn-project-terminal');
+          if (terminalBtn) terminalBtn.classList.remove('active');
+
+          const terminalController = getTerminalController();
+          if (terminalController) {
+            terminalController.closePanel();
+          }
 
           const active = document.body.classList.toggle('mode-map-chat');
           btnAi.classList.toggle('active', active);

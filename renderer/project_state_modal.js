@@ -88,7 +88,7 @@
       deleteBtn.className = 'project-state-clear';
       deleteBtn.textContent = 'Excluir definitivo';
       deleteBtn.addEventListener('click', async () => {
-        if (!window.confirm('Excluir definitivamente este projeto da lista?')) return;
+        if (!await window.faberConfirm('Excluir definitivamente este projeto da lista?')) return;
         const result = await api.removeProject(project.id);
         if (!result || !result.ok) {
           notify((result && result.message) || 'Falha ao excluir projeto.');
@@ -136,7 +136,7 @@
       clearBtn.disabled = rows.length === 0;
       clearBtn.addEventListener('click', async () => {
         if (!rows.length) return;
-        if (!window.confirm('Esvaziar toda a lixeira? Essa ação não pode ser desfeita.')) return;
+        if (!await window.faberConfirm('Esvaziar toda a lixeira? Essa ação não pode ser desfeita.')) return;
         const result = await api.clearTrashProjects();
         if (!result || !result.ok) {
           notify((result && result.message) || 'Falha ao esvaziar lixeira.');

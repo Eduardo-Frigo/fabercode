@@ -58,7 +58,34 @@
         const mapAiBtn = document.getElementById('btn-map-ai');
         if (mapAiBtn) mapAiBtn.classList.remove('active');
 
+        // Clean mode-git and mode-terminal
+        document.body.classList.remove('mode-git');
+        document.body.classList.remove('mode-terminal');
+
+        const gitBtn = document.getElementById('btn-project-git');
+        if (gitBtn) gitBtn.classList.remove('active');
+        const terminalBtn = document.getElementById('btn-project-terminal');
+        if (terminalBtn) terminalBtn.classList.remove('active');
+
+        // Call closePanel on terminal controller
+        const term = getTerminalController();
+        if (term) {
+          term.closePanel();
+        }
+
+        // Expand sidebar if collapsed
+        if (document.body.classList.contains('workspace-right-collapsed')) {
+          const rightToggle = document.getElementById('workspace-collapse-right');
+          if (rightToggle) rightToggle.click();
+        }
+
+        const rightPanelTitle = document.getElementById('right-panel-title');
+        if (rightPanelTitle) rightPanelTitle.textContent = 'Milestones';
+
         refresh();
+      } else {
+        const rightPanelTitle = document.getElementById('right-panel-title');
+        if (rightPanelTitle) rightPanelTitle.textContent = 'Arquivos';
       }
 
       const filesBtn = document.getElementById('btn-project-files');
