@@ -4700,8 +4700,24 @@ function getProjectVerifiedExecutionService() {
 const runtimeDiffStatsByRoot = new Map();
 
 function normalizeRelativePathForDiff(value) {
-  return String(value || '').replace(/^\/+/, '').split('\\').join('/');
+  let str = String(value || '').trim();
+  if (str.startsWith('"') && str.endsWith('"')) {
+    str = str.slice(1, -1);
+    str = str.replace(/\\([0-7]{1,3})/g, (match, octal) => String.fromCharCode(parseInt(octal, 8)));
+    str = str.replace(/\\(.)/g, (match, char) => {
+      switch (char) {
+        case 'n': return '\n';
+        case 'r': return '\r';
+        case 't': return '\t';
+        case 'b': return '\b';
+        case 'f': return '\f';
+        default: return char;
+      }
+    });
+  }
+  return str.replace(/^\/+/, '').split('\\').join('/');
 }
+
 
 function computeLineChangeStats(beforeText, afterText) {
   const beforeLines = String(beforeText || '').replace(/\r\n/g, '\n').split('\n');

@@ -260,7 +260,7 @@ textarea {
 
 /* LEFT_SIDEBAR_TITLEBAR_PADDING_2026-05-21 */
 .panel-left {
-  padding-top: 12px;
+  padding-top: 2px;
 }
 
 button,
@@ -292,6 +292,10 @@ body {
 .left-section-title {
   font-size: 0.82rem !important;
   line-height: 1.22;
+}
+
+.left-section-title {
+  margin-top: 24px !important;
 }
 
 .panel-right .panel-header h2 {
@@ -361,9 +365,14 @@ textarea,
   border: 1px solid rgba(255, 255, 255, 0.03) !important;
   border-radius: 8px !important;
   background: rgba(255, 255, 255, 0.01) !important;
-  padding: 4px !important;
+  padding: 8px !important;
+  margin-bottom: 12px !important;
   transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
   overflow: hidden;
+}
+
+.project-tree-header {
+  padding: 8px 8px !important;
 }
 
 .project-item:hover {
@@ -454,3 +463,36 @@ textarea,
   display: inline-block;
   margin-right: 4px;
 }
+
+/* ==========================================================================
+   Padronização do Painel de Arquivos e Terminal (Igual ao Git)
+   ========================================================================== */
+
+/* 1) Padroniza o fundo e bordas do terminal para ficar idêntico ao .next-steps-box do painel Git */
+.project-terminal-panel {
+  margin: 10px 14px 0 !important;
+  background: rgba(12, 12, 12, 0.94) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+}
+
+.project-terminal-head {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.project-terminal-body {
+  background: transparent !important;
+}
+
+/* 2) Remove o fundo e bordas internas da árvore de arquivos para evitar bordas duplas e igualar ao painel Git */
+.workspace-tool-region--files .project-files-tree {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+

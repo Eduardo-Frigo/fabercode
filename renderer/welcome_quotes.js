@@ -79,12 +79,6 @@
       es: 'El silencio es una fuente de gran fuerza.',
     },
     {
-      author: 'Buda',
-      pt: 'A paz vem de dentro. Não a procure à sua volta.',
-      en: 'Peace comes from within. Do not seek it around you.',
-      es: 'La paz viene de dentro. No la busques alrededor.',
-    },
-    {
       author: 'Isaac Newton',
       pt: 'O que sabemos é uma gota; o que ignoramos é um oceano.',
       en: 'What we know is a drop; what we do not know is an ocean.',

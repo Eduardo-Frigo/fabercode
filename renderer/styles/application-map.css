@@ -18,18 +18,19 @@
 /* Control Bar */
 .application-map-controls {
   position: absolute;
-  top: 16px;
-  left: 50%;
-  transform: translateX(-50%);
+  bottom: 24px;
+  left: 24px;
   z-index: 100;
   display: flex;
   align-items: center;
+  height: 56px;
+  box-sizing: border-box;
   gap: 12px;
   padding: 8px 16px;
   background: rgba(11, 12, 16, 0.85);
   backdrop-filter: blur(16px);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 99px;
+  border-radius: 12px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
@@ -39,7 +40,7 @@
   color: #e8e8e8;
   font-size: 0.85rem;
   padding: 4px 12px;
-  border-radius: 99px;
+  border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
@@ -70,11 +71,12 @@
 .application-map-toolbar {
   position: absolute;
   bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
+  right: 24px;
   z-index: 100;
   display: flex;
   flex-direction: row;
+  height: 56px;
+  box-sizing: border-box;
   gap: 8px;
   padding: 8px;
   background: rgba(11, 12, 16, 0.85);

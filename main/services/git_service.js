@@ -5,7 +5,25 @@ function createProjectGitService(dependencies = {}) {
   const {
     fs = defaultFs,
     mergeDiffStatsEntry,
-    normalizeRelativePathForDiff = (value) => String(value || '').replace(/^\/+/, '').split('\\').join('/'),
+    normalizeRelativePathForDiff = (value) => {
+      let str = String(value || '').trim();
+      if (str.startsWith('"') && str.endsWith('"')) {
+        str = str.slice(1, -1);
+        str = str.replace(/\\([0-7]{1,3})/g, (match, octal) => String.fromCharCode(parseInt(octal, 8)));
+        str = str.replace(/\\(.)/g, (match, char) => {
+          switch (char) {
+            case 'n': return '\n';
+            case 'r': return '\r';
+            case 't': return '\t';
+            case 'b': return '\b';
+            case 'f': return '\f';
+            default: return char;
+          }
+        });
+      }
+      return str.replace(/^\/+/, '').split('\\').join('/');
+    },
+
     path = defaultPath,
     runCommand,
   } = dependencies;

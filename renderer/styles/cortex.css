@@ -5,7 +5,7 @@ width: 28px;
 /* CORTEX_MEMORY_PANEL_UI_2026-05-14
    Reposiciona o Cortex como memoria/regras do projeto sem alterar o fluxo interno de aprendizado. */
 .panel-left .left-actions-row {
-  padding-top: 14px;
+  padding-top: 2px;
 }
 
 .left-bottom-actions {

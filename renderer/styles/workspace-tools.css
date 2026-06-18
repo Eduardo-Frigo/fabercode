@@ -956,12 +956,12 @@ body:not(.workspace-right-collapsed) .right-tool-lightbox__panel {
 
   .workspace-tool-region--git .right-tool-git-count {
     min-width: 30px;
-    min-height: 30px;
-    padding: 3px 7px 4px;
+    min-height: 34px;
+    padding: 4px 7px;
     display: inline-grid;
     place-items: center;
-    gap: 0;
-    line-height: 1;
+    gap: 4px;
+    line-height: 1.1;
     font-size: 0;
     text-align: center;
   }
@@ -1021,15 +1021,9 @@ body:not(.workspace-right-collapsed) .right-tool-lightbox__panel {
     align-items: flex-start;
   }
 
-  .workspace-tool-region--git .right-tool-git-flow--clean .right-tool-git-step__content,
-  .workspace-tool-region--git .right-tool-git-selection,
-  .workspace-tool-region--git .right-tool-actions-row,
-  .workspace-tool-region--git .right-tool-git-file-list,
   .workspace-tool-region--git .right-tool-git-file-chip__summary,
   .workspace-tool-region--git .right-tool-git-file-chip__meta,
-  .workspace-tool-region--git .right-tool-file-folder,
-  .workspace-tool-region--git .right-tool-commit-summary,
-  .workspace-tool-region--git .right-tool-input {
+  .workspace-tool-region--git .right-tool-file-folder {
     display: none !important;
   }
 
@@ -1044,10 +1038,6 @@ body:not(.workspace-right-collapsed) .right-tool-lightbox__panel {
 
   .workspace-tool-region--git .right-tool-git-step {
     padding: 10px;
-  }
-
-  .workspace-tool-region--git .right-tool-git-step__toggle {
-    display: none;
   }
 
   .workspace-tool-region--terminal .project-terminal-head {
