@@ -53,7 +53,7 @@ body.workspace-left-collapsed {
 .workspace-zone-shell--left,
 .workspace-zone-shell--right {
   flex: 1;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .workspace-zone-shell--center {
@@ -627,9 +627,13 @@ body[data-workspace-mode='ide'] .project-terminal-panel {
 
 .workspace-zone-shell--left .workspace-tool-region--files,
 .workspace-zone-shell--left .workspace-tool-region--cortex,
-.workspace-zone-shell--right .workspace-tool-region--files,
 .workspace-zone-shell--right .workspace-tool-region--cortex {
   flex: 0 0 auto;
+}
+
+.workspace-zone-shell--right .workspace-tool-region--files {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .workspace-zone-shell--left .panel-right-footer,

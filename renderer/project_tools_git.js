@@ -196,6 +196,51 @@
     return empty;
   }
 
+  function createGitCommitList(commits = [], options = {}) {
+    const list = document.createElement('div');
+    list.className = 'right-tool-git-commit-list';
+    const items = Array.isArray(commits) ? commits : [];
+    const currentHash = String(options.currentHash || '').trim();
+    const onRollback = typeof options.onRollback === 'function' ? options.onRollback : null;
+    items.forEach((commit) => {
+      const item = document.createElement('article');
+      item.className = 'right-tool-git-commit-item';
+      const isCurrent = Boolean(currentHash) && Boolean(commit && commit.hash) && String(commit.hash).trim() === currentHash;
+      const subject = document.createElement('strong');
+      subject.textContent = commit.subject || 'Commit local';
+      const meta = document.createElement('span');
+      const shortHash = commit.shortHash || (commit.hash ? commit.hash.slice(0, 7) : '');
+      meta.textContent = [shortHash, commit.relative, commit.author].filter(Boolean).join(' · ');
+      item.append(subject, meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'right-tool-git-commit-actions';
+      if (isCurrent) {
+        const current = document.createElement('span');
+        current.className = 'right-tool-git-commit-current';
+        current.textContent = 'Atual';
+        actions.appendChild(current);
+      } else if (onRollback && commit && commit.hash) {
+        const rollback = document.createElement('button');
+        rollback.type = 'button';
+        rollback.className = 'right-tool-action right-tool-action--danger right-tool-git-commit-rollback';
+        rollback.textContent = 'Rollback';
+        rollback.addEventListener('click', async () => {
+          rollback.disabled = true;
+          try {
+            await onRollback(commit, rollback);
+          } finally {
+            rollback.disabled = false;
+          }
+        });
+        actions.appendChild(rollback);
+      }
+      if (actions.childElementCount) item.appendChild(actions);
+      list.appendChild(item);
+    });
+    return list;
+  }
+
   function createProjectGitTool(options = {}) {
     const api = options.api || {};
     const createToolButton = options.createToolButton;
@@ -316,6 +361,9 @@
       const worktree = api.getProjectGitWorktree
         ? await api.getProjectGitWorktree({ rootPath: projectInfo.rootPath })
         : await api.getProjectGitStatus({ rootPath: projectInfo.rootPath });
+      const commitsResult = api.getProjectGitCommits
+        ? await api.getProjectGitCommits({ rootPath: projectInfo.rootPath, limit: 20 })
+        : { ok: false, commits: [] };
       const authResult = api.getGithubAuthStatus ? await api.getGithubAuthStatus() : null;
       const auth = normalizeGithubAuthStatus(authResult) || { ok: false };
       body.innerHTML = '';
@@ -343,7 +391,6 @@
       branch.textContent = worktree.isGitRepo
         ? worktree.branch ? `branch ${worktree.branch}` : 'repositório local'
         : 'Git ainda não ativo';
-      branch.dataset.compactTitle = 'Git';
       const counts = document.createElement('div');
       counts.className = 'right-tool-git-counts';
       [
@@ -573,7 +620,7 @@
       const committedStep = createGitStepCard(
         '4',
         'Salvos Localmente (Committed)',
-        hasCommit ? 'Último commit local pronto para publicação.' : 'Nenhum commit local ainda.',
+        hasCommit ? `${(commitsResult.commits || []).length || 1} commits encontrados no histórico local.` : 'Nenhum commit local ainda.',
         activeStep === 'committed' ? 'active' : hasCommit ? 'done' : 'locked',
         null,
         { key: 'committed', compactTitle: 'Committed' }
@@ -581,15 +628,36 @@
       if (!hasCommit) {
         appendGitStepEmpty(committedStep.content, 'Crie um commit em Staged para liberar publicação e deploy.');
       } else {
-        const commitSummary = document.createElement('div');
-        commitSummary.className = 'right-tool-commit-summary';
-        const title = document.createElement('strong');
-        title.textContent = latest.subject || 'Commit local';
-        const meta = document.createElement('span');
-        const hash = latest.hash ? latest.hash.slice(0, 7) : '';
-        meta.textContent = [hash, latest.relative].filter(Boolean).join(' · ') || 'commit local';
-        commitSummary.append(title, meta);
-        committedStep.content.appendChild(commitSummary);
+        const commitList = createGitCommitList(
+          commitsResult.ok && Array.isArray(commitsResult.commits) && commitsResult.commits.length
+            ? commitsResult.commits
+            : [latest],
+          {
+            currentHash: latest && latest.hash ? latest.hash : '',
+            onRollback: async (commit) => {
+              const targetLabel = commit.shortHash || (commit.hash ? commit.hash.slice(0, 7) : 'commit');
+              const confirmed = confirmAction(
+                `Deseja voltar o repositório para o commit ${targetLabel}? Uma branch de backup será criada automaticamente antes do rollback.`
+              );
+              if (!confirmed) return;
+              updateStatus(`Voltando para o commit ${targetLabel}...`);
+              const result = api.rollbackProjectGitToCommit
+                ? await api.rollbackProjectGitToCommit({ rootPath: projectInfo.rootPath, commitHash: commit.hash })
+                : { ok: false, message: 'Rollback por commit indisponível neste build.' };
+              if (!result || !result.ok) {
+                appendTransientAssistantMessage((result && result.message) || 'Não consegui fazer o rollback para este commit.');
+                return;
+              }
+              const backupNote = result.backupBranch ? ` Backup criado: ${result.backupBranch}.` : '';
+              appendTransientAssistantMessage(`Rollback concluído para ${targetLabel}.${backupNote}`);
+              updateStatus(`Rollback concluído para ${targetLabel}`);
+              openGitStepKey = 'committed';
+              await renderGitTool();
+              await refreshFileTree();
+            },
+          }
+        );
+        committedStep.content.appendChild(commitList);
         if (worktree.latestUrl && api.openProjectLatestVersion) {
           const actionRow = document.createElement('div');
           actionRow.className = 'right-tool-actions-row';

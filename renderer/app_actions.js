@@ -441,6 +441,8 @@
 
         const filesBtn = document.getElementById('btn-project-files');
         if (filesBtn) filesBtn.classList.add('active');
+        const filesRegion = document.getElementById('workspace-files-region');
+        if (filesRegion) filesRegion.classList.remove('workspace-runtime-hidden');
         const rightPanelTitle = document.getElementById('right-panel-title');
         if (rightPanelTitle) rightPanelTitle.textContent = 'Arquivos';
         return;

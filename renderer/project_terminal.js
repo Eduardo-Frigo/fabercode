@@ -141,6 +141,8 @@
       const placement = getTerminalPlacement();
       if (placement === 'right') {
         document.body.classList.remove('mode-terminal');
+        const filesRegion = document.getElementById('workspace-files-region');
+        if (filesRegion) filesRegion.classList.remove('workspace-runtime-hidden');
 
         const filesBtn = document.getElementById('btn-project-files');
         if (filesBtn) filesBtn.classList.add('active');
@@ -261,6 +263,8 @@
         if (gitBtn) gitBtn.classList.remove('active');
         const filesBtn = document.getElementById('btn-project-files');
         if (filesBtn) filesBtn.classList.remove('active');
+        const filesRegion = document.getElementById('workspace-files-region');
+        if (filesRegion) filesRegion.classList.add('workspace-runtime-hidden');
 
         if (elements.button) elements.button.classList.add('active');
 

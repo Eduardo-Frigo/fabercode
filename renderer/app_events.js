@@ -107,6 +107,8 @@
           if (projectTerminalController) {
             projectTerminalController.closePanel();
           }
+          const filesRegion = document.getElementById('workspace-files-region');
+          if (filesRegion) filesRegion.classList.remove('workspace-runtime-hidden');
           
           projectFilesBtnEl.classList.add('active');
           

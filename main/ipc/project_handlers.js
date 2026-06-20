@@ -13,6 +13,8 @@ function registerProjectHandlers(dependencies = {}) {
     fs,
     getProjectGitWorktree,
     getProjectGitStatus,
+    getProjectGitCommits,
+    rollbackProjectGitToCommit,
     getRuntimeDiffStats,
     initProjectGitRepository,
     mergeDiffStatsEntry,
@@ -50,6 +52,8 @@ function registerProjectHandlers(dependencies = {}) {
     requireDependency('fs', fs);
     requireDependency('getProjectGitWorktree', getProjectGitWorktree);
     requireDependency('getProjectGitStatus', getProjectGitStatus);
+    requireDependency('getProjectGitCommits', getProjectGitCommits);
+    requireDependency('rollbackProjectGitToCommit', rollbackProjectGitToCommit);
     requireDependency('getRuntimeDiffStats', getRuntimeDiffStats);
     requireDependency('initProjectGitRepository', initProjectGitRepository);
     requireDependency('mergeDiffStatsEntry', mergeDiffStatsEntry);
@@ -378,6 +382,13 @@ function registerProjectHandlers(dependencies = {}) {
     return getProjectGitWorktree(authorization.rootPath);
   });
 
+  registerIpcHandler('project:git:commits', async (_, payload) => {
+    const authorization = authorizeProjectRoot(payload && payload.rootPath ? String(payload.rootPath) : '');
+    if (!authorization.ok) return authorization;
+    const limit = Number(payload && payload.limit) || 20;
+    return getProjectGitCommits(authorization.rootPath, limit);
+  });
+
   registerIpcHandler('project:git:init', async (_, payload) => {
     const authorization = authorizeProjectRoot(payload && payload.rootPath ? String(payload.rootPath) : '');
     if (!authorization.ok) return authorization;
@@ -403,6 +414,13 @@ function registerProjectHandlers(dependencies = {}) {
     if (!authorization.ok) return authorization;
     const files = payload && Array.isArray(payload.files) ? payload.files : [];
     return rollbackProjectGitFiles(authorization.rootPath, files);
+  });
+
+  registerIpcHandler('project:git:rollback-to-commit', async (_, payload) => {
+    const authorization = authorizeProjectRoot(payload && payload.rootPath ? String(payload.rootPath) : '');
+    if (!authorization.ok) return authorization;
+    const commitHash = payload && payload.commitHash ? String(payload.commitHash) : '';
+    return rollbackProjectGitToCommit(authorization.rootPath, commitHash);
   });
 
   registerIpcHandler('project:git:commit', async (_, payload) => {

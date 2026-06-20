@@ -118,6 +118,55 @@ function createProjectGitService(dependencies = {}) {
     };
   }
 
+  async function getProjectGitCommits(rootPath, limit = 20) {
+    requireDependency('runCommand', runCommand);
+
+    const safeRoot = String(rootPath || '').trim();
+    if (!safeRoot) return { ok: false, message: 'rootPath é obrigatório.', commits: [] };
+
+    const inside = await runCommand('git', ['-C', safeRoot, 'rev-parse', '--is-inside-work-tree'], { timeoutMs: 1400 });
+    if (!inside.ok || !/true/i.test(String(inside.stdout || '').trim())) {
+      return { ok: true, isGitRepo: false, commits: [], message: 'Projeto não é um repositório Git.' };
+    }
+
+    const limitValue = Math.max(1, Math.min(200, Number(limit) || 20));
+    const result = await runCommand(
+      'git',
+      ['-C', safeRoot, 'log', `-${limitValue}`, '--date=relative', '--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%s'],
+      { timeoutMs: 3000 }
+    );
+
+    if (!result.ok) {
+      return {
+        ok: false,
+        isGitRepo: true,
+        commits: [],
+        message: String(result.stderr || result.stdout || 'Não consegui ler o histórico do Git.').trim(),
+      };
+    }
+
+    const commits = String(result.stdout || '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [hash = '', shortHash = '', author = '', relative = '', subject = ''] = line.split('\x1f');
+        return {
+          hash: hash.trim(),
+          shortHash: shortHash.trim(),
+          author: author.trim(),
+          relative: relative.trim(),
+          subject: subject.trim(),
+        };
+      });
+
+    return {
+      ok: true,
+      isGitRepo: true,
+      commits,
+    };
+  }
+
   function parseNumstatLine(line) {
     const tabParts = String(line || '').split('\t');
     if (tabParts.length >= 3) {
@@ -575,6 +624,106 @@ function createProjectGitService(dependencies = {}) {
     return { ...nextWorktree, ok: true, rolledBackFiles: selectedFiles };
   }
 
+  function buildRollbackBackupBranchName(branchName = '') {
+    const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+    const branchSlug = String(branchName || 'detached-head')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9/_-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 48) || 'detached-head';
+    return `rollback-backup/${branchSlug}-${stamp}`;
+  }
+
+  async function rollbackProjectGitToCommit(rootPath, commitHash) {
+    requireDependency('runCommand', runCommand);
+
+    const safeRoot = String(rootPath || '').trim();
+    const targetRef = String(commitHash || '').trim();
+    if (!safeRoot) return { ok: false, message: 'rootPath é obrigatório.' };
+    if (!targetRef) return { ok: false, message: 'Escolha um commit para rollback.' };
+
+    const worktree = await getProjectGitWorktree(safeRoot);
+    if (!worktree.ok) return worktree;
+    if (!worktree.isGitRepo) {
+      return { ok: false, message: 'Projeto não está em um repositório Git.' };
+    }
+    if (Array.isArray(worktree.entries) && worktree.entries.length) {
+      return {
+        ok: false,
+        message: 'O rollback por commit exige árvore limpa. Faça commit, unstage ou descarte as alterações locais antes de continuar.',
+      };
+    }
+
+    const targetResolve = await runCommand(
+      'git',
+      ['-C', safeRoot, 'rev-parse', '--verify', `${targetRef}^{commit}`],
+      { timeoutMs: 2400 }
+    );
+    if (!targetResolve.ok) {
+      return {
+        ok: false,
+        message: String(targetResolve.stderr || targetResolve.stdout || 'Não consegui localizar o commit solicitado.').trim(),
+      };
+    }
+    const targetHash = String(targetResolve.stdout || '').trim();
+
+    const currentResolve = await runCommand('git', ['-C', safeRoot, 'rev-parse', 'HEAD'], { timeoutMs: 2400 });
+    if (!currentResolve.ok) {
+      return {
+        ok: false,
+        message: String(currentResolve.stderr || currentResolve.stdout || 'Não consegui identificar o HEAD atual.').trim(),
+      };
+    }
+    const currentHead = String(currentResolve.stdout || '').trim();
+    if (targetHash === currentHead) {
+      return {
+        ...worktree,
+        ok: true,
+        noOp: true,
+        backupBranch: null,
+        rolledBackToCommit: targetHash,
+      };
+    }
+
+    const status = await getProjectGitStatus(safeRoot);
+    if (!status.ok) return status;
+
+    let backupBranch = buildRollbackBackupBranchName(status.branch || '');
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const candidate = attempt === 0 ? backupBranch : `${backupBranch}-${attempt + 1}`;
+      const branchResult = await runCommand('git', ['-C', safeRoot, 'branch', candidate, currentHead], { timeoutMs: 5000 });
+      if (branchResult.ok) {
+        backupBranch = candidate;
+        break;
+      }
+      if (attempt === 3) {
+        return {
+          ok: false,
+          message: String(branchResult.stderr || branchResult.stdout || 'Não consegui criar a branch de backup antes do rollback.').trim(),
+        };
+      }
+    }
+
+    const resetResult = await runCommand('git', ['-C', safeRoot, 'reset', '--hard', targetHash], { timeoutMs: 12000 });
+    if (!resetResult.ok) {
+      return {
+        ok: false,
+        message: String(resetResult.stderr || resetResult.stdout || 'Não consegui concluir o rollback para o commit escolhido.').trim(),
+      };
+    }
+
+    const nextWorktree = await getProjectGitWorktree(safeRoot);
+    return {
+      ...nextWorktree,
+      ok: true,
+      backupBranch,
+      previousHead: currentHead,
+      rolledBackToCommit: targetHash,
+      output: String(resetResult.stdout || '').trim(),
+    };
+  }
+
   async function listStagedProjectGitFiles(rootPath) {
     requireDependency('runCommand', runCommand);
 
@@ -655,11 +804,13 @@ function createProjectGitService(dependencies = {}) {
     collectGitDiffStats,
     getProjectGitWorktree,
     getProjectGitStatus,
+    getProjectGitCommits,
     initProjectGitRepository,
     normalizeGitRemoteUrl,
     parseNumstatLine,
     parseDiffHunkFirstLine,
     parsePorcelainStatusLine,
+    rollbackProjectGitToCommit,
     stageProjectGitFiles,
     unstageProjectGitFiles,
     rollbackProjectGitFiles,

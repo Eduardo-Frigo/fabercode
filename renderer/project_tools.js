@@ -42,6 +42,17 @@
     return section;
   }
 
+  function setRightPanelTitle(title) {
+    const rightPanelTitle = document.getElementById('right-panel-title');
+    if (rightPanelTitle) rightPanelTitle.textContent = title;
+  }
+
+  function setFilesRegionRuntimeHidden(hidden) {
+    const filesRegion = document.getElementById('workspace-files-region');
+    if (!filesRegion) return;
+    filesRegion.classList.toggle('workspace-runtime-hidden', Boolean(hidden));
+  }
+
   function createProjectToolsController(options = {}) {
     const api = options.api || {};
     const terminalController = options.terminalController || null;
@@ -137,6 +148,7 @@
       toolSurface.root.classList.add('hidden');
       toolSurface.root.setAttribute('aria-hidden', 'true');
       document.body.classList.remove('right-tool-lightbox-open');
+      setFilesRegionRuntimeHidden(false);
     }
 
     function openToolSurface(title, subtitle = '', kind = '') {
@@ -167,8 +179,9 @@
         const gitBtn = document.getElementById('btn-project-git');
         if (gitBtn) gitBtn.classList.add('active');
 
-        const rightPanelTitle = document.getElementById('right-panel-title');
-        if (rightPanelTitle) rightPanelTitle.textContent = 'Git';
+        setRightPanelTitle('Git');
+        setFilesRegionRuntimeHidden(true);
+        requestAnimationFrame(() => setRightPanelTitle('Git'));
 
         if (document.body.classList.contains('workspace-right-collapsed')) {
           const rightToggle = document.getElementById('workspace-collapse-right');

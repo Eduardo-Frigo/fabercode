@@ -114,6 +114,12 @@
         return;
       }
 
+      const shell = document.createElement('div');
+      shell.className = 'project-files-shell';
+
+      const scroll = document.createElement('div');
+      scroll.className = 'project-files-scroll';
+
       const diffEntries = Object.entries(visibleDiffStats)
         .map(([file, stat]) => ({
           file,
@@ -141,7 +147,7 @@
           delEl.textContent = `-${del}`;
           summary.appendChild(delEl);
         }
-        rootEl.appendChild(summary);
+        scroll.appendChild(summary);
       }
 
       visibleRows.slice(0, 800).forEach((row) => {
@@ -226,8 +232,11 @@
           }
         }
 
-        rootEl.appendChild(line);
+        scroll.appendChild(line);
       });
+
+      shell.appendChild(scroll);
+      rootEl.appendChild(shell);
     }
 
     async function ensureProjectReady() {
