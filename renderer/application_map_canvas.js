@@ -1180,7 +1180,8 @@
       updateSelectedNode,
       drawEdges,
       addNodeAtCenter,
-      renderAllNodes
+      renderAllNodes,
+      selectNode
     };
   }
 

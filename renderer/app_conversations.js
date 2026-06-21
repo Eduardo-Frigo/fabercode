@@ -124,7 +124,7 @@
     function ensureConversationStateForProject(projectId) {
       ensureProjectConversationBucket(projectId);
       if (!(projectId in state.activeConversationByProject)) {
-        const firstConversation = state.projectConversations[projectId][0];
+        const firstConversation = state.projectConversations[projectId].find((c) => c && c.source !== 'map_chat');
         state.activeConversationByProject[projectId] = firstConversation ? firstConversation.id : null;
       }
     }

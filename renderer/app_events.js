@@ -28,6 +28,7 @@
       welcomeProjectModalController = null,
       accountGateController = null,
       workspaceLayoutController = null,
+      applicationMapController = null,
     } = controllers;
     const {
       closeAiSettingsModal = () => {},
@@ -94,6 +95,11 @@
           document.body.classList.remove('mode-map-chat');
           document.body.classList.remove('mode-terminal');
           document.body.classList.remove('mode-git');
+
+          // Reset center view: hide map canvas and show chat region
+          if (applicationMapController && typeof applicationMapController.switchTab === 'function') {
+            applicationMapController.switchTab('chat');
+          }
           
           const milestonesBtn = document.getElementById('btn-project-milestones');
           if (milestonesBtn) milestonesBtn.classList.remove('active');

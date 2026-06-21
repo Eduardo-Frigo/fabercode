@@ -70,12 +70,17 @@ async function run() {
       calls.push(['renameConversationEntry', projectId, conversationId, title]);
       return { ok: true, conversation: { id: conversationId, title } };
     },
+    deleteConversationEntry: (projectId, conversationId) => {
+      calls.push(['deleteConversationEntry', projectId, conversationId]);
+      return { ok: true, conversations: [] };
+    },
   });
 
   assert.deepStrictEqual(Object.keys(handlers).sort(), [
     'orchestration:audit:append',
     'orchestration:audit:list',
     'orchestration:conversation:add',
+    'orchestration:conversation:delete',
     'orchestration:conversation:message:add',
     'orchestration:conversation:messages:list',
     'orchestration:conversation:rename',
@@ -110,6 +115,11 @@ async function run() {
     conversationId: 'conversation-1',
     title: 'B',
   }).conversation.title, 'B');
+
+  assert.strictEqual(handlers['orchestration:conversation:delete'](null, {
+    projectId: 'project-1',
+    conversationId: 'conversation-1',
+  }).ok, true);
 
   assert.strictEqual(handlers['orchestration:conversation:messages:list'](null, {
     conversationId: 'conversation-1',

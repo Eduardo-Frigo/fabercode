@@ -718,6 +718,8 @@ function clearTransientChatNotices() {
 function shouldShowWelcomePanel() {
   if (!welcomePanelEl || !chatLogEl) return false;
   if (state.uiMode === 'cortex') return false;
+  const tabMap = document.getElementById('btn-tab-map');
+  if (tabMap && tabMap.classList.contains('active')) return false;
   const hasChatContent = chatLogEl.children.length > 0;
   const hasPendingAction = pendingActionEl && !pendingActionEl.classList.contains('hidden');
   const hasJobProgress = Boolean(jobProgressController && jobProgressController.isVisible());
@@ -1223,8 +1225,8 @@ async function ensureSelectedProjectInfoReady(options = {}) {
   return projectController ? projectController.ensureSelectedProjectInfoReady(options) : false;
 }
 
-async function selectProject(projectId) {
-  if (projectController) await projectController.selectProject(projectId);
+async function selectProject(projectId, options = {}) {
+  if (projectController) await projectController.selectProject(projectId, options);
 }
 
 function clearPending() {

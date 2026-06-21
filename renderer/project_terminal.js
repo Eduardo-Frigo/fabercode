@@ -202,6 +202,19 @@
         return;
       }
 
+      if (placement === 'bottom') {
+        const bottomZone = document.getElementById('workspace-bottom-zone');
+        if (bottomZone && elements.panel.parentElement !== bottomZone) {
+          bottomZone.appendChild(elements.panel);
+        }
+        if (lightbox.root) {
+          lightbox.root.classList.add('hidden');
+          lightbox.root.setAttribute('aria-hidden', 'true');
+          document.body.classList.remove('project-terminal-lightbox-open');
+        }
+        return;
+      }
+
       if (terminalState.panelOpen) {
         const surface = ensureLightbox();
         if (elements.panel.parentElement !== surface.shell) {
@@ -241,6 +254,7 @@
         if (placement === 'right') {
           document.body.classList.remove('mode-terminal');
         }
+        placePanel();
         return;
       }
 
@@ -276,6 +290,13 @@
           if (rightToggle) rightToggle.click();
         }
 
+        if (lightbox.root) {
+          lightbox.root.classList.add('hidden');
+          lightbox.root.setAttribute('aria-hidden', 'true');
+          document.body.classList.remove('project-terminal-lightbox-open');
+        }
+      } else if (placement === 'bottom') {
+        document.body.classList.remove('mode-terminal');
         if (lightbox.root) {
           lightbox.root.classList.add('hidden');
           lightbox.root.setAttribute('aria-hidden', 'true');

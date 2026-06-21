@@ -336,7 +336,7 @@ body.workspace-left-collapsed .projects-list {
 .project-rail-lightbox {
   position: fixed;
   inset: 0;
-  z-index: 3400;
+  z-index: 9999;
   pointer-events: none;
 }
 

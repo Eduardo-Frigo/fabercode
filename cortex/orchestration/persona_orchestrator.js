@@ -226,6 +226,14 @@ function createPersonaOrchestrator(dependencies = {}) {
 
   async function resolveAssistantRouteDecision(payload = {}) {
     assertReady();
+    if (payload && payload.isMapChat) {
+      return {
+        ok: true,
+        decision: 'chat',
+        response: '',
+        meta: { planner: 'persona_router', reason: 'conversation_only' }
+      };
+    }
     const { projectInfo, userMessage, attachments, contextHint, conversationMessages } = payload || {};
     const activeMemory = await resolveRequestActiveMemory(payload, 'route');
     const enrichedContextHint = enrichContextHintWithActiveMemory(contextHint, activeMemory);
@@ -813,6 +821,7 @@ function createPersonaOrchestrator(dependencies = {}) {
       attachments: attachments || [],
       contextHint: enrichedContextHint,
       conversationMessages: conversationMessages || [],
+      isMapChat: payload.isMapChat,
     });
 
     const routeOnlyPlan = await buildAssistantRouteOnlyPlan(

@@ -299,7 +299,7 @@
       }
     }
     
-    async function selectProject(projectId) {
+    async function selectProject(projectId, options = {}) {
       const previousProjectId = state.selectedProjectId;
       if (previousProjectId && previousProjectId !== projectId) {
         state.pendingAction = null;
@@ -337,7 +337,7 @@
         state.automataContractSummary = await automataContractsController.refreshSummary();
       }
       if (applicationMapController) {
-        await applicationMapController.loadProjectMap(project.id);
+        await applicationMapController.loadProjectMap(project.id, options);
       }
       if (milestonesPanelController) {
         await milestonesPanelController.refresh();

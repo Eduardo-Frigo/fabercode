@@ -197,7 +197,8 @@
       const convList = document.createElement('div');
       convList.className = 'conversation-tree';
 
-      const conversations = Array.isArray(getConversations(projectId)) ? getConversations(projectId) : [];
+      const conversations = (Array.isArray(getConversations(projectId)) ? getConversations(projectId) : [])
+        .filter((c) => c && c.source !== 'map_chat');
       if (!conversations.length) {
         const emptyConv = document.createElement('div');
         emptyConv.className = 'conversation-item conversation-empty';
@@ -334,10 +335,11 @@
         event.stopPropagation();
         const railMenuMode = isRailMenuOpen() || isInsideRailMenu(mapBtn);
         if (getSelectedProjectId() !== id) {
-          await onSelectProject(id);
+          await onSelectProject(id, { initialTab: 'map' });
+        } else {
+          const tabMap = document.getElementById('btn-tab-map');
+          if (tabMap) tabMap.click();
         }
-        const tabMap = document.getElementById('btn-tab-map');
-        if (tabMap) tabMap.click();
         if (railMenuMode) setRailMenuOpen(false);
         render();
       });

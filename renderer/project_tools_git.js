@@ -564,7 +564,7 @@
         message.placeholder = 'Mensagem do commit';
         const actionRow = document.createElement('div');
         actionRow.className = 'right-tool-actions-row';
-        const commit = createToolButton('Commit it', 'right-tool-action--primary');
+        const commit = createToolButton('Criar commit com selecionados', 'right-tool-action--primary');
         commit.addEventListener('click', async () => {
           const selectedFiles = getCheckedGitFiles(list);
           if (!selectedFiles.length) {

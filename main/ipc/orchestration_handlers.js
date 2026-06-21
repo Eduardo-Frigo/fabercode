@@ -14,6 +14,7 @@ function registerOrchestrationHandlers(dependencies = {}) {
     readOrchestrationState,
     registerIpcHandler,
     renameConversationEntry,
+    deleteConversationEntry,
   } = dependencies;
 
   function requireDependency(name, value) {
@@ -50,6 +51,11 @@ function registerOrchestrationHandlers(dependencies = {}) {
   registerIpcHandler('orchestration:conversation:rename', (_, payload) => {
     const { projectId, conversationId, title } = payload || {};
     return renameConversationEntry(projectId, conversationId, title);
+  });
+
+  registerIpcHandler('orchestration:conversation:delete', (_, payload) => {
+    const { projectId, conversationId } = payload || {};
+    return deleteConversationEntry(projectId, conversationId);
   });
 
   registerIpcHandler('orchestration:conversation:messages:list', (_, payload) => {

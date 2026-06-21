@@ -1,10 +1,13 @@
 #workspace-milestones-panel {
-  padding: 16px;
-  overflow-y: auto;
+  padding: var(--right-tool-shell-pad-top) var(--right-tool-shell-pad-x) var(--right-tool-shell-pad-bottom);
+  overflow: hidden;
   height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   color: #e8e8e8;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  background-color: #1a1d26;
+  background: var(--right-tool-shell-bg);
 }
 
 body.mode-milestones .panel-right > .next-steps-box:first-of-type,
@@ -15,16 +18,18 @@ body.mode-milestones #cortex-learning-box {
 }
 
 body.mode-milestones #workspace-milestones-panel {
-  display: block !important;
+  display: flex !important;
+  flex-direction: column;
 }
 
 .milestones-header {
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  padding-bottom: 12px;
-  margin-bottom: 16px;
+  min-height: 40px;
+  border-bottom: 1px solid var(--right-tool-shell-divider);
+  padding-bottom: var(--right-tool-shell-gap);
+  margin-bottom: var(--right-tool-shell-gap);
 }
 
 .milestones-header h3 {
@@ -35,9 +40,11 @@ body.mode-milestones #workspace-milestones-panel {
   background: rgba(80, 201, 133, 0.1);
   border: 1px solid rgba(80, 201, 133, 0.3);
   color: #50c985;
-  border-radius: 4px;
-  padding: 4px 10px;
-  font-size: 0.75rem;
+  border-radius: 10px;
+  min-height: 38px;
+  padding: 0 16px;
+  font-size: 0.78rem;
+  font-weight: 700;
   cursor: pointer;
   transition: all 0.2s ease;
 }
@@ -50,7 +57,12 @@ body.mode-milestones #workspace-milestones-panel {
 /* Timeline */
 .milestones-timeline {
   position: relative;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
   padding-left: 28px;
+  padding-top: 2px;
+  padding-right: 4px;
 }
 
 .milestones-timeline::before {

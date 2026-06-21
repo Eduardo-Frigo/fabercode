@@ -73,6 +73,7 @@ contextBridge.exposeInMainWorld('localcodeApi', {
   listConversations: () => ipcRenderer.invoke('orchestration:conversations:list'),
   addConversation: (payload) => ipcRenderer.invoke('orchestration:conversation:add', payload),
   renameConversation: (payload) => ipcRenderer.invoke('orchestration:conversation:rename', payload),
+  deleteConversation: (payload) => ipcRenderer.invoke('orchestration:conversation:delete', payload),
   listConversationMessages: (payload) =>
     ipcRenderer.invoke('orchestration:conversation:messages:list', payload),
   addConversationMessage: (payload) =>

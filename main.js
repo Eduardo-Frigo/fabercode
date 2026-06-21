@@ -1030,6 +1030,7 @@ const {
   recoverInterruptedJobs,
   removeProjectConversationHistory,
   renameConversationEntry,
+  deleteConversationEntry,
   renameCortexTopic,
   setJobCheckpoint,
   upsertCortexLearning,
@@ -5827,6 +5828,7 @@ app.whenReady().then(() => {
     readOrchestrationState,
     registerIpcHandler,
     renameConversationEntry,
+    deleteConversationEntry,
   });
 
   registerAiHandlers({

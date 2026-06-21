@@ -268,6 +268,45 @@ function createOrchestrationStateStore(dependencies = {}) {
     };
   }
 
+  function deleteConversationEntry(projectId, conversationId) {
+    if (!projectId) return { ok: false, message: 'projectId é obrigatório.' };
+    if (!conversationId) return { ok: false, message: 'conversationId é obrigatório.' };
+
+    const current = readOrchestrationState();
+    const bucket = Array.isArray(current.conversationsByProject[projectId])
+      ? current.conversationsByProject[projectId]
+      : [];
+
+    const idx = bucket.findIndex((conv) => conv && conv.id === conversationId);
+    if (idx < 0) return { ok: false, message: 'Conversa não encontrada.' };
+
+    const nextBucket = bucket.filter((conv) => conv && conv.id !== conversationId);
+
+    const nextConversationsByProject = {
+      ...current.conversationsByProject,
+      [projectId]: nextBucket,
+    };
+
+    const nextMessagesByConversation = { ...current.messagesByConversation };
+    delete nextMessagesByConversation[conversationId];
+
+    writeOrchestrationState({
+      ...current,
+      conversationsByProject: nextConversationsByProject,
+      messagesByConversation: nextMessagesByConversation,
+    });
+
+    appendAuditEvent('conversation.deleted', {
+      projectId,
+      conversationId,
+    });
+
+    return {
+      ok: true,
+      conversations: nextBucket,
+    };
+  }
+
   function listConversationMessages(conversationId, limit = MAX_CONVERSATION_MESSAGES) {
     if (!conversationId) {
       return { ok: false, message: 'conversationId é obrigatório.' };
@@ -521,6 +560,7 @@ function createOrchestrationStateStore(dependencies = {}) {
     recoverInterruptedJobs,
     removeProjectConversationHistory,
     renameConversationEntry,
+    deleteConversationEntry,
     renameCortexTopic,
     setJobCheckpoint,
     upsertCortexLearning,

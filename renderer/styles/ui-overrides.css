@@ -465,10 +465,9 @@ textarea,
 }
 
 /* ==========================================================================
-   Padronização do Painel de Arquivos e Terminal (Igual ao Git)
+   Ajuste fino do shell dos painéis da direita
    ========================================================================== */
 
-/* 1) Padroniza o fundo e bordas do terminal para ficar idêntico ao .next-steps-box do painel Git */
 .project-terminal-panel {
   margin: 10px 14px 0 !important;
   background: rgba(12, 12, 12, 0.94) !important;
@@ -486,13 +485,24 @@ textarea,
   background: transparent !important;
 }
 
-/* 2) Remove o fundo e bordas internas da árvore de arquivos para evitar bordas duplas e igualar ao painel Git */
 .workspace-tool-region--files .project-files-tree {
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
   padding: 0 !important;
   max-height: none !important;
-  overflow: visible !important;
+  overflow: hidden !important;
+}
+
+/* Elevate modals and input dialogs to be on top of project rail lightbox */
+.inline-input-dialog,
+.cortex-modal,
+.project-state-modal,
+.welcome-project-modal,
+.ai-settings-modal,
+.project-file-modal,
+.unsaved-exit-modal,
+.automata-contract-ledger {
+  z-index: 11000 !important;
 }
 

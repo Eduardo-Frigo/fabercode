@@ -199,9 +199,6 @@
               <!-- Controls -->
               <div class="application-map-controls">
                 <button id="btn-map-render">Render</button>
-                <button id="btn-map-ai" title="Perguntar à IA" class="btn-map-ai-icon-btn">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                </button>
                 <div class="zoom-slider-container">
                   <span>Zoom:</span>
                   <input type="range" id="map-zoom-slider" min="0.3" max="2" step="0.05" value="1">
@@ -242,38 +239,7 @@
                 <svg id="application-map-canvas-edges" class="application-map-canvas-edges"></svg>
               </div>
 
-              <!-- Inspector -->
-              <div id="application-map-inspector" class="application-map-inspector">
-                <div class="application-map-inspector-header">
-                  <strong>Detalhes do Item</strong>
-                  <button id="btn-map-inspector-close" style="background:transparent; border:none; color:#fff; font-size:1.2rem; cursor:pointer;">&times;</button>
-                </div>
-                <div class="application-map-inspector-body">
-                  <div class="inspector-field">
-                    <label for="inspector-node-title">Título</label>
-                    <input type="text" id="inspector-node-title">
-                  </div>
-                  <div class="inspector-field">
-                    <label for="inspector-node-desc">Descrição</label>
-                    <textarea id="inspector-node-desc"></textarea>
-                  </div>
-                  <div class="inspector-field">
-                    <label for="inspector-node-content">Conteúdo (Markdown / Link)</label>
-                    <textarea id="inspector-node-content" style="min-height: 120px;"></textarea>
-                  </div>
-                  <div class="inspector-field" id="inspector-asset-upload-field" style="display:none;">
-                    <label>Selecionar Imagem</label>
-                    <input type="file" id="map-asset-file-input" accept="image/*">
-                  </div>
-                  <div class="inspector-field">
-                    <label for="inspector-node-tags">Tags (separadas por vírgula)</label>
-                    <input type="text" id="inspector-node-tags">
-                  </div>
-                </div>
-                <div class="application-map-inspector-footer">
-                  <button id="btn-map-delete-node" class="btn-delete-node">Excluir Item</button>
-                </div>
-              </div>
+
             </div>
           </section>
 
@@ -417,21 +383,90 @@
           <div class="milestones-header">
             <h3>Git</h3>
           </div>
-          <div id="git-panel-content" class="git-panel-content" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
+          <div id="git-panel-content" class="git-panel-content">
             <!-- Rendered dynamically -->
           </div>
         </div>
 
         <div id="workspace-map-chat-panel" class="next-steps-box hidden workspace-tool-region workspace-tool-region--map-chat" data-workspace-runtime-tool="map-chat">
           <div class="map-chat-container">
-            <div id="map-chat-log" class="map-chat-log">
-              <!-- Dynamically populated -->
+            <div id="map-chat-list-view" class="map-chat-list-view">
+              <div class="map-chat-list-header">
+                <h3>Histórico do Mapa</h3>
+                <button id="btn-map-chat-new" class="map-chat-new-btn" title="Nova Conversa">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                  </svg>
+                  <span>Nova</span>
+                </button>
+              </div>
+              <div id="map-conversations-list" class="map-conversations-list">
+                <!-- Dynamically populated -->
+              </div>
             </div>
-            <div class="map-chat-composer">
-              <textarea id="map-chat-textarea" placeholder="Pergunte algo sobre o mapa..."></textarea>
-              <button id="btn-map-chat-send" class="map-chat-send-btn" title="Enviar prompt">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+
+            <div id="map-chat-session-view" class="map-chat-session-view hidden">
+              <div id="map-chat-session-header" class="map-chat-session-header">
+                <button id="btn-map-chat-back" class="map-chat-back-btn" title="Voltar para a lista">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="19" y1="12" x2="5" y2="12"></line>
+                    <polyline points="12 19 5 12 12 5"></polyline>
+                  </svg>
+                </button>
+                <span id="map-chat-session-title" class="map-chat-session-title">Análise</span>
+              </div>
+              <div id="map-chat-log" class="map-chat-log">
+                <!-- Dynamically populated -->
+              </div>
+              <div class="map-chat-composer">
+                <textarea id="map-chat-textarea" placeholder="Pergunte algo sobre o mapa..."></textarea>
+                <button id="btn-map-chat-send" class="map-chat-send-btn" title="Enviar prompt">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Map Inspector Panel in Right Sidebar -->
+        <div id="workspace-map-inspector-panel" class="next-steps-box hidden workspace-tool-region workspace-tool-region--map-inspector" data-workspace-runtime-tool="map-inspector">
+          <div class="application-map-inspector-sidebar-container">
+            <div class="application-map-inspector-header">
+              <strong>Detalhes do Item</strong>
+              <button id="btn-map-inspector-close" class="map-inspector-close-btn" title="Fechar detalhes">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
               </button>
+            </div>
+            <div class="application-map-inspector-body">
+              <div class="inspector-field">
+                <label for="inspector-node-title">Título</label>
+                <input type="text" id="inspector-node-title">
+              </div>
+              <div class="inspector-field">
+                <label for="inspector-node-desc">Descrição</label>
+                <textarea id="inspector-node-desc"></textarea>
+              </div>
+              <div class="inspector-field">
+                <label for="inspector-node-content">Conteúdo (Markdown / Link)</label>
+                <div class="markdown-editor-toolbar">
+                  <button type="button" data-format="h1" title="Título 1">H1</button>
+                  <button type="button" data-format="h2" title="Título 2">H2</button>
+                  <button type="button" data-format="bold" title="Negrito">B</button>
+                  <button type="button" data-format="italic" title="Itálico">I</button>
+                  <button type="button" data-format="list" title="Lista">Lista</button>
+                  <button type="button" data-format="code" title="Código">Código</button>
+                  <button type="button" data-format="link" title="Link">Link</button>
+                </div>
+                <textarea id="inspector-node-content"></textarea>
+              </div>
+              <div class="inspector-field" id="inspector-asset-upload-field" style="display:none;">
+                <label>Selecionar Imagem</label>
+                <input type="file" id="map-asset-file-input" accept="image/*">
+              </div>
             </div>
           </div>
         </div>
@@ -443,6 +478,12 @@
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
               </svg>
               <span>Arquivos</span>
+            </button>
+            <button id="btn-map-ai" class="project-panel-btn" type="button" title="Perguntar à IA sobre o mapa" aria-label="IA do Mapa">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+              </svg>
+              <span>IA do Mapa</span>
             </button>
             <button id="btn-project-git" class="project-panel-btn" type="button" title="Git" aria-label="Git">
               <svg viewBox="0 0 24 24" aria-hidden="true">
