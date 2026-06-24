@@ -48,3 +48,65 @@ Com o **Sistema de Mapa da Aplicação** totalmente concluído e testado, o proj
    * Execução de testes de fumaça exaustivos cobrindo todo o ciclo: Intake -> Planejamento no Mapa da Aplicação -> Geração -> Renderização -> Validação Visual.
 4. **Lançamento da Versão MVP:**
    * Publicação da primeira versão utilizável do ecossistema integrado.
+
+---
+
+## 3. Avanços Incrementais Registrados Nesta Rodada
+
+Nesta rodada o trabalho deixou de ser apenas visual e passou a corrigir o comportamento estrutural do fluxo de renderização e do painel de milestones.
+
+### 3.1 Render como refinador incremental do plano
+
+O chat de render passou a tratar o plano como um artefato incremental, e não como um recomeço silencioso a cada solicitação do usuário.
+
+O que foi ajustado:
+- a reconstrução do `renderDraft` agora preserva as milestones anteriores antes de mesclar a nova resposta da IA;
+- pedidos do tipo `adicione um ponto 8`, `inclua uma etapa de release` ou `coloque uma nova milestone` passam a gerar uma etapa adicional real, em vez de parecer rollback;
+- as sugestões refinadas recebem indicadores numéricos de mudança para deixar claro onde o refinador atuou;
+- as referências aos markdowns do mapa continuam sendo reaproveitadas para contextualizar cada etapa do plano.
+
+Arquivos centrais:
+- `renderer/application_map.js`
+- `renderer/styles/application-map.css`
+
+### 3.2 Separação mais limpa entre Render, Git e Terminal
+
+Havia vazamento visual do painel de render quando o usuário alternava rapidamente entre Git e Terminal. Isso foi endurecido em três camadas:
+
+- os controladores de Git e Terminal passaram a remover explicitamente `mode-map-render` ao abrir suas telas;
+- o CSS do painel de render ganhou trava adicional para esconder o painel em `mode-git` e `mode-terminal`;
+- o seletor global de modos passou a reconhecer render como estado próprio, reduzindo estados residuais durante a navegação lateral.
+
+Arquivos centrais:
+- `renderer/project_tools.js`
+- `renderer/project_terminal.js`
+- `renderer/app_events.js`
+- `renderer/app.js`
+- `renderer/styles/application-map.css`
+
+### 3.3 Milestones com espaçamento e alinhamento visual mais estáveis
+
+O painel de milestones recebeu ajustes de layout para corrigir o desalinhamento entre números e cards, além de dar mais respiro entre as etapas.
+
+O que mudou:
+- a timeline recebeu mais padding lateral e superior;
+- a linha vertical foi reposicionada para acompanhar melhor os números;
+- os cards ganharam altura mínima e header com alinhamento mais consistente;
+- o espaçamento entre milestones foi aumentado para reduzir a sensação de aperto visual.
+
+Arquivo central:
+- `renderer/styles/milestones.css`
+
+### 3.4 Validações executadas
+
+A rodada foi validada com checks locais de sintaxe e testes de regressão do fluxo:
+
+- `node --check renderer/application_map.js`
+- `node --check renderer/project_tools.js`
+- `node --check renderer/project_terminal.js`
+- `node --check renderer/app.js`
+- `node --check renderer/app_events.js`
+- `node tests/renderer-map-tool-switching.test.js`
+- `node tests/milestone-service.test.js`
+
+Resultado: todos passaram.

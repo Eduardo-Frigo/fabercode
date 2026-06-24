@@ -58,6 +58,12 @@
         ? window.FaberProjectSidebar.normalizeProjectItems(rawProjects)
         : [];
     }
+
+    function filterVisibleProjectConversations(conversations) {
+      return Array.isArray(conversations)
+        ? conversations.filter((conversation) => conversation && conversation.source !== 'map_chat' && conversation.source !== 'map_render')
+        : [];
+    }
     
     function clearSelectionState() {
       stopJobPolling();
@@ -136,7 +142,7 @@
       }
 
       state.projectConversations[projectId] = Array.isArray(result.conversations)
-        ? result.conversations
+        ? filterVisibleProjectConversations(result.conversations)
         : state.projectConversations[projectId] || [];
       renderProjects();
       return result;
@@ -237,11 +243,17 @@
       try {
         const persistedConversations = await api.listConversations();
         if (persistedConversations && persistedConversations.ok) {
-          state.projectConversations =
+          const rawConversationsByProject =
             persistedConversations.conversationsByProject &&
             typeof persistedConversations.conversationsByProject === 'object'
               ? persistedConversations.conversationsByProject
               : {};
+          state.projectConversations = Object.fromEntries(
+            Object.entries(rawConversationsByProject).map(([projectId, conversations]) => [
+              projectId,
+              filterVisibleProjectConversations(conversations),
+            ])
+          );
         } else {
           state.projectConversations = {};
         }

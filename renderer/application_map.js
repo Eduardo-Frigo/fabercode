@@ -180,26 +180,6 @@
         });
       }
 
-      // Render
-      const btnRender = container.querySelector('#btn-map-render');
-      if (btnRender) {
-        btnRender.addEventListener('click', async () => {
-          const confirmed = await window.faberConfirm("Você revisou o projeto antes de renderizar o mapa da aplicação?");
-          if (!confirmed) return;
-
-          const rootPath = getSelectedProjectInfo()?.rootPath;
-          if (!rootPath) return;
-          btnRender.disabled = true;
-          const result = await api.renderApplicationMap({ rootPath });
-          btnRender.disabled = false;
-          if (result.ok) {
-            appendMessage('assistant', `Mapa da aplicação renderizado com sucesso na pasta \`docs/application-map/\`.`, { persistToConversation: false });
-          } else {
-            alert('Falha ao renderizar mapa: ' + (result.message || 'Erro desconhecido.'));
-          }
-        });
-      }
-
       // Ask IA
       const mapChatPanel = document.getElementById('workspace-map-chat-panel');
       const mapChatLog = document.getElementById('map-chat-log');
@@ -207,15 +187,48 @@
       const btnMapChatSend = document.getElementById('btn-map-chat-send');
       const rightPanelTitle = document.getElementById('right-panel-title');
       const btnMapChatNew = document.getElementById('btn-map-chat-new');
+      const btnMapRenderLauncher = document.getElementById('btn-map-render-launcher');
 
       const mapChatListView = document.getElementById('map-chat-list-view');
       const mapConversationsList = document.getElementById('map-conversations-list');
       const mapChatSessionView = document.getElementById('map-chat-session-view');
       const btnMapChatBack = document.getElementById('btn-map-chat-back');
       const mapChatSessionTitle = document.getElementById('map-chat-session-title');
+      const renderPanel = document.getElementById('workspace-map-render-panel');
+      const renderListView = document.getElementById('map-render-list-view');
+      const renderSessionView = document.getElementById('map-render-session-view');
+      const renderListBack = document.getElementById('btn-map-render-list-back');
+      const renderPanelOpen = document.getElementById('btn-map-render-open');
+      const renderSessionBack = document.getElementById('btn-map-render-back');
+      const renderPanelSave = document.getElementById('btn-map-render-save');
+      const renderPanelStatus = document.getElementById('map-render-status');
+      const renderPanelCopy = document.getElementById('map-render-copy');
+      const renderConversationsList = document.getElementById('map-render-conversations-list');
+      const renderSessionTitle = document.getElementById('map-render-session-title');
+      const renderSessionStatus = document.getElementById('map-render-session-status');
+      const renderSessionLog = document.getElementById('map-render-session-log');
+      const renderSessionPlanCard = document.getElementById('map-render-plan-card');
+      const renderSessionChecklist = document.getElementById('map-render-session-checklist');
+      const renderSessionMilestones = document.getElementById('map-render-session-milestones');
+      const renderAttachmentList = document.getElementById('map-render-attachment-list');
+      const renderSessionTextarea = document.getElementById('map-render-textarea');
+      const renderAttachButton = document.getElementById('btn-map-render-attach');
+      const renderSessionSend = document.getElementById('btn-map-render-send');
+      const renderFileInput = document.getElementById('map-render-file-input');
 
       let mapChatMessages = [];
       let activeConversationId = null;
+      let renderDraft = null;
+      let renderMessages = [];
+      let renderConversations = [];
+      let activeRenderConversationId = null;
+      let renderAttachments = [];
+      let renderWorkflowBusy = false;
+      let renderPlanUpdating = false;
+      let renderPanelView = 'list';
+
+      setRenderPanelView('list');
+      renderRenderPanel();
 
       function appendMapChatMessage(role, text) {
         if (!mapChatLog) return;
@@ -242,12 +255,1549 @@
         if (thinking) thinking.remove();
       }
 
+      function escapeHtml(text) {
+        return String(text || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function normalizeRenderText(value) {
+        return String(value || '').toLowerCase();
+      }
+
+      function getRenderMapMarkdown(mapData = {}) {
+        let markdown = '# MAPA DA APLICAÇÃO PARA RENDERIZAÇÃO\n\n';
+        const rootNodes = Array.isArray(mapData.nodes) ? mapData.nodes.filter((node) => node && !node.parentId) : [];
+        const childNodes = Array.isArray(mapData.nodes) ? mapData.nodes.filter((node) => node && node.parentId) : [];
+        const groups = rootNodes.filter((node) => node.type === 'group' || node.type === 'folder');
+
+        if (groups.length) {
+          markdown += '## GRUPOS / MÓDULOS\n';
+          groups.forEach((group) => {
+            markdown += `### ${group.title || 'Grupo sem título'}\n`;
+            if (group.description) markdown += `${group.description}\n`;
+            const children = childNodes.filter((child) => child.parentId === group.id);
+            if (children.length) {
+              markdown += '\n';
+              children.forEach((child) => {
+                markdown += `- [${child.type || 'node'}] ${child.title || 'Sem título'}`;
+                if (child.description) markdown += ` — ${child.description}`;
+                if (child.content) markdown += ` (Conteúdo: ${child.content})`;
+                markdown += '\n';
+              });
+            }
+            markdown += '\n';
+          });
+        }
+
+        const standalone = rootNodes.filter((node) => node.type !== 'group' && node.type !== 'folder');
+        if (standalone.length) {
+          markdown += '## ITENS AVULSOS\n';
+          standalone.forEach((node) => {
+            markdown += `- [${node.type || 'node'}] ${node.title || 'Sem título'}`;
+            if (node.description) markdown += ` — ${node.description}`;
+            if (node.content) markdown += ` (Conteúdo: ${node.content})`;
+            markdown += '\n';
+          });
+        }
+
+        if (Array.isArray(mapData.edges) && mapData.edges.length) {
+          markdown += '\n## CONEXÕES\n';
+          mapData.edges.forEach((edge) => {
+            const source = Array.isArray(mapData.nodes) ? mapData.nodes.find((node) => node.id === edge.sourceNodeId) : null;
+            const target = Array.isArray(mapData.nodes) ? mapData.nodes.find((node) => node.id === edge.targetNodeId) : null;
+            if (source && target) {
+              markdown += `- ${source.title || source.id} -> ${target.title || target.id}`;
+              if (edge.type) markdown += ` (${edge.type})`;
+              markdown += '\n';
+            }
+          });
+        }
+
+        return markdown.trim();
+      }
+
+      async function collectRenderDocumentation(rootPath, mapData = {}) {
+        const rootNodes = Array.isArray(mapData.nodes) ? mapData.nodes.filter((node) => node && !node.parentId) : [];
+        const groups = rootNodes.filter((node) => node.type === 'group' || node.type === 'folder');
+        const docPaths = [
+          'docs/application-map/README.md',
+          'docs/application-map/decisions.md',
+          'docs/application-map/open-questions.md',
+        ];
+
+        groups.forEach((group) => {
+          const fileBasename = String(group.title || 'grupo')
+            .toLowerCase()
+            .replace(/[^a-z0-9_-]/g, '-') + '.md';
+          docPaths.push(`docs/application-map/${fileBasename}`);
+        });
+
+        const uniquePaths = [...new Set(docPaths)];
+        const documents = [];
+        let combinedText = '';
+
+        for (const relativePath of uniquePaths) {
+          try {
+            const result = await api.readProjectFile({ projectInfo: { rootPath }, relativePath });
+            if (result && result.ok && result.content) {
+              documents.push({ path: relativePath, content: result.content });
+              combinedText += `\n\n### ${relativePath}\n${result.content}`;
+            }
+          } catch (error) {
+            console.warn('[collectRenderDocumentation] Failed to read ' + relativePath, error);
+          }
+        }
+
+        return { documents, combinedText: combinedText.trim() };
+      }
+
+      function evaluateRenderReadiness(mapData = {}, combinedText = '') {
+        const rootNodes = Array.isArray(mapData.nodes) ? mapData.nodes.filter((node) => node && !node.parentId) : [];
+        const groups = rootNodes.filter((node) => node.type === 'group' || node.type === 'folder');
+        const text = normalizeRenderText(combinedText);
+        const nodeText = normalizeRenderText(
+          Array.isArray(mapData.nodes)
+            ? mapData.nodes
+                .map((node) => [node.title, node.description, node.content].filter(Boolean).join(' '))
+                .join(' \n ')
+            : ''
+        );
+        const fullText = `${text}\n${nodeText}`;
+
+        const checks = [
+          {
+            id: 'docs',
+            label: 'Markdowns do mapa',
+            ok: groups.length > 0 || /docs\/application-map/.test(fullText),
+            hint: 'O mapa precisa ter markdowns estruturados para guiar a renderização.',
+          },
+          {
+            id: 'tradeoffs',
+            label: 'Tradeoffs do projeto',
+            ok: /tradeoff|trade-offs|frontend|back-end|backend|stack/.test(fullText),
+            hint: 'Documente decisões e compensações de frontend, backend e stack.',
+          },
+          {
+            id: 'security',
+            label: 'Plano de segurança',
+            ok: /seguran|security|rate limit|rate limiting|mfa|csp|hsts|auth|oauth|jwt/.test(fullText),
+            hint: 'A base do projeto precisa registrar proteção, autenticação e hardening.',
+          },
+          {
+            id: 'branding',
+            label: 'Marca e design system',
+            ok: /brand|marca|logo|logotipo|cores|color|design system|tipografia|tipographic|ui kit/.test(fullText),
+            hint: 'O render precisa saber a linguagem visual e os assets da marca.',
+          },
+        ];
+
+        const missing = checks.filter((item) => !item.ok);
+        return {
+          checks,
+          missing,
+          ready: missing.length === 0,
+        };
+      }
+
+      function buildRenderMilestones(mapData = {}, readiness = {}, combinedText = '', documents = []) {
+        const nodes = Array.isArray(mapData.nodes) ? mapData.nodes.filter(Boolean) : [];
+        const milestones = [];
+        let index = 1;
+
+        const normalize = (value) => String(value || '').toLowerCase();
+        const unique = (items) => Array.from(new Set((items || []).filter(Boolean)));
+        const collectNodeTitles = (keywords, limit = 6) => unique(
+          nodes
+            .filter((node) => {
+              const haystack = normalize([node.title, node.description, node.content, node.type].join(' '));
+              return keywords.some((keyword) => haystack.includes(keyword));
+            })
+            .map((node) => node.title || node.description || node.type || 'Item sem título')
+        ).slice(0, limit);
+
+        const documentList = Array.isArray(documents) ? documents.filter((doc) => doc && doc.path) : [];
+        const pickReferences = (keywords = [], fallbackPaths = []) => {
+          const matches = documentList
+            .filter((doc) => {
+              const haystack = normalize(`${doc.path}\n${doc.content || ''}`);
+              return keywords.some((keyword) => haystack.includes(keyword));
+            })
+            .map((doc) => doc.path);
+          const paths = unique([...matches, ...fallbackPaths]).slice(0, 4);
+          return paths.map((path) => ({ path }));
+        };
+
+        const makeTasks = (fallbackTasks) => fallbackTasks.map((title, taskIndex) => ({
+            id: `render-task-${index}-${taskIndex + 1}`,
+            title,
+            status: 'pending',
+          }));
+
+        const addMilestone = (title, summary, tasks = [], extra = {}) => {
+          const milestone = {
+            id: `render-milestone-${index}`,
+            number: index,
+            title,
+            summary,
+            status: 'planned',
+            tasks: tasks.length
+              ? tasks
+              : [
+                  {
+                    id: `render-task-${index}-1`,
+                    title: 'Validar o escopo e os markdowns do mapa',
+                    status: 'pending',
+                  },
+                ],
+            acceptanceCriteria: extra.acceptanceCriteria || '',
+            validationCommands: extra.validationCommands || '',
+            commits: [],
+            notes: extra.notes || '',
+            references: Array.isArray(extra.references) ? extra.references : [],
+            changeMarker: extra.changeMarker || null,
+          };
+          milestones.push(milestone);
+          index += 1;
+          return milestone;
+        };
+
+        const addTasksToMilestone = (milestone, taskTitles = [], markerLabel = '') => {
+          if (!milestone || !Array.isArray(taskTitles) || !taskTitles.length) return;
+          const currentTasks = Array.isArray(milestone.tasks) ? milestone.tasks : [];
+          const additions = taskTitles.map((title, taskIndex) => ({
+            id: `${milestone.id}-refined-${currentTasks.length + taskIndex + 1}`,
+            title,
+            status: 'pending',
+            isRefinement: true,
+          }));
+          milestone.tasks = [...currentTasks, ...additions];
+          milestone.changeMarker = {
+            type: 'task',
+            count: additions.length,
+            label: markerLabel || `+${additions.length}`,
+          };
+        };
+
+        if (readiness.missing && readiness.missing.length) {
+          addMilestone(
+            'Fechar lacunas da documentação',
+            'Completar os markdowns e as decisões que ainda impedem a execução segura do projeto.',
+            readiness.missing.map((item, idx) => ({
+              id: `render-task-${index}-${idx + 1}`,
+              title: item.hint || item.label || 'Lacuna não descrita',
+              status: 'pending',
+            })),
+            {
+              notes: 'Etapa derivada diretamente da validação de completude do mapa.',
+              references: pickReferences(
+                ['open question', 'open-question', 'decis', 'tradeoff', 'seguran', 'security', 'design', 'marca'],
+                documentList.map((doc) => doc.path)
+              ),
+            }
+          );
+        }
+
+        const foundationNodes = collectNodeTitles(['backend', 'database', 'banco', 'stack', 'setup', 'env', 'seguran']);
+        addMilestone(
+          'Preparar fundação técnica do projeto',
+          'Converter as decisões do mapa em base técnica executável antes de implementar telas e regras finais.',
+          makeTasks(
+            [
+              'Validar a stack definida no mapa e registrar a decisão final de frontend, backend e banco.',
+              'Organizar estrutura de pastas, scripts de desenvolvimento, build, lint e testes.',
+              'Criar arquivos de ambiente de exemplo sem segredos reais e documentar como configurar o projeto.',
+              'Transformar os itens técnicos do mapa em contratos iniciais para as próximas etapas.',
+            ]
+          ),
+          {
+            notes: foundationNodes.length
+              ? `Itens do mapa considerados: ${foundationNodes.join(', ')}.`
+              : 'Primeiro bloco do passo a passo: base técnica antes de implementar funcionalidades.',
+            references: pickReferences(['readme', 'backend', 'banco', 'database', 'stack', 'decis', 'seguran', 'security']),
+          }
+        );
+
+        const designNodes = collectNodeTitles(['design', 'layout', 'frontend', 'brand', 'marca', 'logo', 'tipografia']);
+        addMilestone(
+          'Estruturar interface, marca e design system',
+          'Transformar a linguagem visual documentada no mapa em tokens, componentes e navegação reutilizável.',
+          makeTasks(
+            [
+              'Consolidar cores, tipografia, espaçamentos, estados de interação e assets de marca.',
+              'Criar shell visual da aplicação com layout base e componentes compartilhados.',
+              'Mapear telas, navegação e hierarquia visual antes de implementar o fluxo principal.',
+              'Registrar lacunas de design que ainda precisem de imagens, logotipo ou documentação adicional.',
+            ]
+          ),
+          {
+            notes: designNodes.length
+              ? `Itens do mapa considerados: ${designNodes.join(', ')}.`
+              : 'Esta etapa consolida o visual antes da implementação de telas finais.',
+            references: pickReferences(['design', 'frontend', 'layout', 'marca', 'brand', 'logo', 'cor', 'cores', 'tipografia']),
+          }
+        );
+
+        const productNodes = collectNodeTitles(['funções', 'funcao', 'feature', 'frontend', 'login', 'dashboard', 'fluxo', 'tarefa']);
+        const productMilestone = addMilestone(
+          'Implementar fluxo principal da aplicação',
+          'Construir o caminho ponta a ponta que permite ao usuário usar o produto conforme o mapa definiu.',
+          makeTasks(
+            [
+              'Implementar telas e rotas principais descritas no mapa da aplicação.',
+              'Criar formulários, estados de carregamento, validações de interface e feedbacks de erro/sucesso.',
+              'Conectar cada ação do usuário ao contrato de dados esperado, mesmo que inicialmente com mocks.',
+              'Validar o fluxo completo pelo ponto de vista do usuário antes de avançar para hardening.',
+            ]
+          ),
+          {
+            notes: productNodes.length
+              ? `Itens do mapa considerados: ${productNodes.join(', ')}.`
+              : 'A partir daqui o plano passa a representar execução real do produto.',
+            references: pickReferences(['frontend', 'funções', 'funcoes', 'feature', 'login', 'dashboard', 'fluxo', 'tarefa']),
+          }
+        );
+
+        const backendNodes = collectNodeTitles(['backend', 'api', 'database', 'banco', 'auth', 'jwt', 'sequelize', 'dados']);
+        const backendMilestone = addMilestone(
+          'Construir backend, dados e integrações',
+          'Implementar persistência, API, autenticação e regras de negócio alinhadas com o fluxo principal.',
+          makeTasks(
+            [
+              'Modelar entidades, relações, migrations e seeds necessários para o domínio desenhado.',
+              'Criar contratos REST/API e padronizar payloads, erros e status codes.',
+              'Implementar autenticação, autorização e regras de negócio do backend.',
+              'Integrar frontend, backend e banco em cenários reais do produto.',
+            ]
+          ),
+          {
+            notes: backendNodes.length
+              ? `Itens do mapa considerados: ${backendNodes.join(', ')}.`
+              : (combinedText ? 'A etapa usa o contexto consolidado dos markdowns e decisões do mapa.' : ''),
+            references: pickReferences(['backend', 'api', 'database', 'banco', 'dados', 'sequelize', 'auth', 'jwt']),
+          }
+        );
+
+        const securityNodes = collectNodeTitles(['seguran', 'security', 'teste', 'test', 'deploy', 'log', 'observ']);
+        const asksForPentest = /pentest|pen test|penetration test|teste de intrus|intrus[aã]o|vulnerability|vulnerabil|owasp/.test(normalize(combinedText));
+        const asksForErrorLogging = /log de erro|logs de erro|error log|erro em produ|observabil|monitoramento|alerta|telemetria|sentry/.test(normalize(combinedText));
+        const asksForRealUserValidation = /usu[aá]rios reais|usuario real|user test|teste com usu[aá]rio|valida[cç][aã]o com usu[aá]rios|pesquisa com usu[aá]rios|beta test|teste beta/.test(normalize(combinedText));
+        if (asksForPentest) {
+          addMilestone(
+            'Executar pentest e correção de vulnerabilidades',
+            'Validar a aplicação com testes ofensivos controlados e transformar achados em correções antes da entrega.',
+            makeTasks(
+              [
+                'Definir escopo do pentest, ambientes permitidos e critérios de parada.',
+                'Executar checklist OWASP para autenticação, autorização, sessão, inputs e exposição de dados.',
+                'Registrar vulnerabilidades com severidade, evidência, impacto e recomendação.',
+                'Corrigir achados críticos/altos e repetir os testes de validação antes de liberar a entrega.',
+              ]
+            ),
+            {
+              validationCommands: 'npm test\nnpm run build',
+              notes: 'Etapa adicionada a partir do refinamento solicitado no chat de render.',
+              references: pickReferences(['seguran', 'security', 'auth', 'jwt', 'owasp', 'pentest', 'teste']),
+              changeMarker: { type: 'milestone', count: 1, label: '+ etapa' },
+            }
+          );
+        }
+
+        if (asksForErrorLogging) {
+          addTasksToMilestone(
+            backendMilestone,
+            [
+              'Definir padrão de logs para erros de frontend, backend, autenticação e integrações.',
+              'Registrar contexto mínimo de falhas sem expor dados sensíveis ou segredos.',
+              'Criar fluxo de captura, consulta e triagem de erros recorrentes.',
+            ],
+            '+3'
+          );
+        }
+
+        if (asksForRealUserValidation) {
+          addMilestone(
+            'Validar fluxo com usuários reais',
+            'Testar as etapas principais com pessoas reais antes de encerrar o plano de execução.',
+            makeTasks(
+              [
+                'Definir cenários de uso e critérios de sucesso para a validação com usuários.',
+                'Preparar ambiente, dados de teste e roteiro de observação para cada etapa crítica.',
+                'Coletar dúvidas, bloqueios, erros e pontos de fricção durante a execução real.',
+                'Transformar os achados em ajustes priorizados no plano antes da entrega final.',
+              ]
+            ),
+            {
+              notes: 'Etapa adicionada a partir do refinamento solicitado no chat de render.',
+              references: pickReferences(['readme', 'frontend', 'design', 'funções', 'funcoes', 'teste', 'valida']),
+              changeMarker: { type: 'milestone', count: 1, label: '+ etapa' },
+            }
+          );
+        }
+
+        const deliveryMilestone = addMilestone(
+          'Aplicar segurança, testes e entrega',
+          'Fechar o projeto com proteção, validação funcional, revisão técnica e preparação de entrega.',
+          makeTasks(
+            [
+              'Aplicar checklist de segurança definido no mapa: autenticação, autorização, headers, secrets e rate limiting.',
+              'Criar testes unitários, integração e fluxo ponta a ponta para as jornadas principais.',
+              'Revisar logs, tratamento de erros, observabilidade e comportamento em produção.',
+              'Preparar validação final, documentação de execução e critérios de aceite da entrega.',
+            ]
+          ),
+          {
+            validationCommands: 'npm test\nnpm run build',
+            notes: securityNodes.length
+              ? `Itens do mapa considerados: ${securityNodes.join(', ')}.`
+              : 'Último passo da sequência, com validação antes de concluir a entrega.',
+            references: pickReferences(['seguran', 'security', 'teste', 'test', 'deploy', 'log', 'observability', 'hsts', 'csp']),
+          }
+        );
+
+        if (asksForErrorLogging) {
+          addTasksToMilestone(
+            deliveryMilestone,
+            [
+              'Adicionar alertas ou checklist de revisão para erros críticos antes da entrega.',
+              'Validar se os logs apoiam análise de incidentes sem expor dados sensíveis.',
+            ],
+            '+2'
+          );
+        }
+
+        if (asksForRealUserValidation && productMilestone && !productMilestone.changeMarker) {
+          addTasksToMilestone(
+            productMilestone,
+            [
+              'Preparar o fluxo principal para teste guiado com usuários reais antes do fechamento.',
+            ],
+            '+1'
+          );
+        }
+
+        return milestones;
+      }
+
+      function normalizeRenderKey(value) {
+        return String(value || '')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, ' ')
+          .trim();
+      }
+
+      function renumberRenderMilestones(milestones = []) {
+        return milestones.map((milestone, milestoneIndex) => {
+          const number = milestoneIndex + 1;
+          return {
+            ...milestone,
+            id: milestone.id || `render-milestone-${number}`,
+            number,
+            tasks: Array.isArray(milestone.tasks)
+              ? milestone.tasks.map((task, taskIndex) => ({
+                  ...task,
+                  id: task.id || `render-task-${number}-${taskIndex + 1}`,
+                }))
+              : [],
+          };
+        });
+      }
+
+      function mergeRenderTasks(previousTasks = [], nextTasks = []) {
+        const seen = new Set();
+        const merged = [];
+        [...previousTasks, ...nextTasks].forEach((task) => {
+          if (!task) return;
+          const key = normalizeRenderKey(task.title || task.id);
+          if (!key || seen.has(key)) return;
+          seen.add(key);
+          merged.push({ ...task });
+        });
+        return merged;
+      }
+
+      function buildRequestedReleaseMilestone(requestText = '', nextNumber = 1, pickReferences = () => []) {
+        const normalized = normalizeRenderKey(requestText);
+        const asksExplicitNewStep = /\b(adicionar|adicione|incluir|inclua|criar|crie|colocar|coloque)\b/.test(normalized) && /\b(etapa|passo|ponto|milestone|8|oitavo)\b/.test(normalized);
+        const asksRelease = /liberacao|lancamento|release|publicacao|go live|deploy final|entrega final|lancar|publicar/.test(normalized);
+        if (!asksExplicitNewStep || !asksRelease) return null;
+
+        return {
+          id: `render-milestone-manual-release-${Date.now()}`,
+          number: nextNumber,
+          title: 'Preparar liberação e lançamento do projeto',
+          summary: 'Organizar a etapa final de release para publicar, comunicar e acompanhar a aplicação após a validação.',
+          status: 'planned',
+          tasks: [
+            {
+              id: `render-task-release-${nextNumber}-1`,
+              title: 'Consolidar checklist de release com build, testes, variáveis de ambiente e documentação de execução.',
+              status: 'pending',
+              isRefinement: true,
+            },
+            {
+              id: `render-task-release-${nextNumber}-2`,
+              title: 'Definir plano de lançamento, responsáveis, janela de publicação e estratégia de rollback.',
+              status: 'pending',
+              isRefinement: true,
+            },
+            {
+              id: `render-task-release-${nextNumber}-3`,
+              title: 'Acompanhar primeiros usuários reais, logs de erro e métricas críticas após a liberação.',
+              status: 'pending',
+              isRefinement: true,
+            },
+          ],
+          acceptanceCriteria: '',
+          validationCommands: 'npm test\nnpm run build',
+          commits: [],
+          notes: 'Etapa adicionada a partir do refinamento solicitado no chat de render.',
+          references: pickReferences(['readme', 'deploy', 'release', 'teste', 'seguran', 'security', 'log']),
+          changeMarker: { type: 'milestone', count: 1, label: '+1' },
+        };
+      }
+
+      function mergeRenderMilestonePlan(previousMilestones = [], nextMilestones = [], requestText = '', referencePicker = () => []) {
+        const merged = [];
+        const byTitle = new Map();
+
+        const addOrMerge = (milestone) => {
+          if (!milestone) return;
+          const key = normalizeRenderKey(milestone.title || milestone.id);
+          if (!key) return;
+          const existing = byTitle.get(key);
+          if (!existing) {
+            const copy = {
+              ...milestone,
+              tasks: Array.isArray(milestone.tasks) ? milestone.tasks.map((task) => ({ ...task })) : [],
+              references: Array.isArray(milestone.references) ? milestone.references.map((reference) => ({ ...reference })) : [],
+            };
+            byTitle.set(key, copy);
+            merged.push(copy);
+            return;
+          }
+
+          existing.summary = milestone.summary || existing.summary;
+          existing.status = milestone.status || existing.status;
+          existing.acceptanceCriteria = milestone.acceptanceCriteria || existing.acceptanceCriteria || '';
+          existing.validationCommands = milestone.validationCommands || existing.validationCommands || '';
+          existing.notes = milestone.notes || existing.notes || '';
+          existing.tasks = mergeRenderTasks(existing.tasks, milestone.tasks);
+          existing.references = Array.isArray(milestone.references) && milestone.references.length
+            ? milestone.references
+            : existing.references;
+          existing.changeMarker = milestone.changeMarker || existing.changeMarker || null;
+        };
+
+        previousMilestones.forEach(addOrMerge);
+        nextMilestones.forEach(addOrMerge);
+
+        const requestedRelease = buildRequestedReleaseMilestone(requestText, merged.length + 1, referencePicker);
+        if (requestedRelease && !merged.some((milestone) => /libera|lan[cç]amento|release/i.test(milestone.title || ''))) {
+          merged.push(requestedRelease);
+        }
+
+        return renumberRenderMilestones(merged);
+      }
+
+      function formatRenderConversationDate(value) {
+        const date = value ? new Date(value) : new Date();
+        if (Number.isNaN(date.getTime())) return '';
+        return date.toLocaleString('pt-BR', {
+          day: '2-digit',
+          month: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+      }
+
+      function getRenderConversationById(conversationId) {
+        return Array.isArray(renderConversations)
+          ? renderConversations.find((conversation) => conversation && conversation.id === conversationId) || null
+          : null;
+      }
+
+      function getActiveRenderConversation() {
+        return activeRenderConversationId ? getRenderConversationById(activeRenderConversationId) : null;
+      }
+
+      function toRenderMessage(message = {}) {
+        return {
+          role: message.role === 'user' ? 'user' : 'assistant',
+          content: message.content || message.text || '',
+          attachments: Array.isArray(message.attachments)
+            ? message.attachments.map((attachment) => ({ ...attachment }))
+            : [],
+        };
+      }
+
+      function normalizeRenderConversation(conversation = {}) {
+        return {
+          id: conversation.id,
+          title: conversation.title || 'Render do Mapa',
+          createdAt: conversation.createdAt || new Date().toISOString(),
+          updatedAt: conversation.updatedAt || conversation.createdAt || new Date().toISOString(),
+          source: 'map_render',
+          messages: Array.isArray(conversation.messages)
+            ? conversation.messages.map(toRenderMessage)
+            : [],
+          draft: conversation.draft ? { ...conversation.draft } : null,
+          lastAttachments: Array.isArray(conversation.lastAttachments)
+            ? conversation.lastAttachments.map((attachment) => ({ ...attachment }))
+            : [],
+        };
+      }
+
+      function syncRenderConversationState() {
+        const activeConversation = getActiveRenderConversation();
+        if (!activeConversation) return;
+
+        activeConversation.messages = Array.isArray(renderMessages)
+          ? renderMessages.map((message) => ({ ...message }))
+          : [];
+        activeConversation.draft = renderDraft ? { ...renderDraft } : null;
+        activeConversation.updatedAt = new Date().toISOString();
+        if (renderAttachments && renderAttachments.length) {
+          activeConversation.lastAttachments = renderAttachments.map((attachment) => ({ ...attachment }));
+        } else {
+          activeConversation.lastAttachments = [];
+        }
+      }
+
+      async function createRenderConversation(title = '') {
+        const now = new Date();
+        const defaultTitle = `Render do Mapa (${now.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} ${now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })})`;
+        let conversation = {
+          id: `render-local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          title: String(title || defaultTitle).trim().slice(0, 80) || defaultTitle,
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+          source: 'map_render',
+          messages: [],
+          draft: null,
+          lastAttachments: [],
+        };
+
+        const projectId = getSelectedProjectId();
+        if (projectId && api && typeof api.addConversation === 'function') {
+          try {
+            const result = await api.addConversation({
+              projectId,
+              title: conversation.title,
+              meta: { source: 'map_render' },
+            });
+            if (result && result.ok && result.conversation) {
+              conversation = normalizeRenderConversation(result.conversation);
+            }
+          } catch (error) {
+            console.error('[createRenderConversation] failed to persist render conversation:', error);
+          }
+        }
+
+        renderConversations = [conversation, ...renderConversations.filter((item) => item && item.id !== conversation.id)];
+        activeRenderConversationId = conversation.id;
+        return conversation;
+      }
+
+      async function persistRenderConversationMessage(role, text) {
+        const projectId = getSelectedProjectId();
+        const conversationId = activeRenderConversationId;
+        const normalizedText = String(text || '').trim();
+        if (!projectId || !conversationId || !normalizedText || !api || typeof api.addConversationMessage !== 'function') {
+          return null;
+        }
+
+        try {
+          return await api.addConversationMessage({
+            projectId,
+            conversationId,
+            role,
+            text: normalizedText,
+            meta: { mode: 'map_render', source: 'map_render' },
+          });
+        } catch (error) {
+          console.error('[persistRenderConversationMessage] failed:', error);
+          return null;
+        }
+      }
+
+      async function loadRenderConversationMessages(conversationId) {
+        if (!conversationId || !api || typeof api.listConversationMessages !== 'function') return [];
+
+        try {
+          const result = await api.listConversationMessages({ conversationId, limit: 120 });
+          if (result && result.ok && Array.isArray(result.messages)) {
+            return result.messages.map(toRenderMessage).filter((message) => message.content);
+          }
+        } catch (error) {
+          console.error('[loadRenderConversationMessages] failed:', error);
+        }
+        return [];
+      }
+
+      async function loadRenderConversationsFromStore(projectId = getSelectedProjectId()) {
+        if (!projectId || !api || typeof api.listConversations !== 'function') return;
+
+        try {
+          const result = await api.listConversations();
+          if (!result || !result.ok) return;
+
+          const conversations = result.conversationsByProject && result.conversationsByProject[projectId]
+            ? result.conversationsByProject[projectId]
+            : [];
+          renderConversations = conversations
+            .filter((conversation) => conversation && conversation.source === 'map_render')
+            .map(normalizeRenderConversation);
+
+          if (activeRenderConversationId && !getRenderConversationById(activeRenderConversationId)) {
+            activeRenderConversationId = null;
+          }
+          renderRenderConversationsList();
+        } catch (error) {
+          console.error('[loadRenderConversationsFromStore] failed:', error);
+        }
+      }
+
+      function setActiveRenderConversation(conversationId) {
+        activeRenderConversationId = conversationId || null;
+        const activeConversation = getActiveRenderConversation();
+        if (activeConversation) {
+          renderMessages = Array.isArray(activeConversation.messages) ? activeConversation.messages.map((message) => ({ ...message })) : [];
+          renderDraft = activeConversation.draft ? { ...activeConversation.draft } : null;
+          renderAttachments = [];
+        } else {
+          renderMessages = [];
+          renderDraft = null;
+          renderAttachments = [];
+        }
+      }
+
+      function renderRenderConversationsList() {
+        if (!renderConversationsList) return;
+        renderConversationsList.innerHTML = '';
+
+        const conversations = Array.isArray(renderConversations) ? renderConversations : [];
+        if (!conversations.length) {
+          return;
+        }
+
+        conversations.forEach((conversation) => {
+          const row = document.createElement('button');
+          row.type = 'button';
+          row.className = `map-render-conversation-row${conversation.id === activeRenderConversationId ? ' active' : ''}`;
+
+          const main = document.createElement('div');
+          main.className = 'map-render-conversation-row__main';
+
+          const title = document.createElement('strong');
+          title.className = 'map-render-conversation-row__title';
+          title.textContent = conversation.title || 'Render do Mapa';
+
+          const subtitle = document.createElement('span');
+          subtitle.className = 'map-render-conversation-row__subtitle';
+          const draft = conversation.draft || {};
+          if (draft.ready) {
+            subtitle.textContent = `Pronta para milestones • ${formatRenderConversationDate(conversation.updatedAt || conversation.createdAt)}`;
+          } else if (Array.isArray(draft.missing) && draft.missing.length) {
+            subtitle.textContent = `Faltam lacunas • ${formatRenderConversationDate(conversation.updatedAt || conversation.createdAt)}`;
+          } else if (Array.isArray(conversation.messages) && conversation.messages.length) {
+            subtitle.textContent = `Chat em andamento • ${formatRenderConversationDate(conversation.updatedAt || conversation.createdAt)}`;
+          } else if (conversation.source === 'map_render') {
+            subtitle.textContent = `Renderização salva • ${formatRenderConversationDate(conversation.updatedAt || conversation.createdAt)}`;
+          } else {
+            subtitle.textContent = `Nova renderização • ${formatRenderConversationDate(conversation.createdAt)}`;
+          }
+
+          main.append(title, subtitle);
+
+          const arrow = document.createElement('span');
+          arrow.className = 'map-render-conversation-row__arrow';
+          arrow.textContent = '→';
+
+          row.append(main, arrow);
+          row.addEventListener('click', async () => {
+            await openRenderConversation(conversation.id);
+          });
+          renderConversationsList.appendChild(row);
+        });
+      }
+
+      function renderRenderAttachmentList() {
+        if (!renderAttachmentList) return;
+        renderAttachmentList.innerHTML = '';
+        const attachments = Array.isArray(renderAttachments) ? renderAttachments : [];
+        renderAttachmentList.classList.toggle('hidden', !attachments.length);
+        if (!attachments.length) return;
+
+        attachments.forEach((file, index) => {
+          const chip = document.createElement('div');
+          chip.className = 'attachment-chip attachment-chip--render';
+
+          if (file && file.path && (String(file.type || '').startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(file.path))) {
+            const img = document.createElement('img');
+            img.className = 'attachment-thumb';
+            img.src = `file://${file.path}`;
+            chip.appendChild(img);
+          }
+
+          const name = document.createElement('span');
+          name.className = 'attachment-name';
+          name.textContent = file.name || `Anexo ${index + 1}`;
+
+          const remove = document.createElement('button');
+          remove.type = 'button';
+          remove.className = 'attachment-remove';
+          remove.title = 'Remover anexo';
+          remove.textContent = 'x';
+          remove.addEventListener('click', () => {
+            renderAttachments = renderAttachments.filter((_, attachmentIndex) => attachmentIndex !== index);
+            renderRenderAttachmentList();
+            syncRenderConversationState();
+          });
+
+          chip.append(name, remove);
+          renderAttachmentList.appendChild(chip);
+        });
+      }
+
+      async function openRenderConversation(conversationId) {
+        const conversation = getRenderConversationById(conversationId);
+        if (!conversation) return;
+
+        activeRenderConversationId = conversation.id;
+        if (!Array.isArray(conversation.messages) || !conversation.messages.length) {
+          conversation.messages = await loadRenderConversationMessages(conversation.id);
+        }
+        renderMessages = Array.isArray(conversation.messages)
+          ? conversation.messages.map((message) => ({ ...message }))
+          : [];
+        renderDraft = conversation.draft ? { ...conversation.draft } : null;
+        renderAttachments = [];
+        setRenderPanelView('session');
+
+        const projectInfo = getSelectedProjectInfo();
+        const rootPath = projectInfo?.rootPath || '';
+        if (rootPath) {
+          const mapData = canvasController ? canvasController.getMapData() : { nodes: [], edges: [] };
+          const documentation = await collectRenderDocumentation(rootPath, mapData);
+          const lastAssistant = [...renderMessages].reverse().find((message) => message && message.role === 'assistant');
+          if (!renderDraft) {
+            rebuildRenderDraft(mapData, documentation, lastAssistant ? lastAssistant.content : '');
+          } else {
+            const rebuilt = rebuildRenderDraft(mapData, documentation, lastAssistant ? lastAssistant.content : '');
+            renderDraft = {
+              ...renderDraft,
+              ...rebuilt,
+              milestones: Array.isArray(renderDraft.milestones) && renderDraft.milestones.length
+                ? renderDraft.milestones
+                : rebuilt.milestones,
+            };
+            syncRenderConversationState();
+          }
+        }
+
+        renderRenderPanel();
+      }
+
+      function setRenderPanelView(nextView) {
+        renderPanelView = nextView === 'session' ? 'session' : 'list';
+        renderRenderPanel();
+      }
+
+      function renderRenderMessage(role, text, attachments = []) {
+        if (!renderSessionLog) return;
+        const bubble = document.createElement('div');
+        bubble.className = `msg ${role}`;
+        bubble.textContent = text;
+        if (Array.isArray(attachments) && attachments.length) {
+          const attachmentRow = document.createElement('div');
+          attachmentRow.className = 'msg-attachments msg-attachments--render';
+          attachments.forEach((attachment) => {
+            if (attachment && attachment.path && (String(attachment.type || '').startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(attachment.path))) {
+              const img = document.createElement('img');
+              img.src = `file://${attachment.path}`;
+              attachmentRow.appendChild(img);
+            } else {
+              const pill = document.createElement('span');
+              pill.className = 'attachment-chip attachment-chip--render';
+              pill.textContent = attachment && attachment.name ? attachment.name : 'Anexo';
+              attachmentRow.appendChild(pill);
+            }
+          });
+          bubble.appendChild(attachmentRow);
+        }
+        renderSessionLog.appendChild(bubble);
+        renderSessionLog.scrollTop = renderSessionLog.scrollHeight;
+      }
+
+      function showRenderThinking() {
+        if (!renderSessionLog) return null;
+        const thinking = document.createElement('div');
+        thinking.className = 'msg assistant thinking';
+        thinking.id = 'render-thinking';
+        thinking.innerHTML = '<span>Analisando ajuste no plano...</span>';
+        renderSessionLog.appendChild(thinking);
+        renderSessionLog.scrollTop = renderSessionLog.scrollHeight;
+        return thinking;
+      }
+
+      function hideRenderThinking() {
+        const thinking = document.getElementById('render-thinking');
+        if (thinking) thinking.remove();
+      }
+
+      function setRenderPlanUpdating(isUpdating) {
+        renderPlanUpdating = Boolean(isUpdating);
+        if (renderSessionPlanCard) {
+          renderSessionPlanCard.classList.toggle('is-updating', renderPlanUpdating);
+          renderSessionPlanCard.setAttribute('aria-busy', renderPlanUpdating ? 'true' : 'false');
+        }
+      }
+
+      function showRenderStatusTicker() {
+        if (!renderSessionLog) return null;
+        const ticker = document.createElement('div');
+        ticker.className = 'map-chat-status-ticker map-render-status-ticker';
+        ticker.id = 'render-status-ticker';
+        ticker.innerHTML = `
+          <div class="ticker-step" id="render-step-export-md"><span class="status-dot"></span> <span>Exportando markdowns...</span></div>
+          <div class="ticker-step" id="render-step-send-images"><span class="status-dot"></span> <span>Enviando imagens...</span></div>
+          <div class="ticker-step" id="render-step-analyze-info"><span class="status-dot"></span> <span>Analisando informações...</span></div>
+          <div class="ticker-step" id="render-step-contextualized"><span class="status-dot"></span> <span>Chat contextualizado!</span></div>
+        `;
+        renderSessionLog.appendChild(ticker);
+        renderSessionLog.scrollTop = renderSessionLog.scrollHeight;
+        return {
+          ticker,
+          exportStep: document.getElementById('render-step-export-md'),
+          sendStep: document.getElementById('render-step-send-images'),
+          analyzeStep: document.getElementById('render-step-analyze-info'),
+          contextualizedStep: document.getElementById('render-step-contextualized'),
+        };
+      }
+
+      function renderPlanPreview() {
+        if (renderSessionChecklist) {
+          renderSessionChecklist.innerHTML = '';
+          renderSessionChecklist.classList.add('hidden');
+        }
+
+        if (renderSessionMilestones) {
+          renderSessionMilestones.innerHTML = '';
+          const milestones = renderDraft && Array.isArray(renderDraft.milestones) ? renderDraft.milestones : [];
+          if (!milestones.length) {
+            const empty = document.createElement('div');
+            empty.className = 'map-render-empty-plan';
+            empty.textContent = 'O plano ainda não foi consolidado em milestones.';
+            renderSessionMilestones.appendChild(empty);
+            return;
+          }
+
+          milestones.forEach((milestone) => {
+            const card = document.createElement('article');
+            card.className = 'map-render-milestone-card';
+            if (milestone.changeMarker) {
+              card.classList.add('has-refinement');
+            }
+
+            const header = document.createElement('header');
+            header.className = 'map-render-milestone-card__header';
+            const title = document.createElement('strong');
+            title.textContent = `${String(milestone.number || '')}. ${milestone.title || 'Milestone'}`;
+            header.appendChild(title);
+
+            if (milestone.changeMarker) {
+              const marker = document.createElement('span');
+              marker.className = `map-render-change-marker map-render-change-marker--${milestone.changeMarker.type || 'task'}`;
+              marker.textContent = milestone.changeMarker.label || `+${milestone.changeMarker.count || 1}`;
+              marker.title = milestone.changeMarker.type === 'milestone'
+                ? 'Nova etapa inserida pelo refinamento'
+                : 'Novas tarefas inseridas nesta etapa pelo refinamento';
+              header.appendChild(marker);
+            }
+
+            const summary = document.createElement('p');
+            summary.textContent = milestone.summary || '';
+
+            const tasks = document.createElement('ul');
+            tasks.className = 'map-render-milestone-card__tasks';
+            (Array.isArray(milestone.tasks) ? milestone.tasks : []).forEach((task) => {
+              const item = document.createElement('li');
+              if (task && task.isRefinement) {
+                item.className = 'is-refinement';
+              }
+              item.textContent = task.title || 'Tarefa sem título';
+              tasks.appendChild(item);
+            });
+
+            card.appendChild(header);
+            card.appendChild(summary);
+            card.appendChild(tasks);
+
+            const references = Array.isArray(milestone.references) ? milestone.references : [];
+            if (references.length) {
+              const refs = document.createElement('div');
+              refs.className = 'map-render-milestone-card__refs';
+              const refTitle = document.createElement('span');
+              refTitle.textContent = 'Markdowns de referência';
+              const refList = document.createElement('ul');
+              references.forEach((reference) => {
+                const refItem = document.createElement('li');
+                refItem.textContent = reference && reference.path ? reference.path : String(reference || '');
+                refList.appendChild(refItem);
+              });
+              refs.append(refTitle, refList);
+              card.appendChild(refs);
+            }
+            renderSessionMilestones.appendChild(card);
+          });
+        }
+      }
+
+      function renderRenderPanel() {
+        if (!renderPanel) return;
+
+        const isSessionView = renderPanelView === 'session';
+        if (renderListView) {
+          renderListView.classList.toggle('hidden', isSessionView);
+        }
+        if (renderSessionView) {
+          renderSessionView.classList.toggle('hidden', !isSessionView);
+        }
+        if (renderPanelCopy) {
+          renderPanelCopy.classList.toggle('hidden', isSessionView);
+        }
+        if (renderPanelOpen) {
+          renderPanelOpen.textContent = 'Renderizar o Mapa';
+          renderPanelOpen.disabled = renderWorkflowBusy;
+        }
+        if (renderListBack) {
+          renderListBack.disabled = renderWorkflowBusy;
+        }
+        if (renderSessionBack) {
+          renderSessionBack.disabled = renderWorkflowBusy;
+        }
+        if (renderAttachButton) {
+          renderAttachButton.disabled = renderWorkflowBusy;
+        }
+        if (renderPanelSave) {
+          renderPanelSave.classList.toggle(
+            'hidden',
+            !isSessionView || !renderDraft || !renderDraft.ready || !renderDraft.milestones || !renderDraft.milestones.length
+          );
+          renderPanelSave.disabled = renderWorkflowBusy;
+        }
+
+        if (!isSessionView) {
+          if (renderPanelStatus) {
+            const activeConversation = getActiveRenderConversation();
+            if (activeConversation && activeConversation.draft) {
+              renderPanelStatus.textContent = activeConversation.draft.ready
+                ? 'Última renderização pronta. Selecione uma conversa para revisar ou reanalise o mapa.'
+                : 'Última renderização com lacunas. Selecione uma conversa para ajustar o plano.';
+            } else if (Array.isArray(renderConversations) && renderConversations.length) {
+              renderPanelStatus.textContent = 'Selecione uma renderização anterior para revisar o diagnóstico ou crie uma nova análise.';
+            } else {
+              renderPanelStatus.textContent = 'Pronto para iniciar a análise.';
+            }
+          }
+          renderRenderConversationsList();
+          return;
+        }
+
+        if (renderSessionTitle) {
+          const activeConversation = getActiveRenderConversation();
+          renderSessionTitle.textContent = activeConversation && activeConversation.title
+            ? activeConversation.title
+            : (renderDraft && renderDraft.ready
+              ? 'Renderização e validação do plano'
+              : 'Renderização do Mapa');
+        }
+
+        if (renderSessionStatus) {
+          renderSessionStatus.textContent = renderDraft
+            ? (renderDraft.ready
+              ? 'Análise concluída. Você já pode revisar, corrigir pelo chat e salvar em milestones.'
+              : 'Ainda existem lacunas importantes. Use o chat abaixo para completar o contexto.')
+            : 'Pronto para iniciar a análise.';
+        }
+
+        if (renderSessionPlanCard) {
+          renderSessionPlanCard.classList.toggle('hidden', !renderDraft);
+          renderSessionPlanCard.classList.toggle('is-updating', renderPlanUpdating);
+          renderSessionPlanCard.setAttribute('aria-busy', renderPlanUpdating ? 'true' : 'false');
+        }
+
+        if (renderSessionLog) {
+          const hasMessages = Array.isArray(renderMessages) && renderMessages.length > 0;
+          renderSessionLog.innerHTML = '';
+
+          if (!hasMessages && !renderDraft) {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'map-render-session-placeholder';
+            placeholder.innerHTML = `
+              <strong>Análise do render</strong>
+              <p>Aqui aparecerão as etapas de exportação, leitura dos markdowns, validação do contexto e o chat para ajustar o plano.</p>
+            `;
+            renderSessionLog.appendChild(placeholder);
+          }
+
+          if (!hasMessages && renderDraft && renderDraft.assistantSummary) {
+            renderMessages = [{ role: 'assistant', content: renderDraft.assistantSummary }];
+            syncRenderConversationState();
+          }
+
+          (renderMessages || []).forEach((message) => {
+            renderRenderMessage(message.role, message.content, message.attachments || []);
+          });
+        }
+
+        renderPlanPreview();
+        renderRenderAttachmentList();
+      }
+
+      function setMapSidePanelMode(mode) {
+        const modeClasses = ['mode-map-chat', 'mode-map-render', 'mode-git', 'mode-terminal', 'mode-milestones', 'mode-cortex'];
+        modeClasses.forEach((cls) => document.body.classList.remove(cls));
+        if (mode) {
+          document.body.classList.add(mode);
+        }
+
+        const rightPanelTitle = document.getElementById('right-panel-title');
+        if (rightPanelTitle) {
+          if (mode === 'mode-map-chat') {
+            rightPanelTitle.textContent = 'Perguntar à IA';
+          } else if (mode === 'mode-map-render') {
+            rightPanelTitle.textContent = 'Renderização do Mapa';
+          } else if (mode === 'mode-git') {
+            rightPanelTitle.textContent = 'Git';
+          } else if (mode === 'mode-terminal') {
+            rightPanelTitle.textContent = 'Terminal';
+          } else if (mode === 'mode-milestones') {
+            rightPanelTitle.textContent = 'Milestones';
+          } else if (mode === 'mode-cortex') {
+            rightPanelTitle.textContent = 'Regras e contexto';
+          } else {
+            rightPanelTitle.textContent = 'Arquivos';
+          }
+        }
+
+        const btnAi = document.getElementById('btn-map-ai');
+        if (btnAi) {
+          btnAi.classList.toggle('active', mode === 'mode-map-chat');
+        }
+
+        const filesBtn = document.getElementById('btn-project-files');
+        if (filesBtn) {
+          filesBtn.classList.toggle('active', mode === null);
+        }
+      }
+
+      function buildRenderPrompt(mapData, documentation, userRequest = '', conversationMessages = []) {
+        const renderMarkdown = getRenderMapMarkdown(mapData);
+        const recentConversation = Array.isArray(conversationMessages) && conversationMessages.length
+          ? conversationMessages.slice(-8).map((message) => `- ${message.role}: ${message.text || message.content || ''}`).join('\n')
+          : '(sem histórico adicional)';
+
+        return [
+          'Você é o Assistente de Renderização do Mapa da Aplicação no Faber Code.',
+          'Sua missão é analisar o mapa exportado e os markdowns do projeto para transformar a idealização em um plano de desenvolvimento executável.',
+          'Não substitua os markdowns e não entregue apenas um resumo. Organize as informações em sequência de implementação, cite os markdowns relevantes por caminho e explique quais decisões sustentam cada etapa.',
+          'O resultado deve ajudar o painel de milestones e o chat de desenvolvimento: cada etapa precisa ter tarefas acionáveis, critérios claros e referências aos documentos do mapa que devem ser consultados.',
+          'Se houver lacunas, diga quais informações bloqueiam ou enfraquecem o plano e como o usuário pode completá-las neste chat de render.',
+          'Responda em linguagem clara e objetiva. Se o usuário estiver corrigindo algo, destaque exatamente o que mudou no plano.',
+          '',
+          'QUADRO DO MAPA EM MARKDOWN:',
+          '```markdown',
+          renderMarkdown,
+          '```',
+          '',
+          'MARKDOWNS ENCONTRADOS:',
+          documentation.combinedText || '(nenhum markdown foi encontrado ainda)',
+          '',
+          'HISTÓRICO CURTO DO CHAT DE RENDER:',
+          recentConversation,
+          '',
+          'PEDIDO ATUAL DO USUÁRIO:',
+          userRequest || '(início da renderização)',
+        ].join('\n');
+      }
+
+      function rebuildRenderDraft(mapData, documentation, assistantSummary, options = {}) {
+        const combinedText = `${documentation.combinedText}\n${assistantSummary}`;
+        const readiness = evaluateRenderReadiness(mapData, combinedText);
+        const generatedMilestones = buildRenderMilestones(
+          mapData,
+          readiness,
+          combinedText,
+          documentation.documents
+        );
+        const pickReferences = (keywords = []) => {
+          const normalizedKeywords = keywords.map(normalizeRenderKey).filter(Boolean);
+          const documents = Array.isArray(documentation.documents) ? documentation.documents : [];
+          return documents
+            .filter((document) => {
+              const searchable = normalizeRenderKey(`${document.path || ''}\n${document.content || ''}`);
+              return normalizedKeywords.some((keyword) => searchable.includes(keyword));
+            })
+            .map((document) => ({ path: document.path }))
+            .slice(0, 4);
+        };
+        const previousMilestones = Array.isArray(options.previousMilestones)
+          ? options.previousMilestones
+          : [];
+        const requestText = options.requestText || '';
+        const milestones = previousMilestones.length || requestText
+          ? mergeRenderMilestonePlan(previousMilestones, generatedMilestones, requestText, pickReferences)
+          : generatedMilestones;
+        renderDraft = {
+          assistantSummary: assistantSummary || 'A IA não retornou uma resposta, então o diagnóstico abaixo foi montado com heurísticas locais e documentação existente.',
+          checks: readiness.checks,
+          missing: readiness.missing,
+          ready: readiness.ready,
+          milestones,
+          documents: documentation.documents,
+          renderMarkdown: getRenderMapMarkdown(mapData),
+        };
+        syncRenderConversationState();
+        renderRenderConversationsList();
+        return renderDraft;
+      }
+
+      async function generateRenderDraft(userRequest = 'Executar a análise inicial do mapa.') {
+        const projectInfo = getSelectedProjectInfo();
+        const rootPath = projectInfo?.rootPath || '';
+        if (!rootPath || renderWorkflowBusy) return;
+
+        renderWorkflowBusy = true;
+        await createRenderConversation();
+        renderMessages = [];
+        renderDraft = null;
+        renderAttachments = [];
+        setRenderPanelView('session');
+        renderRenderPanel();
+
+        if (renderSessionStatus) renderSessionStatus.textContent = 'Exportando o mapa e coletando documentação...';
+        if (renderSessionLog) renderSessionLog.innerHTML = '';
+        if (renderSessionChecklist) renderSessionChecklist.innerHTML = '';
+        if (renderSessionMilestones) renderSessionMilestones.innerHTML = '';
+        if (renderPanelStatus) {
+          renderPanelStatus.textContent = 'Exportando o mapa e coletando documentação...';
+        }
+
+        const renderTicker = showRenderStatusTicker();
+
+        try {
+          const mapData = canvasController ? canvasController.getMapData() : { nodes: [], edges: [] };
+
+          try {
+            await api.renderApplicationMap({ rootPath });
+            if (renderTicker && renderTicker.exportStep) {
+              renderTicker.exportStep.classList.remove('active');
+              renderTicker.exportStep.classList.add('completed');
+            }
+            await new Promise((resolve) => setTimeout(resolve, 180));
+          } catch (error) {
+            console.error('[generateRenderDraft] renderApplicationMap failed:', error);
+          }
+
+          if (renderSessionStatus) renderSessionStatus.textContent = 'Lendo markdowns do mapa e pedindo análise da IA...';
+          if (renderPanelStatus) renderPanelStatus.textContent = 'Lendo markdowns do mapa e pedindo análise da IA...';
+          if (renderTicker && renderTicker.sendStep) {
+            renderTicker.sendStep.classList.add('active');
+          }
+
+          const documentation = await collectRenderDocumentation(rootPath, mapData);
+          if (renderTicker && renderTicker.sendStep) {
+            renderTicker.sendStep.classList.remove('active');
+            renderTicker.sendStep.classList.add('completed');
+          }
+          await new Promise((resolve) => setTimeout(resolve, 180));
+          if (renderTicker && renderTicker.analyzeStep) {
+            renderTicker.analyzeStep.classList.add('active');
+          }
+          const renderPrompt = buildRenderPrompt(mapData, documentation, userRequest, renderMessages);
+
+          let assistantSummary = '';
+          try {
+            const response = await api.sendAssistantMessage({
+              projectInfo,
+              userMessage: renderPrompt,
+              contextHint: 'Você deve atuar de forma consultiva, diagnosticando lacunas do mapa para apoiar o planejamento e a futura geração de milestones.',
+              conversationMessages: Array.isArray(renderMessages)
+                ? renderMessages.map((message) => ({ role: message.role, text: message.content }))
+                : [],
+              attachments: [],
+              isMapChat: true,
+            });
+            if (response && response.ok && response.response) {
+              assistantSummary = response.response;
+            }
+          } catch (error) {
+            console.error('[generateRenderDraft] sendAssistantMessage failed:', error);
+          }
+          if (renderTicker && renderTicker.analyzeStep) {
+            renderTicker.analyzeStep.classList.remove('active');
+            renderTicker.analyzeStep.classList.add('completed');
+          }
+
+          rebuildRenderDraft(mapData, documentation, assistantSummary);
+          await new Promise((resolve) => setTimeout(resolve, 220));
+          if (renderTicker && renderTicker.contextualizedStep) {
+            renderTicker.contextualizedStep.classList.add('active');
+          }
+
+          const missingLabels = Array.isArray(renderDraft.missing)
+            ? renderDraft.missing.map((item) => item.label || item.hint).filter(Boolean)
+            : [];
+          const introMessage = renderDraft.ready
+            ? [
+                'A análise inicial terminou e o plano já está coerente para virar milestones.',
+                'Você pode revisar o resumo abaixo, pedir ajustes pelo chat e depois salvar o plano.'
+              ].join(' ')
+            : [
+                'Ainda encontrei lacunas importantes antes de fechar as milestones.',
+                missingLabels.length ? `Itens pendentes: ${missingLabels.join(', ')}.` : 'Ainda vale revisar os markdowns do projeto.',
+                'Se quiser, eu posso te ajudar aqui no chat de render a completar o que está faltando.'
+              ].join(' ');
+
+          const generatedMessages = [
+            { role: 'assistant', content: assistantSummary || 'A IA não retornou uma resposta, então montei um diagnóstico inicial com base nos markdowns encontrados.' },
+            { role: 'assistant', content: introMessage },
+          ];
+          const nextMessages = Array.isArray(renderMessages) ? renderMessages.slice() : [];
+          nextMessages.push(...generatedMessages);
+          renderMessages = nextMessages;
+          syncRenderConversationState();
+          for (const message of generatedMessages) {
+            await persistRenderConversationMessage(message.role, message.content);
+          }
+
+          if (renderSessionStatus) {
+            renderSessionStatus.textContent = renderDraft.ready
+              ? 'Análise pronta. O plano está pronto para revisão e refinamento no chat.'
+              : 'Há lacunas importantes. O chat de render está aberto para completar as informações.';
+          }
+          if (renderPanelStatus) {
+            renderPanelStatus.textContent = renderDraft.ready
+              ? 'Análise pronta. O plano está pronto para revisão e refinamento no chat.'
+              : 'Há lacunas importantes. O chat de render está aberto para completar as informações.';
+          }
+          if (renderTicker && renderTicker.contextualizedStep) {
+            renderTicker.contextualizedStep.classList.remove('active');
+            renderTicker.contextualizedStep.classList.add('completed');
+          }
+
+          setRenderPanelView('session');
+          renderRenderPanel();
+          if (renderSessionTextarea) {
+            renderSessionTextarea.focus();
+          }
+        } catch (error) {
+          console.error('[generateRenderDraft] failed:', error);
+          renderDraft = {
+            assistantSummary: 'Não foi possível concluir a análise de render neste momento.',
+            checks: [],
+            missing: [],
+            ready: false,
+            milestones: [],
+            documents: [],
+            renderMarkdown: '',
+          };
+          renderMessages = [
+            { role: 'assistant', content: 'Não foi possível concluir a análise de render neste momento.' },
+          ];
+          syncRenderConversationState();
+          await persistRenderConversationMessage('assistant', 'Não foi possível concluir a análise de render neste momento.');
+          if (renderSessionStatus) {
+            renderSessionStatus.textContent = `Falha ao analisar o mapa: ${error.message || String(error)}`;
+          }
+          if (renderPanelStatus) {
+            renderPanelStatus.textContent = `Falha ao analisar o mapa: ${error.message || String(error)}`;
+          }
+          setRenderPanelView('session');
+          renderRenderPanel();
+        } finally {
+          renderWorkflowBusy = false;
+          hideRenderThinking();
+          renderRenderPanel();
+        }
+      }
+
+      async function sendRenderChatMessage(userText) {
+        const messageText = String(userText || '').trim();
+        if (!messageText || renderWorkflowBusy) return;
+
+        const projectInfo = getSelectedProjectInfo();
+        const rootPath = projectInfo?.rootPath || '';
+        if (!rootPath) return;
+
+        renderWorkflowBusy = true;
+
+        if (!getActiveRenderConversation()) {
+          await createRenderConversation();
+        }
+
+        const mapData = canvasController ? canvasController.getMapData() : { nodes: [], edges: [] };
+        const history = Array.isArray(renderMessages) ? renderMessages.slice() : [];
+        const outgoingAttachments = Array.isArray(renderAttachments)
+          ? renderAttachments.map((attachment) => ({
+              path: attachment.path,
+              type: attachment.type,
+              name: attachment.name,
+            }))
+          : [];
+        renderMessages.push({ role: 'user', content: messageText, attachments: outgoingAttachments });
+        renderRenderMessage('user', messageText, outgoingAttachments);
+        const thinking = showRenderThinking();
+        setRenderPlanUpdating(true);
+        if (renderSessionStatus) renderSessionStatus.textContent = 'Analisando o pedido e refinando o plano...';
+        if (renderPanelStatus) renderPanelStatus.textContent = 'Analisando o pedido e refinando o plano...';
+        if (renderSessionSend) renderSessionSend.disabled = true;
+        if (renderSessionTextarea) renderSessionTextarea.disabled = true;
+        if (renderAttachButton) renderAttachButton.disabled = true;
+        await persistRenderConversationMessage('user', messageText);
+        renderAttachments = [];
+        renderRenderAttachmentList();
+        syncRenderConversationState();
+
+        const previousMilestones = renderDraft && Array.isArray(renderDraft.milestones)
+          ? renderDraft.milestones.map((milestone) => ({
+              ...milestone,
+              tasks: Array.isArray(milestone.tasks) ? milestone.tasks.map((task) => ({ ...task })) : [],
+              references: Array.isArray(milestone.references) ? milestone.references.map((reference) => ({ ...reference })) : [],
+            }))
+          : [];
+        let documentation = null;
+        try {
+          documentation = await collectRenderDocumentation(rootPath, mapData);
+          const response = await api.sendAssistantMessage({
+            projectInfo,
+            userMessage: buildRenderPrompt(mapData, documentation, messageText, history),
+            contextHint: 'Você deve refinar o plano de renderização com foco em clareza, cobertura das lacunas e qualidade das milestones.',
+            conversationMessages: history.map((message) => ({ role: message.role, text: message.content })),
+            attachments: outgoingAttachments,
+            isMapChat: true,
+          });
+
+          if (thinking) thinking.remove();
+
+          const assistantText = response && response.ok && response.response
+            ? response.response
+            : 'Não consegui refinar o plano neste momento.';
+          renderMessages.push({ role: 'assistant', content: assistantText });
+          renderRenderMessage('assistant', assistantText);
+          await persistRenderConversationMessage('assistant', assistantText);
+
+          const renderTranscript = renderMessages
+            .map((message) => `${message.role}: ${message.content || ''}`)
+            .join('\n\n');
+          rebuildRenderDraft(mapData, documentation, `${renderTranscript}\n\nPedido atual do usuário: ${messageText}`, {
+            previousMilestones,
+            requestText: messageText,
+          });
+          syncRenderConversationState();
+
+          if (renderSessionStatus) {
+            renderSessionStatus.textContent = renderDraft.ready
+              ? 'Plano refinado. Você pode salvar em milestones quando estiver satisfeito.'
+              : 'Plano refinado, mas ainda existem lacunas para fechar.';
+          }
+          if (renderPanelStatus) {
+            renderPanelStatus.textContent = renderDraft.ready
+              ? 'Plano refinado. Você pode salvar em milestones quando estiver satisfeito.'
+              : 'Plano refinado, mas ainda existem lacunas para fechar.';
+          }
+          renderRenderPanel();
+        } catch (error) {
+          if (thinking) thinking.remove();
+          const fallbackText = documentation
+            ? 'Não consegui obter uma resposta completa da IA agora, mas atualizei o rascunho local do plano com base no seu pedido.'
+            : `Erro ao comunicar com a IA: ${error.message || String(error)}`;
+          renderMessages.push({ role: 'assistant', content: fallbackText });
+          renderRenderMessage('assistant', fallbackText);
+          await persistRenderConversationMessage('assistant', fallbackText);
+          if (documentation) {
+            const renderTranscript = renderMessages
+              .map((message) => `${message.role}: ${message.content || ''}`)
+              .join('\n\n');
+            rebuildRenderDraft(mapData, documentation, `${renderTranscript}\n\nPedido atual do usuário: ${messageText}`, {
+              previousMilestones,
+              requestText: messageText,
+            });
+            syncRenderConversationState();
+          }
+          if (renderSessionStatus) renderSessionStatus.textContent = fallbackText;
+          if (renderPanelStatus) renderPanelStatus.textContent = fallbackText;
+        } finally {
+          hideRenderThinking();
+          setRenderPlanUpdating(false);
+          renderWorkflowBusy = false;
+          if (renderSessionSend) renderSessionSend.disabled = false;
+          if (renderSessionTextarea) renderSessionTextarea.disabled = false;
+          if (renderAttachButton) renderAttachButton.disabled = false;
+          renderRenderPanel();
+        }
+      }
+
+      async function saveRenderMilestones() {
+        const projectInfo = getSelectedProjectInfo();
+        const rootPath = projectInfo?.rootPath || '';
+        if (!rootPath || !renderDraft || !renderDraft.ready || !Array.isArray(renderDraft.milestones) || !renderDraft.milestones.length) {
+          alert('Ainda faltam informações para consolidar as milestones.');
+          return;
+        }
+
+        const confirmed = window.faberConfirm
+          ? await window.faberConfirm('Confirma a criação deste plano de milestones no projeto?')
+          : true;
+        if (!confirmed) return;
+
+        if (renderSessionStatus) renderSessionStatus.textContent = 'Salvando milestones no projeto...';
+        if (renderPanelStatus) renderPanelStatus.textContent = 'Salvando milestones no projeto...';
+
+        try {
+          const milestonesForSave = renderDraft.milestones.map((milestone) => {
+            const { changeMarker, ...cleanMilestone } = milestone || {};
+            return {
+              ...cleanMilestone,
+              tasks: Array.isArray(cleanMilestone.tasks)
+                ? cleanMilestone.tasks.map((task) => {
+                    const { isRefinement, ...cleanTask } = task || {};
+                    return cleanTask;
+                  })
+                : [],
+            };
+          });
+          const saveResult = await api.saveMilestones({ rootPath, milestones: milestonesForSave });
+          if (!saveResult || !saveResult.ok) {
+            throw new Error(saveResult && saveResult.message ? saveResult.message : 'Falha ao salvar milestones.');
+          }
+          await api.renderMilestones({ rootPath });
+          window.dispatchEvent(new CustomEvent('faber:milestones-updated', { detail: { rootPath } }));
+          if (renderSessionStatus) renderSessionStatus.textContent = 'Milestones salvas e documentação atualizada.';
+          if (renderPanelStatus) renderPanelStatus.textContent = 'Milestones salvas e documentação atualizada.';
+          syncRenderConversationState();
+        } catch (error) {
+          console.error('[saveRenderMilestones] failed:', error);
+          if (renderSessionStatus) renderSessionStatus.textContent = `Falha ao salvar milestones: ${error.message || String(error)}`;
+          if (renderPanelStatus) renderPanelStatus.textContent = `Falha ao salvar milestones: ${error.message || String(error)}`;
+          alert(`Falha ao salvar milestones: ${error.message || String(error)}`);
+        }
+      }
+
       async function loadMapConversations() {
         const projectId = getSelectedProjectId();
         if (!projectId) return;
 
         activeConversationId = null;
         mapChatMessages = [];
+        setRenderPanelView('list');
         if (mapChatLog) mapChatLog.innerHTML = '';
         if (mapConversationsList) mapConversationsList.innerHTML = '';
 
@@ -383,7 +1933,9 @@
               emptyMsg.textContent = 'Nenhuma análise anterior encontrada. Clique em "Nova" para iniciar.';
               mapConversationsList.appendChild(emptyMsg);
             }
+
           }
+          await loadRenderConversationsFromStore(projectId);
         } catch (err) {
           console.error('[loadMapConversations] Error:', err);
         }
@@ -856,9 +2408,105 @@
         });
       }
 
+      if (btnMapRenderLauncher) {
+        btnMapRenderLauncher.addEventListener('click', async () => {
+          if (inspector && inspector.classList.contains('open')) {
+            closeInspector();
+          }
+          setMapSidePanelMode('mode-map-render');
+          await loadRenderConversationsFromStore();
+          setRenderPanelView('list');
+          renderRenderPanel();
+        });
+      }
+
+      if (renderPanelOpen) {
+        renderPanelOpen.addEventListener('click', async () => {
+          if (renderWorkflowBusy) return;
+          if (inspector && inspector.classList.contains('open')) {
+            closeInspector();
+          }
+          setMapSidePanelMode('mode-map-render');
+          await generateRenderDraft();
+        });
+      }
+
+      if (renderListBack) {
+        renderListBack.addEventListener('click', async () => {
+          if (renderWorkflowBusy) return;
+          setMapSidePanelMode('mode-map-chat');
+          setRenderPanelView('list');
+          renderRenderPanel();
+          await loadMapConversations();
+        });
+      }
+
+      if (renderSessionBack) {
+        renderSessionBack.addEventListener('click', async () => {
+          if (renderWorkflowBusy) return;
+          await loadRenderConversationsFromStore();
+          setRenderPanelView('list');
+          renderRenderPanel();
+        });
+      }
+
+      if (renderAttachButton && renderFileInput) {
+        renderAttachButton.addEventListener('click', () => {
+          renderFileInput.click();
+        });
+        renderFileInput.addEventListener('change', (event) => {
+          const incoming = Array.from((event && event.target && event.target.files) || []);
+          if (!incoming.length) return;
+          const allowed = incoming.filter((file) => {
+            const lowerName = String(file.name || '').toLowerCase();
+            return (
+              file.type.startsWith('image/') ||
+              lowerName.endsWith('.pdf') ||
+              lowerName.endsWith('.txt') ||
+              lowerName.endsWith('.md') ||
+              lowerName.endsWith('.markdown')
+            );
+          });
+          if (!allowed.length) {
+            event.target.value = '';
+            return;
+          }
+          renderAttachments = [...renderAttachments, ...allowed.map((file) => ({
+            path: file.path,
+            type: file.type,
+            name: file.name,
+          }))];
+          renderRenderAttachmentList();
+          syncRenderConversationState();
+          event.target.value = '';
+        });
+      }
+
+      if (renderSessionSend && renderSessionTextarea) {
+        renderSessionSend.addEventListener('click', () => {
+          const text = renderSessionTextarea.value;
+          renderSessionTextarea.value = '';
+          sendRenderChatMessage(text);
+        });
+
+        renderSessionTextarea.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            renderSessionSend.click();
+          }
+        });
+      }
+
+      if (renderPanelSave) {
+        renderPanelSave.addEventListener('click', async () => {
+          await saveRenderMilestones();
+        });
+      }
+
       const btnAi = document.getElementById('btn-map-ai');
       if (btnAi) {
         btnAi.addEventListener('click', async () => {
+          document.body.classList.remove('mode-map-render');
           document.body.classList.remove('mode-milestones');
           document.body.classList.remove('mode-cortex');
           document.body.classList.remove('mode-git');
@@ -877,11 +2525,9 @@
             terminalController.closePanel();
           }
 
-          const active = document.body.classList.toggle('mode-map-chat');
+          const active = !document.body.classList.contains('mode-map-chat');
+          setMapSidePanelMode(active ? 'mode-map-chat' : null);
           btnAi.classList.toggle('active', active);
-          if (rightPanelTitle) {
-            rightPanelTitle.textContent = active ? 'Perguntar à IA' : 'Arquivos';
-          }
 
           const filesBtn = document.getElementById('btn-project-files');
           if (filesBtn) {
@@ -1005,15 +2651,9 @@
       const chatRegion = document.getElementById('workspace-chat-region');
       const mapRegion = document.getElementById('workspace-map-region');
       const welcomePanel = document.getElementById('welcome-panel');
-      const rightPanelTitle = document.getElementById('right-panel-title');
 
       if (mode === 'chat') {
-        document.body.classList.remove('mode-map-chat');
-        const btnAi = document.getElementById('btn-map-ai');
-        if (btnAi) btnAi.classList.remove('active');
-        if (rightPanelTitle) {
-          rightPanelTitle.textContent = 'Arquivos';
-        }
+        setMapSidePanelMode(null);
         if (tabChat) tabChat.classList.add('active');
         if (tabMap) tabMap.classList.remove('active');
         if (chatRegion) chatRegion.classList.remove('hidden');
@@ -1042,6 +2682,9 @@
     let previousPanelInfo = null;
 
     function getCurrentlyActiveRightSidebarPanel() {
+      if (document.body.classList.contains('mode-map-render')) {
+        return { panel: document.getElementById('workspace-map-render-panel'), title: 'Renderização do Mapa', buttonId: 'btn-map-render-open' };
+      }
       if (document.body.classList.contains('mode-cortex')) {
         return { panel: document.getElementById('cortex-learning-box'), title: 'Regras e contexto', buttonId: 'btn-cortex-mode' };
       }
@@ -1097,7 +2740,7 @@
       inspector.classList.add('open');
 
       // Clear other tool body classes to avoid display conflicts
-      const modeClasses = ['mode-map-chat', 'mode-git', 'mode-terminal', 'mode-milestones', 'mode-cortex'];
+      const modeClasses = ['mode-map-chat', 'mode-map-render', 'mode-git', 'mode-terminal', 'mode-milestones', 'mode-cortex'];
       modeClasses.forEach(cls => {
         document.body.classList.remove(cls);
       });
@@ -1130,6 +2773,8 @@
       if (previousPanelInfo && previousPanelInfo.buttonId) {
         if (previousPanelInfo.buttonId === 'btn-map-ai') {
           document.body.classList.add('mode-map-chat');
+        } else if (previousPanelInfo.buttonId === 'btn-map-render-open') {
+          document.body.classList.add('mode-map-render');
         } else if (previousPanelInfo.buttonId === 'btn-project-git') {
           document.body.classList.add('mode-git');
         } else if (previousPanelInfo.buttonId === 'btn-project-terminal') {
@@ -1164,10 +2809,7 @@
           filesRegion.classList.remove('hidden');
           filesRegion.classList.remove('workspace-runtime-hidden');
         }
-        const rightPanelTitle = document.getElementById('right-panel-title');
-        if (rightPanelTitle) {
-          rightPanelTitle.textContent = 'Arquivos';
-        }
+        setMapSidePanelMode(null);
       }
 
       previousPanelInfo = null;

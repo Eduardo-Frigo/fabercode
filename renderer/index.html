@@ -198,7 +198,6 @@
             <div class="application-map-container">
               <!-- Controls -->
               <div class="application-map-controls">
-                <button id="btn-map-render">Render</button>
                 <div class="zoom-slider-container">
                   <span>Zoom:</span>
                   <input type="range" id="map-zoom-slider" min="0.3" max="2" step="0.05" value="1">
@@ -372,7 +371,6 @@
         <div id="workspace-milestones-panel" class="next-steps-box hidden workspace-tool-region workspace-tool-region--milestones" data-workspace-runtime-tool="milestones">
           <div class="milestones-header">
             <h3>Milestones</h3>
-            <button id="btn-milestones-render" class="btn-milestones-render">Renderizar</button>
           </div>
           <div id="milestones-timeline-content" class="milestones-timeline">
             <!-- Rendered dynamically -->
@@ -404,6 +402,11 @@
               <div id="map-conversations-list" class="map-conversations-list">
                 <!-- Dynamically populated -->
               </div>
+              <div class="map-chat-render-next">
+                <button id="btn-map-render-launcher" class="map-chat-render-next-btn" title="Abrir renderização do mapa" type="button">
+                  <span>Renderizar o Mapa</span>
+                </button>
+              </div>
             </div>
 
             <div id="map-chat-session-view" class="map-chat-session-view hidden">
@@ -424,6 +427,67 @@
                 <button id="btn-map-chat-send" class="map-chat-send-btn" title="Enviar prompt">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="workspace-map-render-panel" class="next-steps-box workspace-tool-region workspace-tool-region--map-render" data-workspace-runtime-tool="render">
+          <div class="map-render-shell">
+            <div id="map-render-list-view" class="map-render-list-view">
+              <div class="map-render-list-header">
+                <button id="btn-map-render-list-back" class="map-render-back-btn" title="Voltar para os chats">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="19" y1="12" x2="5" y2="12"></line>
+                    <polyline points="12 19 5 12 12 5"></polyline>
+                  </svg>
+                </button>
+                <h3>Histórico de Renderizações</h3>
+              </div>
+              <div id="map-render-status" class="map-render-status">Pronto para iniciar uma nova análise.</div>
+              <div id="map-render-conversations-list" class="map-render-conversations-list" aria-live="polite">
+                <!-- Rendered dynamically -->
+              </div>
+              <div class="map-render-create-next">
+                <button id="btn-map-render-open" class="map-render-primary-btn map-render-primary-btn--yellow" type="button">Renderizar o Mapa</button>
+              </div>
+            </div>
+
+            <div id="map-render-session-view" class="map-render-session-view hidden">
+              <div class="map-render-session-header">
+                <button id="btn-map-render-back" class="map-render-back-btn" title="Voltar para o histórico de render">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="19" y1="12" x2="5" y2="12"></line>
+                    <polyline points="12 19 5 12 12 5"></polyline>
+                  </svg>
+                </button>
+                <span id="map-render-session-title" class="map-render-session-title">Renderização do Mapa</span>
+                <button id="btn-map-render-save" class="map-render-secondary-btn hidden" type="button">Salvar em Milestones</button>
+              </div>
+              <div id="map-render-session-status" class="map-render-session-status">Pronto para iniciar a análise.</div>
+              <div id="map-render-session-log" class="map-render-session-log" aria-live="polite">
+                <!-- Rendered dynamically -->
+              </div>
+              <div id="map-render-plan-card" class="map-render-plan-card">
+                <strong>Plano de desenvolvimento</strong>
+                <div id="map-render-session-checklist" class="map-render-session-checklist"></div>
+                <div id="map-render-session-milestones" class="map-render-session-milestones"></div>
+              </div>
+              <div class="map-render-attachments">
+                <div id="map-render-attachment-list" class="attachment-list hidden"></div>
+              </div>
+              <div class="map-chat-composer map-render-composer">
+                <button id="btn-map-render-attach" class="map-render-attach-btn" title="Anexar imagem ou markdown" aria-label="Anexar imagem ou markdown" type="button">
+                  <span>Anexar</span>
+                </button>
+                <textarea id="map-render-textarea" placeholder="Peça ajustes no plano de desenvolvimento..."></textarea>
+                <button id="btn-map-render-send" class="map-chat-send-btn" title="Enviar ajuste">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m22 2-7 20-4-9-9-4Z"></path>
+                    <path d="M22 2 11 13"></path>
+                  </svg>
+                </button>
+                <input id="map-render-file-input" type="file" accept=".md,.markdown,image/*" multiple hidden />
               </div>
             </div>
           </div>
@@ -470,7 +534,7 @@
             </div>
           </div>
         </div>
-      
+
         <div id="workspace-actions-region" class="panel-right-footer workspace-tool-region workspace-tool-region--actions" data-workspace-runtime-tool="automations">
           <div class="project-panel-footer">
             <button id="btn-project-files" class="project-panel-btn active" type="button" title="Arquivos do projeto" aria-label="Arquivos">

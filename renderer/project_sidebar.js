@@ -198,7 +198,7 @@
       convList.className = 'conversation-tree';
 
       const conversations = (Array.isArray(getConversations(projectId)) ? getConversations(projectId) : [])
-        .filter((c) => c && c.source !== 'map_chat');
+        .filter((c) => c && c.source !== 'map_chat' && c.source !== 'map_render');
       if (!conversations.length) {
         const emptyConv = document.createElement('div');
         emptyConv.className = 'conversation-item conversation-empty';

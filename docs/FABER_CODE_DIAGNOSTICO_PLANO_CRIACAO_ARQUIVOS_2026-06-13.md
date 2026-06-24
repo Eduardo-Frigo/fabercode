@@ -2,11 +2,13 @@
 
 Data: 2026-06-13
 
+Atualizacao de status em 2026-06-21: este documento passou a ser historico. A correcao do bloqueio para execucoes agentic sem alteracao material ja foi consolidada no codigo atual, entao o texto abaixo serve como registro do problema original e da estrategia adotada para resolve-lo.
+
 ## Resumo executivo
 
-O problema atual nao parece ser permissao real de escrita no disco. A tool `write_files_batch` do caminho agentic chama `automata.execute_operation_batch`, e o executor Automata consegue criar diretorios e arquivos novos dentro da raiz do projeto.
+O problema original nao parecia ser permissao real de escrita no disco. A tool `write_files_batch` do caminho agentic chama `automata.execute_operation_batch`, e o executor Automata consegue criar diretorios e arquivos novos dentro da raiz do projeto.
 
-O problema principal e de orquestracao e contrato de sucesso:
+O problema principal era de orquestracao e contrato de sucesso:
 
 1. O `agentic_tool_loop` passou a ser preferido para qualquer rota `execute`.
 2. Isso inclui continuacoes de `create_project` / `init_project`, que antes deveriam cair no pipeline de blueprint ou Cortex runtime.
@@ -15,6 +17,8 @@ O problema principal e de orquestracao e contrato de sucesso:
 5. A UI mostra eventos tecnicos crus como `job.agentic_tool_called` / `job.agentic_tool_result`, mas nao mostra claramente quais tools rodaram, quais falharam, nem que o resultado nao alterou arquivos.
 
 O dialogo anexado confirma o cenario: depois de um briefing de criacao complexo, o Faber respondeu com plano, o usuario disse "perfeito pode seguir", o job rodou o caminho agentic, marcou concluido e nenhum arquivo apareceu.
+
+Status atual: esse fluxo foi corrigido no runtime e coberto por teste de regressao. O trecho a seguir fica registrado para auditoria e para explicar por que a validacao por `modifiedFiles` passou a ser obrigatoria.
 
 ## Evidencias no codigo do Faber
 
@@ -27,7 +31,7 @@ Trecho relevante:
 - linhas 556-565: se `routeDecision.decision === 'execute'`, o orchestrator tenta `buildAgenticExecutionPlan` primeiro.
 - linhas 567-574: so cai em `buildPlanWithCortexRuntime` se o plano agentic nao existir.
 
-Impacto:
+Impacto na epoca:
 
 - Um pedido de criacao de projeto (`create_project` / `init_project`) tambem entra no agentic loop.
 - O pipeline antigo de blueprint, que preparava operacoes `write_file` verificaveis, fica bypassado.
@@ -43,7 +47,7 @@ Trecho relevante:
   - `message: finalMessage || 'Concluido.'`
   - `modifiedFiles: [...modifiedFiles]`
 
-Nao existe validacao de obrigatoriedade de artefatos. Para um pedido de criacao, `modifiedFiles: []` deveria ser falha ou estado "aguardando execucao", nunca sucesso.
+Nao existia validacao de obrigatoriedade de artefatos. Para um pedido de criacao, `modifiedFiles: []` deveria ser falha ou estado "aguardando execucao", nunca sucesso.
 
 ### 3. `assistant:execute` marca agentic como concluido sem checar diffs
 
@@ -59,7 +63,7 @@ Trecho relevante:
   - `scanProject` antes/depois mudou
   - comandos reais passaram
 
-Impacto direto nos prints anexados:
+Impacto direto nos prints anexados na epoca:
 
 - o job pode ter tres tentativas de tool;
 - pode terminar `ok`;
@@ -81,11 +85,11 @@ Trecho relevante:
 
 - linhas 419-432: `write_file` cria diretorios se necessario e grava o arquivo.
 
-Conclusao:
+Conclusao historica:
 
 - A capacidade de escrita existe.
-- O bug nao e "o Faber nao pode escrever".
-- O bug e "o Faber aceita uma execucao sem escrita como se tivesse escrito".
+- O bug nao era "o Faber nao pode escrever".
+- O bug era "o Faber aceitava uma execucao sem escrita como se tivesse escrito".
 
 ### 5. O pipeline de blueprint para criacao ainda existe, mas ficou atras do agentic loop
 
@@ -391,4 +395,3 @@ Depois desse plano:
 - Se o modelo alucinar permissao, isso virara falha diagnosticavel, nao sucesso.
 - O painel mostrara causa clara.
 - O UX/UI visual do Faber Code permanece o mesmo; a mudanca e no contrato de runtime, validacao e comunicacao.
-

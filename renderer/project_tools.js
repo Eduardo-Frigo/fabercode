@@ -164,6 +164,7 @@
         document.body.classList.remove('mode-cortex');
         document.body.classList.remove('mode-milestones');
         document.body.classList.remove('mode-map-chat');
+        document.body.classList.remove('mode-map-render');
 
         const cortexBtn = document.getElementById('btn-cortex-mode');
         if (cortexBtn) cortexBtn.classList.remove('active');

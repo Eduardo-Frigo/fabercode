@@ -120,13 +120,28 @@
         state.projectConversations[projectId] = [];
       }
     }
-    
+
+    function isVisibleProjectConversation(conversation) {
+      return Boolean(
+        conversation &&
+        conversation.source !== 'map_chat' &&
+        conversation.source !== 'map_render'
+      );
+    }
+
     function ensureConversationStateForProject(projectId) {
       ensureProjectConversationBucket(projectId);
-      if (!(projectId in state.activeConversationByProject)) {
-        const firstConversation = state.projectConversations[projectId].find((c) => c && c.source !== 'map_chat');
-        state.activeConversationByProject[projectId] = firstConversation ? firstConversation.id : null;
+      const activeConversationId = state.activeConversationByProject[projectId] || null;
+      const activeConversation = Array.isArray(state.projectConversations[projectId])
+        ? state.projectConversations[projectId].find((conversation) => conversation && conversation.id === activeConversationId)
+        : null;
+
+      if (activeConversation && isVisibleProjectConversation(activeConversation)) {
+        return;
       }
+
+      const firstConversation = state.projectConversations[projectId].find(isVisibleProjectConversation);
+      state.activeConversationByProject[projectId] = firstConversation ? firstConversation.id : null;
     }
     
     async function addConversationForProject(projectId, text) {
@@ -141,8 +156,10 @@
           meta: { source: 'user_prompt' },
         });
         if (!result || !result.ok) return null;
-    
-        state.projectConversations[projectId] = Array.isArray(result.conversations) ? result.conversations : [];
+
+        state.projectConversations[projectId] = Array.isArray(result.conversations)
+          ? result.conversations.filter(isVisibleProjectConversation)
+          : [];
         return result.conversation || null;
       } catch {
         // Em caso de falha de persistência, mantemos o fluxo principal de chat sem bloquear o usuário.

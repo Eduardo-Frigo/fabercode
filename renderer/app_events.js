@@ -93,6 +93,7 @@
           }
           document.body.classList.remove('mode-milestones');
           document.body.classList.remove('mode-map-chat');
+          document.body.classList.remove('mode-map-render');
           document.body.classList.remove('mode-terminal');
           document.body.classList.remove('mode-git');
 

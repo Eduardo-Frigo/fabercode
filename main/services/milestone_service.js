@@ -1,88 +1,7 @@
 const defaultFs = require('fs');
 const defaultPath = require('path');
 
-const DEFAULT_MILESTONES = [
-  {
-    id: 'milestone-1',
-    number: 1,
-    title: 'Foundation',
-    summary: 'Definição da stack inicial, estrutura de pastas e dependências básicas.',
-    status: 'ready',
-    tasks: [
-      { id: 'task-1-1', title: 'Configurar repositório Git e estrutura de diretórios', status: 'pending' },
-      { id: 'task-1-2', title: 'Definir e instalar dependências principais do projeto', status: 'pending' },
-      { id: 'task-1-3', title: 'Criar configuração de build e script de desenvolvimento', status: 'pending' }
-    ],
-    acceptanceCriteria: 'Projeto inicia localmente sem erros e possui repositório git inicializado.',
-    validationCommands: 'npm run build\nnpm test',
-    commits: [],
-    notes: ''
-  },
-  {
-    id: 'milestone-2',
-    number: 2,
-    title: 'Frontend Shell',
-    summary: 'Layout base, roteamento inicial e design system.',
-    status: 'planned',
-    tasks: [
-      { id: 'task-2-1', title: 'Implementar folha de estilos global e tokens de design', status: 'pending' },
-      { id: 'task-2-2', title: 'Criar componentes de layout comuns (Header, Sidebar, Footer)', status: 'pending' },
-      { id: 'task-2-3', title: 'Configurar roteador e criar páginas estáticas iniciais', status: 'pending' }
-    ],
-    acceptanceCriteria: 'Interface carrega os estilos globais e permite navegação entre páginas básicas.',
-    validationCommands: 'npm run lint',
-    commits: [],
-    notes: ''
-  },
-  {
-    id: 'milestone-3',
-    number: 3,
-    title: 'Backend Core',
-    summary: 'Configuração do servidor, conexões e lógica de negócios inicial.',
-    status: 'planned',
-    tasks: [
-      { id: 'task-3-1', title: 'Estruturar servidor backend e roteador de API', status: 'pending' },
-      { id: 'task-3-2', title: 'Configurar acesso a banco de dados ou persistência local', status: 'pending' },
-      { id: 'task-3-3', title: 'Criar endpoints de saúde (health check) e esquemas de dados', status: 'pending' }
-    ],
-    acceptanceCriteria: 'Endpoints da API respondem localmente e conexões de persistência estão ativas.',
-    validationCommands: 'npm test',
-    commits: [],
-    notes: ''
-  },
-  {
-    id: 'milestone-4',
-    number: 4,
-    title: 'API Integration',
-    summary: 'Conexão do frontend com o backend e sincronização de dados.',
-    status: 'planned',
-    tasks: [
-      { id: 'task-4-1', title: 'Implementar chamadas de API no frontend usando fetch/axios', status: 'pending' },
-      { id: 'task-4-2', title: 'Adicionar gerenciador de estado ou contextos de dados', status: 'pending' },
-      { id: 'task-4-3', title: 'Exibir dados dinâmicos do backend na UI com loaders e tratamento de erros', status: 'pending' }
-    ],
-    acceptanceCriteria: 'A UI renderiza dados dinâmicos buscados do backend e as alterações salvam corretamente.',
-    validationCommands: '',
-    commits: [],
-    notes: ''
-  },
-  {
-    id: 'milestone-5',
-    number: 5,
-    title: 'Validation and Deploy',
-    summary: 'Ajustes finos, auditorias, testes e publicação do projeto.',
-    status: 'planned',
-    tasks: [
-      { id: 'task-5-1', title: 'Executar testes de ponta a ponta e correção de bugs finais', status: 'pending' },
-      { id: 'task-5-2', title: 'Rodar auditorias de segurança e linter em toda a base', status: 'pending' },
-      { id: 'task-5-3', title: 'Preparar build de produção e scripts de deploy', status: 'pending' }
-    ],
-    acceptanceCriteria: 'Todos os testes passam em produção e a build final é gerada com sucesso.',
-    validationCommands: 'npm run build\nnpm run audit',
-    commits: [],
-    notes: ''
-  }
-];
+const EMPTY_MILESTONES = [];
 
 function createMilestoneService(dependencies = {}) {
   const fs = dependencies.fs || defaultFs;
@@ -100,25 +19,52 @@ function createMilestoneService(dependencies = {}) {
     return path.join(ensureFaberDir(rootPath), 'milestones.json');
   }
 
-  function listMilestones(rootPath) {
+  function readMilestonesFile(rootPath) {
     const filePath = getMilestonesPath(rootPath);
-    if (!fs.existsSync(filePath)) {
-      // Create defaults
-      saveMilestones(rootPath, DEFAULT_MILESTONES);
-      return DEFAULT_MILESTONES;
-    }
+    if (!fs.existsSync(filePath)) return null;
     try {
-      const content = fs.readFileSync(filePath, 'utf8');
-      return JSON.parse(content);
+      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
     } catch (e) {
       console.error('Failed to parse milestones JSON', e);
-      return DEFAULT_MILESTONES;
+      return null;
     }
+  }
+
+  function listMilestones(rootPath) {
+    const rawMilestones = readMilestonesFile(rootPath);
+    if (!rawMilestones || Array.isArray(rawMilestones)) {
+      return EMPTY_MILESTONES;
+    }
+    if (!rawMilestones.renderedAt || !Array.isArray(rawMilestones.milestones)) {
+      return EMPTY_MILESTONES;
+    }
+    return rawMilestones.milestones;
   }
 
   function saveMilestones(rootPath, milestones) {
     const filePath = getMilestonesPath(rootPath);
-    fs.writeFileSync(filePath, JSON.stringify(milestones, null, 2), 'utf8');
+    const currentMilestones = readMilestonesFile(rootPath);
+    if (currentMilestones && !Array.isArray(currentMilestones) && currentMilestones.renderedAt && Array.isArray(currentMilestones.milestones)) {
+      const payload = {
+        ...currentMilestones,
+        updatedAt: new Date().toISOString(),
+        milestones,
+      };
+      fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
+    } else {
+      fs.writeFileSync(filePath, JSON.stringify(milestones, null, 2), 'utf8');
+    }
+    return { ok: true, milestones };
+  }
+
+  function persistRenderedMilestones(rootPath, milestones) {
+    const filePath = getMilestonesPath(rootPath);
+    const payload = {
+      renderedAt: new Date().toISOString(),
+      source: 'application-map-render',
+      milestones,
+    };
+    fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
     return { ok: true, milestones };
   }
 
@@ -167,7 +113,15 @@ function createMilestoneService(dependencies = {}) {
 
   function renderMilestones(rootPath) {
     try {
-      const milestones = listMilestones(rootPath);
+      const rawMilestones = readMilestonesFile(rootPath);
+      const milestones = Array.isArray(rawMilestones)
+        ? rawMilestones
+        : rawMilestones && Array.isArray(rawMilestones.milestones)
+          ? rawMilestones.milestones
+          : EMPTY_MILESTONES;
+      if (!milestones.length) {
+        return { ok: false, message: 'No milestones generated yet.' };
+      }
       const docsDir = path.join(rootPath, 'docs', 'milestones');
       if (!fs.existsSync(docsDir)) {
         fs.mkdirSync(docsDir, { recursive: true });
@@ -192,6 +146,17 @@ function createMilestoneService(dependencies = {}) {
         let content = `# Milestone ${m.number} - ${m.title}\n\n`;
         content += `Status: **${m.status}**\n\n`;
         content += `## Objetivo\n\n${m.summary || ''}\n\n`;
+
+        if (Array.isArray(m.references) && m.references.length) {
+          content += `## Markdowns de Referência do Mapa\n\n`;
+          m.references.forEach((reference) => {
+            const referencePath = reference && reference.path ? reference.path : String(reference || '');
+            if (referencePath) {
+              content += `- \`${referencePath}\`\n`;
+            }
+          });
+          content += `\n`;
+        }
         
         content += `## Tarefas\n\n`;
         if (m.tasks && m.tasks.length) {
@@ -225,6 +190,7 @@ function createMilestoneService(dependencies = {}) {
 
       // Save raw JSON copy
       fs.writeFileSync(path.join(docsDir, 'milestones.json'), JSON.stringify(milestones, null, 2), 'utf8');
+      persistRenderedMilestones(rootPath, milestones);
 
       return { ok: true, docsPath: docsDir };
     } catch (e) {

@@ -1034,6 +1034,7 @@ function setUiMode(mode) {
     if (cortexActive) {
       document.body.classList.remove('mode-milestones');
       document.body.classList.remove('mode-map-chat');
+      document.body.classList.remove('mode-map-render');
       document.body.classList.remove('mode-git');
       document.body.classList.remove('mode-terminal');
       const milestonesBtn = document.getElementById('btn-project-milestones');
@@ -1058,6 +1059,7 @@ function setUiMode(mode) {
         || document.body.classList.contains('mode-terminal')
         || document.body.classList.contains('mode-milestones')
         || document.body.classList.contains('mode-map-chat')
+        || document.body.classList.contains('mode-map-render')
       : false;
     filesBtn.classList.toggle('active', !cortexActive && !otherModeActive);
   }

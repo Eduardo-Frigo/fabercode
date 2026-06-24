@@ -6,7 +6,7 @@ Data: 2026-06-14
 
 Este documento organiza a proxima evolucao do Faber Code em duas frentes:
 
-1. Resolver o ultimo problema tecnico em aberto do executor agentic: o loop ainda pode encerrar sem entregar alteracao material no projeto, ou atingir limite de passos quando ja fez grande parte do trabalho mas nao chama `finish_task`.
+1. Consolidar a evolucao do executor agentic, que agora ja tem bloqueio para execucoes sem alteracao material e cobertura de teste para o caso de `modifiedFiles` vazio.
 2. Redesenhar a dinamica de desenvolvimento da ferramenta para que o Faber Code deixe de ser apenas um IDE com chat e passe a ser um ambiente de construcao de aplicacoes assistidas por IA, guiado por:
    - Mapa da Aplicacao;
    - Renderizacao deterministica do mapa em documentacao local;
@@ -29,25 +29,15 @@ O Faber Code ja tem pilares importantes que devem virar parte do novo fluxo:
 - Runtime local com IPC via `preload.js`.
 - Servicos de projeto, Git, preview, terminal, IA, Cortex e Automata ja separados em modulos.
 
-### 2.2 O problema tecnico que ainda precisa ser fechado
+### 2.2 O problema tecnico que foi fechado e o que isso habilita
 
-O diagnostico anterior dizia que o Faber podia marcar uma execucao como concluida mesmo sem criar ou alterar arquivos. O codigo atual mostra que parte da correcao ja foi iniciada:
+O diagnostico anterior dizia que o Faber podia marcar uma execucao como concluida mesmo sem criar ou alterar arquivos. O codigo atual mostra que essa correcao ja foi consolidada:
 
-- `persona_orchestrator.js` ja tem `shouldPreferCortexRuntimeForRoute(routeDecision)` para impedir que `create_project/init_project` entre direto no `agentic_tool_loop`.
-- `main.js` ja valida `agentic_no_file_changes` depois da execucao agentic, bloqueando sucesso se a acao exigia alteracao material e `modifiedFiles` veio vazio.
-- `tests/agentic-tool-loop-service.test.js` ja contem teste esperando que o proprio servico agentic retorne `ok: false`, `status: blocked` e `errors: ['agentic_no_file_changes']`.
+- `main/services/agentic_tool_loop_service.js` bloqueia o caso `agentic_no_file_changes` quando uma execucao que exige alteracao material termina sem `modifiedFiles`.
+- `tests/agentic-tool-loop-service.test.js` cobre esse comportamento de regressao.
+- `persona_orchestrator.js` isola o `map chat` do fluxo executivo com a flag `isMapChat`, evitando que o planejamento do mapa caia no caminho de criacao/edicao de codigo.
 
-Mas o teste ainda falha hoje. Resultado observado:
-
-```txt
-AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
-
-true !== false
-```
-
-Isso acontece porque `agentic_tool_loop_service.js` ainda retorna `ok: true` quando o modelo para de chamar tools depois do lembrete, mesmo que a acao exija arquivos modificados.
-
-Conclusao: a correcao esta parcialmente aplicada em `main.js`, mas precisa ser consolidada no proprio servico agentic. O contrato deve nascer no runtime, nao apenas no chamador.
+Conclusao: o foco daqui em diante deixa de ser a correcao do bug de sucesso sem artefato e passa a ser a evolucao do produto em torno do mapa, da renderizacao e das milestones.
 
 ## 3. Correcao imediata do problema em aberto
 

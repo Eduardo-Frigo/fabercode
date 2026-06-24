@@ -17,6 +17,11 @@ body.mode-milestones #cortex-learning-box {
   display: none !important;
 }
 
+body.mode-milestones #workspace-map-chat-panel,
+body.mode-milestones #workspace-map-render-panel {
+  display: none !important;
+}
+
 body.mode-milestones #workspace-milestones-panel {
   display: flex !important;
   flex-direction: column;
@@ -24,7 +29,7 @@ body.mode-milestones #workspace-milestones-panel {
 
 .milestones-header {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   align-items: center;
   min-height: 40px;
   border-bottom: 1px solid var(--right-tool-shell-divider);
@@ -33,25 +38,11 @@ body.mode-milestones #workspace-milestones-panel {
 }
 
 .milestones-header h3 {
-  display: none;
-}
-
-.btn-milestones-render {
-  background: rgba(80, 201, 133, 0.1);
-  border: 1px solid rgba(80, 201, 133, 0.3);
-  color: #50c985;
-  border-radius: 10px;
-  min-height: 38px;
-  padding: 0 16px;
-  font-size: 0.78rem;
+  display: block;
+  margin: 0;
+  font-size: 0.95rem;
   font-weight: 700;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.btn-milestones-render:hover {
-  background: #50c985;
-  color: #0b0c10;
+  color: #e8e8e8;
 }
 
 /* Timeline */
@@ -60,32 +51,74 @@ body.mode-milestones #workspace-milestones-panel {
   min-height: 0;
   flex: 1 1 auto;
   overflow: auto;
-  padding-left: 28px;
-  padding-top: 2px;
+  padding-left: 36px;
+  padding-top: 10px;
   padding-right: 4px;
 }
 
 .milestones-timeline::before {
   content: '';
   position: absolute;
-  left: 11px;
-  top: 8px;
-  bottom: 8px;
+  left: 13px;
+  top: 24px;
+  bottom: 24px;
   width: 2px;
   background: rgba(255, 255, 255, 0.08);
 }
 
+.milestone-empty-state {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  padding: 16px 16px 16px 20px;
+  margin-left: 0;
+  max-width: 520px;
+  border-radius: 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.025);
+  color: rgba(232, 232, 232, 0.78);
+}
+
+.milestone-empty-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(80, 201, 133, 0.12);
+  border: 1px solid rgba(80, 201, 133, 0.18);
+  color: #7ae7a8;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.milestone-empty-state strong {
+  display: block;
+  margin-bottom: 0;
+  color: #fff;
+  font-size: 0.92rem;
+}
+
+.milestone-empty-state p {
+  margin: 0;
+  max-width: 420px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
 .milestone-item {
   position: relative;
-  margin-bottom: 24px;
+  margin-bottom: 32px;
 }
 
 .milestone-marker {
   position: absolute;
-  left: -28px;
-  top: 2px;
-  width: 24px;
-  height: 24px;
+  left: -36px;
+  top: 20px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   background: #1a1d26;
   border: 2px solid rgba(255, 255, 255, 0.15);
@@ -96,6 +129,12 @@ body.mode-milestones #workspace-milestones-panel {
   color: rgba(255, 255, 255, 0.5);
   z-index: 2;
   transition: all 0.3s ease;
+}
+
+.milestone-item.selected .milestone-marker {
+  border-color: #50c985;
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(80, 201, 133, 0.24);
 }
 
 /* Markers by Status */
@@ -131,8 +170,9 @@ body.mode-milestones #workspace-milestones-panel {
 .milestone-card {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  padding: 12px;
+  border-radius: 10px;
+  padding: 18px 16px;
+  min-height: 72px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
@@ -147,35 +187,43 @@ body.mode-milestones #workspace-milestones-panel {
   border-color: rgba(80, 201, 133, 0.2);
 }
 
-.milestone-title {
-  margin: 0 0 4px;
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #fff;
+.milestone-card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
+  min-height: 34px;
 }
 
-.milestone-status-badge {
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  padding: 1px 6px;
-  border-radius: 4px;
+.milestone-card-title {
+  margin: 0;
+  font-size: 0.95rem;
   font-weight: 700;
+  color: #fff;
+  line-height: 1.28;
 }
 
-.status-badge-ready { background: rgba(255,255,255,0.08); color: #c5c6c7; }
-.status-badge-active { background: rgba(80, 201, 133, 0.15); color: #50c985; }
-.status-badge-done { background: rgba(46, 204, 113, 0.15); color: #2ecc71; }
-.status-badge-blocked { background: rgba(231, 76, 60, 0.15); color: #e74c3c; }
-.status-badge-planned { background: transparent; border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.4); }
+.milestone-card-toggle {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  color: rgba(255, 255, 255, 0.52);
+}
+
+.milestone-card-toggle svg {
+  width: 16px;
+  height: 16px;
+}
 
 .milestone-summary {
-  font-size: 0.78rem;
-  color: rgba(232, 232, 232, 0.6);
-  line-height: 1.4;
-  margin-bottom: 10px;
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.82rem;
+  color: rgba(232, 232, 232, 0.66);
+  line-height: 1.55;
 }
 
 /* Tasks inside Milestone */
@@ -185,7 +233,7 @@ body.mode-milestones #workspace-milestones-panel {
   gap: 6px;
   border-top: 1px solid rgba(255, 255, 255, 0.05);
   padding-top: 10px;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
 .milestone-task-item {
@@ -206,95 +254,30 @@ body.mode-milestones #workspace-milestones-panel {
   color: rgba(255, 255, 255, 0.35);
 }
 
-/* Detail Box (shown only when milestone is active or clicked) */
-.milestone-details-section {
-  margin-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  padding-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.milestone-references {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding-top: 10px;
+  margin-top: 10px;
 }
 
-.milestone-detail-block {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.milestone-detail-block strong {
-  font-size: 0.72rem;
+.milestone-references > span {
+  color: #7ae7a8;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #50c985;
 }
 
-.milestone-detail-block p {
+.milestone-references ul {
+  display: grid;
+  gap: 4px;
   margin: 0;
-  font-size: 0.76rem;
-  color: rgba(255, 255, 255, 0.75);
-}
-
-.milestone-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.btn-milestone-action {
-  flex: 1;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 4px;
-  color: #fff;
-  padding: 6px;
-  font-size: 0.75rem;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  text-align: center;
-}
-
-.btn-milestone-action:hover {
-  border-color: #50c985;
-  background: rgba(80, 201, 133, 0.05);
-}
-
-.btn-milestone-action.btn-action-primary {
-  background: #50c985;
-  border-color: #50c985;
-  color: #0b0c10;
-  font-weight: 600;
-}
-
-.btn-milestone-action.btn-action-primary:hover {
-  background: #3fa669;
-}
-
-/* Related Git area in milestone details */
-.milestone-git-files {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 6px;
-  padding: 8px;
-  font-family: monospace;
+  padding-left: 16px;
+  color: rgba(232, 232, 232, 0.62);
   font-size: 0.7rem;
-  max-height: 120px;
-  overflow-y: auto;
-}
-
-.git-file-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 2px 4px;
-  border-radius: 3px;
-}
-
-.git-file-row.matched {
-  color: #2ecc71;
-  background: rgba(46, 204, 113, 0.05);
-}
-
-.git-file-row.other {
-  color: #e67e22;
-  background: rgba(230, 126, 34, 0.05);
+  line-height: 1.4;
 }
 
 .project-panel-btn.milestones-btn {
@@ -308,6 +291,7 @@ body.mode-milestones #workspace-milestones-panel {
 }
 
 .project-milestones-count {
+  display: none !important;
   position: absolute;
   top: -7px;
   right: -7px;
