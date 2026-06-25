@@ -169,8 +169,8 @@
       const empty = document.createElement('p');
       empty.className = 'subtext';
       empty.textContent = sourceLength
-        ? 'Nenhum projeto encontrado para essa pesquisa.'
-        : 'Nenhum projeto ainda.';
+        ? window.t ? window.t('noProjectsFound', 'Nenhum projeto encontrado para essa pesquisa.') : 'Nenhum projeto encontrado para essa pesquisa.'
+        : window.t ? window.t('noProjectsYet', 'Nenhum projeto ainda.') : 'Nenhum projeto ainda.';
       target.appendChild(empty);
     }
 

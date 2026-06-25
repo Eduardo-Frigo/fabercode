@@ -26,7 +26,7 @@
 
     function setTitle(mode) {
       if (!elements.title) return;
-      elements.title.textContent = mode === 'archived' ? 'Projetos arquivados' : 'Lixeira de projetos';
+      elements.title.textContent = mode === 'archived' ? (window.t ? window.t('archivedProjects', 'Projetos arquivados') : 'Projetos arquivados') : (window.t ? window.t('trashModalTitle', 'Lixeira de projetos') : 'Lixeira de projetos');
     }
 
     function showEmpty(mode) {
@@ -34,7 +34,7 @@
       const empty = document.createElement('div');
       empty.className = 'project-state-empty';
       empty.textContent = mode === 'archived'
-        ? 'Nenhum projeto arquivado.'
+        ? window.t ? window.t('noArchivedProjects', 'Nenhum projeto arquivado.') : 'Nenhum projeto arquivado.'
         : 'A lixeira está vazia.';
       elements.list.appendChild(empty);
     }
@@ -54,7 +54,7 @@
       const restoreBtn = document.createElement('button');
       restoreBtn.type = 'button';
       restoreBtn.className = 'project-state-restore';
-      restoreBtn.textContent = 'Restaurar';
+      restoreBtn.textContent = window.t ? window.t('restoreBtn', 'Restaurar') : 'Restaurar';
       restoreBtn.addEventListener('click', async () => {
         const result = await api.restoreProject({ id: project.id });
         if (!result || !result.ok) {
@@ -86,7 +86,7 @@
       const deleteBtn = document.createElement('button');
       deleteBtn.type = 'button';
       deleteBtn.className = 'project-state-clear';
-      deleteBtn.textContent = 'Excluir definitivo';
+      deleteBtn.textContent = window.t ? window.t('deleteDefinitiveBtn', 'Excluir definitivo') : 'Excluir definitivo';
       deleteBtn.addEventListener('click', async () => {
         if (!await window.faberConfirm('Excluir definitivamente este projeto da lista?')) return;
         const result = await api.removeProject(project.id);
@@ -108,7 +108,7 @@
       const title = document.createElement('strong');
       title.textContent = String(project.name || 'Projeto');
       const meta = document.createElement('span');
-      const stateLabel = mode === 'archived' ? 'Arquivado em' : 'Excluído em';
+      const stateLabel = mode === 'archived' ? (window.t ? window.t('archivedAt', 'Arquivado em') : 'Arquivado em') : (window.t ? window.t('deletedAt', 'Excluído em') : 'Excluído em');
       meta.textContent = `${stateLabel}: ${formatDate(project)} • ${String(project.rootPath || '')}`;
       info.append(title, meta);
 
@@ -132,7 +132,7 @@
       const clearBtn = document.createElement('button');
       clearBtn.type = 'button';
       clearBtn.className = 'project-state-clear';
-      clearBtn.textContent = 'Esvaziar lixeira';
+      clearBtn.textContent = window.t ? window.t('emptyTrashBtn', 'Esvaziar lixeira') : 'Esvaziar lixeira';
       clearBtn.disabled = rows.length === 0;
       clearBtn.addEventListener('click', async () => {
         if (!rows.length) return;

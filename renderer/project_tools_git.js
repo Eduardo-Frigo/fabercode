@@ -349,7 +349,7 @@
         return;
       }
       const body = openToolSurface('Git', 'Untracked, Modified, Staged, Committed e Deploy.', 'git');
-      renderToolLoading(body, 'Lendo repositório...');
+      renderToolLoading(body, window.t ? window.t('readingRepo', 'Lendo repositório...') : 'Lendo repositório...');
       const projectInfo = getProjectRootOrNotify(body);
       if (!projectInfo) return;
       if (!api.getProjectGitWorktree && !api.getProjectGitStatus) {

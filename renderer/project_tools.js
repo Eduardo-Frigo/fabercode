@@ -226,7 +226,7 @@
       const projectInfo = getSelectedProjectInfo();
       if (projectInfo && projectInfo.rootPath) return projectInfo;
       body.innerHTML = '';
-      const empty = createToolSection('Nenhum projeto selecionado', 'Escolha um projeto para usar esta ferramenta.');
+      const empty = createToolSection(window.t ? window.t('noProjectSelectedError', 'Nenhum projeto selecionado') : 'Nenhum projeto selecionado', window.t ? window.t('chooseProjectForTool', 'Escolha um projeto para usar esta ferramenta.') : 'Escolha um projeto para usar esta ferramenta.');
       body.appendChild(empty);
       return null;
     }
@@ -557,7 +557,7 @@
 
     function renderPreviewToolProgress(body, pct, label) {
       body.innerHTML = '';
-      const section = createToolSection('Executar projeto', 'Acompanhe a preparação da visualização local.');
+      const section = createToolSection(window.t ? window.t('runAppProjectTitle', 'Executar projeto') : 'Executar projeto', window.t ? window.t('runAppProjectDesc', 'Acompanhe a preparação da visualização local.') : 'Acompanhe a preparação da visualização local.');
       const meter = document.createElement('div');
       meter.className = 'right-tool-run-meter';
       if (Number(pct) >= 100) meter.classList.add('is-complete');
@@ -575,7 +575,7 @@
         await runPreviewStart();
         return;
       }
-      const body = openToolSurface('Executar', 'Rodar e abrir a visualização local do projeto.', 'run');
+      const body = openToolSurface(window.t ? window.t('runAppTitle', 'Executar') : 'Executar', window.t ? window.t('runAppDesc', 'Rodar e abrir a visualização local do projeto.') : 'Rodar e abrir a visualização local do projeto.', 'run');
       const projectInfo = getProjectRootOrNotify(body);
       if (!projectInfo) return;
       renderPreviewToolProgress(body, 18, 'planejando preview');
@@ -584,7 +584,7 @@
       await new Promise((resolve) => setTimeout(resolve, 120));
       renderPreviewToolProgress(body, 72, 'iniciando execução');
       await runPreviewStart();
-      renderPreviewToolProgress(body, 100, 'visualização solicitada');
+      renderPreviewToolProgress(body, 100, window.t ? window.t('previewRequested', 'visualização solicitada') : 'visualização solicitada');
     }
 
     async function runPreviewStart() {

@@ -39,7 +39,7 @@
     } = callbacks;
 
     function summarizeProject(info) {
-      if (!info) return 'Nenhum projeto selecionado.';
+      if (!info) return window.t ? window.t('noProjectSelected', 'Nenhum projeto selecionado.') : 'Nenhum projeto selecionado.';
     
       const c = info.counters;
       return [

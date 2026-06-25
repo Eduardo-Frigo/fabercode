@@ -1108,7 +1108,7 @@ async function refreshCortexLearningPanel() {
 }
 
 function summarizeProject(info) {
-  return projectController ? projectController.summarizeProject(info) : 'Nenhum projeto selecionado.';
+  return projectController ? projectController.summarizeProject(info) : window.t ? window.t('noProjectSelected', 'Nenhum projeto selecionado.') : 'Nenhum projeto selecionado.';
 }
 
 function normalizeProjectItems(rawProjects) {
