@@ -100,7 +100,7 @@
       <button id="project-rail-lightbox-backdrop" class="project-rail-lightbox__backdrop" type="button" aria-label="Fechar lista de projetos"></button>
       <div class="project-rail-lightbox__panel" role="dialog" aria-modal="false" aria-label="Projetos">
         <div class="project-rail-lightbox__head">
-          <span>Projetos</span>
+          <span data-i18n="projectsTitle">Projetos</span>
           <button id="project-rail-lightbox-close" class="project-rail-lightbox__close" type="button" aria-label="Fechar lista de projetos">×</button>
         </div>
         <div id="project-rail-lightbox-list" class="project-rail-lightbox-list projects-tree"></div>
@@ -141,7 +141,7 @@
               <input id="projects-search" type="text" placeholder="Pesquisa" />
             </div>
 
-            <div class="left-section-title">Projetos</div>
+            <div class="left-section-title" data-i18n="projectsTitle">Projetos</div>
             <button id="project-rail-menu-toggle" class="project-rail-menu-toggle" type="button" title="Projetos" aria-label="Abrir lista de projetos" aria-expanded="false">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M5 8.4 12 5l7 3.4-7 3.4-7-3.4Z" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"></path>
@@ -390,13 +390,13 @@
           <div class="map-chat-container">
             <div id="map-chat-list-view" class="map-chat-list-view">
               <div class="map-chat-list-header">
-                <h3>Histórico do Mapa</h3>
+                <h3 data-i18n="mapHistory">Histórico do Mapa</h3>
                 <button id="btn-map-chat-new" class="map-chat-new-btn" title="Nova Conversa">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="12" y1="5" x2="12" y2="19"></line>
                     <line x1="5" y1="12" x2="19" y2="12"></line>
                   </svg>
-                  <span>Nova</span>
+                  <span data-i18n="newConversationBtn">Nova</span>
                 </button>
               </div>
               <div id="map-conversations-list" class="map-conversations-list">
@@ -404,7 +404,7 @@
               </div>
               <div class="map-chat-render-next">
                 <button id="btn-map-render-launcher" class="map-chat-render-next-btn" title="Abrir renderização do mapa" type="button">
-                  <span>Renderizar o Mapa</span>
+                  <span data-i18n="renderMapBtn">Renderizar o Mapa</span>
                 </button>
               </div>
             </div>
@@ -442,14 +442,14 @@
                     <polyline points="12 19 5 12 12 5"></polyline>
                   </svg>
                 </button>
-                <h3>Histórico de Renderizações</h3>
+                <h3 data-i18n="renderHistory">Histórico de Renderizações</h3>
               </div>
-              <div id="map-render-status" class="map-render-status">Pronto para iniciar uma nova análise.</div>
+              <div id="map-render-status" class="map-render-status" data-i18n="renderStatusReady">Pronto para iniciar uma nova análise.</div>
               <div id="map-render-conversations-list" class="map-render-conversations-list" aria-live="polite">
                 <!-- Rendered dynamically -->
               </div>
               <div class="map-render-create-next">
-                <button id="btn-map-render-open" class="map-render-primary-btn map-render-primary-btn--yellow" type="button">Renderizar o Mapa</button>
+                <button id="btn-map-render-open" class="map-render-primary-btn map-render-primary-btn--yellow" type="button" data-i18n="renderMapBtn">Renderizar o Mapa</button>
               </div>
             </div>
 
@@ -605,7 +605,7 @@
       <div class="project-state-modal__backdrop" data-close="1"></div>
       <div class="project-state-modal__dialog" role="dialog" aria-modal="true" aria-label="Projetos">
         <div class="project-state-modal__head">
-          <strong id="project-state-modal-title">Projetos</strong>
+          <strong id="project-state-modal-title" data-i18n="projectsTitle">Projetos</strong>
           <button id="project-state-modal-close" type="button" class="project-state-modal__close">×</button>
         </div>
         <div id="project-state-modal-list" class="project-state-modal__list"></div>

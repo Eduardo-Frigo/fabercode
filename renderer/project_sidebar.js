@@ -202,7 +202,7 @@
       if (!conversations.length) {
         const emptyConv = document.createElement('div');
         emptyConv.className = 'conversation-item conversation-empty';
-        emptyConv.textContent = 'Sem conversas ainda';
+        emptyConv.textContent = window.t ? window.t('noConversationsYet', 'Sem conversas ainda') : 'Sem conversas ainda';
         convList.appendChild(emptyConv);
         return convList;
       }
@@ -367,7 +367,7 @@
         chatHeader.style.fontWeight = '600';
         chatHeader.style.letterSpacing = '0.5px';
         chatHeader.style.paddingLeft = '8px';
-        chatHeader.textContent = 'CONVERSAS';
+        chatHeader.textContent = window.t ? window.t('conversationsTitle', 'CONVERSAS') : 'CONVERSAS';
 
         subItemsContainer.appendChild(chatHeader);
         subItemsContainer.appendChild(renderConversationList(id));

@@ -83,9 +83,9 @@
 
       const projectInfo = getProjectInfo();
       if (!projectInfo || !projectInfo.rootPath) {
-        renderEmpty('Nenhum projeto selecionado.', [
-          'Escolha um projeto na lateral esquerda para listar arquivos, abrir o editor e liberar Git, execução local e terminal.',
-          'Para começar do zero, use Novo projeto.',
+        renderEmpty(window.t ? window.t('noProjectSelected', 'Nenhum projeto selecionado.') : 'Nenhum projeto selecionado.', [
+          window.t ? window.t('chooseProjectLeft', 'Escolha um projeto na lateral esquerda para listar arquivos, abrir o editor e liberar Git, execução local e terminal.') : 'Escolha um projeto na lateral esquerda para listar arquivos, abrir o editor e liberar Git, execução local e terminal.',
+          window.t ? window.t('startFromScratch', 'Para começar do zero, use Novo projeto.') : 'Para começar do zero, use Novo projeto.',
         ]);
         return;
       }
@@ -107,9 +107,9 @@
       const visibleDiffStats = diffStats && typeof diffStats === 'object' ? diffStats : {};
 
       if (!visibleRows.length) {
-        renderEmpty('Arquivos ainda não carregados.', [
-          'Reabra ou selecione o projeto novamente para atualizar a árvore.',
-          'Se a pasta estiver vazia, crie arquivos pelo fluxo de conversa ou pelo seu editor externo.',
+        renderEmpty(window.t ? window.t('filesNotLoadedYet', 'Arquivos ainda não carregados.') : 'Arquivos ainda não carregados.', [
+          window.t ? window.t('reopenProject', 'Reabra ou selecione o projeto novamente para atualizar a árvore.') : 'Reabra ou selecione o projeto novamente para atualizar a árvore.',
+          window.t ? window.t('emptyFolder', 'Se a pasta estiver vazia, crie arquivos pelo fluxo de conversa ou pelo seu editor externo.') : 'Se a pasta estiver vazia, crie arquivos pelo fluxo de conversa ou pelo seu editor externo.',
         ]);
         return;
       }

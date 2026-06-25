@@ -355,7 +355,7 @@
       }
       if (elements.status) {
         const status = activeSession ? activeSession.status || 'idle' : 'empty';
-        elements.status.textContent = status === 'running' ? 'Executando' : status === 'empty' ? 'Sem sessão' : 'Pronto';
+        elements.status.textContent = status === 'running' ? (window.t ? window.t('terminalRunning', 'Executando') : 'Executando') : status === 'empty' ? (window.t ? window.t('terminalNoSession', 'Sem sessão') : 'Sem sessão') : (window.t ? window.t('terminalReady', 'Pronto') : 'Pronto');
         elements.status.dataset.status = status;
       }
       if (elements.output) {
@@ -473,7 +473,7 @@
         return { ok: false, message: 'Terminal interno indisponível para executar o comando.' };
       }
       const activeSession = await ensureRunnableSession(options);
-      if (!activeSession) return { ok: false, message: 'Não consegui abrir uma sessão de terminal.' };
+      if (!activeSession) return { ok: false, message: window.t ? window.t('terminalSessionFailed', 'Não consegui abrir uma sessão de terminal.') : 'Não consegui abrir uma sessão de terminal.' };
       const info = getProjectInfo();
       if (!info || !info.rootPath) {
         return { ok: false, message: 'Projeto sem pasta local para executar no terminal.' };

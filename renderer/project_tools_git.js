@@ -145,8 +145,8 @@
     wrap.className = 'right-tool-git-selection';
     const summary = document.createElement('span');
     summary.className = 'right-tool-selection-summary';
-    const selectAll = deps.createToolButton('Selecionar tudo');
-    const clear = deps.createToolButton('Limpar seleção');
+    const selectAll = deps.createToolButton(window.t ? window.t('selectAll', 'Selecionar tudo') : 'Selecionar tudo');
+    const clear = deps.createToolButton(window.t ? window.t('clearSelection', 'Limpar seleção') : 'Limpar seleção');
 
     const update = () => {
       const selected = getCheckedGitFiles(list).length;
@@ -499,7 +499,7 @@
             appendTransientAssistantMessage('Escolha ao menos um arquivo para descartar.');
             return;
           }
-          const confirmed = confirmAction('Deseja realmente descartar as alterações dos arquivos selecionados? Esta ação não pode ser desfeita.');
+          const confirmed = confirmAction(window.t ? window.t('discardSelectedConfirm', 'Deseja realmente descartar as alterações dos arquivos selecionados? Esta ação não pode ser desfeita.') : 'Deseja realmente descartar as alterações dos arquivos selecionados? Esta ação não pode ser desfeita.');
           if (!confirmed) return;
           rollback.disabled = true;
           updateStatus('Descartando alterações...');
@@ -527,7 +527,7 @@
         '1',
         window.t ? window.t('untrackedTitle', 'Novos Arquivos (Untracked)') : 'Novos Arquivos (Untracked)',
         untrackedEntries,
-        'Nenhum arquivo novo fora do Git.',
+        window.t ? window.t('noUntrackedFiles', 'Nenhum arquivo novo fora do Git.') : 'Nenhum arquivo novo fora do Git.',
         'untracked'
       );
       flow.appendChild(untrackedStep.section);
@@ -536,7 +536,7 @@
         '2',
         window.t ? window.t('modifiedTitle', 'Alterações (Modified)') : 'Alterações (Modified)',
         modifiedEntries,
-        'Nenhum arquivo modificado fora do stage.',
+        window.t ? window.t('noModifiedFiles', 'Nenhum arquivo modificado fora do stage.') : 'Nenhum arquivo modificado fora do stage.',
         'modified'
       );
       flow.appendChild(modifiedStep.section);
@@ -546,7 +546,7 @@
         window.t ? window.t('stagedTitle', 'Preparados (Staged)') : 'Preparados (Staged)',
         stagedEntries.length
           ? `${stagedEntries.length} ${stagedEntries.length === 1 ? 'arquivo pronto' : 'arquivos prontos'} para commit.`
-          : 'Nada em Staged para commit.',
+          : window.t ? window.t('nothingStaged', 'Nada em Staged para commit.') : 'Nada em Staged para commit.',
         activeStep === 'staged' ? 'active' : stagedEntries.length ? 'idle' : 'locked',
         null,
         { key: 'staged', compactTitle: 'Staged' }
@@ -564,7 +564,7 @@
         message.placeholder = 'Mensagem do commit';
         const actionRow = document.createElement('div');
         actionRow.className = 'right-tool-actions-row';
-        const commit = createToolButton('Criar commit com selecionados', 'right-tool-action--primary');
+        const commit = createToolButton(window.t ? window.t('commitSelected', 'Criar commit com selecionados') : 'Criar commit com selecionados', 'right-tool-action--primary');
         commit.addEventListener('click', async () => {
           const selectedFiles = getCheckedGitFiles(list);
           if (!selectedFiles.length) {
@@ -594,7 +594,7 @@
             appendTransientAssistantMessage('Escolha ao menos um arquivo para remover do stage.');
             return;
           }
-          const confirmed = confirmAction('Deseja realmente remover os arquivos selecionados do stage?');
+          const confirmed = confirmAction(window.t ? window.t('stageRemoveConfirm', 'Deseja realmente remover os arquivos selecionados do stage?') : 'Deseja realmente remover os arquivos selecionados do stage?');
           if (!confirmed) return;
           rollback.disabled = true;
           updateStatus('Removendo arquivos do stage...');

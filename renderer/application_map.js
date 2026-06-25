@@ -1008,7 +1008,7 @@
           } else if (Array.isArray(conversation.messages) && conversation.messages.length) {
             subtitle.textContent = `Chat em andamento • ${formatRenderConversationDate(conversation.updatedAt || conversation.createdAt)}`;
           } else if (conversation.source === 'map_render') {
-            subtitle.textContent = `Renderização salva • ${formatRenderConversationDate(conversation.updatedAt || conversation.createdAt)}`;
+            subtitle.textContent = `${window.t ? window.t('renderSaved', 'Renderização salva') : 'Renderização salva'} • ${formatRenderConversationDate(conversation.updatedAt || conversation.createdAt)}`;
           } else {
             subtitle.textContent = `Nova renderização • ${formatRenderConversationDate(conversation.createdAt)}`;
           }
@@ -1273,7 +1273,7 @@
           renderPanelCopy.classList.toggle('hidden', isSessionView);
         }
         if (renderPanelOpen) {
-          renderPanelOpen.textContent = 'Renderizar o Mapa';
+          renderPanelOpen.textContent = window.t ? window.t('renderMapBtn', 'Renderizar o Mapa') : 'Renderizar o Mapa';
           renderPanelOpen.disabled = renderWorkflowBusy;
         }
         if (renderListBack) {
@@ -1301,7 +1301,7 @@
                 ? 'Última renderização pronta. Selecione uma conversa para revisar ou reanalise o mapa.'
                 : 'Última renderização com lacunas. Selecione uma conversa para ajustar o plano.';
             } else if (Array.isArray(renderConversations) && renderConversations.length) {
-              renderPanelStatus.textContent = 'Selecione uma renderização anterior para revisar o diagnóstico ou crie uma nova análise.';
+              renderPanelStatus.textContent = window.t ? window.t('renderSelectPrev', 'Selecione uma renderização anterior para revisar o diagnóstico ou crie uma nova análise.') : 'Selecione uma renderização anterior para revisar o diagnóstico ou crie uma nova análise.';
             } else {
               renderPanelStatus.textContent = 'Pronto para iniciar a análise.';
             }
