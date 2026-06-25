@@ -1821,3 +1821,11 @@ body.mode-terminal #project-terminal-panel {
   background: #50c985 !important;
   color: #ffffff !important;
 }
+
+/* Light Mode Overrides */
+body[data-theme='light'] .workspace-tool-region--map {
+  background-color: #fbfbfa !important;
+}
+body[data-theme='light'] .application-map-container {
+  color: #333333;
+}
