@@ -672,3 +672,40 @@ body[data-theme='light'] .milestone-marker {
   color: #212121 !important;
   border-color: rgba(33, 33, 33, 0.15) !important;
 }
+
+/* LIGHT MODE UI FIXES - FOURTH BATCH */
+
+/* 6. Git Status Badges (U, A, M) */
+body[data-theme='light'] .right-tool-git-status-badge--untracked {
+  background: rgba(80, 201, 133, 0.2) !important;
+  color: #1f7e4f !important;
+  border-color: rgba(80, 201, 133, 0.4) !important;
+}
+body[data-theme='light'] .right-tool-git-status-badge--staged {
+  background: rgba(100, 160, 255, 0.2) !important;
+  color: #1a4f9a !important;
+  border-color: rgba(100, 160, 255, 0.4) !important;
+}
+body[data-theme='light'] .right-tool-git-status-badge--modified,
+body[data-theme='light'] .right-tool-git-status-badge--mixed {
+  background: rgba(255, 180, 80, 0.2) !important;
+  color: #995a00 !important;
+  border-color: rgba(255, 180, 80, 0.4) !important;
+}
+
+/* 7. Files Change Summary Header (+ diff badges) */
+body[data-theme='light'] .project-files-change-summary {
+  background: rgba(80, 201, 133, 0.15) !important;
+  color: #212121 !important;
+  border-color: rgba(80, 201, 133, 0.3) !important;
+}
+body[data-theme='light'] .project-tree-diff-add {
+  color: #1f7e4f !important;
+  border-color: rgba(80, 201, 133, 0.55) !important;
+  background: rgba(80, 201, 133, 0.2) !important;
+}
+body[data-theme='light'] .project-tree-diff-del {
+  color: #c92a2a !important;
+  border-color: rgba(255, 172, 176, 0.55) !important;
+  background: rgba(255, 172, 176, 0.2) !important;
+}
