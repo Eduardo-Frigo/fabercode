@@ -63,12 +63,12 @@
         }
 
         const rightPanelTitle = document.getElementById('right-panel-title');
-        if (rightPanelTitle) rightPanelTitle.textContent = 'Milestones';
+        if (rightPanelTitle) rightPanelTitle.textContent = window.t ? window.t('milestones', 'Milestones') : 'Milestones';
 
         refresh();
       } else {
         const rightPanelTitle = document.getElementById('right-panel-title');
-        if (rightPanelTitle) rightPanelTitle.textContent = 'Arquivos';
+        if (rightPanelTitle) rightPanelTitle.textContent = window.t ? window.t('files', 'Arquivos') : 'Arquivos';
       }
 
       const filesBtn = document.getElementById('btn-project-files');

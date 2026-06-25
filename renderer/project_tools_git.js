@@ -389,8 +389,8 @@
       summary.className = 'right-tool-git-summary right-tool-git-summary--clean';
       const branch = document.createElement('strong');
       branch.textContent = worktree.isGitRepo
-        ? worktree.branch ? `branch ${worktree.branch}` : 'repositório local'
-        : 'Git ainda não ativo';
+        ? worktree.branch ? `branch ${worktree.branch}` : (window.t ? window.t('localRepository', 'repositório local') : 'repositório local')
+        : (window.t ? window.t('gitNotActive', 'Git ainda não ativo') : 'Git ainda não ativo');
       const counts = document.createElement('div');
       counts.className = 'right-tool-git-counts';
       [
@@ -411,8 +411,8 @@
       if (!worktree.isGitRepo) {
         const setup = createGitStepCard(
           '1',
-          'Repositório local',
-          'Crie o histórico local antes de stage, commit e deploy.',
+          window.t ? window.t('localRepository', 'Repositório local') : 'Repositório local',
+          window.t ? window.t('localHistoryDesc', 'Crie o histórico local antes de stage, commit e deploy.') : 'Crie o histórico local antes de stage, commit e deploy.',
           'active',
           createToolIconMark('git'),
           { key: 'repo', compactTitle: 'Git' }
@@ -525,7 +525,7 @@
       // Legacy step titles for test compliance: 'Untracked' 'Modified' 'Staged' 'Committed'
       const untrackedStep = renderStageableStep(
         '1',
-        'Novos Arquivos (Untracked)',
+        window.t ? window.t('untrackedTitle', 'Novos Arquivos (Untracked)') : 'Novos Arquivos (Untracked)',
         untrackedEntries,
         'Nenhum arquivo novo fora do Git.',
         'untracked'
@@ -534,7 +534,7 @@
 
       const modifiedStep = renderStageableStep(
         '2',
-        'Alterações (Modified)',
+        window.t ? window.t('modifiedTitle', 'Alterações (Modified)') : 'Alterações (Modified)',
         modifiedEntries,
         'Nenhum arquivo modificado fora do stage.',
         'modified'
@@ -543,7 +543,7 @@
 
       const stagedStep = createGitStepCard(
         '3',
-        'Preparados (Staged)',
+        window.t ? window.t('stagedTitle', 'Preparados (Staged)') : 'Preparados (Staged)',
         stagedEntries.length
           ? `${stagedEntries.length} ${stagedEntries.length === 1 ? 'arquivo pronto' : 'arquivos prontos'} para commit.`
           : 'Nada em Staged para commit.',

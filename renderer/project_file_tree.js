@@ -131,7 +131,7 @@
         const summary = document.createElement('div');
         summary.className = 'project-files-change-summary';
         const count = document.createElement('span');
-        count.textContent = `${diffEntries.length} ${diffEntries.length === 1 ? 'arquivo alterado' : 'arquivos alterados'}`;
+        count.textContent = `${diffEntries.length} ${diffEntries.length === 1 ? (window.t ? window.t('filesChangedSingle', 'arquivo alterado') : 'arquivo alterado') : (window.t ? window.t('filesChangedPlural', 'arquivos alterados') : 'arquivos alterados')}`;
         const add = diffEntries.reduce((sum, entry) => sum + entry.add, 0);
         const del = diffEntries.reduce((sum, entry) => sum + entry.del, 0);
         summary.appendChild(count);

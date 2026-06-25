@@ -149,7 +149,7 @@
         if (elements.button) elements.button.classList.remove('active');
 
         const rightPanelTitle = document.getElementById('right-panel-title');
-        if (rightPanelTitle) rightPanelTitle.textContent = 'Arquivos';
+        if (rightPanelTitle) rightPanelTitle.textContent = window.t ? window.t('files', 'Arquivos') : 'Arquivos';
       }
 
       render();
@@ -284,7 +284,7 @@
         if (elements.button) elements.button.classList.add('active');
 
         const rightPanelTitle = document.getElementById('right-panel-title');
-        if (rightPanelTitle) rightPanelTitle.textContent = 'Terminal';
+        if (rightPanelTitle) rightPanelTitle.textContent = window.t ? window.t('terminal', 'Terminal') : 'Terminal';
 
         if (document.body.classList.contains('workspace-right-collapsed')) {
           const rightToggle = document.getElementById('workspace-collapse-right');

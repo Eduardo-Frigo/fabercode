@@ -444,7 +444,7 @@
         const filesRegion = document.getElementById('workspace-files-region');
         if (filesRegion) filesRegion.classList.remove('workspace-runtime-hidden');
         const rightPanelTitle = document.getElementById('right-panel-title');
-        if (rightPanelTitle) rightPanelTitle.textContent = 'Arquivos';
+        if (rightPanelTitle) rightPanelTitle.textContent = window.t ? window.t('files', 'Arquivos') : 'Arquivos';
         return;
       }
       if (projectToolsController) await projectToolsController.publishToGithub();

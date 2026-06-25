@@ -120,7 +120,7 @@
           projectFilesBtnEl.classList.add('active');
           
           const rightPanelTitle = document.getElementById('right-panel-title');
-          if (rightPanelTitle) rightPanelTitle.textContent = 'Arquivos';
+          if (rightPanelTitle) rightPanelTitle.textContent = window.t ? window.t('files', 'Arquivos') : 'Arquivos';
         });
       }
       if (projectGitBtnEl) {

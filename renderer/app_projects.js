@@ -295,7 +295,7 @@
       const hasFiles = Number(state.selectedProjectInfo.totalFiles || 0) > 0;
       incrementalModeBadgeEl.classList.remove('hidden', 'is-edit', 'is-init');
       incrementalModeBadgeEl.classList.add(hasFiles ? 'is-edit' : 'is-init');
-      incrementalModeBadgeEl.textContent = hasFiles ? 'Edição incremental ativa' : 'Modo criação inicial';
+      incrementalModeBadgeEl.textContent = hasFiles ? (window.t ? window.t('incrementalEditingActive', 'Edição incremental ativa') : 'Edição incremental ativa') : (window.t ? window.t('initialCreationMode', 'Modo criação inicial') : 'Modo criação inicial');
     }
     
     async function ensureSelectedProjectInfoReady(options = {}) {

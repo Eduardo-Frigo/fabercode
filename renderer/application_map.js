@@ -1371,19 +1371,19 @@
         const rightPanelTitle = document.getElementById('right-panel-title');
         if (rightPanelTitle) {
           if (mode === 'mode-map-chat') {
-            rightPanelTitle.textContent = 'Perguntar à IA';
+            rightPanelTitle.textContent = window.t ? window.t('askAi', 'Perguntar à IA') : 'Perguntar à IA';
           } else if (mode === 'mode-map-render') {
-            rightPanelTitle.textContent = 'Renderização do Mapa';
+            rightPanelTitle.textContent = window.t ? window.t('mapRendering', 'Renderização do Mapa') : 'Renderização do Mapa';
           } else if (mode === 'mode-git') {
-            rightPanelTitle.textContent = 'Git';
+            rightPanelTitle.textContent = window.t ? window.t('git', 'Git') : 'Git';
           } else if (mode === 'mode-terminal') {
-            rightPanelTitle.textContent = 'Terminal';
+            rightPanelTitle.textContent = window.t ? window.t('terminal', 'Terminal') : 'Terminal';
           } else if (mode === 'mode-milestones') {
-            rightPanelTitle.textContent = 'Milestones';
+            rightPanelTitle.textContent = window.t ? window.t('milestones', 'Milestones') : 'Milestones';
           } else if (mode === 'mode-cortex') {
-            rightPanelTitle.textContent = 'Regras e contexto';
+            rightPanelTitle.textContent = window.t ? window.t('cortexPanelRules', 'Regras e contexto') : 'Regras e contexto';
           } else {
-            rightPanelTitle.textContent = 'Arquivos';
+            rightPanelTitle.textContent = window.t ? window.t('files', 'Arquivos') : 'Arquivos';
           }
         }
 
@@ -2683,25 +2683,25 @@
 
     function getCurrentlyActiveRightSidebarPanel() {
       if (document.body.classList.contains('mode-map-render')) {
-        return { panel: document.getElementById('workspace-map-render-panel'), title: 'Renderização do Mapa', buttonId: 'btn-map-render-open' };
+        return { panel: document.getElementById('workspace-map-render-panel'), title: window.t ? window.t('renderMap', 'Renderização do Mapa') : 'Renderização do Mapa', buttonId: 'btn-map-render-open' };
       }
       if (document.body.classList.contains('mode-cortex')) {
-        return { panel: document.getElementById('cortex-learning-box'), title: 'Regras e contexto', buttonId: 'btn-cortex-mode' };
-      }
-      if (document.body.classList.contains('mode-git')) {
-        return { panel: document.getElementById('workspace-git-panel'), title: 'Git', buttonId: 'btn-project-git' };
+        return { panel: document.getElementById('cortex-learning-box'), title: window.t ? window.t('contextRules', 'Regras e contexto') : 'Regras e contexto', buttonId: 'btn-cortex-mode' };
       }
       if (document.body.classList.contains('mode-terminal')) {
-        return { panel: document.getElementById('project-terminal-panel'), title: 'Terminal', buttonId: 'btn-project-terminal' };
+        return { panel: document.getElementById('project-terminal-panel'), title: window.t ? window.t('terminal', 'Terminal') : 'Terminal', buttonId: 'btn-project-terminal' };
+      }
+      if (document.body.classList.contains('mode-git')) {
+        return { panel: document.getElementById('workspace-git-panel'), title: window.t ? window.t('git', 'Git') : 'Git', buttonId: 'btn-project-git' };
       }
       if (document.body.classList.contains('mode-milestones')) {
-        return { panel: document.getElementById('workspace-milestones-panel'), title: 'Milestones', buttonId: 'btn-project-milestones' };
+        return { panel: document.getElementById('workspace-milestones-panel'), title: window.t ? window.t('milestones', 'Milestones') : 'Milestones', buttonId: 'btn-project-milestones' };
       }
       if (document.body.classList.contains('mode-map-chat')) {
-        return { panel: document.getElementById('workspace-map-chat-panel'), title: 'Perguntar à IA', buttonId: 'btn-map-ai' };
+        return { panel: document.getElementById('workspace-map-chat-panel'), title: window.t ? window.t('askAi', 'Perguntar à IA') : 'Perguntar à IA', buttonId: 'btn-map-ai' };
       }
       // Default to files
-      return { panel: document.getElementById('workspace-files-region'), title: 'Arquivos', buttonId: 'btn-project-files' };
+      return { panel: document.getElementById('workspace-files-region'), title: window.t ? window.t('files', 'Arquivos') : 'Arquivos', buttonId: 'btn-project-files' };
     }
 
     function openInspector(node) {
@@ -2749,7 +2749,7 @@
       // Update header title of right panel
       const rightPanelTitle = document.getElementById('right-panel-title');
       if (rightPanelTitle) {
-        rightPanelTitle.textContent = 'Detalhes do Item';
+        rightPanelTitle.textContent = window.t ? window.t('itemDetails', 'Detalhes do Item') : 'Detalhes do Item';
       }
 
       // Ensure right panel is expanded
