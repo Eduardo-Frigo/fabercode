@@ -658,3 +658,17 @@ body[data-theme='light'] .application-map-controls .zoom-slider-container {
 body[data-theme='light'] .application-map-controls input[type="range"] {
   background: rgba(33, 33, 33, 0.15) !important;
 }
+
+/* LIGHT MODE UI FIXES - THIRD BATCH */
+
+/* 4. Terminal Head in Right Panel */
+.workspace-tool-region--terminal .project-terminal-head {
+  display: none !important;
+}
+
+/* 5. Milestones Markers */
+body[data-theme='light'] .milestone-marker {
+  background: rgba(255, 255, 255, 0.95) !important;
+  color: #212121 !important;
+  border-color: rgba(33, 33, 33, 0.15) !important;
+}
