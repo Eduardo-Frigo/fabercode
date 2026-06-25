@@ -237,7 +237,7 @@ function createAgenticToolLoopService(dependencies = {}) {
       },
       {
         name: 'run_command',
-        description: 'Roda um comando de terminal preso à raiz do projeto e retorna saída auditável.',
+        description: 'Roda um comando de terminal preso à raiz do projeto e retorna saída auditável. NÃO USE cd, passe caminhos relativos ao invés disso.',
         inputSchema: {
           type: 'object',
           additionalProperties: false,
@@ -261,7 +261,16 @@ function createAgenticToolLoopService(dependencies = {}) {
           additionalProperties: false,
           properties: {},
         },
-        execute: async () => capability('terminal', 'status', {}),
+        execute: async () => {
+          const res = await capability('terminal', 'status', {});
+          if (res && res.data && Array.isArray(res.data.sessions)) {
+            const isRunning = res.data.sessions.some(s => s.running);
+            if (isRunning) {
+              await new Promise(r => setTimeout(r, 4000));
+            }
+          }
+          return res;
+        },
       },
       {
         name: 'preview_capture',
@@ -532,6 +541,7 @@ function createAgenticToolLoopService(dependencies = {}) {
     
     // Doom Loop Detector State
     const recentFailedToolCalls = [];
+    let consecutiveEmptyTurns = 0;
 
     if (jobId) {
       const activeProvider = String(getSelectedAiProvider() || '').trim().toLowerCase();
@@ -575,19 +585,22 @@ function createAgenticToolLoopService(dependencies = {}) {
 
       const toolCalls = Array.isArray(turn && turn.toolCalls) ? turn.toolCalls : [];
       if (!toolCalls.length && !isFinished) {
+        consecutiveEmptyTurns += 1;
         const finalMessage = allTextParts.filter(Boolean).join('\n\n').trim();
-        if (step === 0 && maxSteps > 1) {
+        
+        if (consecutiveEmptyTurns < 4 && maxSteps > 1) {
           if (turn && turn.text) {
             conversationMessages.push({ role: 'assistant', content: turn.text });
           }
           conversationMessages.push({
             role: 'user',
-            content: 'Lembrete: Você não chamou nenhuma ferramenta. Você DEVE usar tools para interagir com o projeto e concluir a tarefa.',
+            content: 'Lembrete: Você não chamou nenhuma ferramenta. Você DEVE usar tools para interagir com o projeto e concluir a tarefa. Não pare até terminar usando finish_task.',
           });
           previousResponseId = '';
           pendingToolResults = [];
           continue;
         }
+
         if (actionRequiresFileChanges(action) && modifiedFiles.size === 0) {
           return {
             ok: false,
@@ -607,6 +620,7 @@ function createAgenticToolLoopService(dependencies = {}) {
         };
       }
 
+      consecutiveEmptyTurns = 0;
       pendingToolResults = [];
       for (const call of toolCalls) {
         const tool = toolIndex.get(String(call && call.name ? call.name : ''));

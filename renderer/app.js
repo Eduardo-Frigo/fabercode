@@ -415,6 +415,15 @@ const projectSidebarController = window.FaberProjectSidebar
         clearPending();
         renderProjects();
         renderChatForActiveConversation();
+        // Muda o painel central para o chat sem fechar o painel lateral do mapa
+        const chatRegion = document.getElementById('workspace-chat-region');
+        const mapRegion = document.getElementById('workspace-map-region');
+        const tabChat = document.getElementById('btn-tab-chat');
+        const tabMap = document.getElementById('btn-tab-map');
+        if (chatRegion) chatRegion.classList.remove('hidden');
+        if (mapRegion) mapRegion.classList.add('hidden');
+        if (tabChat) tabChat.classList.add('active');
+        if (tabMap) tabMap.classList.remove('active');
       },
       onRenameProject: async (projectId, currentName) => {
         const nextName = await requestProjectRename(projectId, currentName);

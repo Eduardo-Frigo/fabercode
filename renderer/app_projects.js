@@ -171,8 +171,21 @@
       clearPending();
       hideJobProgress();
       if (chatController) chatController.clearMessages();
+
+      // renderSystemNotice ANTES de mudar o tab: garante que o chat-log tenha conteúdo
+      // para que o welcome panel não apareça por cima do chat vazio
       renderSystemNotice('Nova conversa preparada. Sua próxima mensagem abre um chat separado neste projeto.');
-      renderWelcomePanel();
+
+      // Muda o painel central para o chat sem fechar o painel lateral do mapa
+      // (não usamos switchTab pois ele chama setMapSidePanelMode(null) que fecha o painel "Perguntar à IA")
+      const chatRegion = document.getElementById('workspace-chat-region');
+      const mapRegion = document.getElementById('workspace-map-region');
+      const tabChat = document.getElementById('btn-tab-chat');
+      const tabMap = document.getElementById('btn-tab-map');
+      if (chatRegion) chatRegion.classList.remove('hidden');
+      if (mapRegion) mapRegion.classList.add('hidden');
+      if (tabChat) tabChat.classList.add('active');
+      if (tabMap) tabMap.classList.remove('active');
     }
     
     function closeProjectStateModal() {

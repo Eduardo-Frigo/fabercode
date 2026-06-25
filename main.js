@@ -4672,7 +4672,7 @@ function getAgenticToolLoopService() {
       requestModelTurn: requestAgenticModelTurn,
       setJobCheckpoint,
       shouldUseModel: shouldUseOpenAiResponsesApi,
-      maxSteps: 40,
+      maxSteps: 100,
     });
   }
   return agenticToolLoopServiceInstance;
