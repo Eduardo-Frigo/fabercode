@@ -604,3 +604,57 @@ body[data-theme='light'] .project-state-info span {
 body[data-theme='light'] .project-state-row {
   border-color: rgba(0, 0, 0, 0.14) !important;
 }
+
+/* LIGHT MODE UI FIXES - SECOND BATCH */
+
+/* 1. Modal Folder Icons */
+body[data-theme='light'] .folder-icon-svg.folder-open,
+body[data-theme='light'] .folder-icon-svg.folder-closed {
+  color: #212121 !important;
+}
+
+/* 2. Narrow Git Panel Empty State */
+@container right-panel (max-width: 430px) {
+  body[data-theme='light'] .workspace-tool-region--git .right-tool-git-summary strong::before {
+    color: #212121 !important;
+  }
+  body[data-theme='light'] .workspace-tool-region--git .right-tool-git-count::before {
+    color: rgba(33, 33, 33, 0.72) !important;
+  }
+  body[data-theme='light'] .workspace-tool-region--git .right-tool-git-count::after {
+    color: #212121 !important;
+  }
+}
+
+/* 3. Application Map */
+body[data-theme='light'] .map-node {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border-color: rgba(33, 33, 33, 0.12) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08) !important;
+}
+body[data-theme='light'] .map-node-header,
+body[data-theme='light'] .map-node-title {
+  color: #212121 !important;
+}
+body[data-theme='light'] .map-node-desc {
+  color: rgba(33, 33, 33, 0.72) !important;
+}
+body[data-theme='light'] .application-map-controls,
+body[data-theme='light'] .application-map-toolbar {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border-color: rgba(33, 33, 33, 0.12) !important;
+}
+body[data-theme='light'] .application-map-controls button,
+body[data-theme='light'] .application-map-toolbar button {
+  color: #212121 !important;
+}
+body[data-theme='light'] .application-map-controls button:hover,
+body[data-theme='light'] .application-map-toolbar button:hover {
+  background: rgba(33, 33, 33, 0.08) !important;
+}
+body[data-theme='light'] .application-map-controls .zoom-slider-container {
+  border-left-color: rgba(33, 33, 33, 0.12) !important;
+}
+body[data-theme='light'] .application-map-controls input[type="range"] {
+  background: rgba(33, 33, 33, 0.15) !important;
+}
