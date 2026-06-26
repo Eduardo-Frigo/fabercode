@@ -148,8 +148,15 @@
         if (projectFileTreeController) await projectFileTreeController.refresh();
         const finalMessage = buildExecutionOutcomeAssistantMessage(result, state.pendingAction, state.lastQualityReport);
         appendMessage('assistant', finalMessage || result.message || 'Falha ao executar ação.');
+
+        if (Array.isArray(result.modifiedFiles) && result.modifiedFiles.length) {
+          appendChangeCard(state.pendingAction, result);
+          showChangeSummary(state.pendingAction, result);
+          showModificationAlert(`Arquivo modificado: ${result.modifiedFiles.join(', ')}`);
+        }
+
         if (result && result.blockedByPostExecutionValidation) {
-          updateStatus('Validação técnica bloqueou conclusão; correção incremental necessária');
+          updateStatus('Validação técnica encontrou observações; correção incremental recomendada');
         } else {
           updateStatus('Falha na execução');
         }

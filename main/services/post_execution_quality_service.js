@@ -559,7 +559,9 @@ function createPostExecutionQualityService(dependencies = {}) {
       shouldBlock,
       errors,
       warnings,
-      reason: `post_exec_quality_failed:${reasonParts.join(';')}`,
+      reason: shouldBlock 
+        ? `post_exec_quality_failed:${reasonParts.join(';')}` 
+        : `post_exec_quality_ok:${reasonParts.join(';')}`,
       topIssues,
     };
   }

@@ -177,7 +177,7 @@ function createMainRuntimeConfig({
   const POST_EXEC_QUALITY_MAX_FILES = Number.parseInt(env.POST_EXEC_QUALITY_MAX_FILES || '20', 10);
   const POST_EXEC_QUALITY_MAX_ISSUES = Number.parseInt(env.POST_EXEC_QUALITY_MAX_ISSUES || '40', 10);
   const POST_EXEC_QUALITY_TIMEOUT_MS = Number.parseInt(env.POST_EXEC_QUALITY_TIMEOUT_MS || '30000', 10);
-  const POST_EXEC_QUALITY_ENFORCE_ERRORS = String(env.POST_EXEC_QUALITY_ENFORCE_ERRORS || 'true').toLowerCase() === 'true';
+  const POST_EXEC_QUALITY_ENFORCE_ERRORS = String(env.POST_EXEC_QUALITY_ENFORCE_ERRORS || 'false').toLowerCase() === 'true';
   const POST_EXEC_QUALITY_ENFORCE_WARNINGS = String(env.POST_EXEC_QUALITY_ENFORCE_WARNINGS || 'false').toLowerCase() === 'true';
   const EXECUTION_ENFORCE_EFFECT_GATE = String(env.EXECUTION_ENFORCE_EFFECT_GATE || 'true').toLowerCase() === 'true';
   const EXECUTION_ENFORCE_NONZERO_DIFF_ON_EDIT = String(

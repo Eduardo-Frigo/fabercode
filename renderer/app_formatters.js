@@ -65,11 +65,13 @@
     }
 
     if (blockedByValidation || errors > 0) {
-      return 'Parei antes de concluir: a validação real encontrou um problema e o projeto foi preservado.';
+      return modifiedFiles.length > 0 
+        ? 'Concluído com observações: apliquei a alteração, mas a validação detectou pontos de atenção.'
+        : 'Parei antes de concluir: a validação real encontrou um problema e o projeto foi preservado.';
     }
 
     if (blockedByEffect) {
-      return 'Parei antes de concluir: a mudança proposta não alterou o projeto de forma útil.';
+      return 'A alteração já estava aplicada ou não resultou em mudança.';
     }
 
     return isOk

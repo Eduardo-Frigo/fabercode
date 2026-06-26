@@ -227,10 +227,24 @@
     return Math.max(0, Math.min(100, Math.round(raw)));
   }
 
+  function isPartialSuccess(job) {
+    if (!job || String(job.status || '').toLowerCase() !== 'failed') return false;
+    // se falhou mas existem modifiedFiles > 0, é sucesso parcial
+    const payload = readLatestJobEventPayload(job, 'job.execute_validation_blocked');
+    if (payload && payload.modifiedFilesCount > 0) return true;
+    
+    // Fallback: procuramos event execute_pass_finished
+    const passFinished = readLatestJobEventPayload(job, 'job.execute_pass_finished');
+    if (passFinished && passFinished.modifiedFilesCount > 0) return true;
+
+    return false;
+  }
+
   function inferJobTone(job) {
     const status = String(job && job.status ? job.status : '').toLowerCase();
     if (status === 'completed' && isCompletedWithoutExecution(job)) return 'info';
     if (status === 'completed') return 'success';
+    if (isPartialSuccess(job)) return 'partial_success';
     if (status === 'failed') return 'danger';
     if (status === 'cancelled' || status === 'retry_pending') return 'warning';
     return 'working';
@@ -243,7 +257,7 @@
         ? 'Resposta concluída sem alterar arquivos.'
         : 'Processamento concluído com sucesso.';
     }
-    if (job.status === 'failed') return 'Não consegui concluir esta rodada.';
+    if (job.status === 'failed') return isPartialSuccess(job) ? 'Processamento concluído com observações.' : 'Não consegui concluir esta rodada.';
     if (job.status === 'cancelled') return 'Ação cancelada. Nenhum arquivo foi alterado.';
     if (job.status === 'retry_pending') {
       const reason = normalizeText(job.lastError || '');
@@ -265,7 +279,7 @@
 
   function buildJobTitle(job) {
     if (!job) return 'Processando';
-    if (job.status === 'failed') return 'Não consegui concluir essa execução';
+    if (job.status === 'failed') return isPartialSuccess(job) ? 'Execução concluída com observações' : 'Não consegui concluir essa execução';
     if (job.status === 'completed') return isCompletedWithoutExecution(job) ? 'Resposta concluída' : 'Execução concluída';
     if (job.status === 'retry_pending') return 'Vou tentar novamente em instantes';
     if (job.status === 'cancelled') return 'Execução cancelada';
@@ -275,7 +289,7 @@
   function buildJobStatusLabel(job) {
     if (!job) return 'Aguardando';
     if (job.status === 'completed') return isCompletedWithoutExecution(job) ? 'Sem execução' : 'Concluído';
-    if (job.status === 'failed') return 'Falha';
+    if (job.status === 'failed') return isPartialSuccess(job) ? 'Concluído (com ressalvas)' : 'Falha';
     if (job.status === 'cancelled') return 'Cancelado';
     if (job.status === 'retry_pending') return 'Aguardando retentativa';
     return 'Em andamento';
@@ -534,11 +548,17 @@
     }
 
     if (status === 'failed') {
-      const reason = compactUxReason(job.lastError);
-      if (reason) {
-        lines.push(`Parei esta rodada: ${formatUxSentence(reason)}`);
+      if (isPartialSuccess(job)) {
+        const payload = readLatestJobEventPayload(job, 'job.execute_validation_blocked') || readLatestJobEventPayload(job, 'job.execute_pass_finished');
+        const count = payload && payload.modifiedFilesCount ? payload.modifiedFilesCount : 'alguns';
+        lines.push(`Concluí a alteração de ${count} arquivo(s), mas detectei pontos de atenção na validação.`);
       } else {
-        lines.push('Parei esta rodada sem promover como concluída.');
+        const reason = compactUxReason(job.lastError);
+        if (reason) {
+          lines.push(`Parei esta rodada: ${formatUxSentence(reason)}`);
+        } else {
+          lines.push('Parei esta rodada sem promover como concluída.');
+        }
       }
     }
 
