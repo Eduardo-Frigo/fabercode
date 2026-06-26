@@ -93,6 +93,10 @@ const UI_TRANSLATIONS = {
     readingRepo: 'Lendo repositório...',
     noProjectSelectedError: 'Nenhum projeto selecionado para esta ferramenta.',
     chooseProjectForTool: 'Escolha um projeto para usar esta ferramenta.',
+    attachMapRender: 'Anexar',
+    askMapPlaceholder: 'Pergunte algo sobre o mapa...',
+    askMapRenderPlaceholder: 'Peça ajustes no plano de desenvolvimento...',
+
 
 
     projectModalTitle: 'Projetos',
@@ -365,6 +369,10 @@ const UI_TRANSLATIONS = {
     readingRepo: 'Reading repository...',
     noProjectSelectedError: 'No project selected for this tool.',
     chooseProjectForTool: 'Choose a project to use this tool.',
+    attachMapRender: 'Attach',
+    askMapPlaceholder: 'Ask something about the map...',
+    askMapRenderPlaceholder: 'Ask for adjustments to the development plan...',
+
 
 
     projectModalTitle: 'Projects',
@@ -637,6 +645,10 @@ const UI_TRANSLATIONS = {
     readingRepo: 'Leyendo repositorio...',
     noProjectSelectedError: 'Ningún proyecto seleccionado para esta herramienta.',
     chooseProjectForTool: 'Elija un proyecto para usar esta herramienta.',
+    attachMapRender: 'Adjuntar',
+    askMapPlaceholder: 'Pregunte algo sobre el mapa...',
+    askMapRenderPlaceholder: 'Pida ajustes en el plan de desarrollo...',
+
 
 
     projectModalTitle: 'Proyectos',
@@ -838,6 +850,13 @@ function setNodeAttribute(selector, attribute, key, fallback) {
 }
 
 function applyStaticTranslations() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+      el.setAttribute('placeholder', t(el.getAttribute('data-i18n')));
+    } else {
+      el.textContent = t(el.getAttribute('data-i18n'));
+    }
+  });
   document.querySelectorAll("[data-i18n]").forEach(el => {
     el.textContent = t(el.getAttribute("data-i18n"));
   });

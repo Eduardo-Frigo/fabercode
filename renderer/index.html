@@ -369,9 +369,6 @@
         </div>
 
         <div id="workspace-milestones-panel" class="next-steps-box hidden workspace-tool-region workspace-tool-region--milestones" data-workspace-runtime-tool="milestones">
-          <div class="milestones-header">
-            <h3>Milestones</h3>
-          </div>
           <div id="milestones-timeline-content" class="milestones-timeline">
             <!-- Rendered dynamically -->
           </div>
@@ -423,7 +420,7 @@
                 <!-- Dynamically populated -->
               </div>
               <div class="map-chat-composer">
-                <textarea id="map-chat-textarea" placeholder="Pergunte algo sobre o mapa..."></textarea>
+                <textarea id="map-chat-textarea" placeholder="Pergunte algo sobre o mapa..." data-i18n="askMapPlaceholder"></textarea>
                 <button id="btn-map-chat-send" class="map-chat-send-btn" title="Enviar prompt">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
                 </button>
@@ -478,9 +475,9 @@
               </div>
               <div class="map-chat-composer map-render-composer">
                 <button id="btn-map-render-attach" class="map-render-attach-btn" title="Anexar imagem ou markdown" aria-label="Anexar imagem ou markdown" type="button">
-                  <span>Anexar</span>
+                  <span data-i18n="attachMapRender">Anexar</span>
                 </button>
-                <textarea id="map-render-textarea" placeholder="Peça ajustes no plano de desenvolvimento..."></textarea>
+                <textarea id="map-render-textarea" placeholder="Peça ajustes no plano de desenvolvimento..." data-i18n="askMapRenderPlaceholder"></textarea>
                 <button id="btn-map-render-send" class="map-chat-send-btn" title="Enviar ajuste">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="m22 2-7 20-4-9-9-4Z"></path>
