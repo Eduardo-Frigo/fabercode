@@ -49,6 +49,22 @@ Briefings complexos de SaaS com modulos explicitos e pedido de "primeira versao 
 
 Foram removidos caminhos absolutos locais de uma documentacao antiga do plano de mapa/milestones e substituidos por referencias relativas/descritivas.
 
+### 9. Configuracao externa para o app Mac empacotado
+
+O app aberto pelo Finder nao herda variaveis de ambiente do terminal. Por isso, o runtime agora tambem procura um `.env` externo em:
+
+```text
+~/Library/Application Support/Faber Code/.env
+```
+
+Esse arquivo deve conter variaveis como `DATABASE_URL` e `FABER_SESSION_SECRET` para liberar o backend de conta. Um modelo foi adicionado em:
+
+```text
+docs/FABER_CODE_MAC_APP_ENV_EXAMPLE.env
+```
+
+Ao abrir o app pela primeira vez, o macOS pode pedir permissao para acessar o item `Faber Code Safe Storage` no Keychain. Esse prompt e esperado: o Electron usa o Keychain para proteger segredos locais. Para evitar que o macOS pergunte novamente a cada abertura, escolha `Always Allow`.
+
 ## Validacoes executadas
 
 - `npm run test:ipc`

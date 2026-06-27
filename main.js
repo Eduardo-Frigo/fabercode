@@ -190,9 +190,24 @@ function loadEnvFromCandidates(candidates) {
   return loadedPaths;
 }
 
+function resolvePackagedUserEnvPath() {
+  const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+  if (!homeDir) return '';
+  if (process.platform === 'darwin') {
+    return path.join(homeDir, 'Library', 'Application Support', 'Faber Code', '.env');
+  }
+  if (process.platform === 'win32') {
+    const appDataDir = process.env.APPDATA || path.join(homeDir, 'AppData', 'Roaming');
+    return path.join(appDataDir, 'Faber Code', '.env');
+  }
+  const configDir = process.env.XDG_CONFIG_HOME || path.join(homeDir, '.config');
+  return path.join(configDir, 'Faber Code', '.env');
+}
+
 const ENV_PATH_CANDIDATES = [
   path.join(process.cwd(), '.env'),
   path.join(__dirname, '.env'),
+  app.isPackaged ? resolvePackagedUserEnvPath() : null,
   app.isPackaged ? path.join(process.resourcesPath, '.env') : null,
   app.isPackaged ? path.join(path.dirname(process.execPath), '.env') : null,
 ].filter(Boolean);
