@@ -446,6 +446,11 @@ function buildVisualSmokeHtml(caseDef, {
       const rect = node.getBoundingClientRect();
       return { left: rect.left, right: rect.right, width: rect.width };
     });
+    const elementOverflowX = Math.ceil(Math.max(0, ...overflowRects.map((rect) => Math.max(
+      rect.right - window.innerWidth,
+      -rect.left,
+      rect.width - window.innerWidth
+    ))));
     const overlaps = rects.flatMap((a, index) => rects.slice(index + 1).map((b) => {
       const xOverlap = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
       const yOverlap = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
@@ -457,7 +462,8 @@ function buildVisualSmokeHtml(caseDef, {
       scrollWidth: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
-      hasElementOverflow: overflowRects.some((rect) => rect.left < -1 || rect.right > window.innerWidth + 1),
+      elementOverflowX,
+      hasElementOverflow: elementOverflowX > 1 || overflowRects.some((rect) => rect.left < -1 || rect.right > window.innerWidth + 1 || rect.width > window.innerWidth + 1),
       cardOverlapCount: overlaps.length,
       visibleTextBlocks: Array.from(document.querySelectorAll('h1,p,strong,button,input')).filter((node) => {
         const rect = node.getBoundingClientRect();
@@ -562,6 +568,8 @@ async function captureHtmlWithElectron({ electron, htmlPath, pngPath, viewport }
       layout: {
         scrollWidth: metrics.scrollWidth,
         clientWidth: metrics.clientWidth,
+        elementOverflowX: Number(metrics.elementOverflowX || 0),
+        overflowX: Math.max(0, metrics.scrollWidth - metrics.clientWidth, Number(metrics.elementOverflowX || 0)),
         horizontalOverflow: metrics.hasHorizontalOverflow || metrics.hasElementOverflow,
         visibleTextBlocks: metrics.visibleTextBlocks,
       },

@@ -34,7 +34,8 @@ const CREATE_SURFACES = [
   'sistema', 'projeto', 'ferramenta', 'calculadora', 'conversor',
   'dashboard', 'crm', 'portal', 'componente', 'formulario',
   'fluxo', 'editor visual', 'canvas', 'app de dados', 'explorador de dados',
-  'csv', 'api', 'preset', 'mcp', 'capability',
+  'csv', 'api', 'integracao', 'integração', 'servico externo', 'serviço externo',
+  'mock', 'preset', 'mcp', 'capability',
 ];
 
 const STACK_TERMS = [
@@ -94,6 +95,8 @@ const COMPLEX_BRIEF_TERMS = [
   'cadastro', 'cadastrar', 'campos', 'listar', 'lista', 'filtrar',
   'filtros', 'resumo', 'editar', 'remover', 'localmente',
   'estado local', 'estado vazio', 'propriedades',
+  'participantes', 'check-in', 'ingressos', 'relatorios', 'relatórios',
+  'configuracoes', 'configurações', 'primeira versao funcional', 'primeira versão funcional',
   'exportacao', 'exportação', 'arquitetura', 'servicos', 'services', 'dominio', 'domínio',
 ];
 
@@ -193,7 +196,15 @@ function hasComplexBriefSignal(text = '') {
   const complexHits = countPhraseHits(text, COMPLEX_APP_TERMS);
   const briefHits = countPhraseHits(text, COMPLEX_BRIEF_TERMS);
   const structuredLongBrief = text.length >= 420 && briefHits >= 2;
-  return Boolean(structuredLongBrief || (complexHits >= 2 && briefHits >= 2) || (text.length >= 900 && complexHits >= 1));
+  const functionalMvpWithModules =
+    /\bprimeira versao funcional\b/.test(text) &&
+    /\b(cadastro|participantes|check-?in|ingressos?|dashboard|relatorios|configuracoes|permissoes)\b/.test(text);
+  return Boolean(
+    structuredLongBrief ||
+      functionalMvpWithModules ||
+      (complexHits >= 2 && briefHits >= 2) ||
+      (text.length >= 900 && complexHits >= 1)
+  );
 }
 
 function hasMcpFreedomSignal(text = '') {
@@ -367,6 +378,7 @@ function buildProductIntake({
       continuationCreate
   );
   const blueprintPreferred = Boolean(canCreateInitialProject && scaffoldIntent && enoughForInitialCreate);
+  const diagnosticRouteIntent = Boolean(diagnosticIntent && !blueprintPreferred);
 
   let action = 'conversation';
   let executionIntent = 'conversation';
@@ -376,7 +388,7 @@ function buildProductIntake({
   } else if (toolIntent && !repairDiagnosticIntent) {
     action = 'tool_action';
     executionIntent = 'tool_action';
-  } else if (diagnosticIntent) {
+  } else if (diagnosticRouteIntent) {
     action = 'diagnostic_repair';
     executionIntent = 'diagnose_project';
   } else if (visualReviewIntent) {
@@ -417,7 +429,7 @@ function buildProductIntake({
       scaffoldIntent,
       editIntent,
       searchIntent,
-      diagnosticIntent,
+      diagnosticIntent: diagnosticRouteIntent,
       pendingBriefing,
       complexApplication,
       complexBriefSufficient,

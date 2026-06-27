@@ -84,6 +84,10 @@ async function runProjectHandlersTest(tempRoot) {
       latestUrl: 'https://github.com/example/repo/commit/abc',
       actionsUrl: 'https://github.com/example/repo/actions',
     }),
+    getProjectGitCommits: async (_rootPath, limit) => ({
+      ok: true,
+      commits: [{ hash: 'abc123', subject: 'Commit de teste' }].slice(0, limit || 20),
+    }),
     getProjectGitWorktree: async () => ({
       ok: true,
       isGitRepo: true,
@@ -109,6 +113,7 @@ async function runProjectHandlersTest(tempRoot) {
       openExternal: async (url) => openedUrls.push(url),
     },
     rollbackProjectGitFiles: async (_rootPath, files) => ({ ok: true, rolledBack: files }),
+    rollbackProjectGitToCommit: async (_rootPath, commitHash) => ({ ok: true, rolledBackTo: commitHash }),
     stageProjectGitFiles: async (_rootPath, files) => ({ ok: true, stagedFiles: files }),
     unstageProjectGitFiles: async (_rootPath, files) => ({ ok: true, unstagedFiles: files }),
     writeProjectsSnapshot: (snapshot) => {
@@ -174,7 +179,7 @@ async function runProjectHandlersTest(tempRoot) {
     },
   });
 
-  assert.strictEqual(Object.keys(handlers).filter((channel) => channel.startsWith('project')).length, 32);
+  assert.strictEqual(Object.keys(handlers).filter((channel) => channel.startsWith('project')).length, 34);
 
   const addResult = await handlers['projects:add']();
   assert.strictEqual(addResult.ok, true);

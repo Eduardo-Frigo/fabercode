@@ -29,6 +29,30 @@ function run() {
   assert.strictEqual(simpleNext.signals.scaffoldIntent, true);
   assert.strictEqual(simpleNext.signals.enoughForInitialCreate, true);
 
+  const calculatorWithValidationStates = buildProductIntake({
+    projectInfo: projectInfo(),
+    userMessage: [
+      'Crie uma calculadora simples de preço final para freelancers.',
+      'Deve validar campos vazios, números negativos e percentuais acima de 100%.',
+      'Interface limpa, responsiva e com estados de erro visíveis.',
+    ].join(' '),
+  });
+  assert.strictEqual(calculatorWithValidationStates.canonical.action, 'create_project');
+  assert.strictEqual(calculatorWithValidationStates.canonical.executionIntent, 'init_project');
+  assert.strictEqual(calculatorWithValidationStates.signals.diagnosticIntent, false);
+
+  const temporaryCapabilityIntegration = buildProductIntake({
+    projectInfo: projectInfo(),
+    userMessage: [
+      'Crie uma integração simulada com um serviço externo de emissão de propostas.',
+      'Antes de implementar, crie contrato temporário da capability com input, output, timeout, retry e fallback local.',
+      'Implemente mock controlado e valide.',
+    ].join(' '),
+  });
+  assert.strictEqual(temporaryCapabilityIntegration.canonical.action, 'create_project');
+  assert.strictEqual(temporaryCapabilityIntegration.canonical.executionIntent, 'init_project');
+  assert.strictEqual(temporaryCapabilityIntegration.signals.siteOrAppSurface, true);
+
   const stackOnlyAnswer = buildProductIntake({
     projectInfo: projectInfo({ files: ['.faber/project.json'], totalFiles: 1 }),
     userMessage: 'Quero criar em next.js',
@@ -87,6 +111,18 @@ function run() {
   assert.strictEqual(complexAppWithFullBrief.signals.complexBriefSufficient, true);
   assert.strictEqual(complexAppWithFullBrief.signals.requiresComplexBriefing, false);
   assert.strictEqual(complexAppWithFullBrief.signals.guidedArchitecturePreferred, true);
+
+  const largeEventsSaas = buildProductIntake({
+    projectInfo: projectInfo(),
+    userMessage: [
+      'Crie uma ferramenta SaaS completa para gestão de eventos com cadastro de eventos, participantes, check-in, lotes de ingresso, dashboard, relatórios, configurações e permissões.',
+      'Faça a primeira versão funcional, mas preserve modularidade e contratos.',
+    ].join(' '),
+  });
+  assert.strictEqual(largeEventsSaas.canonical.action, 'create_project');
+  assert.strictEqual(largeEventsSaas.canonical.executionIntent, 'init_project');
+  assert.strictEqual(largeEventsSaas.signals.complexApplication, true);
+  assert.strictEqual(largeEventsSaas.signals.complexBriefSufficient, true);
 
   const visualEditorBrief = buildProductIntake({
     projectInfo: projectInfo(),

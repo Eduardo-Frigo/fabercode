@@ -587,6 +587,16 @@ function createAgenticToolLoopService(dependencies = {}) {
       if (!toolCalls.length && !isFinished) {
         consecutiveEmptyTurns += 1;
         const finalMessage = allTextParts.filter(Boolean).join('\n\n').trim();
+
+        if (modifiedFiles.size > 0 && finalMessage) {
+          return {
+            ok: true,
+            agentic: true,
+            message: finalMessage,
+            modifiedFiles: [...modifiedFiles],
+            toolRuns,
+          };
+        }
         
         if (consecutiveEmptyTurns < 4 && maxSteps > 1) {
           if (turn && turn.text) {

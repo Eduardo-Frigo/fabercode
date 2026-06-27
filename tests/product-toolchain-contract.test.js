@@ -171,6 +171,7 @@ async function testNextCreationPreviewVerificationAndEditing(tempRoot) {
   const verification = await verificationService.runProjectVerification(projectInfo);
   assert.strictEqual(verification.ready, true);
   assert.deepStrictEqual(verificationCalls.map((call) => [call.bin, call.args.join(' ')]), [
+    ['npm', 'install'],
     ['npm', 'run build'],
   ]);
   assert.ok(verification.results.some((result) => result.id === 'next_entry' && result.status === 'passed'));
@@ -411,6 +412,7 @@ async function testPluginFrameworkCreationPreviewAndVerification(tempRoot) {
   const verification = await verificationService.runProjectVerification(projectInfo);
   assert.strictEqual(verification.ready, true);
   assert.deepStrictEqual(verificationCalls.map((call) => [call.bin, call.args.join(' ')]), [
+    ['npm', 'install'],
     ['npm', 'run build'],
   ]);
 }

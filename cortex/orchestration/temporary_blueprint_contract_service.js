@@ -57,6 +57,13 @@ function slugifyContractLabel(value = '') {
 
 function pickDomainLabel({ normalized = '', brand = '' } = {}) {
   if (brand) return brand;
+  const calledEntityMatch = normalized.match(
+    /\b(?:ferramenta|aplicacao|aplicação|app|site|landing page|componente|calculadora|conversor)\b[^\n;!?]{0,140}?\bchamad[ao]\s+([a-z0-9&'.\s-]{2,80}?)(?=\.|,|;| com | que | para | precisa | deve |$)/
+  );
+  if (calledEntityMatch && calledEntityMatch[1]) {
+    const label = calledEntityMatch[1].replace(/\s+/g, ' ').trim();
+    if (!/^(final|cta|principal|primaria|primária|secundaria|secundária)$/.test(label)) return label;
+  }
   const namedToolMatch = normalized.match(
     /\b(?:nome da ferramenta|nome do produto|produto)\s+([a-z0-9&'.\s-]{2,80})(?:\:|\.|,|;| com | que | para |$)/
   );

@@ -1,0 +1,6 @@
+- [x] Restruturar o HTML do painel de chat do mapa em index.html com as duas visualizações (list view e session view)
+- [x] Adicionar regras CSS em application-map.css para os componentes de lista, itens de conversa, cabeçalho de sessão e botão de voltar
+- [x] Implementar a lógica de alternância de telas e população do histórico de conversas em application_map.js
+- [x] Implementar ação do botão de voltar para retornar à lista de conversas em application_map.js
+- [x] Verificar manualmente as telas e o fluxo completo no app
+- [x] Executar suítes de testes para confirmar conformidade

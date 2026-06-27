@@ -201,6 +201,62 @@ async function run() {
     assert.strictEqual(overflowCapture.analysis.horizontalOverflow, true);
     assert.ok(overflowCapture.issues.some((issue) => issue.id === 'capture_horizontal_overflow'));
 
+    const hiddenOverflowLoadedUrls = [];
+    const hiddenOverflowService = createProjectVisualCaptureService({
+      BrowserWindow: createFakeBrowserWindowClass(
+        () => currentBuffer,
+        hiddenOverflowLoadedUrls,
+        null,
+        null,
+        ({ options }) => ({
+          title: 'Overflow mascarado',
+          bodyText: 'Conteudo renderizado com elemento maior que o viewport.',
+          viewport: {
+            width: options.width,
+            height: options.height,
+            devicePixelRatio: 1,
+          },
+          layout: {
+            scrollWidth: options.width,
+            scrollHeight: 900,
+            clientWidth: options.width,
+            clientHeight: options.height,
+            overflowX: 0,
+            elementOverflowX: 72,
+            horizontalOverflow: true,
+            visibleTextBlocks: 6,
+          },
+          headings: ['Overflow mascarado'],
+          buttons: ['Corrigir layout'],
+          images: [],
+          videos: [],
+          iframes: [],
+          svgCount: 0,
+          iconLikeCount: 0,
+          sectionCount: 2,
+          formCount: 0,
+          computedTokens: [],
+        })
+      ),
+      PNG,
+      fs,
+      path,
+    });
+    const hiddenOverflowCapture = await hiddenOverflowService.captureProjectPreview({
+      url: 'file:///tmp/hidden-overflow.html',
+      rootPath: tempRoot,
+      outputDir: path.join(tempRoot, 'captures'),
+      viewport: { id: 'mobile', label: 'Mobile', width: 390, height: 844 },
+      waitMs: 0,
+      domReadyTimeoutMs: 50,
+      domStableIntervalMs: 1,
+      domStableQuietMs: 0,
+    });
+
+    assert.strictEqual(hiddenOverflowCapture.ok, true);
+    assert.strictEqual(hiddenOverflowCapture.analysis.horizontalOverflow, true);
+    assert.ok(hiddenOverflowCapture.issues.some((issue) => issue.id === 'capture_horizontal_overflow'));
+
     currentBuffer = buildPng(420, 300, () => [255, 255, 255, 255]);
     const blankCapture = await service.captureProjectPreview({
       url: 'file:///tmp/blank.html',

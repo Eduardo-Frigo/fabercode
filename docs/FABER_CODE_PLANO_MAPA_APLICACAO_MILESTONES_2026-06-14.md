@@ -214,9 +214,9 @@ As referencias indicam uma linguagem visual propria:
 
 Arquivos de referencia:
 
-- `/Users/eduardofrigo/Desktop/1 Referencia visual do que eu quero para o mapa da aplicação.png`
-- `/Users/eduardofrigo/Desktop/2 Referencia visual do que eu quero para o mapa da aplicação.jpeg`
-- `/Users/eduardofrigo/Desktop/3 Referência visual para o painel de milestones.jpeg`
+- `referencias/mapa-aplicacao-01.png`
+- `referencias/mapa-aplicacao-02.jpeg`
+- `referencias/painel-milestones-01.jpeg`
 
 ### 5.3 Tipos de entidades
 

@@ -302,7 +302,29 @@ function createProjectVisualCaptureService(dependencies = {}) {
           });
           const doc = document.documentElement || document.body;
           const body = document.body || doc;
-          const overflowX = Math.max(0, Math.max(doc ? doc.scrollWidth || 0 : 0, body ? body.scrollWidth || 0 : 0) - window.innerWidth);
+          const overflowCandidates = Array.from(document.querySelectorAll('body *')).slice(0, 1000).map((node) => {
+            const rect = node.getBoundingClientRect();
+            const style = window.getComputedStyle(node);
+            return {
+              left: rect.left,
+              right: rect.right,
+              width: rect.width,
+              height: rect.height,
+              visible: rect.width > 1 && rect.height > 1 && style.display !== 'none' && style.visibility !== 'hidden',
+            };
+          }).filter((rect) => rect.visible);
+          const elementOverflowX = Math.ceil(Math.max(0, ...overflowCandidates.map((rect) => Math.max(
+            rect.right - window.innerWidth,
+            -rect.left,
+            rect.width - window.innerWidth
+          ))));
+          const oversizedElementCount = overflowCandidates.filter((rect) => (
+            rect.left < -1 ||
+            rect.right > window.innerWidth + 1 ||
+            rect.width > window.innerWidth + 1
+          )).length;
+          const scrollOverflowX = Math.max(0, Math.max(doc ? doc.scrollWidth || 0 : 0, body ? body.scrollWidth || 0 : 0) - window.innerWidth);
+          const overflowX = Math.max(scrollOverflowX, elementOverflowX);
           const visibleTextBlocks = Array.from(document.querySelectorAll('h1,h2,h3,p,a,button,label,summary,li')).filter((node) => {
             const rect = node.getBoundingClientRect();
             return rect.width > 1 && rect.height > 1 && rect.bottom >= 0 && rect.top <= window.innerHeight;
@@ -354,6 +376,9 @@ function createProjectVisualCaptureService(dependencies = {}) {
               clientWidth: doc ? doc.clientWidth || window.innerWidth : window.innerWidth,
               clientHeight: doc ? doc.clientHeight || window.innerHeight : window.innerHeight,
               overflowX,
+              scrollOverflowX,
+              elementOverflowX,
+              oversizedElementCount,
               horizontalOverflow: overflowX > 8,
               visibleTextBlocks,
             },
@@ -396,7 +421,11 @@ function createProjectVisualCaptureService(dependencies = {}) {
     if (!pageSnapshot || typeof pageSnapshot !== 'object') return [];
     const issues = [];
     const layout = pageSnapshot.layout && typeof pageSnapshot.layout === 'object' ? pageSnapshot.layout : {};
-    const overflowX = Number(layout.overflowX || 0);
+    const overflowX = Math.max(
+      Number(layout.overflowX || 0),
+      Number(layout.elementOverflowX || 0),
+      layout.horizontalOverflow ? 9 : 0
+    );
     const visibleTextBlocks = Number(layout.visibleTextBlocks || 0);
     const label = viewport && viewport.label ? String(viewport.label) : 'viewport';
     if (overflowX > 24) {

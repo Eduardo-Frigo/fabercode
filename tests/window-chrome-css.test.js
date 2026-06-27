@@ -296,8 +296,8 @@ assert.match(
 );
 assert.match(
   indexHtml,
-  /id="btn-project-git"[\s\S]*id="btn-project-terminal"[\s\S]*id="btn-automata-contracts"[\s\S]*id="btn-project-deploy"/,
-  'right tools should be ordered Git, Terminal, Contratos, Executar'
+  /id="btn-project-git"[\s\S]*id="btn-project-terminal"[\s\S]*id="btn-project-deploy"/,
+  'right tools should be ordered Git, Terminal, Executar'
 );
 assert.match(
   indexHtml,

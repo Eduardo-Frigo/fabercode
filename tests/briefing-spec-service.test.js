@@ -76,6 +76,16 @@ function run() {
   assert.strictEqual(forgeMrp.temporaryBlueprintContract.domain, 'temporary-forge-mrp');
   assert.strictEqual(forgeMrp.temporaryBlueprintContract.label, 'Forge MRP');
 
+  const fitCalc = buildBriefingSpec({
+    userMessage: [
+      'Crie uma ferramenta simples em Next.js chamada FitCalc IMC.',
+      'Precisa ser uma calculadora de IMC com peso, altura, resultado, classificacao, historico local, CTA para calcular agora e conteudo final sem placeholder.',
+    ].join(' '),
+  });
+  assert.strictEqual(fitCalc.temporaryBlueprintContract.domain, 'temporary-fitcalc-imc');
+  assert.strictEqual(fitCalc.temporaryBlueprintContract.label, 'fitcalc imc');
+  assert.strictEqual(fitCalc.temporaryBlueprintContract.calculatorContract.id, 'imc');
+
   const visualEditor = buildBriefingSpec({
     userMessage: 'Crie um editor visual simples para montar layouts com canvas, camadas, inspetor de propriedades e exportação JSON.',
   });

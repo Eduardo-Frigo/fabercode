@@ -530,18 +530,18 @@ function createProjectVisualValidationRuntimeService(dependencies = {}) {
         };
       }
       return {
-        shouldBlock: false,
+        shouldBlock: true,
         reason: 'visual_validation_capture_required',
         status: report.status,
         topIssues,
         summary: report.summary || '',
         autoRepairable: false,
         retryable: false,
-        warning: true,
+        warning: false,
       };
     }
 
-    const finalShouldBlock = infrastructureFailure ? false : shouldBlock;
+    const finalShouldBlock = infrastructureFailure ? true : shouldBlock;
 
     return {
       shouldBlock: finalShouldBlock,
