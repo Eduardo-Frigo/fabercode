@@ -102,6 +102,74 @@ body.ui-ready .account-gate:not(.hidden) .account-gate__panel {
   justify-self: center;
 }
 
+.account-gate__intro {
+  display: grid;
+  gap: 14px;
+}
+
+.account-gate__intro-copy {
+  display: grid;
+  gap: 6px;
+  text-align: center;
+}
+
+.account-gate__intro-copy strong {
+  color: var(--text);
+  font-size: 1.08rem;
+  letter-spacing: -0.02em;
+}
+
+.account-gate__intro-copy p {
+  margin: 0;
+  color: rgba(232, 228, 223, 0.62);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.account-gate__eyebrow {
+  color: rgba(130, 238, 179, 0.84);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.account-gate__preference-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.account-gate__entry-choice {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.account-gate__choice-card {
+  min-height: 84px;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  text-align: left;
+  white-space: normal;
+}
+
+.account-gate__choice-card strong,
+.account-gate__choice-card span {
+  display: block;
+}
+
+.account-gate__choice-card strong {
+  font-size: 0.9rem;
+}
+
+.account-gate__choice-card span {
+  color: rgba(232, 228, 223, 0.62);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
 .account-gate__actions,
 .account-gate__email-form,
 .account-gate__signup-fields {
@@ -327,8 +395,18 @@ body[data-theme='light'] .account-gate__status,
 body[data-theme='light'] .account-gate__separator,
 body[data-theme='light'] .account-gate__field,
 body[data-theme='light'] .account-gate__workspace-choice,
-body[data-theme='light'] .account-gate__link {
+body[data-theme='light'] .account-gate__link,
+body[data-theme='light'] .account-gate__intro-copy p,
+body[data-theme='light'] .account-gate__choice-card span {
   color: rgba(33, 33, 33, 0.68);
+}
+
+body[data-theme='light'] .account-gate__intro-copy strong {
+  color: #212121;
+}
+
+body[data-theme='light'] .account-gate__eyebrow {
+  color: rgba(20, 132, 83, 0.86);
 }
 
 body[data-theme='light'] .account-gate__field input,
@@ -365,6 +443,22 @@ body[data-theme='light'] .account-gate__github-action:hover,
 body[data-theme='light'] .account-gate__back-action:hover {
   background: #fff;
   border-color: rgba(33, 33, 33, 0.22);
+}
+
+@media (max-width: 620px) {
+  .account-gate {
+    padding: 18px;
+  }
+
+  .account-gate__panel {
+    width: min(520px, calc(100vw - 28px));
+    padding: 22px;
+  }
+
+  .account-gate__preference-grid,
+  .account-gate__entry-choice {
+    grid-template-columns: 1fr;
+  }
 }
 
 @keyframes account-gate-fade-up {

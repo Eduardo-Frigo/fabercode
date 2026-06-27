@@ -329,6 +329,15 @@ const accountGateController = window.FaberAccountGate
       api: window.localcodeApi,
       notify: (message) => appendMessage('assistant', message, { persistToConversation: false }),
       getInterfaceLanguage: () => state.interfaceLanguage,
+      onLanguagePreferenceSelected: (locale) => {
+        applyInterfaceLanguage(locale, { rerender: false });
+      },
+      onThemePreferenceSelected: (theme) => {
+        applyAppearanceSettings({
+          interfaceTheme: theme,
+          panelFontScale: state.panelFontScale,
+        }, { rerender: false });
+      },
       onWorkspacePreferenceSelected: (mode) => {
         if (workspaceLayoutController) {
           workspaceLayoutController.updatePreferences({ mode }, { persist: true, applyPreset: true });

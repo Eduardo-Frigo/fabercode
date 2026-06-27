@@ -29,6 +29,40 @@
       <div class="account-gate__panel" role="dialog" aria-modal="true" aria-labelledby="account-gate-title">
         <img class="account-gate__logo" src="./assets/Faber-Code-Logo-02.png" alt="Faber Code" />
         <h1 id="account-gate-title" class="sr-only">Login Faber Code</h1>
+        <div id="account-gate-intro" class="account-gate__intro">
+          <div class="account-gate__intro-copy">
+            <span class="account-gate__eyebrow">Primeiro acesso</span>
+            <strong>Vamos preparar o Faber Code do seu jeito.</strong>
+            <p>Escolha idioma, tema e o caminho de entrada. Depois disso mostramos apenas o que importa para o seu caso.</p>
+          </div>
+          <div class="account-gate__preference-grid">
+            <label class="account-gate__field" for="account-gate-onboarding-language">
+              <span>Idioma</span>
+              <select id="account-gate-onboarding-language">
+                <option value="pt-BR">Português (Brasil)</option>
+                <option value="en-US">English</option>
+                <option value="es-ES">Español</option>
+              </select>
+            </label>
+            <label class="account-gate__field" for="account-gate-onboarding-theme">
+              <span>Tema</span>
+              <select id="account-gate-onboarding-theme">
+                <option value="dark">Escuro</option>
+                <option value="light">Claro</option>
+              </select>
+            </label>
+          </div>
+          <div class="account-gate__entry-choice" aria-label="Escolha como deseja entrar">
+            <button id="account-gate-new-user" type="button" class="btn btn-success account-gate__choice-card">
+              <strong>Sou um novo usuário</strong>
+              <span>Criar conta com preferências iniciais</span>
+            </button>
+            <button id="account-gate-existing-user" type="button" class="btn btn-muted account-gate__choice-card">
+              <strong>Já sou um usuário</strong>
+              <span>Entrar com e-mail, Google ou GitHub</span>
+            </button>
+          </div>
+        </div>
         <div id="account-gate-actions" class="account-gate__actions">
           <button id="account-gate-email-toggle" type="button" class="btn btn-muted account-gate__wide-action">
             Logar com e-mail

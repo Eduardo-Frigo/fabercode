@@ -68,8 +68,13 @@ function createElement() {
 
 async function run() {
   const gateEl = createElement();
+  const introEl = createElement();
   const statusEl = createElement();
   const actionsEl = createElement();
+  const onboardingLanguageSelect = createElement();
+  const onboardingThemeSelect = createElement();
+  const newUserButton = createElement();
+  const existingUserButton = createElement();
   const googleButton = createElement();
   const backButton = createElement();
   const signOutButton = createElement();
@@ -98,8 +103,13 @@ async function run() {
     getElementById(id) {
       return {
         'account-gate': gateEl,
+        'account-gate-intro': introEl,
         'account-gate-actions': actionsEl,
         'account-gate-status': statusEl,
+        'account-gate-onboarding-language': onboardingLanguageSelect,
+        'account-gate-onboarding-theme': onboardingThemeSelect,
+        'account-gate-new-user': newUserButton,
+        'account-gate-existing-user': existingUserButton,
         'account-gate-email-toggle': emailToggle,
         'account-gate-email-form': emailForm,
         'account-gate-email': emailInput,
@@ -163,12 +173,16 @@ async function run() {
   assert.strictEqual(controller.isUnlocked(), false);
   assert.strictEqual(body.classList.contains('account-locked'), true);
   assert.strictEqual(gateEl.classList.contains('hidden'), false);
+  assert.strictEqual(introEl.classList.contains('hidden'), false);
+  assert.strictEqual(actionsEl.classList.contains('hidden'), true);
   controller.showEmailForm('signup');
   assert.strictEqual(actionsEl.classList.contains('hidden'), true);
   assert.strictEqual(emailForm.classList.contains('hidden'), false);
   assert.strictEqual(signupFields.classList.contains('hidden'), false);
   assert.strictEqual(languageSelect.value, 'pt-BR');
   assert.strictEqual(themeSelect.value, 'light');
+  assert.strictEqual(onboardingLanguageSelect.value, 'pt-BR');
+  assert.strictEqual(onboardingThemeSelect.value, 'light');
   assert.strictEqual(workspaceSelect.value, 'chat');
   signupWorkspaceSelect.value = 'ide';
   emailInput.value = 'owner@example.com';

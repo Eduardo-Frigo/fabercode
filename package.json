@@ -144,7 +144,8 @@
     "diagnose:openai": "electron scripts/diagnose-openai-api.js",
     "prepack": "npm run audit:release",
     "prepublishOnly": "npm run audit:release",
-    "pack:mac": "npm run audit:release && electron-builder --mac dir"
+    "pack:mac": "npm run audit:release && electron-builder --mac dir",
+    "dist:mac": "npm run audit:release && electron-builder --mac dmg"
   },
   "keywords": [
     "electron",
@@ -179,6 +180,21 @@
       "target": "dir",
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.png"
+    },
+    "dmg": {
+      "artifactName": "Faber Code-${version}-${arch}.${ext}",
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
     },
     "icon": "build/icon.png"
   },

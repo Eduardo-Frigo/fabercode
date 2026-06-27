@@ -90,13 +90,24 @@
     const onWorkspacePreferenceSelected = typeof options.onWorkspacePreferenceSelected === 'function'
       ? options.onWorkspacePreferenceSelected
       : () => {};
+    const onLanguagePreferenceSelected = typeof options.onLanguagePreferenceSelected === 'function'
+      ? options.onLanguagePreferenceSelected
+      : () => {};
+    const onThemePreferenceSelected = typeof options.onThemePreferenceSelected === 'function'
+      ? options.onThemePreferenceSelected
+      : () => {};
     const notify = typeof options.notify === 'function' ? options.notify : () => {};
     const getInterfaceLanguage = typeof options.getInterfaceLanguage === 'function' ? options.getInterfaceLanguage : null;
 
     const elements = {
       gate: doc.getElementById('account-gate'),
+      intro: doc.getElementById('account-gate-intro'),
       actions: doc.getElementById('account-gate-actions'),
       status: doc.getElementById('account-gate-status'),
+      onboardingLanguageSelect: doc.getElementById('account-gate-onboarding-language'),
+      onboardingThemeSelect: doc.getElementById('account-gate-onboarding-theme'),
+      newUser: doc.getElementById('account-gate-new-user'),
+      existingUser: doc.getElementById('account-gate-existing-user'),
       emailToggle: doc.getElementById('account-gate-email-toggle'),
       emailForm: doc.getElementById('account-gate-email-form'),
       emailInput: doc.getElementById('account-gate-email'),
@@ -120,15 +131,23 @@
     let unlocked = false;
     let busy = false;
     let authMode = 'login';
-    let authView = 'choices';
+    let authView = elements.intro ? 'intro' : 'choices';
     let unsubscribeAccountEvent = null;
 
     function setInitialPreferences() {
+      const language = getPreferredSignupLanguage({ documentRef: doc, getInterfaceLanguage });
+      const theme = getPreferredDeviceTheme(view);
+      if (elements.onboardingLanguageSelect) {
+        elements.onboardingLanguageSelect.value = language;
+      }
+      if (elements.onboardingThemeSelect) {
+        elements.onboardingThemeSelect.value = theme;
+      }
       if (elements.languageSelect) {
-        elements.languageSelect.value = getPreferredSignupLanguage({ documentRef: doc, getInterfaceLanguage });
+        elements.languageSelect.value = language;
       }
       if (elements.themeSelect) {
-        elements.themeSelect.value = getPreferredDeviceTheme(view);
+        elements.themeSelect.value = theme;
       }
       if (elements.workspaceSelect) elements.workspaceSelect.value = 'chat';
       if (elements.signupWorkspaceSelect) elements.signupWorkspaceSelect.value = 'chat';
@@ -143,6 +162,10 @@
         elements.githubLogin,
         elements.signOut,
         elements.refresh,
+        elements.onboardingLanguageSelect,
+        elements.onboardingThemeSelect,
+        elements.newUser,
+        elements.existingUser,
         elements.emailInput,
         elements.passwordInput,
         elements.emailSubmit,
@@ -181,6 +204,43 @@
       if (elements.status) elements.status.textContent = message || '';
     }
 
+    function getSelectedLanguagePreference() {
+      const fromOnboarding = elements.onboardingLanguageSelect
+        ? normalizeLanguagePreference(elements.onboardingLanguageSelect.value)
+        : '';
+      if (fromOnboarding) return fromOnboarding;
+      const fromSignup = elements.languageSelect
+        ? normalizeLanguagePreference(elements.languageSelect.value)
+        : '';
+      return fromSignup || getPreferredSignupLanguage({ documentRef: doc, getInterfaceLanguage });
+    }
+
+    function getSelectedThemePreference() {
+      const fromOnboarding = elements.onboardingThemeSelect
+        ? String(elements.onboardingThemeSelect.value || '').trim()
+        : '';
+      if (fromOnboarding === 'light' || fromOnboarding === 'dark') return fromOnboarding;
+      const fromSignup = elements.themeSelect
+        ? String(elements.themeSelect.value || '').trim()
+        : '';
+      if (fromSignup === 'light' || fromSignup === 'dark') return fromSignup;
+      return getPreferredDeviceTheme(view);
+    }
+
+    function applyOnboardingPreferences({ notifySelection = false } = {}) {
+      const language = getSelectedLanguagePreference();
+      const theme = getSelectedThemePreference();
+      if (elements.languageSelect) elements.languageSelect.value = language;
+      if (elements.onboardingLanguageSelect) elements.onboardingLanguageSelect.value = language;
+      if (elements.themeSelect) elements.themeSelect.value = theme;
+      if (elements.onboardingThemeSelect) elements.onboardingThemeSelect.value = theme;
+      if (notifySelection) {
+        onLanguagePreferenceSelected(language);
+        onThemePreferenceSelected(theme);
+      }
+      return { language, theme };
+    }
+
     function setLocked(locked) {
       unlocked = !locked;
       if (doc.body) doc.body.classList.toggle('account-locked', locked);
@@ -215,12 +275,19 @@
       }
 
       if (signedIn) {
+        if (elements.intro) elements.intro.classList.add('hidden');
         if (elements.actions) elements.actions.classList.toggle('hidden', appReady);
         if (elements.emailForm) elements.emailForm.classList.add('hidden');
+      } else if (authView === 'intro' && elements.intro) {
+        elements.intro.classList.remove('hidden');
+        if (elements.actions) elements.actions.classList.add('hidden');
+        if (elements.emailForm) elements.emailForm.classList.add('hidden');
       } else if (authView === 'choices') {
+        if (elements.intro) elements.intro.classList.add('hidden');
         if (elements.actions) elements.actions.classList.remove('hidden');
         if (elements.emailForm) elements.emailForm.classList.add('hidden');
       } else {
+        if (elements.intro) elements.intro.classList.add('hidden');
         if (elements.actions) elements.actions.classList.add('hidden');
         if (elements.emailForm) elements.emailForm.classList.remove('hidden');
       }
@@ -230,9 +297,24 @@
       if (elements.emailToggle) elements.emailToggle.classList.toggle('hidden', signedIn);
     }
 
+    function showIntro() {
+      if (!elements.intro) {
+        showChoices();
+        return;
+      }
+      authView = 'intro';
+      authMode = 'login';
+      if (elements.intro) elements.intro.classList.remove('hidden');
+      if (elements.actions) elements.actions.classList.add('hidden');
+      if (elements.emailForm) elements.emailForm.classList.add('hidden');
+      if (elements.signupFields) elements.signupFields.classList.add('hidden');
+      setStatusMessage('');
+    }
+
     function showChoices() {
       authView = 'choices';
       authMode = 'login';
+      if (elements.intro) elements.intro.classList.add('hidden');
       if (elements.actions) elements.actions.classList.remove('hidden');
       if (elements.emailForm) elements.emailForm.classList.add('hidden');
       if (elements.signupFields) elements.signupFields.classList.add('hidden');
@@ -245,9 +327,11 @@
     function showEmailForm(nextMode = 'login') {
       authView = 'email';
       authMode = nextMode === 'signup' ? 'signup' : 'login';
+      if (elements.intro) elements.intro.classList.add('hidden');
       if (elements.actions) elements.actions.classList.add('hidden');
       if (elements.emailForm) elements.emailForm.classList.remove('hidden');
       if (elements.signupFields) elements.signupFields.classList.toggle('hidden', authMode !== 'signup');
+      if (authMode === 'signup') applyOnboardingPreferences();
       if (elements.emailSubmit) elements.emailSubmit.textContent = authMode === 'signup' ? 'Criar conta' : 'Entrar';
       if (elements.createToggle) {
         elements.createToggle.textContent = authMode === 'signup'
@@ -376,11 +460,10 @@
 
       const payload = { email, password };
       if (isSignup) {
+        const preferences = applyOnboardingPreferences();
         payload.name = elements.fullNameInput ? String(elements.fullNameInput.value || '').trim() : '';
-        payload.themePreference = elements.themeSelect ? String(elements.themeSelect.value || '').trim() : getPreferredDeviceTheme(view);
-        payload.languagePreference = elements.languageSelect
-          ? String(elements.languageSelect.value || '').trim()
-          : getPreferredSignupLanguage({ documentRef: doc, getInterfaceLanguage });
+        payload.themePreference = preferences.theme;
+        payload.languagePreference = preferences.language;
         applyWorkspacePreference();
       }
 
@@ -444,6 +527,29 @@
 
     function bindEvents() {
       setInitialPreferences();
+      applyOnboardingPreferences({ notifySelection: true });
+      if (elements.onboardingLanguageSelect) {
+        elements.onboardingLanguageSelect.addEventListener('change', () => {
+          applyOnboardingPreferences({ notifySelection: true });
+        });
+      }
+      if (elements.onboardingThemeSelect) {
+        elements.onboardingThemeSelect.addEventListener('change', () => {
+          applyOnboardingPreferences({ notifySelection: true });
+        });
+      }
+      if (elements.newUser) {
+        elements.newUser.addEventListener('click', () => {
+          applyOnboardingPreferences({ notifySelection: true });
+          showEmailForm('signup');
+        });
+      }
+      if (elements.existingUser) {
+        elements.existingUser.addEventListener('click', () => {
+          applyOnboardingPreferences({ notifySelection: true });
+          showChoices();
+        });
+      }
       if (elements.emailToggle) {
         elements.emailToggle.addEventListener('click', () => {
           showEmailForm('login');
@@ -517,6 +623,7 @@
       isUnlocked: () => unlocked,
       refresh,
       showChoices,
+      showIntro,
       showEmailForm,
       signOut,
       startGithubLogin,
