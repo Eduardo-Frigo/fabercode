@@ -1491,7 +1491,7 @@ async function bootstrap() {
 
 let __bootFinished = false;
 const __preloaderWatchdog = startupPreloaderController.startWatchdog({
-  timeoutMs: 3000,
+  timeoutMs: 15000,
   isFinished: () => __bootFinished === true,
   onTimeout: () => {
     console.warn('[bootstrap] watchdog: ocultando preloader por timeout');

@@ -234,7 +234,7 @@
         renameBtn.className = 'conversation-rename-btn';
         renameBtn.title = 'Renomear conversa';
         renameBtn.setAttribute('aria-label', 'Renomear conversa');
-        renameBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
+        renameBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="sidebar-icon-12"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
         renameBtn.addEventListener('click', async (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -315,7 +315,7 @@
       menuBtn.className = 'project-mini-btn project-mini-btn-menu';
       menuBtn.title = 'Opções do projeto';
       menuBtn.setAttribute('aria-label', 'Opções do projeto');
-      menuBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="width: 13px; height: 13px;"><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/><circle cx="5" cy="12" r="1.5"/></svg>`;
+      menuBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="sidebar-icon-13"><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/><circle cx="5" cy="12" r="1.5"/></svg>`;
       menuBtn.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -328,7 +328,7 @@
       mapBtn.className = 'project-mini-btn project-mini-btn-map' + (isMapActive ? ' active' : '');
       mapBtn.title = 'Mapa da Aplicação';
       mapBtn.setAttribute('aria-label', 'Mapa da Aplicação');
-      mapBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 13px; height: 13px;"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>`;
+      mapBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="sidebar-icon-13"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>`;
       
       mapBtn.addEventListener('click', async (event) => {
         event.preventDefault();

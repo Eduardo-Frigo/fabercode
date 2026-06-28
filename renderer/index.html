@@ -64,7 +64,7 @@
               <button id="account-gate-language-next" type="button" class="btn btn-success account-gate__wide-action">Continuar</button>
             </div>
 
-            <div class="hidden" style="display: none;">
+            <div class="hidden">
                <select id="account-gate-onboarding-language">
                  <option value="pt-BR">Português (Brasil)</option>
                  <option value="en-US">English</option>
@@ -93,7 +93,7 @@
               <button id="account-gate-theme-next" type="button" class="btn btn-success account-gate__wide-action">Continuar</button>
             </div>
 
-            <div class="hidden" style="display: none;">
+            <div class="hidden">
               <select id="account-gate-onboarding-theme">
                 <option value="dark">Escuro</option>
                 <option value="light">Claro</option>
@@ -160,7 +160,7 @@
           </section>
 
           <!-- Hidden elements for test and state compatibility -->
-          <div class="hidden" style="display: none;">
+          <div class="hidden">
             <button id="account-gate-access-signup-email" type="button"></button>
             <section id="account-gate-signup-choice-screen">
               <button id="account-gate-signup-email-btn" type="button"></button>
@@ -332,7 +332,7 @@
                   <span>Zoom:</span>
                   <input type="range" id="map-zoom-slider" min="0.3" max="2" step="0.05" value="1">
                   <span id="map-zoom-value">100%</span>
-                  <button id="btn-map-zoom-reset" style="padding: 2px 8px; font-size: 0.75rem;">Reset</button>
+                  <button id="btn-map-zoom-reset" class="btn-map-zoom-reset">Reset</button>
                 </div>
               </div>
 
@@ -385,11 +385,11 @@
 
             <div id="job-progress" class="job-progress hidden">
               <div class="job-progress-head">
-                <div style="display: flex; flex-direction: column; flex-grow: 1;">
+                <div class="job-status-info">
                   <strong id="job-progress-title">Processando</strong>
                   <span id="job-progress-status">Aguardando</span>
                 </div>
-                <button id="btn-job-cancel" class="btn btn-muted" style="margin-left: auto; height: fit-content; padding: 4px 8px; font-size: 0.8em;" title="Parar execução">Parar</button>
+                <button id="btn-job-cancel" class="btn btn-muted job-status-cancel" title="Parar execução">Parar</button>
               </div>
               <div id="job-progress-detail" class="job-progress-detail"></div>
             </div>
@@ -654,9 +654,11 @@
                 </div>
                 <textarea id="inspector-node-content"></textarea>
               </div>
-              <div class="inspector-field" id="inspector-asset-upload-field" style="display:none;">
-                <label>Selecionar Imagem</label>
-                <input type="file" id="map-asset-file-input" accept="image/*">
+              <div class="inspector-controls">
+                <div class="inspector-field hidden" id="inspector-asset-upload-field">
+                  <label>Selecionar Imagem</label>
+                  <input type="file" id="map-asset-file-input" accept="image/*">
+                </div>
               </div>
             </div>
           </div>
