@@ -1008,6 +1008,8 @@ body[data-theme='light'] .workspace-automation-seed strong {
   align-items: center;
   width: 100%;
   margin-bottom: 12px;
+  flex-shrink: 0;
+  box-sizing: border-box;
 }
 .update-action-container.hidden {
   display: none !important;
@@ -1024,6 +1026,7 @@ body[data-theme='light'] .workspace-automation-seed strong {
   cursor: pointer;
   transition: background 0.2s ease, transform 0.1s ease;
   font-family: inherit;
+  box-sizing: border-box !important;
 }
 
 .btn-update-wide:hover {
@@ -1045,9 +1048,9 @@ body.workspace-left-collapsed .update-action-container {
 }
 
 body.workspace-left-collapsed .btn-update-wide {
-  width: 38px !important;
-  height: 38px !important;
-  border-radius: 10px !important;
+  width: 36px !important;
+  height: 36px !important;
+  border-radius: 999px !important;
   padding: 0 !important;
 }
 
