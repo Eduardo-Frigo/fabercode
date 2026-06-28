@@ -136,4 +136,6 @@ contextBridge.exposeInMainWorld('localcodeApi', {
   linkMilestoneCommit: (payload) => ipcRenderer.invoke('milestones:link-commit', payload),
   getMilestoneGitStatus: (payload) => ipcRenderer.invoke('milestones:git-status', payload),
   renderMilestones: (payload) => ipcRenderer.invoke('milestones:render', payload),
+  checkForUpdates: () => ipcRenderer.invoke('app:update:check'),
+  installUpdate: (payload) => ipcRenderer.invoke('app:update:install', payload),
 });

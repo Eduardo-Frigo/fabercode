@@ -80,7 +80,7 @@ padding: 14px;
 
 .account-gate__panel {
   position: relative;
-  width: min(520px, calc(100vw - 48px));
+  width: min(560px, calc(100vw - 48px));
   display: grid;
   gap: 16px;
   padding: 28px;
@@ -90,6 +90,30 @@ padding: 14px;
   box-shadow: 0 28px 72px rgba(0, 0, 0, 0.56);
   opacity: 0;
   transform: translateY(18px) scale(0.985);
+}
+
+.account-gate__back-arrow {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: 0;
+  color: rgba(232, 228, 223, 0.62);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: 999px;
+  transition: background 0.2s, color 0.2s;
+  z-index: 10;
+}
+
+.account-gate__back-arrow:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
 }
 
 body.ui-ready .account-gate:not(.hidden) .account-gate__panel {
@@ -102,14 +126,172 @@ body.ui-ready .account-gate:not(.hidden) .account-gate__panel {
   justify-self: center;
 }
 
-.account-gate__intro {
+.account-gate__wizard {
   display: grid;
-  gap: 14px;
+  gap: 16px;
+}
+
+.account-gate__brand {
+  display: grid;
+  gap: 12px;
+}
+
+.account-gate__stepper {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.account-gate__step-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(232, 228, 223, 0.72);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.account-gate__step-pill.is-active {
+  border-color: rgba(130, 238, 179, 0.38);
+  background: rgba(24, 192, 122, 0.14);
+  color: rgba(201, 255, 226, 0.98);
+}
+
+.account-gate__step-pill.is-complete {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(232, 228, 223, 0.84);
+}
+
+.account-gate__screen {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.account-gate__screen-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.1rem;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.account-gate__screen-copy {
+  margin: 0;
+  color: rgba(232, 228, 223, 0.62);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.account-gate__screen-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.account-gate__screen-actions--split {
+  justify-content: space-between;
+}
+
+.account-gate__screen-actions--start {
+  justify-content: flex-start;
+}
+
+.account-gate__entry-choice {
+  display: grid;
+  gap: 10px;
+}
+
+.account-gate__entry-choice .account-gate__choice-card {
+  width: 100%;
+}
+
+.account-gate__choice-card {
+  min-height: 86px;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  text-align: left;
+  white-space: normal;
+}
+
+.account-gate__choice-card strong,
+.account-gate__choice-card span {
+  display: block;
+}
+
+.account-gate__choice-card strong {
+  font-size: 0.92rem;
+}
+
+.account-gate__choice-card span {
+  color: rgba(232, 228, 223, 0.62);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.account-gate__choice-card.is-selected {
+  border-color: rgba(72, 219, 151, 0.8) !important;
+  background: rgba(24, 192, 122, 0.12) !important;
+  box-shadow: 0 0 12px rgba(24, 192, 122, 0.2) !important;
+}
+
+.account-gate__choice-card.is-selected strong {
+  color: #48db97 !important;
+}
+
+.account-gate__choice-card.is-selected span {
+  color: rgba(232, 228, 223, 0.82) !important;
+}
+
+.account-gate__name-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.account-gate__social-links {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.account-gate__link-separator {
+  color: rgba(255, 255, 255, 0.16);
+  user-select: none;
+}
+
+body[data-theme='light'] .account-gate__link-separator {
+  color: rgba(0, 0, 0, 0.16) !important;
+}
+
+.account-gate__choice-card.btn-muted {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0.03)),
+    rgba(255, 255, 255, 0.02);
+  color: var(--text);
+}
+
+.account-gate__choice-card.btn-muted:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.045)),
+    rgba(255, 255, 255, 0.03);
 }
 
 .account-gate__intro-copy {
-  display: grid;
-  gap: 6px;
   text-align: center;
 }
 
@@ -134,42 +316,6 @@ body.ui-ready .account-gate:not(.hidden) .account-gate__panel {
   text-transform: uppercase;
 }
 
-.account-gate__preference-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.account-gate__entry-choice {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.account-gate__choice-card {
-  min-height: 84px;
-  display: grid;
-  align-content: center;
-  gap: 5px;
-  text-align: left;
-  white-space: normal;
-}
-
-.account-gate__choice-card strong,
-.account-gate__choice-card span {
-  display: block;
-}
-
-.account-gate__choice-card strong {
-  font-size: 0.9rem;
-}
-
-.account-gate__choice-card span {
-  color: rgba(232, 228, 223, 0.62);
-  font-size: 0.74rem;
-  line-height: 1.35;
-}
-
 .account-gate__actions,
 .account-gate__email-form,
 .account-gate__signup-fields {
@@ -185,6 +331,10 @@ body.ui-ready .account-gate:not(.hidden) .account-gate__panel {
   width: 100%;
   min-height: 44px;
   justify-content: center;
+}
+
+.account-gate__wizard .account-gate__actions {
+  margin-top: 4px;
 }
 
 .account-gate__google-action,
@@ -396,17 +546,64 @@ body[data-theme='light'] .account-gate__separator,
 body[data-theme='light'] .account-gate__field,
 body[data-theme='light'] .account-gate__workspace-choice,
 body[data-theme='light'] .account-gate__link,
-body[data-theme='light'] .account-gate__intro-copy p,
+body[data-theme='light'] .account-gate__screen-copy,
 body[data-theme='light'] .account-gate__choice-card span {
   color: rgba(33, 33, 33, 0.68);
 }
 
-body[data-theme='light'] .account-gate__intro-copy strong {
+body[data-theme='light'] .account-gate__screen-title {
   color: #212121;
 }
 
 body[data-theme='light'] .account-gate__eyebrow {
   color: rgba(20, 132, 83, 0.86);
+}
+
+body[data-theme='light'] .account-gate__step-pill {
+  background: rgba(255, 255, 255, 0.76);
+  border-color: rgba(33, 33, 33, 0.12);
+  color: rgba(33, 33, 33, 0.68);
+}
+
+body[data-theme='light'] .account-gate__step-pill.is-active {
+  background: rgba(24, 192, 122, 0.12);
+  border-color: rgba(24, 192, 122, 0.34);
+  color: rgba(18, 98, 63, 0.98);
+}
+
+body[data-theme='light'] .account-gate__choice-card.btn-muted {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.88)),
+    rgba(255, 255, 255, 0.74);
+  border-color: rgba(33, 33, 33, 0.14);
+  color: #212121;
+}
+
+body[data-theme='light'] .account-gate__choice-card.btn-muted span {
+  color: rgba(33, 33, 33, 0.58);
+}
+
+body[data-theme='light'] .account-gate__choice-card.is-selected {
+  border-color: rgba(20, 132, 83, 0.8) !important;
+  background: rgba(20, 132, 83, 0.1) !important;
+  box-shadow: 0 0 10px rgba(20, 132, 83, 0.15) !important;
+}
+
+body[data-theme='light'] .account-gate__choice-card.is-selected strong {
+  color: #148453 !important;
+}
+
+body[data-theme='light'] .account-gate__choice-card.is-selected span {
+  color: rgba(33, 33, 33, 0.78) !important;
+}
+
+body[data-theme='light'] .account-gate__back-arrow {
+  color: rgba(33, 33, 33, 0.64);
+}
+
+body[data-theme='light'] .account-gate__back-arrow:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: #212121;
 }
 
 body[data-theme='light'] .account-gate__field input,
@@ -501,3 +698,79 @@ body[data-theme='light'] .account-gate__back-action:hover {
     filter: blur(0);
   }
 }
+
+.account-gate__access-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.account-gate__access-row-btn {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 14px !important;
+  padding: 14px 18px !important;
+  border-radius: 12px !important;
+  width: 100% !important;
+  text-align: left !important;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+  box-sizing: border-box !important;
+}
+
+.account-gate__access-row-btn:hover {
+  border-color: rgba(255, 255, 255, 0.22) !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+}
+
+.account-gate__access-row-btn.is-selected {
+  border-color: rgba(72, 219, 151, 0.8) !important;
+  background: rgba(24, 192, 122, 0.12) !important;
+  box-shadow: 0 0 12px rgba(24, 192, 122, 0.2) !important;
+}
+
+.account-gate__access-row-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(232, 228, 223, 0.72);
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+}
+
+.account-gate__access-row-text {
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--text);
+}
+
+body[data-theme='light'] .account-gate__access-row-btn {
+  background: rgba(255, 255, 255, 0.9) !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+  color: #212121 !important;
+}
+
+body[data-theme='light'] .account-gate__access-row-btn:hover {
+  background: rgba(0, 0, 0, 0.03) !important;
+  border-color: rgba(0, 0, 0, 0.16) !important;
+}
+
+body[data-theme='light'] .account-gate__access-row-icon {
+  color: rgba(33, 33, 33, 0.7);
+}
+
+body[data-theme='light'] .account-gate__access-row-text {
+  color: #212121;
+}
+
+body[data-theme='light'] .account-gate__access-row-btn.is-selected {
+  border-color: rgba(20, 132, 83, 0.8) !important;
+  background: rgba(20, 132, 83, 0.1) !important;
+  box-shadow: 0 0 10px rgba(20, 132, 83, 0.15) !important;
+}
+

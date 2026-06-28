@@ -52,6 +52,57 @@ window.faberConfirm = function(message) {
   });
 };
 
+window.faberAlert = function(message) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('faber-confirm-modal');
+    const text = document.getElementById('faber-confirm-text');
+    const btnNo = document.getElementById('faber-confirm-no');
+    const btnYes = document.getElementById('faber-confirm-yes');
+    const backdrop = document.getElementById('faber-confirm-backdrop');
+    
+    if (!modal || !text || !btnYes) {
+      window.alert(message);
+      resolve();
+      return;
+    }
+
+    text.textContent = message;
+    if (btnNo) btnNo.style.display = 'none';
+    btnYes.textContent = 'OK';
+    
+    modal.classList.remove('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+
+    setTimeout(() => {
+      try {
+        btnYes.focus({ preventScroll: true });
+      } catch (_) {
+        btnYes.focus();
+      }
+    }, 0);
+
+    const cleanup = () => {
+      modal.classList.add('hidden');
+      modal.setAttribute('aria-hidden', 'true');
+      if (btnNo) btnNo.style.display = '';
+      btnYes.textContent = 'Confirmar';
+      btnYes.removeEventListener('click', onYes);
+      if (backdrop) backdrop.removeEventListener('click', onYes);
+      document.removeEventListener('keydown', onKeydown);
+      resolve();
+    };
+
+    const onYes = () => cleanup();
+    const onKeydown = (e) => {
+      if (e.key === 'Escape' || e.key === 'Enter') onYes();
+    };
+
+    btnYes.addEventListener('click', onYes);
+    if (backdrop) backdrop.addEventListener('click', onYes);
+    document.addEventListener('keydown', onKeydown);
+  });
+};
+
 let state;
 let conversationController = null;
 let projectController = null;
@@ -1354,6 +1405,55 @@ function bindCenterTitleEvents() {
   });
 }
 
+async function setupAppUpdater() {
+  const updateContainer = document.getElementById('update-action-container');
+  const updateBtn = document.getElementById('btn-app-update');
+  if (!updateContainer || !updateBtn) return;
+
+  updateBtn.addEventListener('click', async () => {
+    if (updateBtn.disabled) return;
+    const confirm = await window.faberConfirm('Deseja baixar e instalar a atualização do Faber Code agora? A aplicação será reiniciada após a instalação.');
+    if (!confirm) return;
+
+    try {
+      updateBtn.disabled = true;
+      const textSpan = updateBtn.querySelector('.update-text');
+      if (textSpan) textSpan.textContent = 'Baixando...';
+      updateBtn.style.background = '#0f6640';
+
+      const downloadUrl = updateBtn.dataset.downloadUrl;
+      const result = await window.localcodeApi.installUpdate({ downloadUrl });
+      if (result && !result.ok) {
+        await window.faberAlert('Erro ao instalar atualização: ' + result.message);
+        updateBtn.disabled = false;
+        if (textSpan) textSpan.textContent = 'Update';
+        updateBtn.style.background = '';
+      }
+    } catch (err) {
+      console.error(err);
+      await window.faberAlert('Falha ao processar atualização.');
+      updateBtn.disabled = false;
+      const textSpan = updateBtn.querySelector('.update-text');
+      if (textSpan) textSpan.textContent = 'Update';
+      updateBtn.style.background = '';
+    }
+  });
+
+  try {
+    const result = await window.localcodeApi.checkForUpdates();
+    if (result && result.available) {
+      updateContainer.classList.remove('hidden');
+      updateBtn.dataset.version = result.latestVersion;
+      updateBtn.dataset.downloadUrl = result.downloadUrl;
+    } else {
+      updateContainer.classList.add('hidden');
+    }
+  } catch (err) {
+    console.error('Erro ao verificar atualizações:', err);
+    updateContainer.classList.add('hidden');
+  }
+}
+
 async function bootstrap() {
   if (panelLayoutController) panelLayoutController.initialize();
   if (workspaceLayoutController) workspaceLayoutController.initialize();
@@ -1368,6 +1468,7 @@ async function bootstrap() {
   renderAttachments();
   if (projectFileTreeController) projectFileTreeController.render();
   if (projectTerminalController) projectTerminalController.render();
+  await setupAppUpdater();
   if (automataContractsController) {
     state.automataContractSummary = await automataContractsController.refreshSummary();
   }

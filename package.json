@@ -145,7 +145,9 @@
     "prepack": "npm run audit:release",
     "prepublishOnly": "npm run audit:release",
     "pack:mac": "npm run audit:release && electron-builder --mac dir",
-    "dist:mac": "npm run audit:release && electron-builder --mac dmg"
+    "dist:mac": "npm run audit:release && electron-builder --mac dmg",
+    "dist:win": "npm run audit:release && electron-builder --win nsis",
+    "dist:linux": "npm run audit:release && electron-builder --linux AppImage"
   },
   "keywords": [
     "electron",
@@ -186,15 +188,30 @@
       "contents": [
         {
           "x": 130,
-          "y": 220
+          "y": 190
         },
         {
           "x": 410,
-          "y": 220,
+          "y": 190,
           "type": "link",
           "path": "/Applications"
         }
       ]
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Faber Code-Setup-${version}.${ext}"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Development",
+      "icon": "build/icon.png",
+      "artifactName": "Faber-Code-${version}-${arch}.${ext}"
     },
     "icon": "build/icon.png"
   },

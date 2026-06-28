@@ -122,6 +122,8 @@ function createPlatformAccountService(dependencies = {}) {
     now = () => new Date(),
     pexelsApiKey = '',
     protectSecret = (value) => String(value || ''),
+    saveSessionFile = null,
+    loadSessionFile = null,
     sessionSecret = '',
     store = null,
     unprotectSecret = (value) => String(value || ''),
@@ -228,6 +230,9 @@ function createPlatformAccountService(dependencies = {}) {
       createdAt: now().toISOString(),
     };
     currentSession = session;
+    if (typeof saveSessionFile === 'function') {
+      await saveSessionFile(session);
+    }
     if (store && typeof store.saveSession === 'function') {
       await store.saveSession({
         sessionId: protectSecret(session.id),
@@ -515,10 +520,22 @@ function createPlatformAccountService(dependencies = {}) {
   async function signOut() {
     const session = currentSession;
     currentSession = null;
+    if (typeof saveSessionFile === 'function') {
+      await saveSessionFile(null);
+    }
     if (session && store && typeof store.revokeSession === 'function') {
       await store.revokeSession(protectSecret(session.id));
     }
     return { ok: true };
+  }
+
+  async function initializeSession() {
+    if (typeof loadSessionFile === 'function') {
+      const loaded = await loadSessionFile();
+      if (loaded) {
+        currentSession = loaded;
+      }
+    }
   }
 
   function getPlatformPexelsApiKey() {
@@ -534,6 +551,7 @@ function createPlatformAccountService(dependencies = {}) {
     getCurrentSession,
     getPlatformPexelsApiKey,
     getStatus,
+    initializeSession,
     signInWithPassword,
     signUpWithPassword,
     startEmailLogin,

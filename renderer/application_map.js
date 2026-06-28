@@ -2821,11 +2821,29 @@
       }
     }
 
+    let lastLoadedMapProjectId = null;
+
     async function loadProjectMap(projectId, options = {}) {
+      // Cancel any pending autosave from the previous project
+      if (autosaveTimeout) {
+        clearTimeout(autosaveTimeout);
+        autosaveTimeout = null;
+      }
+
+      // Immediately clear the canvas so the old project's map is never visible
+      canvasController.loadMapData({ nodes: [], edges: [], viewport: { x: 0, y: 0 }, zoom: 1.0 });
+      closeInspector();
+
+      lastLoadedMapProjectId = projectId;
+
       const rootPath = getSelectedProjectInfo()?.rootPath;
       if (!rootPath) return;
 
       const result = await api.getApplicationMap({ rootPath });
+
+      // Guard: if user switched project during the async call, discard this result
+      if (lastLoadedMapProjectId !== projectId) return;
+
       if (result && result.ok && result.map) {
         canvasController.loadMapData(result.map);
       }
@@ -2845,6 +2863,8 @@
         const projectId = getSelectedProjectId();
         const rootPath = getSelectedProjectInfo()?.rootPath;
         if (!projectId || !rootPath) return;
+        // Only save if the map still belongs to the currently selected project
+        if (lastLoadedMapProjectId !== projectId) return;
         
         const mapData = canvasController.getMapData();
         await api.saveApplicationMap({ rootPath, map: mapData });
@@ -2852,6 +2872,12 @@
     }
 
     function resetForNoProject() {
+      if (autosaveTimeout) {
+        clearTimeout(autosaveTimeout);
+        autosaveTimeout = null;
+      }
+      lastLoadedMapProjectId = null;
+      canvasController.loadMapData({ nodes: [], edges: [], viewport: { x: 0, y: 0 }, zoom: 1.0 });
       if (centerTabs) centerTabs.classList.add('hidden');
       closeInspector();
       switchTab('chat');

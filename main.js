@@ -86,6 +86,7 @@ const { registerProjectHandlers } = require('./main/ipc/project_handlers');
 const { registerTerminalHandlers } = require('./main/ipc/terminal_handlers');
 const { registerApplicationMapHandlers } = require('./main/ipc/application_map_handlers');
 const { registerMilestoneHandlers } = require('./main/ipc/milestone_handlers');
+const { registerUpdateHandlers } = require('./main/ipc/update_handlers');
 const { createApplicationMapService } = require('./main/services/application_map_service');
 const { createApplicationMapRenderService } = require('./main/services/application_map_render_service');
 const { createMilestoneService } = require('./main/services/milestone_service');
@@ -881,6 +882,37 @@ const platformAccountService = createPlatformAccountService({
   sessionSecret: FABER_SESSION_SECRET,
   store: postgresUserStore,
   unprotectSecret: (value) => getSecretStore().unprotectSecret(value),
+  saveSessionFile: async (session) => {
+    try {
+      const sessionPath = path.join(app.getPath('userData'), 'fabercode_session.json');
+      const sessionData = session ? { ...session, appVersion: app.getVersion() } : null;
+      await fs.promises.writeFile(sessionPath, JSON.stringify(sessionData, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('Failed to save session file:', err);
+    }
+  },
+  loadSessionFile: async () => {
+    try {
+      const sessionPath = path.join(app.getPath('userData'), 'fabercode_session.json');
+      if (fs.existsSync(sessionPath)) {
+        const content = await fs.promises.readFile(sessionPath, 'utf-8');
+        const loaded = JSON.parse(content);
+        if (loaded && loaded.appVersion !== app.getVersion()) {
+          console.log('App version mismatch. Invaliding session. Current:', app.getVersion(), 'Saved:', loaded.appVersion);
+          if (fs.existsSync(sessionPath)) {
+            try {
+              fs.unlinkSync(sessionPath);
+            } catch {}
+          }
+          return null;
+        }
+        return loaded;
+      }
+    } catch (err) {
+      console.error('Failed to load session file:', err);
+    }
+    return null;
+  }
 });
 
 const pexelsAssetService = createPexelsAssetService({
@@ -4989,8 +5021,11 @@ function createWindow() {
   return win;
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   app.setName('Faber Code');
+  if (platformAccountService && typeof platformAccountService.initializeSession === 'function') {
+    await platformAccountService.initializeSession();
+  }
   const dockIconPath = resolveAppIconPath();
   if (process.platform === 'darwin' && dockIconPath && app.dock && typeof app.dock.setIcon === 'function') {
     try {
@@ -5113,6 +5148,13 @@ app.whenReady().then(() => {
     milestoneService,
     milestoneGitStatusService,
     registerIpcHandler,
+    appendAuditEvent,
+  });
+
+  registerUpdateHandlers({
+    registerIpcHandler,
+    app,
+    dialog,
     appendAuditEvent,
   });
 

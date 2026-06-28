@@ -1000,3 +1000,98 @@ body[data-theme='light'] .workspace-automation-seed strong {
     grid-template-columns: 1fr;
   }
 }
+
+/* Premium green update button styling */
+.update-action-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  margin-bottom: 12px;
+}
+.update-action-container.hidden {
+  display: none !important;
+}
+
+.btn-update-wide {
+  background: #148453 !important;
+  border: 1px solid #0f6640 !important;
+  color: #ffffff !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.1s ease;
+  font-family: inherit;
+}
+
+.btn-update-wide:hover {
+  background: #0f6640 !important;
+}
+
+.btn-update-wide:active {
+  transform: scale(0.95);
+}
+
+.btn-update-wide svg {
+  stroke: #ffffff !important;
+  flex-shrink: 0;
+}
+
+/* When left sidebar is collapsed */
+body.workspace-left-collapsed .update-action-container {
+  margin-bottom: 8px;
+}
+
+body.workspace-left-collapsed .btn-update-wide {
+  width: 38px !important;
+  height: 38px !important;
+  border-radius: 10px !important;
+  padding: 0 !important;
+}
+
+body.workspace-left-collapsed .btn-update-wide .update-text {
+  display: none !important;
+}
+
+/* When left sidebar is expanded */
+body:not(.workspace-left-collapsed) .update-action-container {
+  padding: 0 12px;
+}
+
+body:not(.workspace-left-collapsed) .btn-update-wide {
+  width: 100% !important;
+  height: 34px !important;
+  padding: 0 12px !important;
+  border-radius: 8px !important;
+}
+
+body:not(.workspace-left-collapsed) .btn-update-wide .update-text {
+  display: inline !important;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #ffffff !important;
+  letter-spacing: -0.01em;
+}
+
+/* Dark Mode brand colors for update button */
+body:not([data-theme='light']) .btn-update-wide {
+  background: #48db97 !important;
+  border: 1px solid #148453 !important;
+  color: #111111 !important;
+}
+
+body:not([data-theme='light']) .btn-update-wide:hover {
+  background: #3ec788 !important;
+}
+
+body:not([data-theme='light']) .btn-update-wide svg {
+  stroke: #111111 !important;
+}
+
+body:not([data-theme='light']) .btn-update-wide .update-text {
+  color: #111111 !important;
+}
+
+
