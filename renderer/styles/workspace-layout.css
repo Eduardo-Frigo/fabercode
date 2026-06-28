@@ -1001,7 +1001,7 @@ body[data-theme='light'] .workspace-automation-seed strong {
   }
 }
 
-/* Premium green update button styling */
+/* Update Button Layout & Discreet Dark Theme Styling */
 .update-action-container {
   display: flex;
   justify-content: center;
@@ -1016,21 +1016,21 @@ body[data-theme='light'] .workspace-automation-seed strong {
 }
 
 .btn-update-wide {
-  background: #148453 !important;
-  border: 1px solid #0f6640 !important;
-  color: #ffffff !important;
+  background: rgba(80, 201, 133, 0.15) !important;
+  border: 1px solid rgba(80, 201, 133, 0.4) !important;
+  color: #50c985 !important;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   cursor: pointer;
-  transition: background 0.2s ease, transform 0.1s ease;
+  transition: all 0.2s ease;
   font-family: inherit;
   box-sizing: border-box !important;
 }
 
 .btn-update-wide:hover {
-  background: #0f6640 !important;
+  background: rgba(80, 201, 133, 0.25) !important;
 }
 
 .btn-update-wide:active {
@@ -1038,8 +1038,10 @@ body[data-theme='light'] .workspace-automation-seed strong {
 }
 
 .btn-update-wide svg {
-  stroke: #ffffff !important;
+  stroke: #50c985 !important;
   flex-shrink: 0;
+  width: 14px;
+  height: 14px;
 }
 
 /* When left sidebar is collapsed */
@@ -1052,6 +1054,11 @@ body.workspace-left-collapsed .btn-update-wide {
   height: 36px !important;
   border-radius: 999px !important;
   padding: 0 !important;
+}
+
+body.workspace-left-collapsed .btn-update-wide svg {
+  width: 18px !important;
+  height: 18px !important;
 }
 
 body.workspace-left-collapsed .btn-update-wide .update-text {
@@ -1074,27 +1081,6 @@ body:not(.workspace-left-collapsed) .btn-update-wide .update-text {
   display: inline !important;
   font-size: 0.74rem;
   font-weight: 600;
-  color: #ffffff !important;
+  color: #50c985 !important;
   letter-spacing: -0.01em;
 }
-
-/* Dark Mode brand colors for update button */
-body:not([data-theme='light']) .btn-update-wide {
-  background: #48db97 !important;
-  border: 1px solid #148453 !important;
-  color: #111111 !important;
-}
-
-body:not([data-theme='light']) .btn-update-wide:hover {
-  background: #3ec788 !important;
-}
-
-body:not([data-theme='light']) .btn-update-wide svg {
-  stroke: #111111 !important;
-}
-
-body:not([data-theme='light']) .btn-update-wide .update-text {
-  color: #111111 !important;
-}
-
-

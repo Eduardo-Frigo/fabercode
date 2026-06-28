@@ -1419,15 +1419,11 @@ async function setupAppUpdater() {
       updateBtn.disabled = true;
       const textSpan = updateBtn.querySelector('.update-text');
       if (textSpan) textSpan.textContent = 'Baixando...';
-      updateBtn.style.background = '#0f6640';
-
-      const downloadUrl = updateBtn.dataset.downloadUrl;
       const result = await window.localcodeApi.installUpdate({ downloadUrl });
       if (result && !result.ok) {
         await window.faberAlert('Erro ao instalar atualização: ' + result.message);
         updateBtn.disabled = false;
         if (textSpan) textSpan.textContent = 'Update';
-        updateBtn.style.background = '';
       }
     } catch (err) {
       console.error(err);
@@ -1435,7 +1431,6 @@ async function setupAppUpdater() {
       updateBtn.disabled = false;
       const textSpan = updateBtn.querySelector('.update-text');
       if (textSpan) textSpan.textContent = 'Update';
-      updateBtn.style.background = '';
     }
   });
 
