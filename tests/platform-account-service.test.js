@@ -2,6 +2,7 @@ const assert = require('assert');
 
 const {
   createPlatformAccountService,
+  hashSessionToken,
   normalizeEmail,
 } = require('../main/services/platform_account_service');
 
@@ -148,6 +149,9 @@ async function run() {
   assert.strictEqual(completed.session.user.email, 'owner@example.com');
   assert.strictEqual(upsertedProfiles[0].provider, 'google');
   assert.strictEqual(savedSessions.length, 1);
+  assert.strictEqual(savedSessions[0].sessionId, hashSessionToken(completed.session.id, 'session-secret'));
+  assert.notStrictEqual(savedSessions[0].sessionId, completed.session.id);
+  assert.ok(!String(savedSessions[0].sessionId).startsWith('protected:'));
   assert.strictEqual(fetchCalls.length, 2);
 
   const githubLogin = service.createGithubLoginRequest();

@@ -513,7 +513,7 @@
       const modelInfo = row.kind === 'asset'
         ? translate('assetUsage')
         : row.model ? translate('modelPrefix').replace('{model}', row.model) : translate('defaultLocalModel');
-      facts.textContent = `${modelInfo} | ${compactKeyLabel(row.hasKey, row.keyMasked)}`;
+      facts.textContent = `${modelInfo} | ${row.keyLabel || compactKeyLabel(row.hasKey, row.keyMasked)}`;
 
         meta.append(titleRow, detail, facts);
 

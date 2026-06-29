@@ -205,14 +205,16 @@ function resolvePackagedUserEnvPath() {
   return path.join(configDir, 'Faber Code', '.env');
 }
 
-const ENV_PATH_CANDIDATES = [
-  path.join(process.cwd(), '.env'),
-  path.join(__dirname, '.env'),
-  app.isPackaged ? resolvePackagedUserEnvPath() : null,
-  app.isPackaged ? path.join(process.resourcesPath, '.env') : null,
-  app.isPackaged ? path.join(path.dirname(process.execPath), '.env') : null,
-].filter(Boolean);
+const ENV_PATH_CANDIDATES = (app.isPackaged
+  ? [resolvePackagedUserEnvPath()]
+  : [path.join(process.cwd(), '.env'), path.join(__dirname, '.env')]
+).filter(Boolean);
 const LOADED_ENV_PATHS = loadEnvFromCandidates(ENV_PATH_CANDIDATES);
+
+function buildPostgresSslConfig() {
+  if (!FABER_POSTGRES_SSL) return null;
+  return { rejectUnauthorized: FABER_POSTGRES_SSL_REJECT_UNAUTHORIZED };
+}
 
 const EXCLUDED_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.turbo', '.cache', '.faber']);
 const MAX_FILES_SCAN = 800;
@@ -247,12 +249,15 @@ const {
   OPENAI_API_KEY,
   OPENAI_MODEL_BRAIN_ENV,
   PEXELS_API_KEY,
+  FABER_PLATFORM_PEXELS_API_KEY,
+  FABER_PLATFORM_MEDIA_ENDPOINT,
   FABER_DATABASE_URL,
   FABER_SESSION_SECRET,
   FABER_APP_BASE_URL,
   FABER_BACKEND_HOST,
   FABER_BACKEND_PORT,
   FABER_POSTGRES_SSL,
+  FABER_POSTGRES_SSL_REJECT_UNAUTHORIZED,
   FABER_AUTH_DEV_CODES,
   GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET,
@@ -805,9 +810,47 @@ let secretStoreInstance = null;
 
 function getSecretStore() {
   if (!secretStoreInstance) {
-    secretStoreInstance = createSecretStore({ safeStorage });
+    secretStoreInstance = createSecretStore({
+      allowPlaintextFallback: !app.isPackaged,
+      safeStorage,
+    });
   }
   return secretStoreInstance;
+}
+
+function signSessionPayload(payload = '') {
+  const secret = String(FABER_SESSION_SECRET || '').trim();
+  if (!secret) return '';
+  return crypto.createHmac('sha256', secret).update(String(payload || '')).digest('base64url');
+}
+
+function verifySessionSignature(payload = '', signature = '') {
+  const expected = signSessionPayload(payload);
+  const actual = String(signature || '').trim();
+  if (!expected || !actual) return false;
+  const expectedBuffer = Buffer.from(expected, 'utf8');
+  const actualBuffer = Buffer.from(actual, 'utf8');
+  return expectedBuffer.length === actualBuffer.length && crypto.timingSafeEqual(expectedBuffer, actualBuffer);
+}
+
+function createSessionFileEnvelope(sessionData = null) {
+  const payload = getSecretStore().protectSecret(JSON.stringify(sessionData || null));
+  if (!payload) return null;
+  return {
+    protected: true,
+    version: 1,
+    payload,
+    signature: signSessionPayload(payload),
+  };
+}
+
+function parseSessionFileContent(content = '') {
+  const parsed = JSON.parse(String(content || 'null'));
+  if (!parsed || parsed.protected !== true) return parsed;
+  if (!verifySessionSignature(parsed.payload, parsed.signature)) return null;
+  const unprotected = getSecretStore().unprotectSecret(parsed.payload);
+  if (!unprotected) return null;
+  return JSON.parse(unprotected);
 }
 
 const aiRuntimeSettings = createAiRuntimeSettingsService({
@@ -862,7 +905,7 @@ const {
 
 const postgresUserStore = createPostgresUserStore({
   databaseUrl: FABER_DATABASE_URL,
-  ssl: FABER_POSTGRES_SSL ? { rejectUnauthorized: false } : null,
+  ssl: buildPostgresSslConfig(),
 });
 
 const platformAccountService = createPlatformAccountService({
@@ -877,7 +920,8 @@ const platformAccountService = createPlatformAccountService({
   githubClientSecret: GITHUB_CLIENT_SECRET,
   githubRedirectUri: GITHUB_REDIRECT_URI,
   githubScopes: GITHUB_SCOPES,
-  pexelsApiKey: PEXELS_API_KEY,
+  platformMediaEndpoint: FABER_PLATFORM_MEDIA_ENDPOINT,
+  pexelsApiKey: FABER_PLATFORM_PEXELS_API_KEY,
   protectSecret: (value) => getSecretStore().protectSecret(value),
   sessionSecret: FABER_SESSION_SECRET,
   store: postgresUserStore,
@@ -885,8 +929,14 @@ const platformAccountService = createPlatformAccountService({
   saveSessionFile: async (session) => {
     try {
       const sessionPath = path.join(app.getPath('userData'), 'fabercode_session.json');
-      const sessionData = session ? { ...session, appVersion: app.getVersion() } : null;
-      await fs.promises.writeFile(sessionPath, JSON.stringify(sessionData, null, 2), 'utf-8');
+      if (!session) {
+        await fs.promises.unlink(sessionPath).catch(() => {});
+        return;
+      }
+      const sessionData = { ...session, appVersion: app.getVersion() };
+      const envelope = createSessionFileEnvelope(sessionData);
+      if (!envelope) throw new Error('Armazenamento seguro indisponivel para sessao local.');
+      await fs.promises.writeFile(sessionPath, JSON.stringify(envelope, null, 2), 'utf-8');
     } catch (err) {
       console.error('Failed to save session file:', err);
     }
@@ -896,7 +946,16 @@ const platformAccountService = createPlatformAccountService({
       const sessionPath = path.join(app.getPath('userData'), 'fabercode_session.json');
       if (fs.existsSync(sessionPath)) {
         const content = await fs.promises.readFile(sessionPath, 'utf-8');
-        const loaded = JSON.parse(content);
+        const parsedSessionFile = JSON.parse(content);
+        const loaded = parseSessionFileContent(content);
+        if (!loaded) {
+          await fs.promises.unlink(sessionPath).catch(() => {});
+          return null;
+        }
+        if (!parsedSessionFile || parsedSessionFile.protected !== true) {
+          const envelope = createSessionFileEnvelope(loaded);
+          if (envelope) await fs.promises.writeFile(sessionPath, JSON.stringify(envelope, null, 2), 'utf-8');
+        }
         if (loaded && loaded.appVersion !== app.getVersion()) {
           console.log('App version mismatch. Invaliding session. Current:', app.getVersion(), 'Saved:', loaded.appVersion);
           if (fs.existsSync(sessionPath)) {
@@ -930,6 +989,7 @@ const platformMediaService = createPlatformMediaService({
   accountService: platformAccountService,
   getLocalPexelsApiKey: () => getEffectivePexelsApiKey(),
   localAssetService: pexelsAssetService,
+  platformMediaEndpoint: FABER_PLATFORM_MEDIA_ENDPOINT,
 });
 
 const platformBackendService = createPlatformBackendService({
@@ -2339,6 +2399,8 @@ async function generateTechnicalPdfReport(projectInfo, userMessage, narrativeTex
   const reportWindow = new BrowserWindow({
     show: false,
     webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
       sandbox: true,
     },
   });

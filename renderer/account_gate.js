@@ -17,7 +17,7 @@
     const missing = Array.isArray(config.missing) ? config.missing : [];
     if (missing.length) return `Backend incompleto: ${missing.join(', ')}.`;
     if (config.media && !config.media.pexelsConfigured) {
-      return 'Conta conectada, mas PEXELS_API_KEY ainda nao esta configurada para liberar imagens nas blueprints.';
+      return 'Conta conectada, mas a midia de plataforma ainda nao esta configurada para liberar imagens nas blueprints.';
     }
     return '';
   }

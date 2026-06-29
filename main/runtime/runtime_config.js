@@ -25,12 +25,17 @@ function createMainRuntimeConfig({
   const OPENAI_API_KEY = env.OPENAI_API_KEY || '';
   const OPENAI_MODEL_BRAIN_ENV = env.OPENAI_MODEL_BRAIN || 'gpt-5-codex';
   const PEXELS_API_KEY = env.PEXELS_API_KEY || env.PEXELS_ACCESS_KEY || '';
+  const FABER_PLATFORM_PEXELS_API_KEY = env.FABER_PLATFORM_PEXELS_API_KEY || '';
+  const FABER_PLATFORM_MEDIA_ENDPOINT = env.FABER_PLATFORM_MEDIA_ENDPOINT || '';
   const FABER_DATABASE_URL = env.FABER_DATABASE_URL || env.DATABASE_URL || '';
   const FABER_SESSION_SECRET = env.FABER_SESSION_SECRET || env.SESSION_SECRET || '';
   const FABER_APP_BASE_URL = env.FABER_APP_BASE_URL || 'http://127.0.0.1:37418';
   const FABER_BACKEND_HOST = env.FABER_BACKEND_HOST || '127.0.0.1';
   const FABER_BACKEND_PORT = Number.parseInt(env.FABER_BACKEND_PORT || '37418', 10);
   const FABER_POSTGRES_SSL = String(env.FABER_POSTGRES_SSL || 'false').toLowerCase() === 'true';
+  const FABER_POSTGRES_SSL_REJECT_UNAUTHORIZED = String(
+    env.FABER_POSTGRES_SSL_REJECT_UNAUTHORIZED || 'true'
+  ).toLowerCase() !== 'false';
   const FABER_AUTH_DEV_CODES = String(env.FABER_AUTH_DEV_CODES || 'false').toLowerCase() === 'true';
   const GOOGLE_CLIENT_ID = env.GOOGLE_CLIENT_ID || '';
   const GOOGLE_CLIENT_SECRET = env.GOOGLE_CLIENT_SECRET || '';
@@ -38,7 +43,7 @@ function createMainRuntimeConfig({
   const GITHUB_CLIENT_ID = env.GITHUB_CLIENT_ID || '';
   const GITHUB_CLIENT_SECRET = env.GITHUB_CLIENT_SECRET || '';
   const GITHUB_REDIRECT_URI = env.GITHUB_REDIRECT_URI || '';
-  const GITHUB_SCOPES = env.GITHUB_SCOPES || 'read:user user:email repo';
+  const GITHUB_SCOPES = env.GITHUB_SCOPES || 'read:user user:email';
   const OPENAI_MIN_REQUEST_INTERVAL_MS = Number.parseInt(
     env.OPENAI_MIN_REQUEST_INTERVAL_MS || '0',
     10
@@ -275,12 +280,15 @@ function createMainRuntimeConfig({
     OPENAI_API_KEY,
     OPENAI_MODEL_BRAIN_ENV,
     PEXELS_API_KEY,
+    FABER_PLATFORM_PEXELS_API_KEY,
+    FABER_PLATFORM_MEDIA_ENDPOINT,
     FABER_DATABASE_URL,
     FABER_SESSION_SECRET,
     FABER_APP_BASE_URL,
     FABER_BACKEND_HOST,
     FABER_BACKEND_PORT,
     FABER_POSTGRES_SSL,
+    FABER_POSTGRES_SSL_REJECT_UNAUTHORIZED,
     FABER_AUTH_DEV_CODES,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,

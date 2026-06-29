@@ -8,6 +8,11 @@ const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 const GITHUB_USER_URL = 'https://api.github.com/user';
 const GITHUB_EMAILS_URL = 'https://api.github.com/user/emails';
 const PASSWORD_HASH_PREFIX = 'scrypt:v1';
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const EMAIL_CODE_TTL_MS = 10 * 60 * 1000;
+const EMAIL_CODE_MAX_ATTEMPTS = 5;
+const PASSWORD_FAILURE_WINDOW_MS = 15 * 60 * 1000;
+const PASSWORD_FAILURE_LIMIT = 8;
 
 function normalizeEmail(value = '') {
   return String(value || '').trim().toLowerCase();
@@ -15,13 +20,6 @@ function normalizeEmail(value = '') {
 
 function normalizeUrl(value = '') {
   return String(value || '').trim().replace(/\/+$/, '');
-}
-
-function maskSecretTail(value = '', visibleTail = 4) {
-  const text = String(value || '').trim();
-  if (!text) return '';
-  if (text.length <= visibleTail) return '*'.repeat(text.length);
-  return `${'*'.repeat(Math.max(0, text.length - visibleTail))}${text.slice(-visibleTail)}`;
 }
 
 function parseScopes(value = '') {
@@ -44,6 +42,17 @@ function parseGithubScopes(value = '') {
 
 function createRandomToken(size = 24) {
   return crypto.randomBytes(size).toString('base64url');
+}
+
+function createEmailCode() {
+  return String(crypto.randomInt(100000, 1000000));
+}
+
+function hashSessionToken(sessionToken = '', sessionSecret = '') {
+  const token = String(sessionToken || '').trim();
+  const secret = String(sessionSecret || '').trim();
+  if (!token || !secret) return '';
+  return crypto.createHmac('sha256', secret).update(token).digest('hex');
 }
 
 function isValidEmail(value = '') {
@@ -118,9 +127,10 @@ function createPlatformAccountService(dependencies = {}) {
     githubClientId = '',
     githubClientSecret = '',
     githubRedirectUri = '',
-    githubScopes = 'read:user user:email repo',
+    githubScopes = 'read:user user:email',
     now = () => new Date(),
     pexelsApiKey = '',
+    platformMediaEndpoint = '',
     protectSecret = (value) => String(value || ''),
     saveSessionFile = null,
     loadSessionFile = null,
@@ -132,7 +142,49 @@ function createPlatformAccountService(dependencies = {}) {
   const pendingGoogleStates = new Map();
   const pendingGithubStates = new Map();
   const pendingEmailCodes = new Map();
+  const passwordFailures = new Map();
   let currentSession = null;
+
+  function isExpired(timestamp, ttlMs) {
+    return Date.now() - Number(timestamp || 0) > ttlMs;
+  }
+
+  function consumePendingState(map, state = '') {
+    const key = String(state || '').trim();
+    const pending = map.get(key);
+    if (!pending) return null;
+    map.delete(key);
+    if (isExpired(pending.createdAt, OAUTH_STATE_TTL_MS)) return null;
+    return pending;
+  }
+
+  function getPasswordFailureState(email = '') {
+    const key = normalizeEmail(email);
+    const record = passwordFailures.get(key);
+    if (!record || isExpired(record.firstAt, PASSWORD_FAILURE_WINDOW_MS)) {
+      const fresh = { count: 0, firstAt: Date.now() };
+      passwordFailures.set(key, fresh);
+      return fresh;
+    }
+    return record;
+  }
+
+  function assertPasswordAttemptsAllowed(email = '') {
+    const record = getPasswordFailureState(email);
+    if (record.count >= PASSWORD_FAILURE_LIMIT) {
+      return { ok: false, message: 'Muitas tentativas de login. Aguarde alguns minutos e tente novamente.' };
+    }
+    return { ok: true };
+  }
+
+  function recordPasswordFailure(email = '') {
+    const record = getPasswordFailureState(email);
+    record.count += 1;
+  }
+
+  function clearPasswordFailures(email = '') {
+    passwordFailures.delete(normalizeEmail(email));
+  }
 
   function getConfigStatus() {
     const missing = [];
@@ -146,6 +198,10 @@ function createPlatformAccountService(dependencies = {}) {
     const githubMissing = [];
     if (!String(githubClientId || '').trim()) githubMissing.push('GITHUB_CLIENT_ID');
     if (!String(githubClientSecret || '').trim()) githubMissing.push('GITHUB_CLIENT_SECRET');
+
+    const platformMediaConfigured = Boolean(
+      String(platformMediaEndpoint || '').trim() || String(pexelsApiKey || '').trim()
+    );
 
     return {
       enabled: missing.length === 0,
@@ -170,8 +226,8 @@ function createPlatformAccountService(dependencies = {}) {
         mode: 'password',
       },
       media: {
-        pexelsConfigured: Boolean(String(pexelsApiKey || '').trim()),
-        pexelsKeyMasked: maskSecretTail(pexelsApiKey),
+        pexelsConfigured: platformMediaConfigured,
+        mode: String(platformMediaEndpoint || '').trim() ? 'endpoint' : String(pexelsApiKey || '').trim() ? 'local-key' : 'none',
       },
     };
   }
@@ -233,14 +289,20 @@ function createPlatformAccountService(dependencies = {}) {
     if (typeof saveSessionFile === 'function') {
       await saveSessionFile(session);
     }
-    if (store && typeof store.saveSession === 'function') {
-      await store.saveSession({
-        sessionId: protectSecret(session.id),
-        userId: sanitized.id,
-        createdAt: session.createdAt,
-      });
-    }
+    await saveSessionRecord(session);
     return getCurrentSession();
+  }
+
+  async function saveSessionRecord(session = null) {
+    if (!session || !store || typeof store.saveSession !== 'function') return;
+    const sessionId = hashSessionToken(session.id, sessionSecret);
+    const userId = session.user && session.user.id ? String(session.user.id).trim() : '';
+    if (!sessionId || !userId) return;
+    await store.saveSession({
+      sessionId,
+      userId,
+      createdAt: session.createdAt,
+    });
   }
 
   function createGoogleLoginRequest() {
@@ -270,9 +332,8 @@ function createPlatformAccountService(dependencies = {}) {
   }
 
   async function exchangeGoogleCode({ code = '', state = '' } = {}) {
-    const pending = pendingGoogleStates.get(String(state || '').trim());
+    const pending = consumePendingState(pendingGoogleStates, state);
     if (!pending) return { ok: false, message: 'Estado do login Google invalido ou expirado.' };
-    pendingGoogleStates.delete(state);
 
     if (!String(code || '').trim()) return { ok: false, message: 'Codigo Google nao informado.' };
     if (typeof fetchFn !== 'function') return { ok: false, message: 'Fetch indisponivel para concluir OAuth.' };
@@ -367,9 +428,8 @@ function createPlatformAccountService(dependencies = {}) {
   }
 
   async function exchangeGithubCode({ code = '', state = '' } = {}) {
-    const pending = pendingGithubStates.get(String(state || '').trim());
+    const pending = consumePendingState(pendingGithubStates, state);
     if (!pending) return { ok: false, message: 'Estado do login GitHub invalido ou expirado.' };
-    pendingGithubStates.delete(state);
 
     if (!String(code || '').trim()) return { ok: false, message: 'Codigo GitHub nao informado.' };
     if (typeof fetchFn !== 'function') return { ok: false, message: 'Fetch indisponivel para concluir OAuth.' };
@@ -427,10 +487,11 @@ function createPlatformAccountService(dependencies = {}) {
     if (!normalized || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(normalized)) {
       return { ok: false, message: 'Email invalido.' };
     }
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = createEmailCode();
     pendingEmailCodes.set(normalized, {
       code: protectSecret(code),
       createdAt: Date.now(),
+      attempts: 0,
     });
     return {
       ok: true,
@@ -444,8 +505,19 @@ function createPlatformAccountService(dependencies = {}) {
     const normalized = normalizeEmail(email);
     const pending = pendingEmailCodes.get(normalized);
     if (!pending) return { ok: false, message: 'Codigo de email expirado ou inexistente.' };
+    if (isExpired(pending.createdAt, EMAIL_CODE_TTL_MS)) {
+      pendingEmailCodes.delete(normalized);
+      return { ok: false, message: 'Codigo de email expirado ou inexistente.' };
+    }
+    if (pending.attempts >= EMAIL_CODE_MAX_ATTEMPTS) {
+      pendingEmailCodes.delete(normalized);
+      return { ok: false, message: 'Muitas tentativas de codigo. Solicite um novo codigo.' };
+    }
     const expected = unprotectSecret(pending.code);
-    if (String(code || '').trim() !== expected) return { ok: false, message: 'Codigo de email invalido.' };
+    if (String(code || '').trim() !== expected) {
+      pending.attempts += 1;
+      return { ok: false, message: 'Codigo de email invalido.' };
+    }
     pendingEmailCodes.delete(normalized);
 
     const ensured = await ensureUser({
@@ -466,13 +538,20 @@ function createPlatformAccountService(dependencies = {}) {
     const normalized = normalizeEmail(email);
     if (!isValidEmail(normalized)) return { ok: false, message: 'Email invalido.' };
     if (!String(password || '').trim()) return { ok: false, message: 'Senha obrigatoria.' };
+    const attemptsAllowed = assertPasswordAttemptsAllowed(normalized);
+    if (!attemptsAllowed.ok) return attemptsAllowed;
 
     const identity = await store.getPasswordIdentityByEmail(normalized);
     if (!identity || !identity.passwordHash) {
+      recordPasswordFailure(normalized);
       return { ok: false, message: 'Conta nao encontrada. Crie uma conta para continuar.' };
     }
     const validPassword = await verifyPassword(password, identity.passwordHash);
-    if (!validPassword) return { ok: false, message: 'Email ou senha invalidos.' };
+    if (!validPassword) {
+      recordPasswordFailure(normalized);
+      return { ok: false, message: 'Email ou senha invalidos.' };
+    }
+    clearPasswordFailures(normalized);
 
     const session = await createSessionForUser({
       ...(identity.user || {}),
@@ -524,7 +603,8 @@ function createPlatformAccountService(dependencies = {}) {
       await saveSessionFile(null);
     }
     if (session && store && typeof store.revokeSession === 'function') {
-      await store.revokeSession(protectSecret(session.id));
+      const sessionId = hashSessionToken(session.id, sessionSecret);
+      if (sessionId) await store.revokeSession(sessionId);
     }
     return { ok: true };
   }
@@ -534,6 +614,7 @@ function createPlatformAccountService(dependencies = {}) {
       const loaded = await loadSessionFile();
       if (loaded) {
         currentSession = loaded;
+        await saveSessionRecord(currentSession);
       }
     }
   }
@@ -568,8 +649,8 @@ module.exports = {
   GOOGLE_TOKEN_URL,
   GOOGLE_USERINFO_URL,
   createPlatformAccountService,
+  hashSessionToken,
   hashPassword,
-  maskSecretTail,
   normalizeEmail,
   normalizeLanguagePreference,
   normalizeThemePreference,
