@@ -1,4 +1,5 @@
 const NODE_RUNTIME_COMMAND_RE = /(^|[\s;&|()])(?:npm|npx|node|next|pnpm|yarn|bun)(?=$|[\s;&|()])/;
+const SENSITIVE_ENV_RE = /(?:^|_)(?:API_?KEY|ACCESS_?KEY|TOKEN|SECRET|PASSWORD|PASS|DATABASE_URL|POSTGRES|SUPABASE|OPENAI|GEMINI|SAMBANOVA|PEXELS)(?:_|$)/i;
 
 function createProjectNodeRuntimeService(dependencies = {}) {
   const {
@@ -76,6 +77,11 @@ function createProjectNodeRuntimeService(dependencies = {}) {
     const env = { ...processEnv, ...extraEnv };
     delete env.npm_config_metrics_registry;
     delete env.NPM_CONFIG_METRICS_REGISTRY;
+    if (String(env.FABER_TERMINAL_INHERIT_SENSITIVE_ENV || '').toLowerCase() !== 'true') {
+      for (const key of Object.keys(env)) {
+        if (SENSITIVE_ENV_RE.test(key)) delete env[key];
+      }
+    }
 
     const runtime = resolveProjectRuntime(rootPath);
     if (runtime.active) {

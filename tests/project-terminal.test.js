@@ -68,7 +68,14 @@ async function waitFor(predicate, timeoutMs = 200) {
     fs,
     path,
     spawn: createFakeSpawn(calls),
-    processEnv: { SHELL: '/bin/zsh', HOME: homeRoot, PATH: '/legacy/bin', npm_config_metrics_registry: 'legacy' },
+    processEnv: {
+      SHELL: '/bin/zsh',
+      HOME: homeRoot,
+      PATH: '/legacy/bin',
+      npm_config_metrics_registry: 'legacy',
+      OPENAI_API_KEY: 'app-secret',
+      DATABASE_URL: 'postgresql://secret',
+    },
     now: () => '2026-05-16T00:00:00.000Z',
     idFactory: () => 'abc123',
   });
@@ -125,6 +132,8 @@ async function waitFor(predicate, timeoutMs = 200) {
   assert.ok(calls[0].args[1].includes(`export PATH='${nodeBin}':$PATH`));
   assert.ok(calls[0].args[1].endsWith('; npm test'));
   assert.strictEqual(calls[0].options.env.npm_config_metrics_registry, undefined);
+  assert.strictEqual(calls[0].options.env.OPENAI_API_KEY, undefined);
+  assert.strictEqual(calls[0].options.env.DATABASE_URL, undefined);
   assert.ok(calls[0].options.env.PATH.startsWith(`${nodeBin}:`));
 
   await waitFor(() => events.some((event) => event.type === 'finished'));

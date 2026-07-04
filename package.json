@@ -30,7 +30,7 @@
     "test:mcp-capabilities": "npm run test:mcp-capability-gateway && npm run test:mcp-policy && npm run test:mcp-transports && npm run test:mcp-server-registry && npm run test:mcp-discovery-cache && npm run test:mcp-ipc && npm run test:mcp-external && npm run test:mcp-capability-adapter && npm run test:tools && npm run test:project-terminal && npm run test:project-preview-runtime && npm run test:project-visual-capture && npm run test:project-visual-validation-runtime && npm run test:git-service && SMOKE_SCENARIOS=mcp_structured_edit_persistence,mcp_external_tool_bridge,mcp_external_stdio_visual_bridge,mcp_blueprint_contract_guardian,mcp_blueprint_contract_briefing_matrix node tests/smoke-scenarios.test.js",
     "test:ai-trust-boundary": "node tests/ai-trust-boundary.test.js",
     "test:real-openai-prompt-injection": "electron tests/real-openai-prompt-injection-e2e.electron.js",
-    "test:security": "node tests/security.test.js",
+    "test:security": "node tests/security.test.js && node tests/update-handlers.test.js",
     "test:command-runner": "node tests/command-runner.test.js",
     "test:cortex-product-runtime-contract": "node tests/cortex-product-runtime-contract-service.test.js",
     "test:stack-registry": "node tests/stack-registry-service.test.js",

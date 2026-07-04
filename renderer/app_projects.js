@@ -194,6 +194,15 @@
     
     async function runProjectContextAction(action, projectId) {
       if (!action || !projectId) return;
+
+      const tutorialRuntime = window.FaberTutorialRuntime;
+      if (tutorialRuntime && typeof tutorialRuntime.handleProjectContextAction === 'function') {
+        const handledByTutorial = await tutorialRuntime.handleProjectContextAction(action, projectId);
+        if (handledByTutorial) {
+          renderProjects();
+          return;
+        }
+      }
     
       if (action === 'rename') {
         const target = state.projects.find((project) => project.id === projectId);
@@ -323,6 +332,31 @@
         return Boolean(state.selectedProjectInfo && state.selectedProjectInfo.rootPath && !forceRefresh);
       }
     }
+
+    async function ensureMapTabVisible() {
+      if (!applicationMapController || typeof applicationMapController.switchTab !== 'function') return;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        applicationMapController.switchTab('map');
+        const tabMap = document.getElementById('btn-tab-map');
+        if (tabMap && typeof tabMap.click === 'function') {
+          tabMap.click();
+        }
+        await new Promise((resolve) => {
+          window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(resolve);
+          });
+        });
+        const mapRegion = document.getElementById('workspace-map-region');
+        const mapVisible = Boolean(
+          tabMap
+          && tabMap.classList.contains('active')
+          && mapRegion
+          && !mapRegion.classList.contains('hidden')
+        );
+        if (mapVisible) return;
+        await new Promise((resolve) => window.setTimeout(resolve, 70));
+      }
+    }
     
     async function selectProject(projectId, options = {}) {
       const previousProjectId = state.selectedProjectId;
@@ -363,6 +397,9 @@
       }
       if (applicationMapController) {
         await applicationMapController.loadProjectMap(project.id, options);
+        if (options && options.initialTab === 'map') {
+          await ensureMapTabVisible();
+        }
       }
       if (milestonesPanelController) {
         await milestonesPanelController.refresh();
@@ -381,6 +418,9 @@
       }
       await refreshCortexLearningPanel();
       renderChatForActiveConversation();
+      if (options && options.initialTab === 'map') {
+        await ensureMapTabVisible();
+      }
     }
 
     return {

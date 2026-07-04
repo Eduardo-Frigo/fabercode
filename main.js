@@ -86,6 +86,7 @@ const { registerProjectHandlers } = require('./main/ipc/project_handlers');
 const { registerTerminalHandlers } = require('./main/ipc/terminal_handlers');
 const { registerApplicationMapHandlers } = require('./main/ipc/application_map_handlers');
 const { registerMilestoneHandlers } = require('./main/ipc/milestone_handlers');
+const { registerSystemHandlers } = require('./main/ipc/system_handlers');
 const { registerUpdateHandlers } = require('./main/ipc/update_handlers');
 const { createApplicationMapService } = require('./main/services/application_map_service');
 const { createApplicationMapRenderService } = require('./main/services/application_map_render_service');
@@ -145,6 +146,7 @@ const { createExternalMcpServerRegistryService } = require('./main/services/exte
 const { createExternalMcpPresetRegistryService } = require('./main/services/external_mcp_preset_registry_service');
 const { createExternalMcpDiscoveryCacheService } = require('./main/services/external_mcp_discovery_cache_service');
 const { createLocalDiagnosticsService } = require('./main/services/local_diagnostics_service');
+const { createHostRequirementsService } = require('./main/services/host_requirements_service');
 const { createCortexMemoryManagementService } = require('./main/services/cortex_memory_management_service');
 const { createMemoryEvidenceLedgerService } = require('./main/services/memory_evidence_ledger_service');
 const { createPlatformAccountService } = require('./main/services/platform_account_service');
@@ -401,6 +403,11 @@ const {
 
 const commandRunner = createCommandRunner({ spawn });
 const { runCommand } = commandRunner;
+const hostRequirementsService = createHostRequirementsService({
+  platform: process.platform,
+  runCommand,
+});
+const { getHostRequirements } = hostRequirementsService;
 
 const fileTextUtils = createFileTextUtils({ crypto });
 const {
@@ -5211,6 +5218,14 @@ app.whenReady().then(async () => {
     milestoneGitStatusService,
     registerIpcHandler,
     appendAuditEvent,
+  });
+
+  registerSystemHandlers({
+    appendAuditEvent,
+    getHostRequirements,
+    normalizeExternalUrl,
+    registerIpcHandler,
+    shell,
   });
 
   registerUpdateHandlers({

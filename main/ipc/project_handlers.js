@@ -139,7 +139,7 @@ function registerProjectHandlers(dependencies = {}) {
 
   registerIpcHandler('projects:add', async () => {
     const result = await dialog.showOpenDialog({
-      properties: ['openDirectory'],
+      properties: ['openDirectory', 'createDirectory'],
       title: 'Selecione a pasta do projeto',
     });
 

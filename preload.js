@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('localcodeApi', {
   toggleWindowMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
+  getHostRequirements: () => ipcRenderer.invoke('system:host-requirements'),
+  openExternalUrl: (payload) => ipcRenderer.invoke('system:open-external', payload),
   getAccountStatus: () => ipcRenderer.invoke('account:status'),
   startGoogleLogin: (payload) => ipcRenderer.invoke('account:google:start', payload),
   completeGoogleLogin: (payload) => ipcRenderer.invoke('account:google:complete', payload),

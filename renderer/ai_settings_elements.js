@@ -25,6 +25,7 @@
           openAccount: document.getElementById('ai-settings-open-account'),
           openApis: document.getElementById('ai-settings-open-apis'),
           openMcp: document.getElementById('ai-settings-open-mcp'),
+          replayTutorial: document.getElementById('ai-settings-replay-tutorial'),
           language: document.getElementById('ai-settings-language'),
           theme: document.getElementById('ai-settings-theme'),
           fontScale: document.getElementById('ai-settings-font-scale'),

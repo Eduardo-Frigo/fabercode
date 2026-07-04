@@ -1,11 +1,16 @@
 const ALLOWED_EXTERNAL_URL_HOSTS = new Set([
   'accounts.google.com',
   'aistudio.google.com',
+  'anthropic.com',
   'cloud.sambanova.ai',
+  'console.anthropic.com',
   'github.com',
+  'git-scm.com',
+  'nodejs.org',
   'platform.deepseek.com',
   'platform.openai.com',
   'www.github.com',
+  'www.nodejs.org',
 ]);
 
 const LOCAL_PREVIEW_HOSTS = new Set([

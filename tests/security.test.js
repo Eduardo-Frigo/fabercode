@@ -20,6 +20,9 @@ function run() {
   assert.match(protectedValue, /^enc:v1:/);
   assert.strictEqual(secretStore.unprotectSecret(protectedValue), 'abc123');
   assert.strictEqual(secretStore.unprotectSecret('legacy-key'), 'legacy-key');
+  const strictSecretStore = createSecretStore({ allowPlaintextFallback: false, safeStorage: null });
+  assert.strictEqual(strictSecretStore.protectSecret('abc123'), '');
+  assert.strictEqual(strictSecretStore.unprotectSecret('plain:v1:YWJjMTIz'), 'abc123');
   assert.strictEqual(normalizeExternalUrl('https://github.com/example/repo').ok, true);
   assert.strictEqual(normalizeExternalUrl('https://aistudio.google.com/app/apikey').ok, true);
   assert.strictEqual(normalizeExternalUrl('https://cloud.sambanova.ai/').ok, true);

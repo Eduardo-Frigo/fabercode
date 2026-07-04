@@ -50,6 +50,7 @@
       updateStatus = () => {},
       watchLatestProjectJob = () => () => {},
       normalizeProjectItems = () => [],
+      notifyTutorialProjectCreated = () => {},
     } = callbacks;
     const {
       buildExecutionOutcomeAssistantMessage = () => '',
@@ -428,6 +429,11 @@
     }
     
     async function onAddProject() {
+      const previousIds = new Set(
+        (Array.isArray(state.projects) ? state.projects : [])
+          .map((project) => project && project.id)
+          .filter(Boolean)
+      );
       const result = await api.addProject();
       if (!result.ok) return;
     
@@ -435,8 +441,13 @@
       renderProjects();
     
       if (state.projects.length) {
-        const latest = state.projects[state.projects.length - 1];
-        await selectProject(latest.id);
+        const createdProjectId = result.projectId
+          || state.projects.find((project) => project && project.id && !previousIds.has(project.id))?.id
+          || state.projects[state.projects.length - 1]?.id;
+        if (createdProjectId) {
+          notifyTutorialProjectCreated(createdProjectId);
+          await selectProject(createdProjectId);
+        }
       }
     }
     

@@ -12,6 +12,7 @@
     <link rel="stylesheet" href="./styles.css" />
     <link rel="stylesheet" href="./styles/application-map.css" />
     <link rel="stylesheet" href="./styles/milestones.css" />
+    <link rel="stylesheet" href="./styles/progressive-disclosure.css" />
     <link rel="stylesheet" href="../node_modules/codemirror/lib/codemirror.css" />
     <link rel="stylesheet" href="../node_modules/codemirror/theme/material-darker.css" />
   </head>
@@ -933,6 +934,12 @@
               <strong>MCP externo</strong>
               <span class="ai-settings-home-btn__desc">Configure servidores, descubra tools e aprove integrações locais</span>
             </button>
+            <button id="ai-settings-replay-tutorial" type="button" class="ai-settings-home-btn">
+              <i class="ai-settings-home-btn__icon" aria-hidden="true">↺</i>
+              <small>Onboarding</small>
+              <strong>Rodar tutorial novamente</strong>
+              <span class="ai-settings-home-btn__desc">Reinicia a apresentação guiada da ferramenta para revisar o fluxo do Faber Code</span>
+            </button>
           </div>
 
           <div id="ai-settings-language-panel" class="ai-settings-panel hidden">
@@ -1258,6 +1265,49 @@
       </div>
     </div>
 
+    <div id="progressive-requirements-modal" class="progressive-requirements-modal hidden" aria-hidden="true">
+      <div class="progressive-requirements-modal__backdrop"></div>
+      <div class="progressive-requirements-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="progressive-requirements-title">
+        <div class="progressive-requirements__head">
+          <h2 id="progressive-requirements-title">Requisitos locais do Faber Code</h2>
+          <p id="progressive-requirements-lead">Antes de continuar, confirme que este computador tem Node.js e Git instalados.</p>
+        </div>
+        <div id="progressive-requirements-status" class="progressive-requirements__status"></div>
+        <div id="progressive-requirements-list" class="progressive-requirements__list"></div>
+        <div class="progressive-requirements__actions">
+          <button id="progressive-requirements-recheck" type="button">Verificar novamente</button>
+          <button id="progressive-requirements-continue" type="button">Continuar</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="progressive-tutorial" class="progressive-tutorial hidden" aria-hidden="true">
+      <div class="progressive-tutorial__backdrop"></div>
+      <div id="progressive-tutorial-spotlight" class="progressive-tutorial__spotlight hidden" aria-hidden="true"></div>
+      <div id="progressive-tutorial-cursor" class="progressive-fake-cursor hidden" aria-hidden="true"><span></span></div>
+      <div id="progressive-tutorial-cursor-label" class="progressive-fake-cursor-label hidden" aria-hidden="true"></div>
+      <section class="progressive-tutorial__coach" role="dialog" aria-modal="true" aria-labelledby="progressive-tutorial-title">
+        <div class="progressive-tutorial__coach-head">
+          <span id="progressive-tutorial-step-counter" class="progressive-step-counter">1 / 10</span>
+          <span id="progressive-tutorial-live" class="progressive-tutorial__live-pill">Tutorial ao vivo</span>
+        </div>
+        <div id="progressive-tutorial-progress" class="progressive-progress"></div>
+        <div class="progressive-tutorial__coach-body">
+          <div class="progressive-tutorial__copy">
+            <h2 id="progressive-tutorial-title">Tutorial guiado do Faber Code</h2>
+            <p id="progressive-tutorial-hint" class="progressive-tutorial__hint">Acompanhe o cursor e a interface para entender o fluxo da ferramenta.</p>
+          </div>
+          <div id="progressive-tutorial-checklist" class="progressive-checklist hidden"></div>
+          <div id="progressive-tutorial-preview" class="progressive-preview"></div>
+          <div class="progressive-tutorial__actions">
+            <button id="progressive-tutorial-prev" type="button">Voltar</button>
+            <button id="progressive-tutorial-skip-all" type="button">Interromper</button>
+            <button id="progressive-tutorial-next" type="button">Continuar</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
     <script src="../node_modules/codemirror/lib/codemirror.js"></script>
     <script src="../node_modules/codemirror/mode/javascript/javascript.js"></script>
     <script src="../node_modules/codemirror/mode/css/css.js"></script>
@@ -1310,6 +1360,7 @@
     <script src="./welcome_project_modal.js"></script>
     <script src="./welcome_quotes.js"></script>
     <script src="./hover_tooltips.js"></script>
+    <script src="./progressive_disclosure.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

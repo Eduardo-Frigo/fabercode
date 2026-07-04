@@ -23,12 +23,26 @@
 
   function getCortexLearningParts(learning) {
     const source = learning && typeof learning === 'object' ? learning : {};
-    return {
-      persona: Array.isArray(source.persona) ? source.persona : Array.isArray(source.ia2) ? source.ia2 : [],
-      executor: Array.isArray(source.executor) ? source.executor : Array.isArray(source.ia1) ? source.ia1 : [],
-      events: Array.isArray(source.events) ? source.events : [],
-      topics: Array.isArray(source.topics) ? source.topics : [],
+    const parts = {
+      persona: Array.isArray(source.persona) ? source.persona.slice() : Array.isArray(source.ia2) ? source.ia2.slice() : [],
+      executor: Array.isArray(source.executor) ? source.executor.slice() : Array.isArray(source.ia1) ? source.ia1.slice() : [],
+      events: Array.isArray(source.events) ? source.events.slice() : [],
+      topics: Array.isArray(source.topics) ? source.topics.slice() : [],
     };
+
+    const runtime = window.FaberTutorialRuntime;
+    const overlay = runtime && typeof runtime.getTutorialCortexOverlay === 'function'
+      ? runtime.getTutorialCortexOverlay()
+      : null;
+
+    if (overlay && typeof overlay === 'object') {
+      if (Array.isArray(overlay.persona)) parts.persona.push(...overlay.persona);
+      if (Array.isArray(overlay.executor)) parts.executor.push(...overlay.executor);
+      if (Array.isArray(overlay.events)) parts.events.push(...overlay.events);
+      if (Array.isArray(overlay.topics)) parts.topics.push(...overlay.topics);
+    }
+
+    return parts;
   }
 
   function createCortexController(options = {}) {
@@ -770,6 +784,11 @@
       if (elements.modeButton) elements.modeButton.classList.remove('active');
     }
 
+    function handleTutorialOverlayChange() {
+      if (!isOpen()) return;
+      renderLightbox(getActiveLearning() || null);
+    }
+
     function isOpen() {
       return Boolean(elements.modal && !elements.modal.classList.contains('hidden'));
     }
@@ -999,6 +1018,7 @@
           }
         });
       }
+      window.addEventListener('faber:tutorial-cortex-changed', handleTutorialOverlayChange);
     }
 
     return {

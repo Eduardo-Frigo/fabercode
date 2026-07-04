@@ -52,6 +52,7 @@ async function runProjectHandlersTest(tempRoot) {
   const openedUrls = [];
   const removedConversations = [];
   const committedPayloads = [];
+  const openDialogCalls = [];
   const previewRuntime = {
     status: null,
   };
@@ -75,7 +76,10 @@ async function runProjectHandlersTest(tempRoot) {
     collectGitDiffStats: async () => ({ 'git.js': { added: 1, removed: 0 } }),
     collectProjectFilesTree: () => [{ path: 'src/index.js' }],
     dialog: {
-      showOpenDialog: async () => ({ canceled: false, filePaths: [projectRoot] }),
+      showOpenDialog: async (options) => {
+        openDialogCalls.push(options);
+        return { canceled: false, filePaths: [projectRoot] };
+      },
     },
     fs,
     getProjectGitStatus: async () => ({
@@ -185,6 +189,7 @@ async function runProjectHandlersTest(tempRoot) {
   assert.strictEqual(addResult.ok, true);
   assert.strictEqual(projects.length, 1);
   assert.strictEqual(projects[0].rootPath, projectRoot);
+  assert.deepStrictEqual(openDialogCalls[0].properties, ['openDirectory', 'createDirectory']);
 
   const importedRoot = path.join(tempRoot, 'imported-project');
   fs.mkdirSync(importedRoot, { recursive: true });

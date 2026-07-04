@@ -110,6 +110,7 @@ let jobController = null;
 let actionController = null;
 let eventsController = null;
 let preferencesController = null;
+let progressiveDisclosureController = null;
 let welcomePanelWasVisible = false;
 let welcomePanelAnimationFrame = null;
 
@@ -173,6 +174,7 @@ const REQUIRED_RENDERER_MODULES = [
   { globalName: 'FaberProjectSidebar', methods: ['createProjectSidebarController', 'normalizeProjectItems'] },
   { globalName: 'FaberProjectStateModal', methods: ['createProjectStateModalController'] },
   { globalName: 'FaberProjectTerminal', methods: ['createProjectTerminalController'] },
+  { globalName: 'FaberProgressiveDisclosure', methods: ['createProgressiveDisclosureController'] },
   { globalName: 'FaberWelcomeProjectModal', methods: ['createWelcomeProjectModalController'] },
   { globalName: 'FaberWelcomeQuotes', methods: ['applyWelcomeQuote', 'getWelcomeQuote', 'setLastAuthor'] },
 ];
@@ -345,6 +347,10 @@ const aiSettingsController = window.FaberAiSettings
   ? window.FaberAiSettings.createAiSettingsController({
       api: window.localcodeApi,
       t,
+      onReplayTutorial: async () => {
+        closeAiSettingsModal();
+        if (progressiveDisclosureController) await progressiveDisclosureController.restartTutorial();
+      },
       getSelectedProvider: () => state.selectedAiProvider,
       setSelectedProvider: (provider) => {
         state.selectedAiProvider = normalizeKnownProvider(provider);
@@ -378,6 +384,7 @@ const aiSettingsController = window.FaberAiSettings
 const accountGateController = window.FaberAccountGate
   ? window.FaberAccountGate.createAccountGateController({
       api: window.localcodeApi,
+      requirePlatformMedia: false,
       notify: (message) => appendMessage('assistant', message, { persistToConversation: false }),
       getInterfaceLanguage: () => state.interfaceLanguage,
       onLanguagePreferenceSelected: (locale) => {
@@ -401,6 +408,24 @@ const accountGateController = window.FaberAccountGate
         if (workspaceLayoutController) {
           workspaceLayoutController.maybeShowOnboarding({ accountUnlocked: state.accountUnlocked });
         }
+      },
+    })
+  : null;
+progressiveDisclosureController = window.FaberProgressiveDisclosure
+  ? window.FaberProgressiveDisclosure.createProgressiveDisclosureController({
+      api: window.localcodeApi,
+      documentRef: document,
+      getLocale: () => state.interfaceLanguage,
+      getAccountUnlocked: () => state.accountUnlocked,
+      getProjects: () => state.projects,
+      getSelectedProjectId: () => state.selectedProjectId,
+      actions: {
+        openCortex: async () => {
+          openCortexModal();
+        },
+        openApis: async () => {
+          await openAiSettingsSection('ai-settings-open-apis');
+        },
       },
     })
   : null;
@@ -608,6 +633,14 @@ actionController = window.FaberAppActions
         hideJobProgress,
         hidePersonaThinkingIndicator,
         normalizeProjectItems,
+        notifyTutorialProjectCreated: (projectId) => {
+          if (
+            progressiveDisclosureController
+            && typeof progressiveDisclosureController.notifyProjectCreated === 'function'
+          ) {
+            progressiveDisclosureController.notifyProjectCreated(projectId);
+          }
+        },
         openWelcomeProjectModal,
         pollJob,
         prepareNewConversationForProject,
@@ -1282,10 +1315,16 @@ async function runProjectContextAction(action, projectId) {
 function renderProjects() {
   if (projectController) projectController.renderProjects();
   renderCenterTitle();
+  if (progressiveDisclosureController && typeof progressiveDisclosureController.notifyStateChanged === 'function') {
+    progressiveDisclosureController.notifyStateChanged();
+  }
 }
 
 async function loadProjects() {
   if (projectController) await projectController.loadProjects();
+  if (progressiveDisclosureController && typeof progressiveDisclosureController.notifyStateChanged === 'function') {
+    progressiveDisclosureController.notifyStateChanged();
+  }
 }
 
 function renderIncrementalModeBadge() {
@@ -1298,6 +1337,9 @@ async function ensureSelectedProjectInfoReady(options = {}) {
 
 async function selectProject(projectId, options = {}) {
   if (projectController) await projectController.selectProject(projectId, options);
+  if (progressiveDisclosureController && typeof progressiveDisclosureController.notifyStateChanged === 'function') {
+    progressiveDisclosureController.notifyStateChanged();
+  }
 }
 
 function clearPending() {
@@ -1384,9 +1426,17 @@ function closeAiSettingsModal() {
   if (aiSettingsController) aiSettingsController.close();
 }
 
+async function openAiSettingsSection(buttonId) {
+  await openAiSettingsModal();
+  if (!buttonId) return;
+  const button = document.getElementById(buttonId);
+  if (button) button.click();
+}
+
 function bindEvents() {
   bindCenterTitleEvents();
   if (eventsController) eventsController.bindEvents();
+  if (progressiveDisclosureController) progressiveDisclosureController.bindEvents();
 }
 
 function bindCenterTitleEvents() {
@@ -1419,7 +1469,10 @@ async function setupAppUpdater() {
       updateBtn.disabled = true;
       const textSpan = updateBtn.querySelector('.update-text');
       if (textSpan) textSpan.textContent = 'Baixando...';
-      const result = await window.localcodeApi.installUpdate({ downloadUrl });
+      const result = await window.localcodeApi.installUpdate({
+        downloadUrl: updateBtn.dataset.downloadUrl || '',
+        installToken: updateBtn.dataset.installToken || '',
+      });
       if (result && !result.ok) {
         await window.faberAlert('Erro ao instalar atualização: ' + result.message);
         updateBtn.disabled = false;
@@ -1440,8 +1493,10 @@ async function setupAppUpdater() {
       updateContainer.classList.remove('hidden');
       updateBtn.dataset.version = result.latestVersion;
       updateBtn.dataset.downloadUrl = result.downloadUrl;
+      updateBtn.dataset.installToken = result.installToken || '';
     } else {
       updateContainer.classList.add('hidden');
+      updateBtn.dataset.installToken = '';
     }
   } catch (err) {
     console.error('Erro ao verificar atualizações:', err);
@@ -1487,6 +1542,7 @@ async function bootstrap() {
   state.mempalaceStatus = null;
 
   renderWelcomePanel();
+  if (progressiveDisclosureController) await progressiveDisclosureController.maybeStart();
 }
 
 let __bootFinished = false;

@@ -263,12 +263,14 @@
         showContextMenu(id, event.clientX, event.clientY);
       });
 
-      const headerBtn = document.createElement('button');
+      const headerBtn = document.createElement('div');
       headerBtn.className = 'project-tree-header';
-      headerBtn.type = 'button';
       headerBtn.title = name;
+      headerBtn.setAttribute('role', 'button');
+      headerBtn.tabIndex = 0;
       headerBtn.setAttribute('aria-label', `Abrir projeto ${name}`);
-      headerBtn.addEventListener('click', async () => {
+
+      async function handleHeaderActivate() {
         const railMenuMode = isRailMenuOpen() || isInsideRailMenu(headerBtn);
         setExpanded(id, !isProjectExpanded(id));
         render();
@@ -283,6 +285,15 @@
         }
 
         await onRefreshSelectedProjectFiles(id);
+      }
+
+      headerBtn.addEventListener('click', async () => {
+        await handleHeaderActivate();
+      });
+      headerBtn.addEventListener('keydown', async (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        await handleHeaderActivate();
       });
 
       const nameEl = document.createElement('span');
@@ -329,17 +340,19 @@
       mapBtn.title = 'Mapa da Aplicação';
       mapBtn.setAttribute('aria-label', 'Mapa da Aplicação');
       mapBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="sidebar-icon-13"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>`;
-      
+
+      mapBtn.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+      });
+
       mapBtn.addEventListener('click', async (event) => {
         event.preventDefault();
         event.stopPropagation();
+        event.stopImmediatePropagation();
         const railMenuMode = isRailMenuOpen() || isInsideRailMenu(mapBtn);
-        if (getSelectedProjectId() !== id) {
-          await onSelectProject(id, { initialTab: 'map' });
-        } else {
-          const tabMap = document.getElementById('btn-tab-map');
-          if (tabMap) tabMap.click();
-        }
+        await onSelectProject(id, { initialTab: 'map' });
         if (railMenuMode) setRailMenuOpen(false);
         render();
       });
@@ -386,15 +399,24 @@
       renderProjectListInto(elements.railMenuList);
     }
 
+    function getTutorialProjects() {
+      const runtime = window.FaberTutorialRuntime;
+      if (!runtime || typeof runtime.getSidebarProjects !== 'function') return [];
+      const tutorialProjects = runtime.getSidebarProjects();
+      return Array.isArray(tutorialProjects) ? tutorialProjects : [];
+    }
+
     function renderProjectListInto(target) {
       if (!target) return;
       target.innerHTML = '';
 
       const query = String(getSearchQuery() || '').trim().toLowerCase();
       const source = Array.isArray(getProjects()) ? getProjects() : [];
+      const tutorialProjects = getTutorialProjects();
+      const mergedSource = tutorialProjects.concat(source.filter((project) => !tutorialProjects.some((tutorialProject) => tutorialProject && project && tutorialProject.id === project.id)));
       const visibleProjects = query
-        ? source.filter((project) => String((project && project.name) || '').toLowerCase().includes(query))
-        : source;
+        ? mergedSource.filter((project) => String((project && project.name) || '').toLowerCase().includes(query))
+        : mergedSource;
 
       if (!visibleProjects.length) {
         renderEmptyInto(target, source.length);
@@ -442,6 +464,7 @@
       }
 
       document.addEventListener('pointerdown', handleOutsidePointerDown);
+      window.addEventListener('faber:tutorial-projects-changed', render);
       document.addEventListener('click', (event) => {
         if (!isContextMenuOpen()) return;
         const insideProject = event.target && event.target.closest && event.target.closest('#project-context-menu');

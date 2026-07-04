@@ -29,6 +29,9 @@ const UI_TRANSLATIONS = {
     archivedProjects: 'Projetos arquivados',
     trash: 'Lixeira',
     settings: 'Configurações',
+    settingsGroupOnboarding: 'Onboarding',
+    replayTutorial: 'Rodar tutorial novamente',
+    replayTutorialDesc: 'Reinicia a apresentação guiada da ferramenta para revisar o fluxo do Faber Code',
     waitingProject: 'Aguardando projeto',
     confirmExecute: 'Confirmar e Executar',
     cancel: 'Cancelar',
@@ -146,6 +149,9 @@ const UI_TRANSLATIONS = {
     settingsGroupAccess: 'Acesso',
     settingsGroupModels: 'Modelos',
     settingsGroupIntegrations: 'Integrações',
+    settingsGroupOnboarding: 'Onboarding',
+    replayTutorial: 'Rodar tutorial novamente',
+    replayTutorialDesc: 'Reinicia a apresentação guiada da ferramenta para revisar o fluxo do Faber Code',
     back: 'Voltar',
     interfaceLanguage: 'Idioma da interface',
     languageHelp: 'A preferência é aplicada à interface e fica salva nas configurações da ferramenta.',
@@ -423,6 +429,9 @@ const UI_TRANSLATIONS = {
     settingsGroupAccess: 'Access',
     settingsGroupModels: 'Models',
     settingsGroupIntegrations: 'Integrations',
+    settingsGroupOnboarding: 'Onboarding',
+    replayTutorial: 'Run tutorial again',
+    replayTutorialDesc: 'Restarts the guided product tour so you can review the Faber Code workflow',
     back: 'Back',
     interfaceLanguage: 'Interface language',
     languageHelp: 'The preference is applied to the interface and saved in the tool settings.',
@@ -700,6 +709,9 @@ const UI_TRANSLATIONS = {
     settingsGroupAccess: 'Acceso',
     settingsGroupModels: 'Modelos',
     settingsGroupIntegrations: 'Integraciones',
+    settingsGroupOnboarding: 'Onboarding',
+    replayTutorial: 'Ejecutar tutorial nuevamente',
+    replayTutorialDesc: 'Reinicia la presentación guiada de la herramienta para revisar el flujo de Faber Code',
     back: 'Volver',
     interfaceLanguage: 'Idioma de la interfaz',
     languageHelp: 'La preferencia se aplica a la interfaz y queda guardada en la configuración de la herramienta.',
@@ -945,6 +957,9 @@ function applyStaticTranslations() {
   setNodeText('#ai-settings-open-mcp small', 'settingsGroupIntegrations');
   setNodeText('#ai-settings-open-mcp strong', 'externalMcp');
   setNodeText('#ai-settings-open-mcp .ai-settings-home-btn__desc', 'externalMcpDesc');
+  setNodeText('#ai-settings-replay-tutorial small', 'settingsGroupOnboarding');
+  setNodeText('#ai-settings-replay-tutorial strong', 'replayTutorial');
+  setNodeText('#ai-settings-replay-tutorial .ai-settings-home-btn__desc', 'replayTutorialDesc');
   setNodeText('#ai-settings-back-home', 'back');
   setNodeText('#ai-settings-language-panel .ai-settings-panel-head span', 'language');
   setNodeText('#ai-settings-language-panel .ai-settings-field span', 'interfaceLanguage');

@@ -19,7 +19,8 @@ function loadEnvironment() {
   const envPath = path.resolve(process.cwd(), '.env');
   require('dotenv').config({ path: envPath });
   const databaseUrl = process.env.FABER_DATABASE_URL || process.env.DATABASE_URL || '';
-  const ssl = process.env.FABER_POSTGRES_SSL === 'true' ? { rejectUnauthorized: false } : null;
+  const rejectUnauthorized = String(process.env.FABER_POSTGRES_SSL_REJECT_UNAUTHORIZED || 'true').toLowerCase() !== 'false';
+  const ssl = process.env.FABER_POSTGRES_SSL === 'true' ? { rejectUnauthorized } : null;
   return { databaseUrl, envPath, ssl };
 }
 

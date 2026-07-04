@@ -16,6 +16,10 @@
 
     let currentMode = null;
 
+    function getTutorialRuntime() {
+      return window.FaberTutorialRuntime || null;
+    }
+
     function formatDate(project) {
       const raw = project && (project.archivedAt || project.deletedAt || project.createdAt);
       if (!raw) return 'sem data';
@@ -26,7 +30,9 @@
 
     function setTitle(mode) {
       if (!elements.title) return;
-      elements.title.textContent = mode === 'archived' ? (window.t ? window.t('archivedProjects', 'Projetos arquivados') : 'Projetos arquivados') : (window.t ? window.t('trashModalTitle', 'Lixeira de projetos') : 'Lixeira de projetos');
+      elements.title.textContent = mode === 'archived'
+        ? (window.t ? window.t('archivedProjects', 'Projetos arquivados') : 'Projetos arquivados')
+        : (window.t ? window.t('trashModalTitle', 'Lixeira de projetos') : 'Lixeira de projetos');
     }
 
     function showEmpty(mode) {
@@ -45,9 +51,24 @@
       return refreshed && refreshed.ok && Array.isArray(refreshed.projects) ? refreshed.projects : [];
     }
 
+    async function getRowsForMode(mode) {
+      const tutorialRuntime = getTutorialRuntime();
+      if (tutorialRuntime && typeof tutorialRuntime.getProjectStateRows === 'function') {
+        const tutorialRows = tutorialRuntime.getProjectStateRows(mode);
+        if (tutorialRows !== null) return Array.isArray(tutorialRows) ? tutorialRows : [];
+      }
+      return refreshRows(mode);
+    }
+
     async function refreshAfterMutation(mode) {
       await refreshProjects();
-      await render(mode, await refreshRows(mode));
+      await render(mode, await getRowsForMode(mode));
+    }
+
+    async function runTutorialAction(payload) {
+      const tutorialRuntime = getTutorialRuntime();
+      if (!tutorialRuntime || typeof tutorialRuntime.handleProjectStateAction !== 'function') return null;
+      return tutorialRuntime.handleProjectStateAction(payload);
     }
 
     function createRestoreButton(mode, project) {
@@ -56,6 +77,17 @@
       restoreBtn.className = 'project-state-restore';
       restoreBtn.textContent = window.t ? window.t('restoreBtn', 'Restaurar') : 'Restaurar';
       restoreBtn.addEventListener('click', async () => {
+        if (project && project.__tutorialPlaceholder) {
+          const outcome = await runTutorialAction({ action: 'restore', mode, projectId: project.id });
+          if (outcome && outcome.handled) {
+            if (outcome.closeModal) {
+              close();
+              return;
+            }
+            await render(mode, await getRowsForMode(mode));
+            return;
+          }
+        }
         const result = await api.restoreProject({ id: project.id });
         if (!result || !result.ok) {
           notify((result && result.message) || 'Falha ao restaurar projeto.');
@@ -88,6 +120,13 @@
       deleteBtn.className = 'project-state-clear';
       deleteBtn.textContent = window.t ? window.t('deleteDefinitiveBtn', 'Excluir definitivo') : 'Excluir definitivo';
       deleteBtn.addEventListener('click', async () => {
+        if (project && project.__tutorialPlaceholder) {
+          const outcome = await runTutorialAction({ action: 'delete', mode, projectId: project.id });
+          if (outcome && outcome.handled) {
+            await render(mode, await getRowsForMode(mode));
+            return;
+          }
+        }
         if (!await window.faberConfirm('Excluir definitivamente este projeto da lista?')) return;
         const result = await api.removeProject(project.id);
         if (!result || !result.ok) {
@@ -108,20 +147,17 @@
       const title = document.createElement('strong');
       title.textContent = String(project.name || 'Projeto');
       const meta = document.createElement('span');
-      const stateLabel = mode === 'archived' ? (window.t ? window.t('archivedAt', 'Arquivado em') : 'Arquivado em') : (window.t ? window.t('deletedAt', 'Excluído em') : 'Excluído em');
+      const stateLabel = mode === 'archived'
+        ? (window.t ? window.t('archivedAt', 'Arquivado em') : 'Arquivado em')
+        : (window.t ? window.t('deletedAt', 'Excluído em') : 'Excluído em');
       meta.textContent = `${stateLabel}: ${formatDate(project)} • ${String(project.rootPath || '')}`;
       info.append(title, meta);
 
       const actions = document.createElement('div');
       actions.className = 'project-state-actions';
       actions.appendChild(createRestoreButton(mode, project));
-
-      if (mode === 'archived') {
-        actions.appendChild(createTrashButton(mode, project));
-      }
-      if (mode === 'deleted') {
-        actions.appendChild(createDeleteButton(mode, project));
-      }
+      if (mode === 'archived') actions.appendChild(createTrashButton(mode, project));
+      if (mode === 'deleted') actions.appendChild(createDeleteButton(mode, project));
 
       row.append(info, actions);
       return row;
@@ -154,13 +190,10 @@
       elements.list.innerHTML = '';
       elements.footer.innerHTML = '';
 
-      if (!rows.length) {
-        showEmpty(mode);
-      } else {
-        rows.forEach((project) => {
-          elements.list.appendChild(renderRow(mode, project));
-        });
-      }
+      if (!rows.length) showEmpty(mode);
+      else rows.forEach((project) => {
+        elements.list.appendChild(renderRow(mode, project));
+      });
 
       renderClearTrash(mode, rows);
     }
@@ -170,7 +203,7 @@
       const normalizedMode = mode === 'deleted' ? 'deleted' : 'archived';
       currentMode = normalizedMode;
       setTitle(normalizedMode);
-      await render(normalizedMode, await refreshRows(normalizedMode));
+      await render(normalizedMode, await getRowsForMode(normalizedMode));
       elements.modal.classList.remove('hidden');
       elements.modal.setAttribute('aria-hidden', 'false');
     }
@@ -199,9 +232,7 @@
           await open('deleted');
         });
       }
-      if (elements.close) {
-        elements.close.addEventListener('click', close);
-      }
+      if (elements.close) elements.close.addEventListener('click', close);
       if (elements.modal) {
         elements.modal.addEventListener('click', (event) => {
           const shouldClose = event.target && event.target.dataset && event.target.dataset.close === '1';

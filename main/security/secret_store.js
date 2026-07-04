@@ -1,5 +1,6 @@
 function createSecretStore(dependencies = {}) {
   const {
+    allowPlaintextFallback = true,
     safeStorage,
   } = dependencies;
 
@@ -30,7 +31,8 @@ function createSecretStore(dependencies = {}) {
       return `enc:v1:${encrypted.toString('base64')}`;
     }
 
-    return `plain:v1:${encodeBase64(text)}`;
+    if (allowPlaintextFallback) return `plain:v1:${encodeBase64(text)}`;
+    return '';
   }
 
   function unprotectSecret(value) {

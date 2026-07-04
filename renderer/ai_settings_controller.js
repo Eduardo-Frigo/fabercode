@@ -442,12 +442,18 @@
       setHelpLink(draft.selectedProvider);
     }
 
-    function createApiActionButton(label, className, onClick, disabled = false) {
+    function createApiActionButton(label, className, onClick, disabled = false, dataset = null) {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = className;
       button.textContent = label;
       button.disabled = disabled;
+      if (dataset && typeof dataset === 'object') {
+        Object.entries(dataset).forEach(([key, value]) => {
+          if (value == null || value === '') return;
+          button.dataset[key] = String(value);
+        });
+      }
       if (typeof onClick === 'function') button.addEventListener('click', onClick);
       return button;
     }
@@ -474,6 +480,8 @@
         const isReady = Boolean(row.selectable);
         const item = document.createElement('div');
         item.className = 'ai-settings-api-item';
+        item.dataset.provider = String(row.provider || '');
+        item.dataset.kind = String(row.kind || '');
         if (isActive) item.classList.add('is-active');
         if (!isReady) item.classList.add('is-incomplete');
 
@@ -521,34 +529,34 @@
         actions.className = 'ai-settings-api-actions';
 
         if (isActive) {
-          actions.appendChild(createApiActionButton(translate('active'), 'btn btn-muted', null, true));
+          actions.appendChild(createApiActionButton(translate('active'), 'btn btn-muted', null, true, { aiSettingsAction: 'active', provider: row.provider }));
         } else if (row.selectable) {
           actions.appendChild(createApiActionButton(translate('use'), 'btn btn-success', () => {
             draft.selectedProvider = normalizeKnownProvider(row.provider);
             refreshCurrentLine();
             renderApiList();
             setHelpLink(row.providerHint || row.provider);
-          }));
+          }, false, { aiSettingsAction: 'use', provider: row.provider }));
         } else if (row.editable) {
           actions.appendChild(createApiActionButton(translate('configure'), 'btn btn-muted', () => {
             openEditorForRow(row);
-          }));
+          }, false, { aiSettingsAction: 'configure', provider: row.provider }));
         }
 
         if (row.editable && (row.selectable || isActive)) {
           actions.appendChild(createApiActionButton(translate('edit'), 'btn btn-muted', () => {
             openEditorForRow(row);
-          }));
+          }, false, { aiSettingsAction: 'edit', provider: row.provider }));
         }
 
         if (row.kind === 'custom' && row.customId) {
           actions.appendChild(createApiActionButton(translate('remove'), 'btn btn-danger', async () => {
             await removeCustomApiDraft(row.customId);
-          }));
+          }, false, { aiSettingsAction: 'remove', provider: row.provider }));
         } else if (row.kind === 'builtin' && (row.provider === 'openai' || row.provider === 'gemini' || row.provider === 'sambanova')) {
           actions.appendChild(createApiActionButton(translate('remove'), 'btn btn-danger', async () => {
             await clearBuiltinRemoteProviderDraft(row.provider);
-          }));
+          }, false, { aiSettingsAction: 'remove', provider: row.provider }));
         }
 
         item.append(meta, actions);
@@ -989,6 +997,14 @@
         elements.openMcp.addEventListener('click', async () => {
           showPanel('mcp');
           if (mcpPanel) await mcpPanel.refresh();
+        });
+      }
+
+      if (elements.replayTutorial) {
+        elements.replayTutorial.addEventListener('click', async () => {
+          if (typeof options.onReplayTutorial === 'function') {
+            await options.onReplayTutorial();
+          }
         });
       }
 
