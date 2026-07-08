@@ -120,6 +120,17 @@
       panelLeftTitle: 'Esquerda',
       panelCenterTitle: 'Centro',
       panelRightTitle: 'Direita',
+      mapDemoMarkdownTitle: 'Adicionando Markdown de Título...',
+      mapDemoMarkdownBrief: 'Adicionando Resumo...',
+      mapDemoLogo: 'Adicionando Logos...',
+      mapDemoGroupFrontend: 'Criando grupo Frontend...',
+      mapDemoGroupRules: 'Criando grupo Regras...',
+      mapDemoChatQuestion: 'Precisa de ajuda com o mapa?',
+      mapDemoChatReply: 'O assistente do mapa pode ajudar a estruturar e revisar sua arquitetura.',
+      devMilestonesHint: 'Abrindo o chat de desenvolvimento e solicitando a primeira milestone...',
+      gitDemoInit: 'Ativando controle de versão...',
+      gitDemoCommit: 'Preparando primeiro commit...',
+      runDemoPlay: 'Rodando aplicação no navegador...'
     },
     'en-US': {
       requirementsTitle: 'Local requirements for Faber Code',
@@ -221,6 +232,17 @@
       panelLeftTitle: 'Left',
       panelCenterTitle: 'Center',
       panelRightTitle: 'Right',
+      mapDemoMarkdownTitle: 'Adding Title Markdown...',
+      mapDemoMarkdownBrief: 'Adding Brief...',
+      mapDemoLogo: 'Adding Logos...',
+      mapDemoGroupFrontend: 'Creating Frontend group...',
+      mapDemoGroupRules: 'Creating Rules group...',
+      mapDemoChatQuestion: 'Need help with the map?',
+      mapDemoChatReply: 'The map assistant can help you structure and review your architecture.',
+      devMilestonesHint: 'Opening dev chat and requesting the first milestone...',
+      gitDemoInit: 'Activating version control...',
+      gitDemoCommit: 'Preparing first commit...',
+      runDemoPlay: 'Running app in browser...'
     },
     'es-ES': {
       requirementsTitle: 'Requisitos locales de Faber Code',
@@ -390,11 +412,11 @@
       '#btn-map-tool-add-card',
       '#btn-map-tool-add-image',
       '#btn-map-tool-add-decision',
-      '#btn-map-clear',
     ];
     let hoveredSelectors = new Set();
     let hoveredMapSelectors = new Set();
     let tutorialCortexEntry = null;
+    let tutorialMapIconClicked = false;
     let tutorialCreatedProjectId = '';
     let highlightedElements = [];
     let demoRunId = 0;
@@ -600,6 +622,7 @@
 
     function syncTutorialRuntime() {
       window.FaberTutorialRuntime = {
+        isTutorialActive: () => active,
         isSidebarProjectDemoEnabled: () => isSidebarTutorialStep(),
         getProjectStateRows: (mode) => getSidebarTutorialRows(mode),
         getSidebarProjects: () => getSidebarTutorialProjects(),
@@ -650,6 +673,19 @@
       }
     }
 
+    function resolveVisibleElement(selector) {
+      if (!selector) return null;
+      try {
+        const elements = doc.querySelectorAll(selector);
+        for (const el of elements) {
+          if (isVisibleElement(el)) return el;
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    }
+
     function isVisibleElement(element) {
       if (!element) return false;
       const style = window.getComputedStyle(element);
@@ -662,6 +698,7 @@
       if (!element) return fallback;
       return (
         element.getAttribute('data-progressive-label')
+        || element.getAttribute('data-faber-tooltip')
         || element.getAttribute('aria-label')
         || element.getAttribute('title')
         || (element.textContent || '').trim()
@@ -961,8 +998,18 @@
 
     async function animateCursorTo(selector, options = {}) {
       const runId = options.runId;
-      const element = resolveElement(selector);
-      if (!isVisibleElement(element) || (runId != null && runId !== demoRunId)) return false;
+      let element = resolveVisibleElement(selector) || resolveElement(selector);
+      if (!element && typeof selector === 'string') {
+        element = document.querySelector(selector); // Fallback force
+      }
+      if (!element) {
+        setCursorLabel(`DEBUG: Element ${selector} not found in DOM`);
+        return false;
+      }
+      if (runId != null && runId !== demoRunId) {
+        setCursorLabel(`DEBUG: animateCursorTo aborted due to runId`);
+        return false;
+      }
       const rect = element.getBoundingClientRect();
       const x = Math.round(rect.left + rect.width / 2 + (options.offsetX || 0));
       const y = Math.round(rect.top + rect.height / 2 + (options.offsetY || 0));
@@ -980,6 +1027,82 @@
       if (options.pulse) pulseElement(element);
       return stillActive;
     }
+    async function animateCursorToCanvasNode(nodeIndex, options = {}) {
+      if (!active) return false;
+      const { runId, mapController } = options;
+      if (!mapController) return false;
+
+      const canvasController = typeof mapController.getCanvasController === 'function' ? mapController.getCanvasController() : null;
+      if (!canvasController) return false;
+
+      const mapContainer = document.getElementById('workspace-map-region');
+      if (!mapContainer) return false;
+
+      let tracking = true;
+      let initialMoveDone = false;
+
+      if (runId !== demoRunId) {
+        setCursorLabel(`DEBUG: runId ${runId} !== demoRunId ${demoRunId}`);
+      } else {
+        setCursorLabel('DEBUG: starting loop');
+      }
+
+      // Un-cancellable tracking loop for canvas coordinates
+      (async () => {
+        while (tracking && runId === demoRunId && active) {
+          try {
+            const mapData = typeof canvasController.getMapData === 'function' ? canvasController.getMapData() : null;
+            if (!mapData) {
+              setCursorLabel('DEBUG: mapData is null');
+            } else if (!mapData.nodes || mapData.nodes.length === 0) {
+              setCursorLabel('DEBUG: mapData.nodes is empty');
+            } else if (!mapData.nodes[nodeIndex]) {
+              setCursorLabel(`DEBUG: nodeIndex ${nodeIndex} not found. Total nodes: ${mapData.nodes.length}`);
+            } else {
+              const node = mapData.nodes[nodeIndex];
+              const panOffset = typeof mapController.getPanOffset === 'function' ? mapController.getPanOffset() : { x: 0, y: 0 };
+              const zoomLevel = typeof mapController.getZoomLevel === 'function' ? mapController.getZoomLevel() : 1;
+              const rect = mapContainer.getBoundingClientRect();
+              
+              // Edit button is approx at top-right (width=220, height=120)
+              const targetX = node.position.x + 220 - 24;
+              const targetY = node.position.y + 24;
+
+              const screenX = Math.round(rect.left + panOffset.x + (targetX * zoomLevel));
+              const screenY = Math.round(rect.top + panOffset.y + (targetY * zoomLevel));
+
+              cursorPosition = { x: screenX, y: screenY };
+              const cursor = elements.tutorialCursor;
+              if (cursor) {
+                if (!initialMoveDone) {
+                  cursor.style.transitionDuration = '480ms';
+                  initialMoveDone = true;
+                } else {
+                  cursor.style.transitionDuration = '100ms';
+                }
+                if (isNaN(screenX) || isNaN(screenY)) {
+                  setCursorLabel(`DEBUG: NaN screen coords. panX=${panOffset.x}, zoom=${zoomLevel}`);
+                } else {
+                  cursor.style.left = `${screenX}px`;
+                  cursor.style.top = `${screenY}px`;
+                  if (!cursorSuppressed) setVisible(elements.tutorialCursor, true);
+                  setCursorLabel(options.label || 'Clique no ícone de lápis para editar');
+                }
+              } else {
+                 setCursorLabel('DEBUG: elements.tutorialCursor is null');
+              }
+            }
+          } catch (e) {
+            setCursorLabel('DEBUG ERROR: ' + e.message);
+          }
+          await delay(50);
+        }
+      })();
+      
+      const stillActive = await wait((options.duration || 480) + 70, runId);
+      return stillActive;
+    }
+
 
     async function typeInto(selector, text, options = {}) {
       const runId = options.runId;
@@ -1013,6 +1136,29 @@
           }, 0);
         }
       }
+    }
+
+    function waitForUserInteraction(selector, runId) {
+      return new Promise((resolve) => {
+        const checkRun = setInterval(() => {
+          if (runId != null && runId !== demoRunId) {
+            clearInterval(checkRun);
+            resolve(false);
+          }
+        }, 100);
+
+        const handler = (e) => {
+          const el = resolveElement(selector);
+          if (el && (e.target === el || el.contains(e.target))) {
+            window.removeEventListener('click', handler, true);
+            window.removeEventListener('mousedown', handler, true);
+            clearInterval(checkRun);
+            resolve(true);
+          }
+        };
+        window.addEventListener('click', handler, true);
+        window.addEventListener('mousedown', handler, true);
+      });
     }
 
     async function runAction(name) {
@@ -1449,7 +1595,7 @@
     }
 
     function getMapGuide() {
-      if (!isMapTabOpen()) {
+      if (!tutorialMapIconClicked) {
         const tutorialSelector = getTutorialCreatedProjectMapSelector();
         const selector = resolveElement(tutorialSelector)
           ? tutorialSelector
@@ -1461,10 +1607,10 @@
           revealPadding: 14,
           hint: translate('mapHint'),
           demo: async ({ runId }) => {
-            await animateCursorToAndClick(selector, {
+            await animateCursorTo(selector, {
               runId,
               pulse: true,
-              label: getElementLabel(resolveElement(selector), 'Mapa da Aplicação'),
+              label: getElementLabel(resolveElement(selector), 'Clique no Mapa da Aplicação'),
             });
           },
         };
@@ -1478,10 +1624,10 @@
           revealPadding: 16,
           hint: translate('mapHint'),
           demo: async ({ runId }) => {
-            await animateCursorToAndClick('#workspace-collapse-left', {
+            await animateCursorTo('#workspace-collapse-left', {
               runId,
               pulse: true,
-              label: getElementLabel(resolveElement('#workspace-collapse-left'), 'Recolher painel esquerdo'),
+              label: getElementLabel(resolveElement('#workspace-collapse-left'), 'Clique para recolher painel esquerdo'),
             });
           },
         };
@@ -1495,10 +1641,10 @@
           revealPadding: 16,
           hint: translate('mapHint'),
           demo: async ({ runId }) => {
-            await animateCursorToAndClick('#workspace-collapse-right', {
+            await animateCursorTo('#workspace-collapse-right', {
               runId,
               pulse: true,
-              label: getElementLabel(resolveElement('#workspace-collapse-right'), 'Recolher painel direito'),
+              label: getElementLabel(resolveElement('#workspace-collapse-right'), 'Clique para recolher painel direito'),
             });
           },
         };
@@ -1517,7 +1663,7 @@
             await animateCursorTo(nextHoverSelector, {
               runId,
               pulse: true,
-              label: getElementLabel(element, element && element.getAttribute ? (element.getAttribute('title') || 'Ferramenta do mapa') : 'Ferramenta do mapa'),
+              label: getElementLabel(element, element && element.getAttribute ? (element.getAttribute('data-faber-tooltip') || element.getAttribute('title') || 'Ferramenta do mapa') : 'Ferramenta do mapa'),
             });
           },
         };
@@ -1542,7 +1688,7 @@
       if (step.id === 'sidebar') return getSidebarGuide();
       if (step.id === 'cortex') return getCortexGuide();
       if (step.id === 'apis') return getApiGuide();
-      if (step.id === 'map') return getMapGuide();
+      if (step.id === 'map-intro') return getMapGuide();
       return {
         signature: step.id,
         targets: typeof step.targets === 'function' ? step.targets() : [],
@@ -1653,25 +1799,25 @@
           demo: async ({ runId }) => {
             const tutorialMapSelector = getTutorialCreatedProjectMapSelector();
             if (hasTutorialReadyProject() && resolveElement(tutorialMapSelector)) {
-              await animateCursorTo(tutorialMapSelector, { runId, pulse: true, label: 'Mapa da Aplicação' });
+              await animateCursorTo(tutorialMapSelector, { runId, pulse: true, label: 'Clique no Mapa da Aplicação' });
               return;
             }
             await animateCursorTo('#btn-add-project', { runId, pulse: true, label: 'Novo projeto' });
           },
         },
         {
-          id: 'map',
+          id: 'map-intro',
           title: translate('mapTitle'),
           body: translate('mapBody'),
           hint: translate('mapHint'),
           checklist: () => [
-            { label: 'Mapa aberto', done: isMapTabOpen() },
+            { label: 'Mapa aberto', done: tutorialMapIconClicked },
             { label: 'Painel esquerdo recolhido', done: isLeftWorkspaceCollapsed() },
             { label: 'Painel direito recolhido', done: isRightWorkspaceCollapsed() },
             { label: 'Ferramentas do mapa exploradas', done: hoveredMapSelectors.size >= MAP_TOOL_HOVER_SELECTORS.length },
           ],
           canAdvance: () => (
-            isMapTabOpen()
+            tutorialMapIconClicked
             && isLeftWorkspaceCollapsed()
             && isRightWorkspaceCollapsed()
             && hoveredMapSelectors.size >= MAP_TOOL_HOVER_SELECTORS.length
@@ -1685,19 +1831,209 @@
           },
         },
         {
-          id: 'chat',
+          id: 'map-build',
+          title: 'Aula de Criação de Projeto',
+          body: 'O tutorial monta um planejamento no mapa simulando a criação de um grupo Frontend e de Regras.',
+          hint: 'Acompanhe a construção visual do projeto.',
+          canAdvance: () => true,
+          preview: () => `<div class="progressive-map-preview"><div class="progressive-mini-card"><strong>Frontend</strong></div><div class="progressive-mini-card"><strong>Regras</strong></div></div>`,
+          targets: () => [
+            '#btn-map-tool-add-card',
+            '.map-node-edit-btn',
+            '#inspector-node-title',
+            '#inspector-node-desc',
+            '#inspector-node-content',
+            '.CodeMirror'
+          ],
+          revealSelectors: () => ['.panel-center', '.map-inspector-panel'],
+          revealPadding: 16,
+          demo: async ({ runId }) => {
+            try {
+              setCursorLabel('DEBUG: init map-build');
+              const mapController = options.actions && options.actions.getMapController ? options.actions.getMapController() : null;
+              if (!mapController) {
+                setCursorLabel('DEBUG: mapController is null');
+                return;
+              }
+              
+              setCursorLabel('DEBUG: waiting canvasController');
+              let canvasController = null;
+              for (let i = 0; i < 40; i++) {
+                canvasController = typeof mapController.getCanvasController === 'function' ? mapController.getCanvasController() : null;
+                if (canvasController) break;
+                await delay(100);
+              }
+              if (!canvasController) {
+                setCursorLabel('DEBUG: canvasController timeout');
+                return;
+              }
+              
+              setCursorLabel('DEBUG: waiting nodes');
+              for (let i = 0; i < 20; i++) {
+                if (document.querySelectorAll('.map-node').length > 0) break;
+                await delay(100);
+              }
+              
+              const initialNodeCount = document.querySelectorAll('.map-node').length;
+              
+              // Wait for the button to become visible before animating
+              for (let i = 0; i < 20; i++) {
+                if (resolveVisibleElement('#btn-map-tool-add-card')) break;
+                await delay(100);
+              }
+              
+              setCursorLabel('DEBUG: animating to markdown btn');
+              cursorSuppressed = false;
+              await animateCursorTo('#btn-map-tool-add-card', { runId, pulse: true, label: 'Clique na ferramenta Markdown' });
+            
+            while (document.querySelectorAll('.map-node').length <= initialNodeCount) {
+              if (runId !== demoRunId) return;
+              await delay(100);
+            }
+
+            // Utiliza o novo motor de cálculo matemático direto da matriz do canvas, ignorando o DOM
+            if (runId !== demoRunId) return;
+            cursorSuppressed = false;
+            
+            const mapData = canvasController.getMapData ? canvasController.getMapData() : { nodes: [] };
+            const newNodeIndex = Math.max(0, (mapData.nodes || []).length - 1);
+            
+            // Assume que estamos mirando no nó recém-criado (último índice)
+            let trackingCanvas = animateCursorToCanvasNode(newNodeIndex, {
+              runId,
+              mapController,
+              label: 'Clique no ícone de lápis para editar'
+            });
+            } catch (e) {
+              setCursorLabel('DEBUG ERROR: ' + e.message);
+              console.error(e);
+            }
+            
+            // Wait for inspector to open
+            while (!resolveVisibleElement('#inspector-node-title')) {
+              if (runId !== demoRunId) {
+                tracking = false;
+                return;
+              }
+              await delay(100);
+            }
+            tracking = false;
+              
+            // 2. Wait for user to click Title and type Hello World
+            cursorSuppressed = false;
+            await animateCursorTo('#inspector-node-title', { runId, pulse: true, label: 'Clique no Título' });
+            
+            while (document.activeElement !== resolveElement('#inspector-node-title')) {
+              if (runId !== demoRunId) return;
+              await delay(100);
+            }
+            await typeInto('#inspector-node-title', 'Hello World', { runId });
+
+            const node = typeof canvasController !== 'undefined' && canvasController.getMapData().nodes[0];
+            const hasDesc = node && node.description && node.description.includes('boas-vindas');
+            const hasContent = node && node.content && node.content.includes('Hello Word');
+
+            if (!hasDesc && !hasContent) {
+              // Wait a bit for UI to settle
+              for (let i = 0; i < 5; i++) {
+                if (resolveVisibleElement('#inspector-node-desc')) break;
+                await delay(50);
+              }
+              // 3. Wait for user to click Description and type
+              cursorSuppressed = false;
+              await animateCursorTo('#inspector-node-desc', { runId, pulse: true, label: 'Clique na Descrição' });
+              
+              while (document.activeElement !== resolveElement('#inspector-node-desc')) {
+                if (runId !== demoRunId) return;
+                await delay(100);
+              }
+              await typeInto('#inspector-node-desc', 'markdown se trata da descrição para o Faber Code criar um hello world.', { runId });
+            }
+
+            if (!hasContent) {
+              // Wait a bit for UI to settle
+              for (let i = 0; i < 5; i++) {
+                if (resolveVisibleElement('.CodeMirror, #inspector-node-content')) break;
+                await delay(50);
+              }
+              // 4. Wait for user to click Content and type
+              cursorSuppressed = false;
+              await animateCursorTo('.CodeMirror', { runId, pulse: true, label: 'Clique no Conteúdo', offsetX: 30, offsetY: 30 });
+              
+              while (!document.activeElement || !document.activeElement.closest('.CodeMirror')) {
+                if (runId !== demoRunId) return;
+                await delay(100);
+              }
+              
+              // Type into CodeMirror
+              const cmEl = resolveVisibleElement('.CodeMirror');
+              if (cmEl && cmEl.CodeMirror) {
+                const cm = cmEl.CodeMirror;
+                const text = 'página Hello Word recebendo bem o usuário e dando as boas-vindas a plataforma.';
+                cm.setValue('');
+                for (let i = 0; i < text.length; i++) {
+                  if (runId !== demoRunId) return;
+                  cm.replaceRange(text[i], { line: cm.lastLine(), ch: cm.getLine(cm.lastLine()).length });
+                  await delay(24);
+                }
+                const contentEl = document.getElementById('inspector-node-content');
+                if (contentEl) {
+                  contentEl.value = cm.getValue();
+                  contentEl.dispatchEvent(new Event('input'));
+                }
+              } else {
+                 await typeInto('#inspector-node-content', 'página Hello Word recebendo bem o usuário e dando as boas-vindas a plataforma.', { runId });
+              }
+            }
+
+            await delay(1000);
+            if (runId !== demoRunId) return;
+            // Advance to next step (map-chat)
+            const current = steps()[currentStepIndex];
+            if (current && current.id === 'map-build' && current.canAdvance()) nextStep();
+          },
+        },
+        {
+          id: 'map-chat',
+          title: 'Assistente do Mapa',
+          body: 'Você pode usar o chat do mapa da aplicação para tirar dúvidas sobre o que está desenvolvendo.',
+          hint: 'Observe a interação com o assistente do mapa.',
+          canAdvance: () => true,
+          preview: () => `<div class="progressive-chat-preview"><div class="progressive-chat-message is-assistant">${translate('mapDemoChatReply')}</div></div>`,
+          targets: () => ['#btn-map-ai'],
+          revealSelectors: () => ['.panel-center', '.map-side-panel'],
+          revealPadding: 16,
+          demo: async ({ runId }) => {
+            const mapBtn = await animateCursorTo('#btn-map-ai', { runId, pulse: true, label: translate('mapDemoChatQuestion') });
+            if (!mapBtn) return;
+            
+            const aiPanel = document.getElementById('workspace-map-chat-panel');
+            if (aiPanel && aiPanel.classList.contains('hidden')) {
+               const btn = resolveElement('#btn-map-ai');
+               if (btn) btn.click();
+            }
+            await delay(1000);
+            await animateCursorTo('#workspace-chat-region', { runId, pulse: true, label: translate('devMilestonesHint') });
+          },
+        },
+        {
+          id: 'dev-chat',
           title: translate('chatTitle'),
           body: translate('chatBody'),
           hint: translate('chatHint'),
           canAdvance: () => true,
           preview: () => `<div class="progressive-chat-preview"><div class="progressive-chat-message is-user">${translate('mockUserPrompt')}</div><div class="progressive-chat-message is-assistant">${translate('mockAssistantReply')}</div></div>`,
-          targets: () => ['#user-input', '#btn-project-milestones', '#btn-project-deploy'],
+          targets: () => ['#user-input', '#btn-project-milestones'],
           revealSelectors: () => ['.panel-center', '.panel-right'],
           revealPadding: 16,
           demo: async ({ runId }) => {
             const first = await animateCursorTo('#user-input', { runId, pulse: true, label: 'Chat' });
             if (!first) return;
             await typeInto('#user-input', translate('mockUserPrompt'), { runId });
+            await delay(1000);
+            if (options.actions && options.actions.simulateChatReply) {
+              options.actions.simulateChatReply(translate('mockAssistantReply'));
+            }
           },
         },
         {
@@ -1711,7 +2047,9 @@
           revealSelectors: () => ['.panel-right'],
           revealPadding: 16,
           demo: async ({ runId }) => {
-            await animateCursorTo('#btn-project-git', { runId, pulse: true, label: 'Git' });
+            await animateCursorTo('#btn-project-git', { runId, pulse: true, label: translate('gitDemoInit') });
+            await delay(1000);
+            await animateCursorTo('#btn-project-git', { runId, pulse: true, label: translate('gitDemoCommit') });
           },
         },
         {
@@ -1725,7 +2063,7 @@
           revealSelectors: () => ['.panel-right'],
           revealPadding: 16,
           demo: async ({ runId }) => {
-            await animateCursorTo('#btn-project-deploy', { runId, pulse: true, label: 'Executar' });
+            await animateCursorTo('#btn-project-deploy', { runId, pulse: true, label: translate('runDemoPlay') });
           },
         },
       ];
@@ -2035,11 +2373,11 @@
           if (current && current.id === 'project-class' && current.canAdvance()) nextStep();
         }, 260);
       }
-      if (step.id === 'map' && step.canAdvance()) {
+      if (step.id === 'map-intro' && step.canAdvance()) {
         window.setTimeout(() => {
           if (!active) return;
           const current = steps()[currentStepIndex];
-          if (current && current.id === 'map' && current.canAdvance()) nextStep();
+          if (current && current.id === 'map-intro' && current.canAdvance()) nextStep();
         }, 260);
       }
     }
@@ -2102,6 +2440,7 @@
       sidebarClosedOnce = false;
       sidebarDemoStage = 'intro';
       tutorialCreatedProjectId = '';
+      tutorialMapIconClicked = false;
       cortexSavedOnce = false;
       apiDemoPrepared = false;
       apiProviderSelected = false;
@@ -2195,7 +2534,7 @@
         renderStep();
         return;
       }
-      if (step.id === 'map') {
+      if (step.id === 'map-intro') {
         const selector = MAP_TOOL_HOVER_SELECTORS.find((entry) => matchedSelector === entry);
         if (!selector) return;
         hoveredMapSelectors.add(selector);
@@ -2230,7 +2569,10 @@
       if (!node || !node.closest) return { selector: '', element: null };
       for (const selector of selectors) {
         const element = node.closest(selector);
-        if (element) return { selector, element };
+        // Ignora a checagem rigorosa de visibilidade se for um botão crítico do mapa,
+        // porque animações e o canvas svg fazem o rect.width reportar 0
+        const isCriticalMapTarget = element && (element.id === 'btn-map-tool-add-card' || element.classList.contains('map-node-edit-btn') || element.id === 'inspector-node-title');
+        if (element && (isCriticalMapTarget || isVisibleElement(element))) return { selector, element };
       }
       return { selector: '', element: null };
     }
@@ -2457,13 +2799,16 @@
         }, 260);
         return;
       }
-      if (step.id === 'map') {
+      if (step.id === 'map-intro') {
         if (
           match.selector === '#workspace-collapse-left'
           || match.selector === '#workspace-collapse-right'
           || match.selector === getTutorialCreatedProjectMapSelector()
           || match.selector === '.project-mini-btn-map'
         ) {
+          if ((event.type === 'click' || event.type === 'mousedown') && (match.selector === getTutorialCreatedProjectMapSelector() || match.selector === '.project-mini-btn-map')) {
+            tutorialMapIconClicked = true;
+          }
           animateCursorClick();
           hideCursor();
           deferProgressRefresh();
@@ -2475,6 +2820,11 @@
           event.stopImmediatePropagation();
           return;
         }
+      }
+      if (step.id === 'map-build') {
+        animateCursorClick();
+        hideCursor();
+        return;
       }
       animateCursorClick();
       if (step.id !== 'panels') {
