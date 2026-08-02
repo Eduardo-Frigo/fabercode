@@ -39,7 +39,7 @@
       if (typeof options.requestFileRename === 'function') {
         return options.requestFileRename({ relativePath, currentName });
       }
-      return window.prompt('Novo nome do arquivo:', currentName);
+      return window.prompt(window.t ? window.t('newFileName', 'Novo nome do arquivo:') : 'Novo nome do arquivo:', currentName);
     }
 
     function showContextMenu(relativePath, x, y) {
@@ -370,7 +370,7 @@
             const nextName = await requestFileRename(relativePath);
             if (!nextName || !nextName.trim() || nextName.trim() === currentName) return;
             if (!api || typeof api.renameProjectFile !== 'function') {
-              notify('Renomear arquivo ainda não está disponível nesta build.');
+              notify(window.t ? window.t('renameFileUnavailable', 'Renomear arquivo ainda não está disponível nesta versão.') : 'Renomear arquivo ainda não está disponível nesta versão.');
               return;
             }
             const result = await api.renameProjectFile({
@@ -379,7 +379,7 @@
               nextName: nextName.trim(),
             });
             if (!result || !result.ok) {
-              notify((result && result.message) || 'Falha ao renomear arquivo.');
+              notify((result && result.message) || (window.t ? window.t('renameFileFailed', 'Falha ao renomear arquivo.') : 'Falha ao renomear arquivo.'));
               return;
             }
             await refresh();

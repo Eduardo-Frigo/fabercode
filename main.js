@@ -5055,6 +5055,7 @@ function createWindow() {
     frame: true,
     titleBarStyle: 'hiddenInset',
     titleBarOverlay: true,
+    acceptFirstMouse: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -5093,7 +5094,21 @@ function createWindow() {
 app.whenReady().then(async () => {
   app.setName('Faber Code');
   if (platformAccountService && typeof platformAccountService.initializeSession === 'function') {
-    await platformAccountService.initializeSession();
+    try {
+      const sessionInitialization = await platformAccountService.initializeSession();
+      if (sessionInitialization && sessionInitialization.ok === false) {
+        const detail = {
+          reason: sessionInitialization.reason || 'session_restore_degraded',
+          message: sessionInitialization.message || '',
+        };
+        console.warn('[platform-account] Local session restored without remote synchronization:', detail.message);
+        appendAuditEvent('platform_account.session_restore_degraded', detail);
+      }
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error || '');
+      console.error('[platform-account] Session initialization failed:', message);
+      appendAuditEvent('platform_account.session_restore_failed', { message });
+    }
   }
   const dockIconPath = resolveAppIconPath();
   if (process.platform === 'darwin' && dockIconPath && app.dock && typeof app.dock.setIcon === 'function') {
@@ -6053,6 +6068,9 @@ app.whenReady().then(async () => {
     registerIpcHandler,
     resolveAuthorizedProjectPath,
     shell,
+    bundledAssetPaths: {
+      'faber-code-logo': path.join(__dirname, 'renderer', 'assets', 'Faber-Code-Logo-02.png'),
+    },
   });
 
   createWindow();

@@ -1,8 +1,12 @@
 (function () {
-  const DEFAULT_DELAY_MS = 2000;
+  const DEFAULT_DELAY_MS = 3000;
   const TOOLTIP_SELECTOR = [
+    'button[aria-label]',
     'button[title]',
     'button[data-tooltip]',
+    'button[data-faber-tooltip]',
+    '[role="button"][aria-label]',
+    '[role="button"][data-faber-tooltip]',
     '.icon-btn[aria-label]',
     '.left-mini-action[aria-label]',
     '.project-panel-btn[title]',
@@ -38,13 +42,15 @@
     function getTooltipText(target) {
       if (!target) return '';
       const existing = normalizeText(target.getAttribute('data-faber-tooltip'));
-      if (existing) return existing;
+      const derived = target.getAttribute('data-faber-tooltip-source') === 'derived';
+      if (existing && !derived) return existing;
       const explicit = normalizeText(target.getAttribute('data-tooltip'));
       const title = normalizeText(target.getAttribute('title'));
       const label = normalizeText(target.getAttribute('aria-label'));
-      const text = explicit || title || label;
+      const text = explicit || title || label || existing;
       if (text) {
         target.setAttribute('data-faber-tooltip', text);
+        target.setAttribute('data-faber-tooltip-source', 'derived');
         if (target.hasAttribute('title')) target.removeAttribute('title');
       }
       return text;
@@ -87,6 +93,7 @@
     }
 
     function scheduleTooltip(target) {
+      if (doc.body && doc.body.classList.contains('progressive-tutorial-active')) return;
       const text = getTooltipText(target);
       if (!text || target.disabled) return;
       if (activeTarget === target) return;

@@ -6,6 +6,18 @@ const rootDir = path.join(__dirname, '..');
 const rendererDir = path.join(rootDir, 'renderer');
 const indexHtml = fs.readFileSync(path.join(rendererDir, 'index.html'), 'utf8');
 const appSource = fs.readFileSync(path.join(rendererDir, 'app.js'), 'utf8');
+const progressiveSource = fs.readFileSync(path.join(rendererDir, 'progressive_disclosure.js'), 'utf8');
+const mapCanvasSource = fs.readFileSync(path.join(rendererDir, 'application_map_canvas.js'), 'utf8');
+const applicationMapSource = fs.readFileSync(path.join(rendererDir, 'application_map.js'), 'utf8');
+const milestonesSource = fs.readFileSync(path.join(rendererDir, 'milestones_panel.js'), 'utf8');
+const projectSidebarSource = fs.readFileSync(path.join(rendererDir, 'project_sidebar.js'), 'utf8');
+const mainSource = fs.readFileSync(path.join(rootDir, 'main.js'), 'utf8');
+const tutorialRenderStart = applicationMapSource.indexOf('generateTutorialRenderDraftHandler = async');
+const tutorialRenderEnd = applicationMapSource.indexOf('async function sendRenderChatMessage', tutorialRenderStart);
+const tutorialRenderSource = applicationMapSource.slice(tutorialRenderStart, tutorialRenderEnd);
+const tutorialDevelopmentStart = appSource.indexOf('async function simulateTutorialDevelopmentConversation');
+const tutorialDevelopmentEnd = appSource.indexOf('function appendChangeCard', tutorialDevelopmentStart);
+const tutorialDevelopmentSource = appSource.slice(tutorialDevelopmentStart, tutorialDevelopmentEnd);
 
 const rendererScripts = [...indexHtml.matchAll(/<script\s+src="(\.\/[^"]+\.js)"><\/script>/g)].map(
   (match) => match[1]
@@ -78,6 +90,11 @@ const expectedModules = [
     script: './i18n.js',
     globalName: 'FaberI18n',
     methods: ['createI18nController'],
+  },
+  {
+    script: './tutorial_copy.js',
+    globalName: 'FaberTutorialCopy',
+    methods: ['normalizeLocale', 'translate', 'translateHtml', 'translatePhrase', 'value'],
   },
   {
     script: './ui_appearance.js',
@@ -230,6 +247,16 @@ const expectedModules = [
     ],
   },
   {
+    script: './tutorial_welcome_project.js',
+    globalName: 'FaberTutorialWelcomeProject',
+    methods: ['createWelcomeProjectBatches', 'normalizeWelcomeName'],
+  },
+  {
+    script: './hover_tooltips.js',
+    globalName: 'FaberHoverTooltips',
+    methods: ['createHoverTooltipController', 'initHoverTooltips'],
+  },
+  {
     script: './project_sidebar.js',
     globalName: 'FaberProjectSidebar',
     methods: ['createProjectSidebarController', 'normalizeProjectItems'],
@@ -269,6 +296,18 @@ assert.ok(
 assert.ok(
   rendererScripts.indexOf('./i18n.js') < appScriptIndex,
   'i18n.js must load before app.js so static UI copy is available during boot'
+);
+assert.ok(
+  rendererScripts.indexOf('./tutorial_copy.js') < rendererScripts.indexOf('./progressive_disclosure.js'),
+  'tutorial_copy.js must load before progressive_disclosure.js so every guided step can be localized'
+);
+assert.ok(
+  rendererScripts.indexOf('./tutorial_welcome_project.js') < rendererScripts.indexOf('./progressive_disclosure.js'),
+  'tutorial_welcome_project.js must load before progressive_disclosure.js so the generated files are deterministic'
+);
+assert.ok(
+  rendererScripts.indexOf('./hover_tooltips.js') < rendererScripts.indexOf('./progressive_disclosure.js'),
+  'hover_tooltips.js must load before progressive_disclosure.js so tutorial mode can suppress normal tooltips'
 );
 assert.ok(
   rendererScripts.indexOf('./ui_appearance.js') < rendererScripts.indexOf('./ai_settings.js'),
@@ -354,6 +393,133 @@ assert.ok(
   appSource.includes('window.FaberBootstrapGuard.requireRendererModules(REQUIRED_RENDERER_MODULES)'),
   'app.js must enforce the renderer module contract during boot'
 );
+assert.ok(mainSource.includes('acceptFirstMouse: true'), 'macOS window must accept the first project action click');
+assert.ok(appSource.includes('closeApis:'), 'tutorial actions must expose a non-persistent API modal close');
+assert.ok(
+  progressiveSource.includes("targets: ['#ai-settings-cancel']"),
+  'API tutorial must discard its draft instead of persisting the fake provider'
+);
+assert.ok(
+  !progressiveSource.includes("targets: ['#cortex-modal-close', '#cortex-modal-backdrop']"),
+  'Cortex tutorial must never raise the full backdrop above the dialog'
+);
+assert.ok(
+  progressiveSource.includes('disableSpotlight: true'),
+  'Cortex close step must avoid the full-screen spotlight'
+);
+assert.ok(mapCanvasSource.includes('function focusNodes('), 'application map must support deterministic node framing');
+assert.ok(
+  applicationMapSource.includes('let setMapSidePanelMode = () => {};'),
+  'map side-panel reset must remain available outside init() when a selected project is deleted'
+);
+assert.ok(
+  progressiveSource.includes('canvas.focusNodes([tutorialWelcomeNodeId, tutorialDesignSystemNodeId]'),
+  'map tutorial must frame both Markdown nodes automatically'
+);
+assert.ok(
+  progressiveSource.includes('refreshSidebarTutorialGuide();'),
+  'sidebar tutorial must refresh its guide immediately after moving the demo project'
+);
+assert.ok(
+  progressiveSource.includes('disableHighlight: () => !hasTutorialReadyProject()'),
+  'new-project tutorial target must use only the spotlight contour'
+);
+assert.ok(
+  progressiveSource.includes('tutorialMapBuildStage = `architecture-${kind}-edit`;')
+    && progressiveSource.includes("'architecture-content-review': 'development-ready'")
+    && progressiveSource.includes('focusTutorialMapNodeForEditing(nodeId);'),
+  'each architecture Markdown must be opened for review before the map becomes ready'
+);
+assert.ok(
+  progressiveSource.includes('function startElementCursorTracking(')
+    && progressiveSource.includes('trackTarget: true')
+    && progressiveSource.includes("elements.tutorialCursor.style.transitionDuration = '0ms';"),
+  'map tutorial cursor must remain attached to its target while the canvas moves'
+);
+assert.ok(
+  progressiveSource.includes('if (tutorialMapCreationPending)')
+    && progressiveSource.includes("'map-intro', 'map-build'")
+    && progressiveSource.includes('scheduleAutoAdvance(step.id, 240);')
+    && progressiveSource.includes(": translate('next')"),
+  'map tutorial must advance automatically after map build and present the support action as Next'
+);
+assert.ok(
+  progressiveSource.includes('function prepareMapIntroForAdvance()')
+    && progressiveSource.includes('elements.tutorialNext.disabled = false;')
+    && progressiveSource.includes("if (step && step.id === 'map-intro' && !step.canAdvance())")
+    && progressiveSource.includes("if (step.id === 'map-build' && !tutorialUserName)")
+    && progressiveSource.includes('closeTutorialContextForAdvance();')
+    && !progressiveSource.includes('if (step && !step.canAdvance()) return;'),
+  'Next must navigate every tutorial step while keeping the user name as the only required input'
+);
+assert.ok(
+  progressiveSource.includes('const RIGHT_PANEL_TOOL_GUIDES = RIGHT_PANEL_TOOL_SELECTORS.map')
+    && progressiveSource.includes("tutorialValue('rightTools', [])")
+    && progressiveSource.includes("tutorialMapChatStage = 'expand-right'"),
+  'map chat tutorial must expand and introduce the right-panel tools before opening chat'
+);
+assert.ok(
+  progressiveSource.includes("tutorialText('documents.gap.title'")
+    && progressiveSource.includes("targets: ['#btn-map-chat-add-gap']")
+    && progressiveSource.includes("tutorialMapChatStage = 'adjustment-complete'")
+    && progressiveSource.includes("step.id === 'map-chat' && tutorialMapChatStage === 'adjustment-complete'"),
+  'simulated map chat must guide a contextual action, apply the missing-information node, and advance'
+);
+assert.ok(
+  applicationMapSource.includes('prepareTutorialMapHistory: () => (')
+    && applicationMapSource.includes('generateTutorialRenderDraft: () => (')
+    && applicationMapSource.includes("addGapButton.id = 'btn-map-chat-add-gap'"),
+  'map tutorial must persist history and expose its local render workflow'
+);
+assert.ok(
+  tutorialRenderStart >= 0
+    && tutorialRenderEnd > tutorialRenderStart
+    && !tutorialRenderSource.includes('sendAssistantMessage'),
+  'tutorial render workflow must never call an AI provider'
+);
+assert.ok(
+  progressiveSource.includes("targets: ['#btn-map-render-save']")
+    && progressiveSource.includes("targets: ['#btn-project-milestones']")
+    && progressiveSource.includes("targets: ['.milestone-item:first-child .milestone-card']")
+    && progressiveSource.includes('const target = getTutorialCreatedProjectConversationSelector();')
+    && progressiveSource.includes("tutorialMapAnalysisStage = 'project-chat'"),
+  'tutorial must guide saving, opening milestones, reviewing Milestone 1, and using the project conversation action'
+);
+assert.ok(
+  progressiveSource.includes("tutorialText('development.prompt')")
+    && progressiveSource.includes("id: 'development-chat'")
+    && progressiveSource.includes('actions.simulateTutorialDevelopmentConversation'),
+  'development tutorial must compose and emulate the requested Milestone 1 conversation'
+);
+assert.ok(
+  tutorialDevelopmentStart >= 0
+    && tutorialDevelopmentEnd > tutorialDevelopmentStart
+    && !tutorialDevelopmentSource.includes('sendAssistantMessage'),
+  'tutorial development conversation must never call an AI provider'
+);
+assert.ok(
+  appSource.includes('simulateTutorialDevelopmentBatch')
+    && appSource.includes("new CustomEvent('faber:tutorial-files-written'")
+    && progressiveSource.includes("window.addEventListener('faber:tutorial-git-action'")
+    && progressiveSource.includes("window.addEventListener('faber:project-preview-started'")
+    && progressiveSource.includes('.project-tree-row.file.has-diff'),
+  'tutorial must create files locally, react to real Git actions, review a diff, and finish through a real preview'
+);
+assert.ok(
+  !milestonesSource.includes('milestone-development-chat-btn')
+    && !appSource.includes('onOpenDevelopmentChat:')
+    && appSource.includes('revealProjectConversationButton:')
+    && projectSidebarSource.includes("new CustomEvent('faber:project-conversation-prepared'")
+    && progressiveSource.includes("window.addEventListener('faber:project-conversation-prepared'"),
+  'tutorial must use the existing project + action without adding controls to normal milestones'
+);
+assert.ok(
+  progressiveSource.includes("tutorialMapAnalysisStage = 'history-loading'")
+    && progressiveSource.includes('tutorialMapHistoryPreparing = true;')
+    && progressiveSource.includes('hideLabel: true')
+    && progressiveSource.includes('disableSpotlight: true'),
+  'tutorial cursor must wait for async panels and avoid stacked labels or contours on real controls'
+);
 
 const appearanceSource = fs.readFileSync(path.join(rendererDir, 'ui_appearance.js'), 'utf8');
 for (const iconName of lightThemeIcons) {
@@ -370,7 +536,8 @@ for (const moduleDef of expectedModules.filter((moduleDef) =>
   moduleDef.globalName !== 'FaberAiSettingsDraft' &&
   moduleDef.globalName !== 'FaberAiSettingsElements' &&
   moduleDef.globalName !== 'FaberAiSettingsAccountPanel' &&
-  moduleDef.globalName !== 'FaberAiSettingsController'
+  moduleDef.globalName !== 'FaberAiSettingsController' &&
+  moduleDef.globalName !== 'FaberHoverTooltips'
 )) {
   assert.ok(appSource.includes(`globalName: '${moduleDef.globalName}'`), `${moduleDef.globalName} must be required by app.js`);
 }

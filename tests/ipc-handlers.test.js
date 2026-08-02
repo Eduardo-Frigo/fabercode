@@ -301,6 +301,8 @@ async function runFileHandlersTest(tempRoot) {
 
   const audit = [];
   const ingested = [];
+  const bundledLogoPath = path.join(tempRoot, 'bundled-faber-logo.png');
+  fs.writeFileSync(bundledLogoPath, Buffer.from('89504e470d0a1a0a', 'hex'));
   const { handlers, registerIpcHandler } = createHandlerMap();
 
   registerFileHandlers({
@@ -327,6 +329,9 @@ async function runFileHandlersTest(tempRoot) {
       showItemInFolder: () => {},
       openPath: async () => '',
     },
+    bundledAssetPaths: {
+      'faber-code-logo': bundledLogoPath,
+    },
   });
 
   assert.deepStrictEqual(Object.keys(handlers).sort(), ['file:preview-image', 'file:read', 'file:rename', 'file:reveal', 'file:write']);
@@ -337,16 +342,37 @@ async function runFileHandlersTest(tempRoot) {
     relativePath: 'src/example.txt',
     content: 'hello',
   });
-  assert.strictEqual(writeResult.ok, false);
-
-  fs.mkdirSync(path.join(projectRoot, 'src'), { recursive: true });
-  const secondWrite = handlers['file:write'](null, {
-    projectInfo,
-    relativePath: 'src/example.txt',
-    content: 'hello',
-  });
-  assert.strictEqual(secondWrite.ok, true);
+  assert.strictEqual(writeResult.ok, true);
   assert.strictEqual(fs.readFileSync(path.join(projectRoot, 'src', 'example.txt'), 'utf8'), 'hello');
+
+  const nestedWrite = handlers['file:write'](null, {
+    projectInfo,
+    relativePath: 'app/components/welcome/card.js',
+    content: 'export const card = true;\n',
+  });
+  assert.strictEqual(nestedWrite.ok, true);
+  assert.strictEqual(
+    fs.readFileSync(path.join(projectRoot, 'app', 'components', 'welcome', 'card.js'), 'utf8'),
+    'export const card = true;\n'
+  );
+
+  const assetWrite = handlers['file:write'](null, {
+    projectInfo,
+    relativePath: 'public/faber-code-logo.png',
+    assetKey: 'faber-code-logo',
+  });
+  assert.strictEqual(assetWrite.ok, true);
+  assert.deepStrictEqual(
+    fs.readFileSync(path.join(projectRoot, 'public', 'faber-code-logo.png')),
+    fs.readFileSync(bundledLogoPath)
+  );
+
+  const unknownAssetWrite = handlers['file:write'](null, {
+    projectInfo,
+    relativePath: 'public/unknown.png',
+    assetKey: '../../unknown',
+  });
+  assert.strictEqual(unknownAssetWrite.ok, false);
 
   const readResult = handlers['file:read'](null, { projectInfo, relativePath: 'src/example.txt' });
   assert.strictEqual(readResult.ok, true);
@@ -373,7 +399,7 @@ async function runFileHandlersTest(tempRoot) {
   });
   assert.strictEqual(renameResult.ok, true);
   assert.strictEqual(renameResult.relativePath, 'src/renamed.txt');
-  assert.strictEqual(ingested.length, 1);
+  assert.strictEqual(ingested.length, 2);
   assert.ok(audit.some((event) => event.type === 'file.saved_from_lightbox'));
 }
 

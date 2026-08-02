@@ -1,4 +1,8 @@
 (function () {
+  function uiText(key, fallback) {
+    return window.t ? window.t(key, fallback) : fallback;
+  }
+
   function createProjectFileEditorController(options = {}) {
     const api = options.api || {};
     const elements = {
@@ -141,7 +145,9 @@
       isDirty = Boolean(flag);
       if (elements.saveButton) elements.saveButton.disabled = !isDirty;
       if (elements.status) {
-        elements.status.textContent = isDirty ? 'Alterações não salvas' : 'Sem alterações';
+        elements.status.textContent = isDirty
+          ? uiText('unsavedChanges', 'Alterações não salvas')
+          : uiText('noChanges', 'Sem alterações');
       }
     }
 
@@ -155,7 +161,7 @@
     function getBaseName(filePath) {
       const normalized = String(filePath || '').replace(/\\/g, '/');
       const parts = normalized.split('/').filter(Boolean);
-      return parts[parts.length - 1] || normalized || 'arquivo';
+      return parts[parts.length - 1] || normalized || uiText('file', 'Arquivo');
     }
 
     function getParentPath(filePath) {
@@ -234,21 +240,21 @@
       const caption = document.createElement('figcaption');
       caption.className = 'project-file-image-caption';
       const captionTitle = document.createElement('strong');
-      captionTitle.textContent = relativePath ? getBaseName(relativePath) : 'Imagem';
+      captionTitle.textContent = relativePath ? getBaseName(relativePath) : uiText('imageLabel', 'Imagem');
       const captionPath = document.createElement('span');
       captionPath.textContent = String(relativePath || '');
       caption.append(captionTitle, captionPath);
 
       const fallback = document.createElement('p');
       fallback.className = 'project-file-image-fallback';
-      fallback.textContent = 'Carregando imagem...';
+      fallback.textContent = uiText('loadingImage', 'Carregando imagem...');
 
       image.addEventListener('load', () => {
         fallback.textContent = '';
         fallback.classList.add('hidden');
       });
       image.addEventListener('error', () => {
-        fallback.textContent = 'Não foi possível carregar esta imagem.';
+        fallback.textContent = uiText('imageLoadFailed', 'Não foi possível carregar esta imagem.');
         fallback.classList.remove('hidden');
       });
 
@@ -260,14 +266,14 @@
       } catch (error) {
         previewResult = {
           ok: false,
-          message: error && error.message ? error.message : 'Não foi possível carregar esta imagem.',
+          message: error && error.message ? error.message : uiText('imageLoadFailed', 'Não foi possível carregar esta imagem.'),
         };
       }
 
       if (previewResult && previewResult.ok && previewResult.dataUrl) {
         image.src = previewResult.dataUrl;
       } else {
-        fallback.textContent = (previewResult && previewResult.message) || 'Não foi possível carregar esta imagem.';
+        fallback.textContent = (previewResult && previewResult.message) || uiText('imageLoadFailed', 'Não foi possível carregar esta imagem.');
         fallback.classList.remove('hidden');
       }
 
@@ -325,7 +331,7 @@
           elements.imageStage.innerHTML = '';
           const fallback = document.createElement('p');
           fallback.className = 'project-file-image-fallback';
-          fallback.textContent = error && error.message ? error.message : 'Não foi possível carregar esta imagem.';
+          fallback.textContent = error && error.message ? error.message : uiText('imageLoadFailed', 'Não foi possível carregar esta imagem.');
           elements.imageStage.appendChild(fallback);
         }
       }
@@ -452,7 +458,8 @@
     async function promptUnsavedExitWithoutSaving() {
       const { unsavedModal, unsavedNo, unsavedYes, unsavedBackdrop } = elements;
       if (!unsavedModal || !unsavedNo || !unsavedYes || !unsavedBackdrop) {
-        return window.faberConfirm ? await window.faberConfirm('Você alterou o projeto, deseja sair sem salvar?') : window.confirm('Você alterou o projeto, deseja sair sem salvar?');
+        const message = uiText('discardUnsavedConfirm', 'Você alterou o projeto. Deseja sair sem salvar?');
+        return window.faberConfirm ? await window.faberConfirm(message) : window.confirm(message);
       }
 
       return new Promise((resolve) => {
@@ -566,7 +573,7 @@
       });
 
       if (!result || !result.ok) {
-        notify((result && result.message) || 'Falha ao salvar arquivo.');
+        notify((result && result.message) || uiText('fileSaveFailed', 'Falha ao salvar arquivo.'));
         return false;
       }
 
@@ -598,7 +605,7 @@
 
       currentPath = relativePath;
       if (elements.title) elements.title.textContent = isImageFilePath(relativePath) ? getBaseName(relativePath) : relativePath;
-      if (elements.status) elements.status.textContent = 'Sem alterações';
+      if (elements.status) elements.status.textContent = uiText('noChanges', 'Sem alterações');
 
       if (isImageFilePath(relativePath)) {
         await openImagePreview(projectInfo, relativePath);
@@ -612,7 +619,7 @@
         relativePath,
       });
       if (!result || !result.ok) {
-        notify((result && result.message) || 'Falha ao abrir arquivo.');
+        notify((result && result.message) || uiText('fileOpenFailed', 'Falha ao abrir arquivo.'));
         return;
       }
 
@@ -679,7 +686,7 @@
 
       setDirty(wasSanitized);
       if (wasSanitized && elements.status) {
-        elements.status.textContent = 'Conteúdo recuperado, salve para aplicar';
+        elements.status.textContent = uiText('recoveredContent', 'Conteúdo recuperado. Salve para aplicar.');
       }
       updateDecorations();
       syncOverlayScroll();

@@ -7,9 +7,17 @@ const supportSource = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'pr
 const deploySource = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'project_tools_github_deploy.js'), 'utf8');
 const gitSource = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'project_tools_git.js'), 'utf8');
 const source = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'project_tools.js'), 'utf8');
+const dispatchedEvents = [];
 const sandbox = {
   window: {
     confirm: () => true,
+    CustomEvent: class CustomEvent {
+      constructor(type, options = {}) {
+        this.type = type;
+        this.detail = options.detail;
+      }
+    },
+    dispatchEvent: (event) => dispatchedEvents.push(event),
   },
 };
 sandbox.window.window = sandbox.window;
@@ -243,6 +251,25 @@ async function runAsyncAssertions() {
   assert.strictEqual(previewPayloads[0].options.port, 3000);
   assert.ok(messages.some((entry) => String(entry[1]).includes('terminal interno')));
   assert.ok(statuses.includes('Execução local ativa'));
+  assert.ok(dispatchedEvents.some((event) => event.type === 'faber:project-preview-started'));
+
+  const failedMessages = [];
+  const failedController = tools.createProjectToolsController({
+    api: {
+      startProjectPreview: async () => {
+        throw new Error('servidor indisponível');
+      },
+    },
+    getSelectedProjectInfo: () => ({ rootPath: '/tmp/faber-preview-failure' }),
+    appendMessage: (...args) => failedMessages.push(args),
+  });
+  const failed = await failedController.startPreview();
+  assert.strictEqual(failed, false);
+  assert.ok(failedMessages.some((entry) => String(entry[1]).includes('servidor indisponível')));
+  assert.ok(dispatchedEvents.some((event) => (
+    event.type === 'faber:project-preview-failed'
+    && event.detail.rootPath === '/tmp/faber-preview-failure'
+  )));
 }
 
 runAsyncAssertions()

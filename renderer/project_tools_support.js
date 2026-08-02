@@ -1,4 +1,12 @@
 (function () {
+  function uiText(key, fallback, replacements = {}) {
+    let text = window.t ? window.t(key, fallback) : fallback;
+    Object.entries(replacements).forEach(([token, value]) => {
+      text = String(text).replaceAll(`{${token}}`, String(value));
+    });
+    return text;
+  }
+
   function inferGithubRepoNameFromProject(projects = [], selectedProjectId = null, selectedProjectInfo = null) {
     const selected = (Array.isArray(projects) ? projects : []).find((project) => project && project.id === selectedProjectId);
     const fromName = selected && selected.name ? String(selected.name).trim() : '';
@@ -12,38 +20,43 @@
   }
 
   function formatGithubPublishPlan(plan) {
-    if (!plan) return 'Não consegui montar o plano GitHub.';
+    if (!plan) return uiText('githubPlanUnavailable', 'Não consegui montar o plano GitHub.');
     const blockers = Array.isArray(plan.blockers) ? plan.blockers : [];
     const warnings = Array.isArray(plan.warnings) ? plan.warnings : [];
     const actions = Array.isArray(plan.actions) ? plan.actions : [];
     const lines = [
-      `Plano de publicação GitHub para ${plan.repoFullName || plan.repoName || 'repositório'} (${plan.visibility || 'private'}).`,
-      `Branch prevista: ${plan.branch || 'main'}.`,
+      uiText('githubPlanTitle', 'Plano de publicação GitHub para {repo} ({visibility}).', {
+        repo: plan.repoFullName || plan.repoName || uiText('repository', 'repositório'),
+        visibility: plan.visibility || 'private',
+      }),
+      uiText('githubPlannedBranch', 'Branch prevista: {branch}.', { branch: plan.branch || 'main' }),
     ];
 
     if (plan.auth && plan.auth.ghInstalled === false) {
-      lines.push('Ainda não encontrei o GitHub CLI (`gh`) neste Mac.');
-      lines.push('O login aberto no navegador não autoriza publicações locais sozinho.');
-      lines.push('Próximo passo: instale com `brew install gh`, depois rode `gh auth login --hostname github.com --web` e volte a clicar em Git.');
+      lines.push(uiText('githubCliMissing', 'Ainda não encontrei o GitHub CLI (`gh`) neste Mac.'));
+      lines.push(uiText('githubBrowserLoginInsufficient', 'O login aberto no navegador não autoriza publicações locais sozinho.'));
+      lines.push(uiText('githubInstallNext', 'Próximo passo: instale com `brew install gh`, depois rode `gh auth login --hostname github.com --web` e volte a clicar em Git.'));
     } else if (plan.auth && plan.auth.authenticated === false) {
-      lines.push('O GitHub CLI (`gh`) está instalado, mas ainda não está autenticado no github.com.');
-      lines.push('O login aberto no navegador não autoriza publicações locais sozinho.');
-      lines.push('Próximo passo: rode `gh auth login --hostname github.com --web`, faça login pelo navegador e depois clique em Git novamente.');
+      lines.push(uiText('githubCliNotAuthenticated', 'O GitHub CLI (`gh`) está instalado, mas ainda não está autenticado no github.com.'));
+      lines.push(uiText('githubBrowserLoginInsufficient', 'O login aberto no navegador não autoriza publicações locais sozinho.'));
+      lines.push(uiText('githubLoginNext', 'Próximo passo: rode `gh auth login --hostname github.com --web`, faça login pelo navegador e depois clique em Git novamente.'));
     }
 
     if (warnings.length) {
-      lines.push(`Avisos: ${warnings.join(' ')}`);
+      lines.push(uiText('warningsLabel', 'Avisos: {value}', { value: warnings.join(' ') }));
     }
     if (blockers.length) {
-      lines.push(`Bloqueios: ${blockers.join(' ')}`);
+      lines.push(uiText('blockersLabel', 'Bloqueios: {value}', { value: blockers.join(' ') }));
     }
     if (actions.length) {
-      lines.push(`Ações previstas: ${actions.map((entry) => entry.label || entry.id).join(' > ')}.`);
+      lines.push(uiText('plannedActionsLabel', 'Ações previstas: {value}.', {
+        value: actions.map((entry) => entry.label || entry.id).join(' > '),
+      }));
     }
     if (!plan.ready) {
-      lines.push('Nada foi publicado ainda. Resolva os bloqueios acima para eu conseguir criar o commit e enviar o repositório.');
+      lines.push(uiText('githubNothingPublished', 'Nada foi publicado ainda. Resolva os bloqueios acima para eu conseguir criar o commit e enviar o repositório.'));
     } else {
-      lines.push('Tudo pronto para publicar. Ao confirmar, vou preparar os arquivos, criar o commit e enviar para o GitHub.');
+      lines.push(uiText('githubReadyPublish', 'Tudo pronto para publicar. Ao confirmar, vou preparar os arquivos, criar o commit e enviar para o GitHub.'));
     }
     return lines.join('\n');
   }
@@ -58,31 +71,33 @@
     if (!auth || auth.ok === false) {
       return {
         tone: 'warning',
-        title: 'Não consegui verificar a conta GitHub',
-        message: 'Verifique a conexão local e tente novamente antes de publicar.',
+        title: uiText('githubAuthCheckFailedTitle', 'Não consegui verificar a conta GitHub'),
+        message: uiText('githubAuthCheckFailedMessage', 'Verifique a conexão local e tente novamente antes de publicar.'),
         command: '',
       };
     }
     if (auth.ghInstalled === false) {
       return {
         tone: 'blocked',
-        title: 'Instale o GitHub CLI',
-        message: 'O Faber Code usa o GitHub CLI local para publicar com segurança. O login do navegador não basta para dar permissão ao app.',
+        title: uiText('githubInstallCliTitle', 'Instale o GitHub CLI'),
+        message: uiText('githubInstallCliMessage', 'O Faber Code usa o GitHub CLI local para publicar com segurança. O login do navegador não basta para dar permissão ao app.'),
         command: getGithubAuthCommand(auth),
       };
     }
     if (auth.authenticated === false) {
       return {
         tone: 'blocked',
-        title: 'Conecte a conta no terminal',
-        message: 'O navegador pode estar logado, mas o envio local precisa de uma sessão do GitHub CLI neste Mac.',
+        title: uiText('githubConnectTerminalTitle', 'Conecte a conta no terminal'),
+        message: uiText('githubConnectTerminalMessage', 'O navegador pode estar logado, mas o envio local precisa de uma sessão do GitHub CLI neste Mac.'),
         command: getGithubAuthCommand(auth),
       };
     }
     return {
       tone: 'ready',
-      title: auth.username ? `Conta conectada como @${auth.username}` : 'Conta GitHub conectada',
-      message: 'Pronto para revisar repositório, commit e envio antes de publicar.',
+      title: auth.username
+        ? uiText('githubConnectedAs', 'Conta conectada como @{username}', { username: auth.username })
+        : uiText('githubConnected', 'Conta GitHub conectada'),
+      message: uiText('githubReadyReview', 'Pronto para revisar repositório, commit e envio antes de publicar.'),
       command: '',
     };
   }
@@ -94,18 +109,22 @@
     const steps = plan && Array.isArray(plan.steps) ? plan.steps : [];
     const blockedSteps = steps.filter((step) => step && step.status === 'blocked');
     const manualSteps = steps.filter((step) => step && step.status === 'manual');
-    const lines = [(result && result.message) || 'Execução local bloqueada.'];
-    if (warnings.length) lines.push(`Avisos: ${warnings.join(' ')}`);
-    if (blockers.length) lines.push(`Bloqueios: ${blockers.join(' ')}`);
+    const lines = [(result && result.message) || uiText('localExecutionBlocked', 'Execução local bloqueada.')];
+    if (warnings.length) lines.push(uiText('warningsLabel', 'Avisos: {value}', { value: warnings.join(' ') }));
+    if (blockers.length) lines.push(uiText('blockersLabel', 'Bloqueios: {value}', { value: blockers.join(' ') }));
     if (manualSteps.length) {
-      lines.push(`Etapas manuais: ${manualSteps.map((step) => step.commandText || step.label).join(', ')}`);
+      lines.push(uiText('manualStepsLabel', 'Etapas manuais: {value}', {
+        value: manualSteps.map((step) => step.commandText || step.label).join(', '),
+      }));
     }
     if (blockedSteps.length) {
-      lines.push(`Etapas bloqueadas: ${blockedSteps.map((step) => step.label || step.id).join(', ')}`);
+      lines.push(uiText('blockedStepsLabel', 'Etapas bloqueadas: {value}', {
+        value: blockedSteps.map((step) => step.label || step.id).join(', '),
+      }));
     }
     if (result && result.session && (result.session.stderr || result.session.stdout)) {
       const output = String(result.session.stderr || result.session.stdout || '').trim();
-      if (output) lines.push(`Saída do servidor: ${output.slice(-900)}`);
+      if (output) lines.push(uiText('serverOutputLabel', 'Saída do servidor: {value}', { value: output.slice(-900) }));
     }
     return lines.join('\n');
   }

@@ -12,12 +12,24 @@
     return Boolean(media.pexelsConfigured);
   }
 
-  function getConfigMissingMessage(status) {
+  function formatMessage(template, replacements = {}) {
+    return Object.entries(replacements).reduce(
+      (message, [key, value]) => message.replaceAll(`{${key}}`, String(value)),
+      String(template || ''),
+    );
+  }
+
+  function getConfigMissingMessage(status, strings = {}) {
     const config = status && status.config ? status.config : {};
     const missing = Array.isArray(config.missing) ? config.missing : [];
-    if (missing.length) return `Backend incompleto: ${missing.join(', ')}.`;
+    if (missing.length) {
+      return formatMessage(strings.backendIncomplete || 'Backend incompleto: {items}.', {
+        items: missing.join(', '),
+      });
+    }
     if (config.media && !config.media.pexelsConfigured) {
-      return 'Conta conectada, mas a midia de plataforma ainda nao esta configurada para liberar imagens nas blueprints.';
+      return strings.platformMediaMissing
+        || 'Conta conectada, mas a mídia da plataforma ainda não está configurada para liberar imagens nos blueprints.';
     }
     return '';
   }
@@ -64,20 +76,22 @@
     return value === 'ide' || value === 'programador' || value === 'programmer' ? 'ide' : 'chat';
   }
 
-  function formatGithubSetupMessage(result = {}) {
+  function formatGithubSetupMessage(result = {}, strings = {}) {
     const missing = Array.isArray(result.missing) ? result.missing.filter(Boolean) : [];
     const setup = result.setup || {};
     const callback = setup.redirectUri || result.redirectUri || 'http://127.0.0.1:37418/auth/github/callback';
     if (!missing.length && !setup.redirectUri) {
-      return result.message || 'Nao foi possivel iniciar o login GitHub.';
+      return result.message || strings.githubLoginStartFailed || 'Não foi possível iniciar o login com GitHub.';
     }
 
-    const missingText = missing.length ? `Falta preencher ${missing.join(', ')} no .env.` : 'Revise a configuracao GitHub no .env.';
+    const missingText = missing.length
+      ? formatMessage(strings.githubMissingEnv || 'Falta preencher {items} no .env.', { items: missing.join(', ') })
+      : strings.githubReviewEnv || 'Revise a configuração do GitHub no .env.';
     return [
-      `GitHub OAuth ainda nao esta configurado. ${missingText}`,
-      'No GitHub: Settings > Developer settings > OAuth Apps > New OAuth App.',
-      `Authorization callback URL: ${callback}`,
-      'Depois salve o Client ID/Secret no .env e reinicie o Faber Code.',
+      `${strings.githubOAuthUnconfigured || 'O GitHub OAuth ainda não está configurado.'} ${missingText}`,
+      strings.githubOAuthInstructions || 'No GitHub: Settings > Developer settings > OAuth Apps > New OAuth App.',
+      formatMessage(strings.githubCallbackUrl || 'Authorization callback URL: {callback}', { callback }),
+      strings.githubRestartInstructions || 'Depois, salve o Client ID/Secret no .env e reinicie o Faber Code.',
     ].join('\n');
   }
 
@@ -226,6 +240,16 @@
       return fromOnboarding || getPreferredSignupLanguage({ documentRef: doc, getInterfaceLanguage });
     }
 
+    function getGateStrings() {
+      const locale = getSelectedLanguagePreference();
+      return GATE_TRANSLATIONS[locale] || GATE_TRANSLATIONS['pt-BR'];
+    }
+
+    function gateText(key, fallback = '', replacements = {}) {
+      const strings = getGateStrings();
+      return formatMessage(strings[key] || fallback || key, replacements);
+    }
+
     function getSelectedThemePreference() {
       const fromOnboarding = elements.onboardingThemeSelect
         ? String(elements.onboardingThemeSelect.value || '').trim()
@@ -265,7 +289,7 @@
     function renderStatus(status = null, message = '') {
       const signedIn = isSignedIn(status);
       const platformMediaReady = hasPlatformMedia(status);
-      const configMessage = getConfigMissingMessage(status);
+      const configMessage = getConfigMissingMessage(status, getGateStrings());
       const appReady = canUseApp(status);
 
       if (message) {
@@ -316,23 +340,24 @@
 
     function renderEmailFormState() {
       const signupMode = authMode === 'signup';
+      const strings = GATE_TRANSLATIONS[getSelectedLanguagePreference()] || GATE_TRANSLATIONS['pt-BR'];
       if (elements.formEyebrow) {
-        elements.formEyebrow.textContent = signupMode ? 'Novo usuário' : 'Acesso existente';
+        elements.formEyebrow.textContent = signupMode ? strings.eyebrowFormSignup : strings.eyebrowFormLogin;
       }
       if (elements.formTitle) {
-        elements.formTitle.textContent = signupMode ? 'Criar conta com e-mail' : 'Entrar com e-mail';
+        elements.formTitle.textContent = signupMode ? strings.titleFormSignup : strings.titleFormLogin;
       }
       if (elements.formCopy) {
         elements.formCopy.textContent = signupMode
-          ? 'Crie sua conta e siga com as preferências já escolhidas.'
-          : 'Use sua conta existente para continuar.';
+          ? strings.copyFormSignup
+          : strings.copyFormLogin;
       }
       if (elements.signupFields) elements.signupFields.classList.toggle('hidden', !signupMode);
-      if (elements.emailSubmit) elements.emailSubmit.textContent = signupMode ? 'Criar conta' : 'Entrar';
+      if (elements.emailSubmit) elements.emailSubmit.textContent = signupMode ? strings.btnSubmitSignup : strings.btnSubmitLogin;
       if (elements.createToggle) {
         elements.createToggle.textContent = signupMode
-          ? 'Já tem uma conta? Voltar para o login.'
-          : 'Não tem uma conta? Crie aqui.';
+          ? strings.toggleToLogin
+          : strings.toggleToSignup;
       }
       if (elements.passwordInput) {
         elements.passwordInput.setAttribute('autocomplete', signupMode ? 'new-password' : 'current-password');
@@ -349,7 +374,7 @@
         langEnTitle: 'English',
         langEnDesc: 'Interface and messages in English',
         langEsTitle: 'Español',
-        langEsDesc: 'Interfaz e mensagens em espanhol',
+        langEsDesc: 'Interface e mensagens em espanhol',
         btnContinue: 'Continuar',
 
         eyebrowTheme: 'Etapa 2 de 3',
@@ -401,6 +426,31 @@
         placeholderPassword: 'Sua senha',
         placeholderFirstName: 'Seu nome',
         placeholderLastName: 'Seu sobrenome',
+        backendIncomplete: 'Backend incompleto: {items}.',
+        platformMediaMissing: 'Conta conectada, mas a mídia da plataforma ainda não está configurada para liberar imagens nos blueprints.',
+        accountBackendUnavailable: 'Backend de conta indisponível. Reinicie o Faber Code e tente novamente.',
+        accountSessionValidationFailed: 'Não foi possível validar sua sessão. Verifique o backend de conta e tente novamente.',
+        googleLoginUnavailable: 'Login com Google indisponível nesta versão.',
+        googleLoginStartFailed: 'Não foi possível iniciar o login com Google.',
+        completeBrowserLogin: 'Conclua o login no navegador para continuar.',
+        googleOpenFailed: 'Falha ao abrir o login com Google.',
+        githubLoginUnavailable: 'Login com GitHub indisponível nesta versão.',
+        githubLoginStartFailed: 'Não foi possível iniciar o login com GitHub.',
+        githubMissingEnv: 'Falta preencher {items} no .env.',
+        githubReviewEnv: 'Revise a configuração do GitHub no .env.',
+        githubOAuthUnconfigured: 'O GitHub OAuth ainda não está configurado.',
+        githubOAuthInstructions: 'No GitHub: Settings > Developer settings > OAuth Apps > New OAuth App.',
+        githubCallbackUrl: 'Authorization callback URL: {callback}',
+        githubRestartInstructions: 'Depois, salve o Client ID/Secret no .env e reinicie o Faber Code.',
+        completeGithubLogin: 'Conclua o login no GitHub para continuar.',
+        githubOpenFailed: 'Falha ao abrir o login com GitHub.',
+        credentialsRequired: 'Preencha e-mail e senha.',
+        emailLoginUnavailable: 'Login com e-mail indisponível nesta versão.',
+        emailLoginFailed: 'Não foi possível concluir o login.',
+        emailLoginSubmitFailed: 'Falha ao concluir o login com e-mail.',
+        signOutUnavailable: 'Saída da conta indisponível nesta versão.',
+        signOutFailed: 'Não foi possível sair da conta.',
+        signOutSubmitFailed: 'Falha ao sair da conta.',
       },
       'en-US': {
         eyebrowLang: 'Step 1 of 3',
@@ -463,11 +513,36 @@
         placeholderPassword: 'Your password',
         placeholderFirstName: 'Your first name',
         placeholderLastName: 'Your last name',
+        backendIncomplete: 'Incomplete backend configuration: {items}.',
+        platformMediaMissing: 'The account is connected, but platform media is not configured to provide images in blueprints yet.',
+        accountBackendUnavailable: 'The account backend is unavailable. Restart Faber Code and try again.',
+        accountSessionValidationFailed: 'Your session could not be validated. Check the account backend and try again.',
+        googleLoginUnavailable: 'Google sign-in is unavailable in this build.',
+        googleLoginStartFailed: 'Google sign-in could not be started.',
+        completeBrowserLogin: 'Complete sign-in in your browser to continue.',
+        googleOpenFailed: 'Google sign-in could not be opened.',
+        githubLoginUnavailable: 'GitHub sign-in is unavailable in this build.',
+        githubLoginStartFailed: 'GitHub sign-in could not be started.',
+        githubMissingEnv: 'Add {items} to the .env file.',
+        githubReviewEnv: 'Review the GitHub configuration in the .env file.',
+        githubOAuthUnconfigured: 'GitHub OAuth is not configured yet.',
+        githubOAuthInstructions: 'On GitHub: Settings > Developer settings > OAuth Apps > New OAuth App.',
+        githubCallbackUrl: 'Authorization callback URL: {callback}',
+        githubRestartInstructions: 'Then save the Client ID/Secret in .env and restart Faber Code.',
+        completeGithubLogin: 'Complete sign-in on GitHub to continue.',
+        githubOpenFailed: 'GitHub sign-in could not be opened.',
+        credentialsRequired: 'Enter your email and password.',
+        emailLoginUnavailable: 'Email sign-in is unavailable in this build.',
+        emailLoginFailed: 'Sign-in could not be completed.',
+        emailLoginSubmitFailed: 'Email sign-in failed.',
+        signOutUnavailable: 'Sign-out is unavailable in this build.',
+        signOutFailed: 'The account could not be signed out.',
+        signOutSubmitFailed: 'Sign-out failed.',
       },
       'es-ES': {
         eyebrowLang: 'Etapa 1 de 3',
         titleLang: 'Seleccione idioma',
-        copyLang: 'La interfaz y los mensagens iniciales siguen esta elección.',
+        copyLang: 'La interfaz y los mensajes iniciales siguen esta elección.',
         langPtTitle: 'Português (Brasil)',
         langPtDesc: 'Interfaz y mensajes en portugués',
         langEnTitle: 'English',
@@ -487,7 +562,7 @@
 
         eyebrowEntry: 'Etapa 3 de 3',
         titleEntry: '¿Cómo prefiere iniciar?',
-        copyEntry: 'Elija se desea comenzar con el tutorial guiado de la herramienta o ir directo al uso.',
+        copyEntry: 'Elija si desea comenzar con el tutorial guiado de la herramienta o ir directamente al uso.',
         newUserTitle: 'Nuevo usuario',
         newUserDesc: 'Quiero ver el tutorial guiado de la herramienta',
         existingUserTitle: 'Ya soy un usuario',
@@ -498,7 +573,7 @@
         copyAccess: 'Elija su método preferido para iniciar sesión o crear su cuenta.',
         accessLoginEmailTitle: 'Iniciar sesión con correo',
         accessLoginEmailDesc: 'Usar inicio de sesión tradicional con correo y contraseña',
-        accessSignupEmailTitle: 'Crear cuenta com correo',
+        accessSignupEmailTitle: 'Crear cuenta con correo',
         accessSignupEmailDesc: 'Registro rápido usando correo y contraseña',
         accessGoogleTitle: 'Iniciar sesión con Google',
         accessGoogleDesc: 'Acceder usando su cuenta de Google',
@@ -506,7 +581,7 @@
         accessGithubDesc: 'Acceder usando su perfil de GitHub',
 
         eyebrowFormSignup: 'Nuevo usuario',
-        titleFormSignup: 'Crear conta com e-mail',
+        titleFormSignup: 'Crear cuenta con correo',
         copyFormSignup: 'Cree su cuenta y continúe con las preferencias elegidas.',
         btnSubmitSignup: 'Crear cuenta',
         toggleToLogin: '¿Ya tiene una cuenta? Volver a iniciar sesión.',
@@ -525,6 +600,31 @@
         placeholderPassword: 'Tu contraseña',
         placeholderFirstName: 'Tu nombre',
         placeholderLastName: 'Tu apellido',
+        backendIncomplete: 'Configuración incompleta del backend: {items}.',
+        platformMediaMissing: 'La cuenta está conectada, pero los medios de la plataforma todavía no están configurados para ofrecer imágenes en los blueprints.',
+        accountBackendUnavailable: 'El backend de la cuenta no está disponible. Reinicia Faber Code e inténtalo de nuevo.',
+        accountSessionValidationFailed: 'No se pudo validar tu sesión. Revisa el backend de la cuenta e inténtalo de nuevo.',
+        googleLoginUnavailable: 'El acceso con Google no está disponible en esta versión.',
+        googleLoginStartFailed: 'No se pudo iniciar el acceso con Google.',
+        completeBrowserLogin: 'Completa el acceso en el navegador para continuar.',
+        googleOpenFailed: 'No se pudo abrir el acceso con Google.',
+        githubLoginUnavailable: 'El acceso con GitHub no está disponible en esta versión.',
+        githubLoginStartFailed: 'No se pudo iniciar el acceso con GitHub.',
+        githubMissingEnv: 'Falta agregar {items} al archivo .env.',
+        githubReviewEnv: 'Revisa la configuración de GitHub en el archivo .env.',
+        githubOAuthUnconfigured: 'GitHub OAuth todavía no está configurado.',
+        githubOAuthInstructions: 'En GitHub: Settings > Developer settings > OAuth Apps > New OAuth App.',
+        githubCallbackUrl: 'Authorization callback URL: {callback}',
+        githubRestartInstructions: 'Después guarda el Client ID/Secret en .env y reinicia Faber Code.',
+        completeGithubLogin: 'Completa el acceso en GitHub para continuar.',
+        githubOpenFailed: 'No se pudo abrir el acceso con GitHub.',
+        credentialsRequired: 'Escribe tu correo y contraseña.',
+        emailLoginUnavailable: 'El acceso con correo no está disponible en esta versión.',
+        emailLoginFailed: 'No se pudo completar el acceso.',
+        emailLoginSubmitFailed: 'Falló el acceso con correo.',
+        signOutUnavailable: 'El cierre de sesión no está disponible en esta versión.',
+        signOutFailed: 'No se pudo cerrar la sesión.',
+        signOutSubmitFailed: 'Falló el cierre de sesión.',
       }
     };
 
@@ -745,7 +845,7 @@
     async function refresh(message = '') {
       if (!hasAccountApi(api)) {
         currentStatus = null;
-        renderStatus(null, 'Backend de conta indisponivel. Reinicie o Faber Code e tente novamente.');
+        renderStatus(null, gateText('accountBackendUnavailable'));
         setLocked(true);
         onStatusChange(currentStatus, false);
         return null;
@@ -762,7 +862,7 @@
         return currentStatus;
       } catch {
         currentStatus = null;
-        renderStatus(null, 'Nao foi possivel validar sua sessao. Verifique o backend de conta e tente novamente.');
+        renderStatus(null, gateText('accountSessionValidationFailed'));
         setLocked(true);
         onStatusChange(currentStatus, false);
         return null;
@@ -776,7 +876,7 @@
         window.localStorage.setItem('fabercode:wants-tutorial', String(wantsTutorial));
       }
       if (!api || typeof api.startGoogleLogin !== 'function') {
-        const message = 'Login Google indisponivel neste build.';
+        const message = gateText('googleLoginUnavailable');
         renderStatus(currentStatus, message);
         notify(message);
         return null;
@@ -787,15 +887,15 @@
         applyWorkspacePreference();
         const result = await api.startGoogleLogin({ openExternal: true });
         if (!result || !result.ok) {
-          const message = (result && result.message) || 'Nao foi possivel iniciar o login Google.';
+          const message = (result && result.message) || gateText('googleLoginStartFailed');
           renderStatus(currentStatus, message);
           notify(message);
           return result || null;
         }
-        renderStatus(currentStatus, 'Conclua o login no navegador para continuar.');
+        renderStatus(currentStatus, gateText('completeBrowserLogin'));
         return result;
       } catch {
-        const message = 'Falha ao abrir o login Google.';
+        const message = gateText('googleOpenFailed');
         renderStatus(currentStatus, message);
         notify(message);
         return null;
@@ -809,7 +909,7 @@
         window.localStorage.setItem('fabercode:wants-tutorial', String(wantsTutorial));
       }
       if (!api || typeof api.startGithubAccountLogin !== 'function') {
-        const message = 'Login GitHub indisponivel neste build.';
+        const message = gateText('githubLoginUnavailable');
         renderStatus(currentStatus, message);
         notify(message);
         return null;
@@ -820,15 +920,15 @@
         applyWorkspacePreference();
         const result = await api.startGithubAccountLogin({ openExternal: true });
         if (!result || !result.ok) {
-          const message = formatGithubSetupMessage(result || {});
+          const message = formatGithubSetupMessage(result || {}, getGateStrings());
           renderStatus(currentStatus, message);
           notify(message);
           return result || null;
         }
-        renderStatus(currentStatus, 'Conclua o login no GitHub para continuar.');
+        renderStatus(currentStatus, gateText('completeGithubLogin'));
         return result;
       } catch {
-        const message = 'Falha ao abrir o login GitHub.';
+        const message = gateText('githubOpenFailed');
         renderStatus(currentStatus, message);
         notify(message);
         return null;
@@ -841,14 +941,14 @@
       const email = elements.emailInput ? String(elements.emailInput.value || '').trim() : '';
       const password = elements.passwordInput ? String(elements.passwordInput.value || '') : '';
       if (!email || !password) {
-        setStatusMessage('Preencha e-mail e senha.');
+        setStatusMessage(gateText('credentialsRequired'));
         return null;
       }
 
       const isSignup = authMode === 'signup';
       const methodName = isSignup ? 'signUpWithPassword' : 'signInWithPassword';
       if (!api || typeof api[methodName] !== 'function') {
-        const message = 'Login com e-mail indisponivel neste build.';
+        const message = gateText('emailLoginUnavailable');
         renderStatus(currentStatus, message);
         notify(message);
         return null;
@@ -869,7 +969,7 @@
       try {
         const result = await api[methodName](payload);
         if (!result || !result.ok) {
-          const message = (result && result.message) || 'Nao foi possivel concluir o login.';
+          const message = (result && result.message) || gateText('emailLoginFailed');
           renderStatus(currentStatus, message);
           notify(message);
           return result || null;
@@ -880,7 +980,7 @@
         await refresh('');
         return result;
       } catch {
-        const message = 'Falha ao concluir o login com e-mail.';
+        const message = gateText('emailLoginSubmitFailed');
         renderStatus(currentStatus, message);
         notify(message);
         return null;
@@ -891,7 +991,7 @@
 
     async function signOut() {
       if (!api || typeof api.signOutAccount !== 'function') {
-        const message = 'Saida da conta indisponivel neste build.';
+        const message = gateText('signOutUnavailable');
         renderStatus(currentStatus, message);
         notify(message);
         return null;
@@ -901,7 +1001,7 @@
       try {
         const result = await api.signOutAccount();
         if (!result || !result.ok) {
-          const message = (result && result.message) || 'Nao foi possivel sair da conta.';
+          const message = (result && result.message) || gateText('signOutFailed');
           renderStatus(currentStatus, message);
           notify(message);
           return result || null;
@@ -909,7 +1009,7 @@
         await refresh('');
         return result;
       } catch {
-        const message = 'Falha ao sair da conta.';
+        const message = gateText('signOutSubmitFailed');
         renderStatus(currentStatus, message);
         notify(message);
         return null;

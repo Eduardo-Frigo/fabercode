@@ -14,6 +14,14 @@
       ? options.ensureProjectReady
       : async () => Boolean(getProjectInfo() && getProjectInfo().rootPath);
     const notify = typeof options.notify === 'function' ? options.notify : () => {};
+    const uiText = (key, fallback) => window.t ? window.t(key, fallback) : fallback;
+
+    function localizeTerminalOutput(value) {
+      const prefix = uiText('terminalSessionStartedAt', 'Sessão iniciada em');
+      return String(value || '')
+        .replace(/^__FABER_TERMINAL_SESSION_STARTED__:(.*)$/gm, `${prefix} $1`)
+        .replace(/^Sessão iniciada em\s+/gm, `${prefix} `);
+    }
 
     const elements = {
       button: document.getElementById('btn-project-terminal'),
@@ -165,7 +173,7 @@
       const backdrop = document.createElement('button');
       backdrop.type = 'button';
       backdrop.className = 'project-terminal-lightbox__backdrop';
-      backdrop.setAttribute('aria-label', 'Fechar terminal');
+      backdrop.setAttribute('aria-label', uiText('closeTerminal', 'Fechar terminal'));
 
       const shell = document.createElement('div');
       shell.className = 'project-terminal-lightbox__shell';
@@ -359,7 +367,9 @@
         elements.status.dataset.status = status;
       }
       if (elements.output) {
-        const nextOutput = activeSession ? activeSession.output || '' : 'Nenhum terminal aberto.\n';
+        const nextOutput = activeSession
+          ? localizeTerminalOutput(activeSession.output || '')
+          : `${uiText('noTerminalOpen', 'Nenhum terminal aberto.')}\n`;
         if (elements.output.textContent !== nextOutput) {
           elements.output.textContent = nextOutput;
           if (elements.body) {
@@ -380,8 +390,8 @@
       if (elements.placement) {
         elements.placement.textContent = placement === 'bottom' ? '▥' : '▤';
         elements.placement.title = placement === 'bottom'
-          ? 'Mover terminal para o painel direito'
-          : 'Mover terminal para a base';
+          ? uiText('moveTerminalRight', 'Mover terminal para o painel direito')
+          : uiText('moveTerminalBottom', 'Mover terminal para a base');
         elements.placement.setAttribute('aria-label', elements.placement.title);
       }
     }
@@ -408,7 +418,7 @@
       const ready = await ensureProjectReady();
       const info = getProjectInfo();
       if (!ready || !info || !info.rootPath) {
-        notify('Selecione um projeto antes de abrir o terminal.');
+        notify(uiText('selectProjectBeforeTerminal', 'Selecione um projeto antes de abrir o terminal.'));
         return;
       }
 
@@ -436,7 +446,7 @@
         name: `Terminal ${sessions.length + 1}`,
       });
       if (!result || !result.ok || !result.session) {
-        notify((result && result.message) || 'Não consegui abrir um novo terminal.');
+        notify((result && result.message) || uiText('newTerminalFailed', 'Não consegui abrir uma nova sessão de terminal.'));
         return null;
       }
       const key = getProjectKey();
@@ -453,7 +463,7 @@
       const ready = await ensureProjectReady();
       const info = getProjectInfo();
       if (!ready || !info || !info.rootPath) {
-        notify('Selecione um projeto antes de abrir o terminal.');
+        notify(uiText('selectProjectBeforeTerminal', 'Selecione um projeto antes de abrir o terminal.'));
         return null;
       }
       terminalState.panelOpen = true;
@@ -470,13 +480,13 @@
     async function runProjectCommand(command, options = {}) {
       const commandText = String(command || '').trim();
       if (!commandText || !api.runProjectTerminalCommand) {
-        return { ok: false, message: 'Terminal interno indisponível para executar o comando.' };
+        return { ok: false, message: uiText('terminalUnavailable', 'Terminal interno indisponível para executar o comando.') };
       }
       const activeSession = await ensureRunnableSession(options);
-      if (!activeSession) return { ok: false, message: window.t ? window.t('terminalSessionFailed', 'Não consegui abrir uma sessão de terminal.') : 'Não consegui abrir uma sessão de terminal.' };
+      if (!activeSession) return { ok: false, message: uiText('terminalSessionFailed', 'Não consegui abrir uma sessão de terminal.') };
       const info = getProjectInfo();
       if (!info || !info.rootPath) {
-        return { ok: false, message: 'Projeto sem pasta local para executar no terminal.' };
+        return { ok: false, message: uiText('projectWithoutLocalFolder', 'Projeto sem pasta local para executar no terminal.') };
       }
 
       if (elements.input) elements.input.value = '';
@@ -492,9 +502,9 @@
         render();
       }
       if (!result || !result.ok) {
-        notify((result && result.message) || 'Não consegui executar o comando no terminal.');
+        notify((result && result.message) || uiText('terminalCommandFailed', 'Não consegui executar o comando no terminal.'));
       }
-      return result || { ok: false, message: 'Não consegui executar o comando no terminal.' };
+      return result || { ok: false, message: uiText('terminalCommandFailed', 'Não consegui executar o comando no terminal.') };
     }
 
     async function runCommand(event) {
@@ -514,7 +524,7 @@
         render();
       }
       if (!result || !result.ok) {
-        notify((result && result.message) || 'Não consegui executar o comando no terminal.');
+        notify((result && result.message) || uiText('terminalCommandFailed', 'Não consegui executar o comando no terminal.'));
       }
     }
 

@@ -43,12 +43,12 @@
         const cancelBtn = document.createElement('button');
         cancelBtn.type = 'button';
         cancelBtn.className = 'btn btn-muted';
-        cancelBtn.textContent = 'Cancelar';
+        cancelBtn.textContent = window.t ? window.t('cancel', 'Cancelar') : 'Cancelar';
 
         const saveBtn = document.createElement('button');
         saveBtn.type = 'button';
         saveBtn.className = 'btn btn-success';
-        saveBtn.textContent = 'Salvar';
+        saveBtn.textContent = window.t ? window.t('save', 'Salvar') : 'Salvar';
 
         actions.append(cancelBtn, saveBtn);
         dialog.append(titleEl, input, actions);

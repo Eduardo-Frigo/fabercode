@@ -204,6 +204,31 @@ async function run() {
   });
   assert.strictEqual(wrongPassword.ok, false);
 
+  const degradedService = createPlatformAccountService({
+    databaseUrl: 'postgresql://faber.local/db',
+    loadSessionFile: async () => ({
+      id: 'local-session',
+      createdAt: '2026-07-10T12:00:00.000Z',
+      user: {
+        id: 'usr_local',
+        email: 'local@example.com',
+        name: 'Local User',
+      },
+    }),
+    sessionSecret: 'session-secret',
+    store: {
+      getStatus: () => ({ available: true, reason: 'ready' }),
+      saveSession: async () => {
+        throw new Error('self signed certificate in certificate chain');
+      },
+    },
+  });
+  const degradedRestore = await degradedService.initializeSession();
+  assert.strictEqual(degradedRestore.ok, false);
+  assert.strictEqual(degradedRestore.restored, true);
+  assert.strictEqual(degradedRestore.reason, 'session_record_sync_failed');
+  assert.strictEqual(degradedService.getStatus().signedIn, true);
+
   const signedOut = await service.signOut();
   assert.strictEqual(signedOut.ok, true);
   assert.strictEqual(service.getStatus().signedIn, false);

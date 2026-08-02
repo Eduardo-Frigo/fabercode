@@ -1,4 +1,15 @@
 (function () {
+  function translatedText(key, fallback, params = {}) {
+    const locale = String(document.documentElement.lang || navigator.language || 'pt-BR');
+    const translations = window.FaberI18n && window.FaberI18n.UI_TRANSLATIONS;
+    const dictionary = translations && (translations[locale] || translations[locale.split('-')[0]] || translations['pt-BR']);
+    const template = dictionary && dictionary[key] ? dictionary[key] : fallback;
+    return Object.entries(params).reduce(
+      (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+      String(template || '')
+    );
+  }
+
   function normalizeRequiredModule(entry) {
     if (!entry || typeof entry !== 'object') return null;
     const globalName = typeof entry.globalName === 'string' ? entry.globalName.trim() : '';
@@ -49,7 +60,9 @@
     panel.id = 'renderer-boot-error';
     panel.className = 'renderer-boot-error';
     panel.setAttribute('role', 'alert');
-    panel.textContent = error && error.message ? error.message : 'Falha ao iniciar a interface do Faber Code.';
+    panel.textContent = error && error.message
+      ? error.message
+      : translatedText('bootstrapFailed', 'Falha ao iniciar a interface do Faber Code.');
 
     if (!existing) document.body.appendChild(panel);
   }
@@ -57,7 +70,11 @@
   function requireRendererModules(requiredModules) {
     const missing = getMissingRendererModules(requiredModules);
     if (!missing.length) return true;
-    const error = new Error(`Renderer incompleto: módulos ausentes (${missing.join(', ')}).`);
+    const error = new Error(translatedText(
+      'rendererIncomplete',
+      'Renderer incompleto: módulos ausentes ({modules}).',
+      { modules: missing.join(', ') }
+    ));
     showFatalBootError(error);
     throw error;
   }

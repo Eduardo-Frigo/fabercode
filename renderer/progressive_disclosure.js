@@ -4,6 +4,26 @@
   const TUTORIAL_DISMISSED_KEY = 'fabercode:tutorial-dismissed';
   const TUTORIAL_PROGRESS_KEY = 'fabercode:tutorial-progress';
   const WANTS_TUTORIAL_KEY = 'fabercode:wants-tutorial';
+  const TUTORIAL_PROJECT_ID_KEY = 'fabercode:tutorial-project-id';
+  const TUTORIAL_USER_NAME_KEY = 'fabercode:tutorial-user-name';
+  const TUTORIAL_DEVELOPMENT_STATE_KEY = 'fabercode:tutorial-development-state';
+
+  const CURSOR_ANIMATION_MS = 480;
+  const CURSOR_SETTLE_MS = 70;
+  const TRACKING_INTERVAL_MS = 50;
+  const POLLING_TIMEOUT_MS = 5000;
+  const CANVAS_NODE_WIDTH = 220;
+  const CANVAS_EDIT_BTN_OFFSET_X = 24;
+  const CANVAS_EDIT_BTN_OFFSET_Y = 24;
+  const MIN_VIEWPORT_WIDTH = 1280;
+  const MIN_VIEWPORT_HEIGHT = 720;
+  const PULSE_DURATION_MS = 720;
+  const CLICK_ANIMATION_MS = 260;
+  const TYPE_CHAR_DELAY_MS = 24;
+  const MIN_CARD_WIDTH = 260;
+  const MIN_CARD_HEIGHT = 132;
+  const TUTORIAL_MAP_AUTO_ZOOM = 0.6;
+
 
   const LEFT_PANEL_HOVER_SELECTORS = [
     '#btn-cortex-mode',
@@ -29,6 +49,7 @@
       installGit: 'Instalar Git',
       recheck: 'Verificar novamente',
       continue: 'Continuar',
+      next: 'Próximo',
       previous: 'Voltar',
       stopTutorial: 'Interromper',
       finishTutorial: 'Concluir tutorial',
@@ -75,7 +96,7 @@
       apiTitle: 'Configurar API de IA',
       apiBody: 'Aqui o usuário vê que pode conectar a IA que preferir quando quiser. O objetivo desta etapa é apenas mostrar onde ficam as opções e os links oficiais para conseguir as APIs.',
       apiHint: 'O tutorial mostra o painel de APIs sem pressionar o usuário a cadastrar uma chave agora.',
-      apiSaveHint: 'O tutorial já montou um exemplo visual. Agora clique em Salvar para fechar as APIs e seguir para o mapa da aplicação.',
+      apiSaveHint: 'O exemplo está pronto. Clique em Cancelar para fechar sem salvar a API fake e seguir para o mapa da aplicação.',
       projectClassTitle: 'Funcionamento do Faber Code',
       projectClassBody: 'Agora começa a simulação prática: criar um projeto, escolher a pasta do tutorial e preparar o terreno para o Hello World guiado.',
       projectClassHint: 'Acompanhe a criação da pasta e do projeto. Os arquivos de demonstração só entram nessa pasta no fim do tutorial.',
@@ -141,6 +162,7 @@
       installGit: 'Install Git',
       recheck: 'Check again',
       continue: 'Continue',
+      next: 'Next',
       previous: 'Back',
       stopTutorial: 'Stop',
       finishTutorial: 'Finish tutorial',
@@ -187,7 +209,7 @@
       apiTitle: 'Configure an AI API',
       apiBody: 'Here the user sees that they can connect the AI provider they prefer whenever they are ready. This step only shows where the options and official provider links live.',
       apiHint: 'The tutorial shows the API panel without pushing the user to add a key right now.',
-      apiSaveHint: 'The tutorial has already prepared a visual example. Now click Save to close the API panel and continue to the application map.',
+      apiSaveHint: 'The example is ready. Click Cancel to close without saving the fake API and continue to the application map.',
       projectClassTitle: 'How Faber Code works',
       projectClassBody: 'Now the practical simulation begins: create a project, choose the tutorial folder, and prepare the ground for the guided Hello World example.',
       projectClassHint: 'Follow the creation of the folder and project. Demo files are only copied into that folder after the tutorial is finished.',
@@ -253,6 +275,7 @@
       installGit: 'Instalar Git',
       recheck: 'Verificar de nuevo',
       continue: 'Continuar',
+      next: 'Siguiente',
       previous: 'Volver',
       stopTutorial: 'Interrumpir',
       finishTutorial: 'Finalizar tutorial',
@@ -299,7 +322,7 @@
       apiTitle: 'Configurar una API de IA',
       apiBody: 'Aquí el usuario ve que puede conectar la IA que prefiera cuando quiera. Esta etapa solo muestra dónde están las opciones y los enlaces oficiales para conseguir las APIs.',
       apiHint: 'El tutorial muestra el panel de APIs sin presionar al usuario para registrar una clave ahora.',
-      apiSaveHint: 'El tutorial ya preparó un ejemplo visual. Ahora haz clic en Guardar para cerrar APIs y seguir al mapa de la aplicación.',
+      apiSaveHint: 'El ejemplo está listo. Haz clic en Cancelar para cerrar sin guardar la API falsa y seguir al mapa de la aplicación.',
       projectClassTitle: 'Cómo funciona Faber Code',
       projectClassBody: 'Ahora empieza la simulación práctica: crear un proyecto, elegir la carpeta del tutorial y preparar el terreno para el Hello World guiado.',
       projectClassHint: 'Sigue la creación de la carpeta y del proyecto. Los archivos demo solo se copian a esa carpeta al final del tutorial.',
@@ -373,6 +396,10 @@
       tutorialProgress: doc.getElementById('progressive-tutorial-progress'),
       tutorialChecklist: doc.getElementById('progressive-tutorial-checklist'),
       tutorialPreview: doc.getElementById('progressive-tutorial-preview'),
+      tutorialNamePrompt: doc.getElementById('progressive-tutorial-name-prompt'),
+      tutorialNameInput: doc.getElementById('progressive-tutorial-name-input'),
+      tutorialNameSave: doc.getElementById('progressive-tutorial-name-save'),
+      tutorialNameError: doc.getElementById('progressive-tutorial-name-error'),
       tutorialPrev: doc.getElementById('progressive-tutorial-prev'),
       tutorialSkipAll: doc.getElementById('progressive-tutorial-skip-all'),
       tutorialNext: doc.getElementById('progressive-tutorial-next'),
@@ -401,7 +428,8 @@
     let apiPlaceholderTyped = false;
     let apiEditorSaved = false;
     const API_PLACEHOLDER_VALUE = 'sk-faber-tutorial-placeholder-not-real';
-    const API_TUTORIAL_SERVICE_NAME = 'API de exemplo do tutorial';
+    const TUTORIAL_GITHUB_PLACEHOLDER = 'https://github.com/SEU_USUARIO';
+    const TUTORIAL_LINKEDIN_PLACEHOLDER = 'https://www.linkedin.com/in/SEU_PERFIL';
     let apiKeyInputOriginalType = '';
     let apiTutorialKeyValue = '';
     const SIDEBAR_DEMO_PROJECT_ID = '__tutorial-demo-project__';
@@ -413,11 +441,54 @@
       '#btn-map-tool-add-image',
       '#btn-map-tool-add-decision',
     ];
+    const RIGHT_PANEL_TOOL_SELECTORS = [
+      '#btn-project-files',
+      '#btn-map-ai',
+      '#btn-project-git',
+      '#btn-project-terminal',
+      '#btn-project-milestones',
+      '#btn-project-deploy',
+    ];
+    const RIGHT_PANEL_TOOL_GUIDES = RIGHT_PANEL_TOOL_SELECTORS.map((selector, index) => ({ selector, index }));
+    const RIGHT_PANEL_HOVER_SELECTORS = RIGHT_PANEL_TOOL_GUIDES.map((tool) => tool.selector);
     let hoveredSelectors = new Set();
     let hoveredMapSelectors = new Set();
+    let hoveredRightPanelSelectors = new Set();
     let tutorialCortexEntry = null;
     let tutorialMapIconClicked = false;
     let tutorialCreatedProjectId = '';
+    let tutorialMapNodeId = '';
+    let tutorialMapInspectorOpened = false;
+    let tutorialMapBuildStage = 'welcome-create';
+    let tutorialWelcomeNodeId = '';
+    let tutorialWelcomeBriefReady = false;
+    let tutorialDesignSystemNodeId = '';
+    let tutorialDesignSystemReady = false;
+    let tutorialMapZoomReady = false;
+    let tutorialLogoNodeId = '';
+    let tutorialFrontendGroupId = '';
+    let tutorialRulesGroupId = '';
+    let tutorialRulesNodeIds = [];
+    let tutorialUserName = '';
+    let tutorialArchitectureNodeIds = [];
+    let tutorialDevelopmentReady = false;
+    let tutorialMapCreationPending = false;
+    let tutorialMapChatStage = 'expand-right';
+    let tutorialMapGapNodeId = '';
+    let tutorialMapConversationComplete = false;
+    let tutorialMapAnalysisStage = 'history-loading';
+    let tutorialMapHistoryPreparing = false;
+    let tutorialMilestonesSaved = false;
+    let tutorialDevelopmentChatStage = 'compose';
+    let tutorialDevelopmentConversationComplete = false;
+    let tutorialDevelopmentBatchIndex = -1;
+    let tutorialDevelopmentWorkflowStage = 'idle';
+    let tutorialDevelopmentCommitCount = 0;
+    let tutorialDevelopmentFilesReviewed = false;
+    let tutorialDevelopmentBusy = false;
+    let tutorialGitChangeScope = 'untracked';
+    let tutorialPreviewStarted = false;
+    let tutorialPreviewLaunching = false;
     let highlightedElements = [];
     let demoRunId = 0;
     let activeGuideSignature = '';
@@ -431,6 +502,7 @@
     let cursorSuppressed = false;
     let tutorialBaselineProjectIds = new Set();
     let allowTutorialSyntheticClick = false;
+    let autoAdvanceTimer = null;
     const contextualModalSelectors = [
       '#cortex-modal',
       '#ai-settings-modal',
@@ -444,6 +516,30 @@
     function translate(key) {
       const locale = COPY[getLocale()] ? getLocale() : 'pt-BR';
       return COPY[locale][key] || COPY['pt-BR'][key] || key;
+    }
+
+    function tutorialText(path, variables = {}, fallback = '') {
+      const copy = window.FaberTutorialCopy;
+      if (!copy || typeof copy.translate !== 'function') return fallback;
+      return copy.translate(getLocale(), path, variables, fallback);
+    }
+
+    function tutorialValue(path, fallback = null) {
+      const copy = window.FaberTutorialCopy;
+      if (!copy || typeof copy.value !== 'function') return fallback;
+      return copy.value(getLocale(), path, fallback);
+    }
+
+    function tutorialPhrase(value) {
+      const copy = window.FaberTutorialCopy;
+      if (!copy || typeof copy.translatePhrase !== 'function') return String(value || '');
+      return copy.translatePhrase(getLocale(), value);
+    }
+
+    function tutorialHtml(value) {
+      const copy = window.FaberTutorialCopy;
+      if (!copy || typeof copy.translateHtml !== 'function') return String(value || '');
+      return copy.translateHtml(getLocale(), value);
     }
 
     function getStorage() {
@@ -472,6 +568,60 @@
         if (value === '' || value == null) storage.removeItem(key);
         else storage.setItem(key, String(value));
       } catch {}
+    }
+
+    function persistTutorialDevelopmentState() {
+      writeStorage(TUTORIAL_DEVELOPMENT_STATE_KEY, JSON.stringify({
+        batchIndex: tutorialDevelopmentBatchIndex,
+        workflowStage: tutorialDevelopmentWorkflowStage,
+        commitCount: tutorialDevelopmentCommitCount,
+        filesReviewed: tutorialDevelopmentFilesReviewed,
+        chatStage: tutorialDevelopmentChatStage,
+        conversationComplete: tutorialDevelopmentConversationComplete,
+      }));
+    }
+
+    function restoreTutorialDevelopmentState() {
+      const raw = readStorage(TUTORIAL_DEVELOPMENT_STATE_KEY, '');
+      if (!raw) return;
+      try {
+        const state = JSON.parse(raw);
+        const parsedBatchIndex = Number(state.batchIndex);
+        tutorialDevelopmentBatchIndex = Number.isFinite(parsedBatchIndex)
+          ? Math.max(-1, Math.min(1, parsedBatchIndex))
+          : -1;
+        tutorialDevelopmentWorkflowStage = String(state.workflowStage || 'idle');
+        tutorialDevelopmentCommitCount = Math.max(0, Math.min(2, Number(state.commitCount) || 0));
+        tutorialDevelopmentFilesReviewed = Boolean(state.filesReviewed);
+        tutorialDevelopmentChatStage = String(state.chatStage || 'compose');
+        tutorialDevelopmentConversationComplete = Boolean(state.conversationComplete);
+      } catch {
+        writeStorage(TUTORIAL_DEVELOPMENT_STATE_KEY, '');
+      }
+    }
+
+    function resetTutorialDevelopmentState() {
+      tutorialDevelopmentChatStage = 'compose';
+      tutorialDevelopmentConversationComplete = false;
+      tutorialDevelopmentBatchIndex = -1;
+      tutorialDevelopmentWorkflowStage = 'idle';
+      tutorialDevelopmentCommitCount = 0;
+      tutorialDevelopmentFilesReviewed = false;
+      tutorialDevelopmentBusy = false;
+      tutorialGitChangeScope = 'untracked';
+      tutorialPreviewStarted = false;
+      tutorialPreviewLaunching = false;
+      writeStorage(TUTORIAL_DEVELOPMENT_STATE_KEY, '');
+    }
+
+    function getTutorialDevelopmentBatches() {
+      const factory = window.FaberTutorialWelcomeProject;
+      if (!factory || typeof factory.createWelcomeProjectBatches !== 'function') return [];
+      return factory.createWelcomeProjectBatches({ name: tutorialUserName, locale: getLocale() });
+    }
+
+    function getTutorialDevelopmentBatch(index = tutorialDevelopmentBatchIndex) {
+      return getTutorialDevelopmentBatches()[Number(index)] || null;
     }
 
     function isSidebarTutorialStep() {
@@ -514,9 +664,6 @@
       );
     }
 
-    function hasCreatedProjectSinceTutorialStart() {
-      return getActiveProjects().some((project) => project && project.id && !tutorialBaselineProjectIds.has(project.id));
-    }
 
     function getTutorialCreatedProject() {
       if (tutorialCreatedProjectId) {
@@ -539,8 +686,436 @@
       return '.project-item.active .project-mini-btn-map';
     }
 
+    function getTutorialCreatedProjectConversationSelector() {
+      const project = getTutorialCreatedProject();
+      const scope = isLeftWorkspaceCollapsed() ? '#project-rail-lightbox-list' : '#projects-list';
+      if (!project || !project.id) return `${scope} .project-item.active .project-mini-btn-new-conv`;
+      if (window.CSS && typeof window.CSS.escape === 'function') {
+        return `${scope} .project-item[data-project-id="${window.CSS.escape(project.id)}"] .project-mini-btn-new-conv`;
+      }
+      return `${scope} .project-item.active .project-mini-btn-new-conv`;
+    }
+
     function getNextMapHoverSelector() {
       return MAP_TOOL_HOVER_SELECTORS.find((selector) => !hoveredMapSelectors.has(selector)) || '';
+    }
+
+    function getNextRightPanelToolGuide() {
+      const tool = RIGHT_PANEL_TOOL_GUIDES.find((candidate) => !hoveredRightPanelSelectors.has(candidate.selector)) || null;
+      if (!tool) return null;
+      const localizedTools = tutorialValue('rightTools', []);
+      return { ...tool, ...(localizedTools[tool.index] || {}) };
+    }
+
+    function getTutorialMapNodeEditSelector(nodeId = tutorialMapNodeId) {
+      if (!nodeId) return '.map-node.node-text:last-child .map-node-edit-btn';
+      if (window.CSS && typeof window.CSS.escape === 'function') {
+        return `#${window.CSS.escape(nodeId)} .map-node-edit-btn`;
+      }
+      return '.map-node.node-text:last-child .map-node-edit-btn';
+    }
+
+    function getTutorialMapNodeSelector(nodeId) {
+      if (!nodeId) return '.map-node:last-child';
+      if (window.CSS && typeof window.CSS.escape === 'function') {
+        return `#${window.CSS.escape(nodeId)}`;
+      }
+      return '.map-node:last-child';
+    }
+
+    function getTutorialMapController() {
+      if (!options.actions || typeof options.actions.getMapController !== 'function') return null;
+      return options.actions.getMapController();
+    }
+
+    function getTutorialMapCanvasController() {
+      const controller = getTutorialMapController();
+      if (!controller || typeof controller.getCanvasController !== 'function') return null;
+      return controller.getCanvasController();
+    }
+
+    function updateTutorialMapNode(nodeId, updatedData) {
+      const canvas = getTutorialMapCanvasController();
+      if (!canvas || typeof canvas.updateNode !== 'function') return null;
+      return canvas.updateNode(nodeId, updatedData);
+    }
+
+    function configureTutorialLogoNode(nodeId) {
+      return updateTutorialMapNode(nodeId, {
+        title: tutorialText('documents.logo.title'),
+        description: tutorialText('documents.logo.description'),
+        content: 'assets/Faber-Code-Logo-horizontal.png',
+        assetId: 'assets/Faber-Code-Logo-horizontal.png',
+        imageFit: 'contain',
+        tags: ['marca', 'logo', 'frontend'],
+      });
+    }
+
+    function arrangeTutorialMarkdownNodes() {
+      const canvas = getTutorialMapCanvasController();
+      if (!canvas || typeof canvas.getMapData !== 'function' || typeof canvas.updateNode !== 'function') return false;
+      const mapData = canvas.getMapData();
+      const welcomeNode = mapData.nodes.find((node) => node.id === tutorialWelcomeNodeId);
+      const designNode = mapData.nodes.find((node) => node.id === tutorialDesignSystemNodeId);
+      if (!welcomeNode || !designNode) return false;
+
+      const centerX = (welcomeNode.position.x + designNode.position.x) / 2;
+      const gap = 140;
+      const layoutWidth = (CANVAS_NODE_WIDTH * 2) + gap;
+      const firstX = Math.max(80, Math.round(centerX - (layoutWidth / 2)));
+      const alignedY = Math.max(120, Math.min(welcomeNode.position.y, designNode.position.y));
+      canvas.updateNode(welcomeNode.id, { position: { x: firstX, y: alignedY } });
+      canvas.updateNode(designNode.id, { position: { x: firstX + CANVAS_NODE_WIDTH + gap, y: alignedY } });
+      return true;
+    }
+
+    function applyTutorialMapLayout() {
+      if (!arrangeTutorialMarkdownNodes()) return false;
+      const canvas = getTutorialMapCanvasController();
+      if (canvas && typeof canvas.focusNodes === 'function') {
+        canvas.focusNodes([tutorialWelcomeNodeId, tutorialDesignSystemNodeId], {
+          zoom: TUTORIAL_MAP_AUTO_ZOOM,
+          horizontalAnchor: 0.5,
+          verticalAnchor: 0.3,
+        });
+      } else if (canvas && typeof canvas.setZoomLevel === 'function') {
+        canvas.setZoomLevel(TUTORIAL_MAP_AUTO_ZOOM);
+      } else {
+        const slider = resolveElement('#map-zoom-slider');
+        if (slider) {
+          slider.value = String(TUTORIAL_MAP_AUTO_ZOOM);
+          slider.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      }
+      tutorialMapZoomReady = true;
+      tutorialMapBuildStage = 'design-edit';
+      return true;
+    }
+
+    function configureTutorialFrontendGroup(nodeId) {
+      const group = updateTutorialMapNode(nodeId, {
+        title: tutorialText('documents.frontendGroup.title'),
+        description: tutorialText('documents.frontendGroup.description'),
+        position: { x: 450, y: 350 },
+        size: { width: 620, height: 230 },
+        collapsed: false,
+        tags: ['frontend'],
+      });
+      if (!group) return false;
+
+      const frontendNodes = [
+        [tutorialWelcomeNodeId, { x: 200, y: 700 }],
+        [tutorialDesignSystemNodeId, { x: 500, y: 880 }],
+        [tutorialLogoNodeId, { x: 780, y: 730 }],
+      ];
+      frontendNodes.forEach(([childId, position]) => {
+        if (!childId) return;
+        updateTutorialMapNode(childId, { parentId: nodeId, position });
+      });
+      return true;
+    }
+
+    function configureTutorialRulesGroup(nodeId) {
+      const canvas = getTutorialMapCanvasController();
+      if (!canvas || typeof canvas.addNodeAtCenter !== 'function') return false;
+      const group = updateTutorialMapNode(nodeId, {
+        title: tutorialText('documents.rulesGroup.title'),
+        description: tutorialText('documents.rulesGroup.description'),
+        position: { x: 1250, y: 350 },
+        size: { width: 460, height: 230 },
+        collapsed: false,
+        tags: ['regras'],
+      });
+      if (!group) return false;
+
+      const stamp = Date.now();
+      const interfaceRules = canvas.addNodeAtCenter('text', {
+        id: `tutorial-interface-rules-${stamp}`,
+        title: tutorialText('documents.interfaceRules.title'),
+        description: tutorialText('documents.interfaceRules.description'),
+        content: tutorialText('documents.interfaceRules.content'),
+        parentId: nodeId,
+        position: { x: 1500, y: 700 },
+        tags: ['regras', 'frontend'],
+      });
+      const acceptanceRules = canvas.addNodeAtCenter('text', {
+        id: `tutorial-acceptance-rules-${stamp}`,
+        title: tutorialText('documents.acceptance.title'),
+        description: tutorialText('documents.acceptance.description'),
+        content: tutorialText('documents.acceptance.content'),
+        parentId: nodeId,
+        position: { x: 1320, y: 850 },
+        tags: ['regras', 'qualidade'],
+      });
+      tutorialRulesNodeIds = [interfaceRules && interfaceRules.id, acceptanceRules && acceptanceRules.id].filter(Boolean);
+      if (tutorialRulesNodeIds.length === 2 && typeof canvas.selectNode === 'function') canvas.selectNode(null);
+      return tutorialRulesNodeIds.length === 2;
+    }
+
+    function personalizeTutorialWelcomeNode(name) {
+      const variables = {
+        name,
+        github: TUTORIAL_GITHUB_PLACEHOLDER,
+        linkedin: TUTORIAL_LINKEDIN_PLACEHOLDER,
+      };
+      return updateTutorialMapNode(tutorialWelcomeNodeId, {
+        title: tutorialText('documents.personalizedWelcome.title', variables),
+        description: tutorialText('documents.personalizedWelcome.description', variables),
+        content: tutorialText('documents.personalizedWelcome.content', variables),
+        tags: ['briefing', 'boas-vindas', 'personalização'],
+      });
+    }
+
+    function getTutorialArchitectureDefinition(kind) {
+      const variables = {
+        name: tutorialUserName,
+        github: TUTORIAL_GITHUB_PLACEHOLDER,
+        linkedin: TUTORIAL_LINKEDIN_PLACEHOLDER,
+      };
+      const definitions = {
+        stack: {
+          title: tutorialText('documents.architecture.title'),
+          description: tutorialText('documents.architecture.description'),
+          position: { x: 200, y: 1050 },
+          tags: ['arquitetura', 'nextjs', 'tailwind'],
+          content: tutorialText('documents.architecture.content', variables),
+        },
+        components: {
+          title: tutorialText('documents.components.title'),
+          description: tutorialText('documents.components.description'),
+          position: { x: 500, y: 1100 },
+          tags: ['arquitetura', 'componentes', 'frontend'],
+          content: tutorialText('documents.components.content', variables),
+        },
+        content: {
+          title: tutorialText('documents.contentLinks.title'),
+          description: tutorialText('documents.contentLinks.description'),
+          position: { x: 800, y: 1050 },
+          tags: ['conteúdo', 'links', 'personalização'],
+          content: tutorialText('documents.contentLinks.content', variables),
+        },
+      };
+      return definitions[kind] || null;
+    }
+
+    function configureTutorialArchitectureNode(nodeId, kind) {
+      const definition = getTutorialArchitectureDefinition(kind);
+      if (!definition || !tutorialFrontendGroupId) return false;
+      const updated = updateTutorialMapNode(nodeId, {
+        ...definition,
+        parentId: tutorialFrontendGroupId,
+      });
+      if (!updated) return false;
+      if (!tutorialArchitectureNodeIds.includes(nodeId)) tutorialArchitectureNodeIds.push(nodeId);
+      return true;
+    }
+
+    function createTutorialArchitectureBundle() {
+      const canvas = getTutorialMapCanvasController();
+      if (
+        !canvas
+        || !tutorialFrontendGroupId
+        || typeof canvas.getMapData !== 'function'
+        || typeof canvas.addNodeAtCenter !== 'function'
+      ) return false;
+
+      const mapData = canvas.getMapData();
+      const nodes = Array.isArray(mapData && mapData.nodes) ? mapData.nodes : [];
+      const stamp = Date.now();
+      tutorialArchitectureNodeIds = [];
+
+      for (const kind of ['stack', 'components', 'content']) {
+        const definition = getTutorialArchitectureDefinition(kind);
+        if (!definition) return false;
+        const marker = `tutorial-architecture-${kind}`;
+        let node = nodes.find((candidate) => (
+          candidate
+          && (
+            candidate.title === definition.title
+            || (Array.isArray(candidate.tags) && candidate.tags.includes(marker))
+          )
+        ));
+        if (!node) {
+          node = canvas.addNodeAtCenter('text', {
+            id: `${marker}-${stamp}`,
+            ...definition,
+            parentId: tutorialFrontendGroupId,
+            tags: [...definition.tags, marker],
+          });
+        } else {
+          node = updateTutorialMapNode(node.id, {
+            ...definition,
+            parentId: tutorialFrontendGroupId,
+            tags: [...definition.tags, marker],
+          });
+        }
+        if (!node || !node.id) return false;
+        tutorialArchitectureNodeIds.push(node.id);
+      }
+
+      if (typeof canvas.selectNode === 'function') canvas.selectNode(null);
+      focusTutorialDevelopmentMap();
+      return tutorialArchitectureNodeIds.length === 3;
+    }
+
+    function prepareTutorialArchitectureNode(nodeId, kind) {
+      if (!configureTutorialArchitectureNode(nodeId, kind)) return false;
+      tutorialMapNodeId = nodeId;
+      tutorialMapInspectorOpened = false;
+      tutorialMapBuildStage = `architecture-${kind}-edit`;
+      focusTutorialMapNodeForEditing(nodeId);
+      return true;
+    }
+
+    function focusTutorialMapNodeForEditing(nodeId) {
+      const canvas = getTutorialMapCanvasController();
+      if (!canvas || !nodeId) return false;
+      if (typeof canvas.selectNode === 'function') canvas.selectNode(null);
+      if (typeof canvas.focusNodes === 'function') {
+        return canvas.focusNodes([nodeId], {
+          zoom: TUTORIAL_MAP_AUTO_ZOOM,
+          horizontalAnchor: 0.58,
+          verticalAnchor: 0.5,
+        });
+      }
+      return typeof canvas.setZoomLevel === 'function'
+        ? canvas.setZoomLevel(TUTORIAL_MAP_AUTO_ZOOM)
+        : false;
+    }
+
+    function focusTutorialDevelopmentMap() {
+      const canvas = getTutorialMapCanvasController();
+      if (!canvas) return false;
+      const nodeIds = [
+        tutorialFrontendGroupId,
+        tutorialRulesGroupId,
+        tutorialWelcomeNodeId,
+        tutorialDesignSystemNodeId,
+        tutorialLogoNodeId,
+        ...tutorialArchitectureNodeIds,
+        ...tutorialRulesNodeIds,
+      ].filter(Boolean);
+      if (typeof canvas.selectNode === 'function') canvas.selectNode(null);
+      if (typeof canvas.focusNodes === 'function' && nodeIds.length) {
+        return canvas.focusNodes(nodeIds, {
+          zoom: TUTORIAL_MAP_AUTO_ZOOM,
+          horizontalAnchor: 0.5,
+          verticalAnchor: 0.42,
+        });
+      }
+      if (typeof canvas.setZoomLevel === 'function') return canvas.setZoomLevel(TUTORIAL_MAP_AUTO_ZOOM);
+      return false;
+    }
+
+    function applyTutorialMapGapCorrection() {
+      const canvas = getTutorialMapCanvasController();
+      if (!canvas || typeof canvas.getMapData !== 'function' || typeof canvas.addNodeAtCenter !== 'function') return false;
+      const actionButton = resolveElement('#btn-map-chat-add-gap');
+      if (actionButton) actionButton.disabled = true;
+      tutorialMapChatStage = 'applying-gap';
+      const controller = getTutorialMapController();
+      if (controller && typeof controller.showTutorialMapCanvas === 'function') {
+        controller.showTutorialMapCanvas();
+      }
+      const mapData = canvas.getMapData();
+      let gapNode = (mapData.nodes || []).find((node) => (
+        node
+        && (
+          node.id === tutorialMapGapNodeId
+          || node.title === tutorialText('documents.gap.title', {}, 'SEO e Estados da Interface')
+          || (Array.isArray(node.tags) && node.tags.includes('tutorial-gap'))
+        )
+      ));
+
+      if (!gapNode) {
+        gapNode = canvas.addNodeAtCenter('text', {
+          id: `tutorial-map-gap-${Date.now()}`,
+          title: tutorialText('documents.gap.title', {}, 'SEO e Estados da Interface'),
+          description: tutorialText('documents.gap.description', {}, 'Metadados, acessibilidade e estados necessários antes da análise do projeto.'),
+          content: tutorialText('documents.gap.content', {}, ''),
+          parentId: tutorialRulesGroupId || undefined,
+          position: { x: 1600, y: 1030 },
+          tags: ['tutorial-gap', 'regras', 'seo', 'acessibilidade'],
+        });
+      }
+      if (!gapNode || !gapNode.id) {
+        tutorialMapChatStage = 'missing-info';
+        if (actionButton) actionButton.disabled = false;
+        renderStep();
+        return false;
+      }
+
+      tutorialMapGapNodeId = gapNode.id;
+      if (!tutorialRulesNodeIds.includes(gapNode.id)) tutorialRulesNodeIds.push(gapNode.id);
+      if (typeof canvas.selectNode === 'function') canvas.selectNode(null);
+      if (typeof canvas.focusNodes === 'function') {
+        canvas.focusNodes([tutorialRulesGroupId, gapNode.id].filter(Boolean), {
+          zoom: TUTORIAL_MAP_AUTO_ZOOM,
+          horizontalAnchor: 0.5,
+          verticalAnchor: 0.42,
+        });
+      }
+      tutorialMapChatStage = 'adjustment-complete';
+      tutorialMapConversationComplete = true;
+      renderStep();
+      return true;
+    }
+
+    function prepareTutorialMapAnalysisPanel() {
+      const controller = getTutorialMapController();
+      if (!controller || typeof controller.prepareTutorialMapAnalysis !== 'function') return false;
+      return controller.prepareTutorialMapAnalysis();
+    }
+
+    function prepareTutorialMapAnalysisHistory() {
+      const controller = getTutorialMapController();
+      if (!controller || typeof controller.prepareTutorialMapHistory !== 'function') return false;
+      return controller.prepareTutorialMapHistory();
+    }
+
+    function submitTutorialUserName() {
+      const current = steps()[currentStepIndex];
+      if (!active || !current || current.id !== 'map-build' || tutorialMapBuildStage !== 'user-name') return false;
+      const rawName = String(elements.tutorialNameInput && elements.tutorialNameInput.value || '');
+      const normalizedName = rawName.replace(/\s+/g, ' ').trim().slice(0, 60);
+      if (!normalizedName) {
+        if (elements.tutorialNameError) elements.tutorialNameError.textContent = tutorialText('ui.nameRequired', {}, 'Digite seu nome para continuar.');
+        if (elements.tutorialNameInput) {
+          elements.tutorialNameInput.setAttribute('aria-invalid', 'true');
+          elements.tutorialNameInput.focus();
+        }
+        return false;
+      }
+
+      tutorialUserName = normalizedName;
+      writeStorage(TUTORIAL_USER_NAME_KEY, normalizedName);
+      if (tutorialWelcomeNodeId && !personalizeTutorialWelcomeNode(normalizedName)) {
+        if (elements.tutorialNameError) elements.tutorialNameError.textContent = tutorialText('ui.namePersonalizeError', {}, 'Não foi possível personalizar o briefing. Tente novamente.');
+        return false;
+      }
+      if (elements.tutorialNameInput) {
+        elements.tutorialNameInput.value = normalizedName;
+        elements.tutorialNameInput.removeAttribute('aria-invalid');
+      }
+      if (elements.tutorialNameError) elements.tutorialNameError.textContent = '';
+      if (tutorialFrontendGroupId && !createTutorialArchitectureBundle()) {
+        if (elements.tutorialNameError) elements.tutorialNameError.textContent = tutorialText('ui.nameDocumentsError', {}, 'Não foi possível organizar os documentos técnicos. Tente novamente.');
+        return false;
+      }
+      tutorialDevelopmentReady = true;
+      tutorialMapBuildStage = 'development-ready';
+      renderStep();
+      return true;
+    }
+
+    function isTutorialMapInspectorOpen() {
+      const inspector = resolveVisibleElement('#workspace-map-inspector-panel');
+      return Boolean(
+        tutorialMapNodeId
+        && inspector
+        && inspector.classList.contains('open')
+        && doc.body.classList.contains('mode-map-inspector')
+      );
     }
 
     function buildSidebarDemoProject() {
@@ -585,6 +1160,14 @@
       window.dispatchEvent(new CustomEvent('faber:tutorial-projects-changed'));
     }
 
+    function refreshSidebarTutorialGuide() {
+      window.setTimeout(() => {
+        if (!isSidebarTutorialStep()) return;
+        refreshTutorialContext();
+        renderStep();
+      }, 0);
+    }
+
     function dispatchTutorialCortexChanged() {
       window.dispatchEvent(new CustomEvent('faber:tutorial-cortex-changed'));
     }
@@ -597,12 +1180,14 @@
         sidebarDemoStage = 'restored';
         syncTutorialRuntime();
         dispatchTutorialProjectsChanged();
+        refreshSidebarTutorialGuide();
         return { handled: true, closeModal: true };
       }
       if (payload.mode === 'deleted' && payload.action === 'delete' && sidebarDemoStage === 'trashed') {
         sidebarDemoStage = 'deleted';
         syncTutorialRuntime();
         dispatchTutorialProjectsChanged();
+        refreshSidebarTutorialGuide();
         return { handled: true, rerender: true };
       }
       return { handled: false };
@@ -615,12 +1200,14 @@
         sidebarDemoStage = 'trashed';
         syncTutorialRuntime();
         dispatchTutorialProjectsChanged();
+        refreshSidebarTutorialGuide();
         return true;
       }
       return action === 'rename' || action === 'archive';
     }
 
     function syncTutorialRuntime() {
+      if (doc.body) doc.body.classList.toggle('progressive-tutorial-active', active);
       window.FaberTutorialRuntime = {
         isTutorialActive: () => active,
         isSidebarProjectDemoEnabled: () => isSidebarTutorialStep(),
@@ -710,6 +1297,7 @@
       highlightedElements.forEach((element) => {
         element.classList.remove('progressive-target-active');
         element.classList.remove('progressive-target-pulse');
+        element.classList.remove('progressive-target-positioned');
       });
       highlightedElements = [];
     }
@@ -717,14 +1305,19 @@
     function highlightTargets(selectors = []) {
       clearHighlights();
       highlightedElements = selectors
-        .map((selector) => resolveElement(selector))
+        .map((selector) => resolveVisibleElement(selector))
         .filter((element) => isVisibleElement(element));
-      highlightedElements.forEach((element) => element.classList.add('progressive-target-active'));
+      highlightedElements.forEach((element) => {
+        if (window.getComputedStyle(element).position === 'static') {
+          element.classList.add('progressive-target-positioned');
+        }
+        element.classList.add('progressive-target-active');
+      });
     }
 
     function getUnionRectFromSelectors(selectors = []) {
       const visible = selectors
-        .map((selector) => resolveElement(selector))
+        .map((selector) => resolveVisibleElement(selector))
         .filter((element) => isVisibleElement(element));
       if (!visible.length) return null;
       return visible.reduce((acc, element) => {
@@ -764,7 +1357,7 @@
     }
 
     function showSpotlightForGuide(guide) {
-      if (!guide) {
+      if (!guide || guide.disableSpotlight) {
         hideSpotlight();
         return;
       }
@@ -864,7 +1457,7 @@
       if (label) return label;
       const value = String(apiSelectedProviderValue || '').trim();
       if (value) return value;
-      return API_TUTORIAL_SERVICE_NAME;
+      return tutorialText('api.serviceName', {}, 'API de exemplo do tutorial');
     }
 
     function revealTutorialApiKeyField() {
@@ -910,21 +1503,39 @@
       return apiTutorialKeyValue;
     }
 
-    function getAlternateTutorialLocale(currentLocale) {
-      const locale = String(currentLocale || 'pt-BR');
-      if (locale === 'pt-BR') return 'en-US';
-      if (locale === 'en-US') return 'es-ES';
-      return 'pt-BR';
-    }
-
-    function setCursorLabel(label) {
-      if (!elements.tutorialCursorLabel) return;
-      if (!label) {
-        setVisible(elements.tutorialCursorLabel, false);
+    function discardTutorialApiDraft() {
+      restoreTutorialFieldDecorators();
+      if (!isModalOpen('#ai-settings-modal')) return;
+      if (typeof actions.closeApis === 'function') {
+        actions.closeApis();
         return;
       }
-      elements.tutorialCursorLabel.textContent = label;
-      setVisible(elements.tutorialCursorLabel, true);
+      const cancel = resolveElement('#ai-settings-cancel');
+      if (cancel && typeof cancel.click === 'function') cancel.click();
+    }
+
+    function finishTutorialApiDemoAfterModalClose() {
+      const watchClose = () => {
+        if (!active) return;
+        if (isModalOpen('#ai-settings-modal')) {
+          window.setTimeout(watchClose, 120);
+          return;
+        }
+        apiDemoPrepared = true;
+        apiEditorSaved = true;
+        restoreTutorialFieldDecorators();
+        refreshTutorialContext();
+        renderStep();
+        const current = steps()[currentStepIndex];
+        if (current && current.id === 'apis') nextStep();
+      };
+      window.setTimeout(watchClose, 80);
+    }
+
+
+    function positionCursorLabel() {
+      if (!elements.tutorialCursorLabel) return;
+      if (elements.tutorialCursorLabel.classList.contains('hidden')) return;
       const { width, height } = getViewportSize();
       const bubbleRect = elements.tutorialCursorLabel.getBoundingClientRect();
       const bubbleWidth = Math.max(120, Math.round(bubbleRect.width || 160));
@@ -948,6 +1559,17 @@
       elements.tutorialCursorLabel.dataset.side = side;
       elements.tutorialCursorLabel.style.left = `${left}px`;
       elements.tutorialCursorLabel.style.top = `${top}px`;
+    }
+
+    function setCursorLabel(label) {
+      if (!elements.tutorialCursorLabel) return;
+      if (!label) {
+        setVisible(elements.tutorialCursorLabel, false);
+        return;
+      }
+      elements.tutorialCursorLabel.textContent = tutorialPhrase(label);
+      setVisible(elements.tutorialCursorLabel, true);
+      positionCursorLabel();
     }
 
     function moveCursorInstant(x, y, label = '') {
@@ -996,6 +1618,66 @@
       });
     }
 
+    function waitForElement(selector, { timeout = POLLING_TIMEOUT_MS, visible = false, runId } = {}) {
+      return new Promise((resolve) => {
+        const check = () => {
+          const el = visible ? resolveVisibleElement(selector) : resolveElement(selector);
+          if (el) return el;
+          return null;
+        };
+        const existing = check();
+        if (existing) { resolve(existing); return; }
+
+        let resolved = false;
+        const observer = new MutationObserver(() => {
+          if (runId != null && runId !== demoRunId) { cleanup(); resolve(null); return; }
+          const el = check();
+          if (el) { cleanup(); resolve(el); }
+        });
+        const timer = setTimeout(() => { cleanup(); resolve(null); }, timeout);
+
+        function cleanup() {
+          if (resolved) return;
+          resolved = true;
+          observer.disconnect();
+          clearTimeout(timer);
+        }
+
+        observer.observe(doc.body, { childList: true, subtree: true, attributes: true });
+      });
+    }
+
+    function waitForFocus(selector, { timeout = POLLING_TIMEOUT_MS, runId } = {}) {
+      return new Promise((resolve) => {
+        const check = () => {
+          if (document.activeElement) {
+            if (document.activeElement.matches(selector) || document.activeElement.closest(selector)) return document.activeElement;
+          }
+          return null;
+        };
+        const existing = check();
+        if (existing) { resolve(existing); return; }
+
+        let resolved = false;
+        const observer = new MutationObserver(() => {
+          if (runId != null && runId !== demoRunId) { cleanup(); resolve(null); return; }
+          const el = check();
+          if (el) { cleanup(); resolve(el); }
+        });
+        const timer = setTimeout(() => { cleanup(); resolve(null); }, timeout);
+
+        function cleanup() {
+          if (resolved) return;
+          resolved = true;
+          observer.disconnect();
+          clearTimeout(timer);
+        }
+
+        observer.observe(doc.body, { childList: true, subtree: true, attributes: true });
+      });
+    }
+
+
     async function animateCursorTo(selector, options = {}) {
       const runId = options.runId;
       let element = resolveVisibleElement(selector) || resolveElement(selector);
@@ -1003,12 +1685,10 @@
         element = document.querySelector(selector); // Fallback force
       }
       if (!element) {
-        setCursorLabel(`DEBUG: Element ${selector} not found in DOM`);
-        return false;
+                return false;
       }
       if (runId != null && runId !== demoRunId) {
-        setCursorLabel(`DEBUG: animateCursorTo aborted due to runId`);
-        return false;
+                return false;
       }
       const rect = element.getBoundingClientRect();
       const x = Math.round(rect.left + rect.width / 2 + (options.offsetX || 0));
@@ -1021,86 +1701,111 @@
         elements.tutorialCursor.style.top = `${y}px`;
         if (!cursorSuppressed) setVisible(elements.tutorialCursor, true);
       }
-      setCursorLabel(options.label || getElementLabel(element));
+      setCursorLabel(options.hideLabel ? '' : (options.label || getElementLabel(element)));
       if (options.focusTarget) showSpotlightAroundElement(element);
       const stillActive = await wait((options.duration || 480) + 70, runId);
       if (options.pulse) pulseElement(element);
+      if (stillActive && options.trackTarget) {
+        startElementCursorTracking(selector, {
+          ...options,
+          label: options.hideLabel ? '' : (options.label || getElementLabel(element)),
+        });
+      }
       return stillActive;
     }
-    async function animateCursorToCanvasNode(nodeIndex, options = {}) {
-      if (!active) return false;
-      const { runId, mapController } = options;
-      if (!mapController) return false;
 
+    function startElementCursorTracking(selector, options = {}) {
+      const { runId } = options;
+      let previousX = Number.NaN;
+      let previousY = Number.NaN;
+
+      const intervalId = window.setInterval(() => {
+        if (!active || (runId != null && runId !== demoRunId)) {
+          window.clearInterval(intervalId);
+          return;
+        }
+
+        const element = resolveVisibleElement(selector) || resolveElement(selector);
+        if (!element) return;
+        const rect = element.getBoundingClientRect();
+        const x = Math.round(rect.left + (rect.width / 2) + (options.offsetX || 0));
+        const y = Math.round(rect.top + (rect.height / 2) + (options.offsetY || 0));
+        if (!Number.isFinite(x) || !Number.isFinite(y) || (x === previousX && y === previousY)) return;
+
+        previousX = x;
+        previousY = y;
+        cursorPosition = { x, y };
+        if (elements.tutorialCursor) {
+          elements.tutorialCursor.style.transitionDuration = '0ms';
+          elements.tutorialCursor.style.left = `${x}px`;
+          elements.tutorialCursor.style.top = `${y}px`;
+          if (!cursorSuppressed) setVisible(elements.tutorialCursor, true);
+        }
+        if (options.label && elements.tutorialCursorLabel && elements.tutorialCursorLabel.textContent !== options.label) {
+          setCursorLabel(options.label);
+        } else {
+          positionCursorLabel();
+        }
+      }, TRACKING_INTERVAL_MS);
+
+      return () => window.clearInterval(intervalId);
+    }
+    function startCanvasNodeTracking(nodeIndex, options = {}) {
+      const { runId, mapController, label } = options;
+      let stopped = false;
       const canvasController = typeof mapController.getCanvasController === 'function' ? mapController.getCanvasController() : null;
-      if (!canvasController) return false;
-
       const mapContainer = document.getElementById('workspace-map-region');
-      if (!mapContainer) return false;
 
-      let tracking = true;
       let initialMoveDone = false;
 
-      if (runId !== demoRunId) {
-        setCursorLabel(`DEBUG: runId ${runId} !== demoRunId ${demoRunId}`);
-      } else {
-        setCursorLabel('DEBUG: starting loop');
-      }
-
-      // Un-cancellable tracking loop for canvas coordinates
-      (async () => {
-        while (tracking && runId === demoRunId && active) {
-          try {
-            const mapData = typeof canvasController.getMapData === 'function' ? canvasController.getMapData() : null;
-            if (!mapData) {
-              setCursorLabel('DEBUG: mapData is null');
-            } else if (!mapData.nodes || mapData.nodes.length === 0) {
-              setCursorLabel('DEBUG: mapData.nodes is empty');
-            } else if (!mapData.nodes[nodeIndex]) {
-              setCursorLabel(`DEBUG: nodeIndex ${nodeIndex} not found. Total nodes: ${mapData.nodes.length}`);
-            } else {
-              const node = mapData.nodes[nodeIndex];
-              const panOffset = typeof mapController.getPanOffset === 'function' ? mapController.getPanOffset() : { x: 0, y: 0 };
-              const zoomLevel = typeof mapController.getZoomLevel === 'function' ? mapController.getZoomLevel() : 1;
-              const rect = mapContainer.getBoundingClientRect();
-              
-              // Edit button is approx at top-right (width=220, height=120)
-              const targetX = node.position.x + 220 - 24;
-              const targetY = node.position.y + 24;
-
-              const screenX = Math.round(rect.left + panOffset.x + (targetX * zoomLevel));
-              const screenY = Math.round(rect.top + panOffset.y + (targetY * zoomLevel));
-
-              cursorPosition = { x: screenX, y: screenY };
-              const cursor = elements.tutorialCursor;
-              if (cursor) {
-                if (!initialMoveDone) {
-                  cursor.style.transitionDuration = '480ms';
-                  initialMoveDone = true;
-                } else {
-                  cursor.style.transitionDuration = '100ms';
-                }
-                if (isNaN(screenX) || isNaN(screenY)) {
-                  setCursorLabel(`DEBUG: NaN screen coords. panX=${panOffset.x}, zoom=${zoomLevel}`);
-                } else {
-                  cursor.style.left = `${screenX}px`;
-                  cursor.style.top = `${screenY}px`;
-                  if (!cursorSuppressed) setVisible(elements.tutorialCursor, true);
-                  setCursorLabel(options.label || 'Clique no ícone de lápis para editar');
-                }
-              } else {
-                 setCursorLabel('DEBUG: elements.tutorialCursor is null');
-              }
-            }
-          } catch (e) {
-            setCursorLabel('DEBUG ERROR: ' + e.message);
-          }
-          await delay(50);
+      const intervalId = setInterval(() => {
+        if (stopped || !active || (runId != null && runId !== demoRunId)) {
+          clearInterval(intervalId);
+          return;
         }
-      })();
-      
-      const stillActive = await wait((options.duration || 480) + 70, runId);
-      return stillActive;
+
+        if (!canvasController || !mapContainer) return;
+
+        try {
+          const mapData = typeof canvasController.getMapData === 'function' ? canvasController.getMapData() : null;
+          if (!mapData || !mapData.nodes || !mapData.nodes[nodeIndex]) return;
+
+          const node = mapData.nodes[nodeIndex];
+          const panOffset = typeof mapController.getPanOffset === 'function' ? mapController.getPanOffset() : { x: 0, y: 0 };
+          const zoomLevel = typeof mapController.getZoomLevel === 'function' ? mapController.getZoomLevel() : 1;
+          const rect = mapContainer.getBoundingClientRect();
+
+          const targetX = node.position.x + CANVAS_NODE_WIDTH - CANVAS_EDIT_BTN_OFFSET_X;
+          const targetY = node.position.y + CANVAS_EDIT_BTN_OFFSET_Y;
+
+          const screenX = Math.round(rect.left + panOffset.x + (targetX * zoomLevel));
+          const screenY = Math.round(rect.top + panOffset.y + (targetY * zoomLevel));
+
+          cursorPosition = { x: screenX, y: screenY };
+          const cursor = elements.tutorialCursor;
+          if (cursor && !isNaN(screenX) && !isNaN(screenY)) {
+            if (!initialMoveDone) {
+              cursor.style.transitionDuration = CURSOR_ANIMATION_MS + 'ms';
+              initialMoveDone = true;
+            } else {
+              cursor.style.transitionDuration = '100ms';
+            }
+            cursor.style.left = `${screenX}px`;
+            cursor.style.top = `${screenY}px`;
+            if (!cursorSuppressed) setVisible(elements.tutorialCursor, true);
+            setCursorLabel(label || 'Clique no ícone de lápis para editar');
+          }
+        } catch (e) {
+          // Silent catch
+        }
+      }, TRACKING_INTERVAL_MS);
+
+      return {
+        stop() {
+          stopped = true;
+          clearInterval(intervalId);
+        }
+      };
     }
 
 
@@ -1138,35 +1843,6 @@
       }
     }
 
-    function waitForUserInteraction(selector, runId) {
-      return new Promise((resolve) => {
-        const checkRun = setInterval(() => {
-          if (runId != null && runId !== demoRunId) {
-            clearInterval(checkRun);
-            resolve(false);
-          }
-        }, 100);
-
-        const handler = (e) => {
-          const el = resolveElement(selector);
-          if (el && (e.target === el || el.contains(e.target))) {
-            window.removeEventListener('click', handler, true);
-            window.removeEventListener('mousedown', handler, true);
-            clearInterval(checkRun);
-            resolve(true);
-          }
-        };
-        window.addEventListener('click', handler, true);
-        window.addEventListener('mousedown', handler, true);
-      });
-    }
-
-    async function runAction(name) {
-      if (!name || typeof actions[name] !== 'function') return;
-      await actions[name]();
-      refreshTutorialContext();
-      await wait(260);
-    }
 
     async function stepPause(runId, ms = 220) {
       return wait(ms, runId);
@@ -1387,9 +2063,10 @@
       if (cortexSavedOnce) {
         return {
           signature: 'cortex:close',
-          targets: ['#cortex-modal-close', '#cortex-modal-backdrop'].filter((selector) => isVisibleElement(resolveElement(selector))),
-          revealSelectors: ['#cortex-modal'],
-          revealPadding: 18,
+          targets: ['#cortex-modal-close'],
+          revealSelectors: ['#cortex-modal-close'],
+          revealPadding: 10,
+          disableSpotlight: true,
           hint: translate('cortexCloseHint'),
           demo: async ({ runId }) => {
             await animateCursorTo('#cortex-modal-close', { runId, pulse: true, label: getElementLabel(resolveElement('#cortex-modal-close'), 'Fechar Cortex') });
@@ -1439,20 +2116,20 @@
           },
         };
       }
-      if (isVisibleElement(resolveElement('#ai-settings-save')) && apiEditorSaved && !isVisibleElement(resolveElement('#ai-settings-editor-key'))) {
+      if (isVisibleElement(resolveElement('#ai-settings-cancel')) && apiEditorSaved && !isVisibleElement(resolveElement('#ai-settings-editor-key'))) {
         return {
-          signature: 'apis:save-modal',
-          targets: ['#ai-settings-save'],
+          signature: 'apis:discard-modal',
+          targets: ['#ai-settings-cancel'],
           revealSelectors: ['#ai-settings-modal'],
           revealPadding: 18,
           hint: translate('apiSaveHint'),
           demo: async ({ runId }) => {
-            await scrollModalBodyToElement('#ai-settings-save', { runId, block: 'end', afterDelay: 180 });
-            await animateCursorTo('#ai-settings-save', {
+            await scrollModalBodyToElement('#ai-settings-cancel', { runId, block: 'end', afterDelay: 180 });
+            await animateCursorTo('#ai-settings-cancel', {
               runId,
               pulse: true,
               duration: 900,
-              label: 'Salvar',
+              label: 'Cancelar e continuar',
             });
           },
         };
@@ -1595,7 +2272,24 @@
     }
 
     function getMapGuide() {
-      if (!tutorialMapIconClicked) {
+      if ((!tutorialMapIconClicked || !isMapTabOpen()) && isLeftWorkspaceCollapsed()) {
+        return {
+          signature: 'map:restore-left-for-project',
+          targets: ['#workspace-collapse-left'],
+          revealSelectors: ['#workspace-collapse-left', '.panel-left'],
+          revealPadding: 16,
+          hint: 'Expanda o painel esquerdo para acessar o projeto criado.',
+          demo: async ({ runId }) => {
+            await animateCursorTo('#workspace-collapse-left', {
+              runId,
+              pulse: true,
+              label: 'Expandir painel esquerdo',
+            });
+          },
+        };
+      }
+
+      if (!tutorialMapIconClicked || !isMapTabOpen()) {
         const tutorialSelector = getTutorialCreatedProjectMapSelector();
         const selector = resolveElement(tutorialSelector)
           ? tutorialSelector
@@ -1681,6 +2375,926 @@
       };
     }
 
+    function getMapBuildGuide() {
+      const makeGuide = ({
+        signature,
+        target,
+        hint,
+        label,
+        revealSelectors,
+        interactiveSelectors,
+        disableCursor = false,
+      }) => ({
+        signature: `map-build:${signature}`,
+        targets: [target],
+        revealSelectors: revealSelectors || ['#workspace-map-region', target],
+        interactiveSelectors: interactiveSelectors || [],
+        revealPadding: 18,
+        hint,
+        disableCursor,
+        demo: disableCursor
+          ? null
+          : label
+            ? async ({ runId }) => {
+                await animateCursorTo(target, {
+                  runId,
+                  pulse: true,
+                  label,
+                  trackTarget: true,
+                });
+              }
+            : null,
+      });
+
+      if (tutorialMapBuildStage === 'welcome-create') {
+        return makeGuide({
+          signature: 'welcome-create',
+          target: '#btn-map-tool-add-card',
+          hint: 'Clique em Novo Markdown para criar o briefing da página de boas-vindas.',
+          label: 'Criar briefing de boas-vindas',
+          revealSelectors: ['#workspace-map-region', '.application-map-toolbar'],
+        });
+      }
+      if (tutorialMapBuildStage === 'welcome-edit') {
+        const target = getTutorialMapNodeEditSelector(tutorialWelcomeNodeId);
+        return makeGuide({
+          signature: `welcome-edit:${tutorialWelcomeNodeId}`,
+          target,
+          hint: 'Clique no lápis do Markdown criado para abrir os detalhes do item.',
+          label: 'Editar briefing',
+        });
+      }
+      if (tutorialMapBuildStage === 'welcome-title') {
+        return makeGuide({
+          signature: 'welcome-title',
+          target: '#inspector-node-title',
+          hint: 'Clique no campo Título. O tutorial escreverá o título do briefing.',
+          label: 'Preencher título',
+          revealSelectors: ['#workspace-map-inspector-panel'],
+        });
+      }
+      if (tutorialMapBuildStage === 'welcome-description') {
+        return makeGuide({
+          signature: 'welcome-description',
+          target: '#inspector-node-desc',
+          hint: 'Clique em Descrição para registrar o objetivo da página estática.',
+          label: 'Preencher descrição',
+          revealSelectors: ['#workspace-map-inspector-panel'],
+        });
+      }
+      if (tutorialMapBuildStage === 'welcome-content') {
+        return makeGuide({
+          signature: 'welcome-content',
+          target: '#workspace-map-inspector-panel .CodeMirror',
+          hint: 'Clique no editor Markdown para inserir o briefing completo com “Olá Mundo”, boas-vindas e direção visual.',
+          label: 'Escrever briefing',
+          revealSelectors: ['#workspace-map-inspector-panel'],
+        });
+      }
+      if (tutorialMapBuildStage === 'welcome-close') {
+        return makeGuide({
+          signature: 'welcome-close',
+          target: '#btn-map-inspector-close',
+          hint: 'O primeiro briefing está pronto. Clique no X para voltar ao mapa.',
+          label: 'Fechar detalhes',
+          revealSelectors: ['#workspace-map-inspector-panel'],
+        });
+      }
+      if (tutorialMapBuildStage === 'design-create') {
+        return makeGuide({
+          signature: 'design-create',
+          target: '#btn-map-tool-add-card',
+          hint: 'Crie outro Markdown para documentar o Design System do Faber Code.',
+          label: 'Criar Design System',
+          revealSelectors: ['#workspace-map-region', '.application-map-toolbar'],
+        });
+      }
+      if (tutorialMapBuildStage === 'design-collapse-right') {
+        return makeGuide({
+          signature: 'design-collapse-right',
+          target: '#workspace-collapse-right',
+          hint: 'Recolha o painel direito para ganhar espaço e organizar os dois Markdowns no mapa.',
+          label: 'Recolher painel direito',
+          revealSelectors: ['#workspace-collapse-right', '#workspace-map-region'],
+        });
+      }
+      if (tutorialMapBuildStage === 'design-edit') {
+        const target = getTutorialMapNodeEditSelector(tutorialDesignSystemNodeId);
+        return makeGuide({
+          signature: `design-edit:${tutorialDesignSystemNodeId}`,
+          target,
+          hint: 'Os Markdowns estão organizados lado a lado. Clique no lápis do novo item para documentar cores e tipografias.',
+          label: 'Editar Design System',
+        });
+      }
+      if (tutorialMapBuildStage === 'design-title') {
+        return makeGuide({
+          signature: 'design-title',
+          target: '#inspector-node-title',
+          hint: 'Clique no Título para identificar este documento como Design System Faber Code.',
+          label: 'Preencher título',
+          revealSelectors: ['#workspace-map-inspector-panel'],
+        });
+      }
+      if (tutorialMapBuildStage === 'design-description') {
+        return makeGuide({
+          signature: 'design-description',
+          target: '#inspector-node-desc',
+          hint: 'Clique em Descrição para resumir o propósito deste documento.',
+          label: 'Preencher descrição',
+          revealSelectors: ['#workspace-map-inspector-panel'],
+        });
+      }
+      if (tutorialMapBuildStage === 'design-content') {
+        return makeGuide({
+          signature: 'design-content',
+          target: '#workspace-map-inspector-panel .CodeMirror',
+          hint: 'Clique no editor para inserir as cores, tipografias e regras visuais da marca.',
+          label: 'Escrever Design System',
+          revealSelectors: ['#workspace-map-inspector-panel'],
+        });
+      }
+      if (tutorialMapBuildStage === 'design-close') {
+        return makeGuide({
+          signature: 'design-close',
+          target: '#btn-map-inspector-close',
+          hint: 'O Design System está documentado. Feche os detalhes para continuar.',
+          label: 'Fechar detalhes',
+          revealSelectors: ['#workspace-map-inspector-panel'],
+        });
+      }
+      if (tutorialMapBuildStage === 'logo-create') {
+        return makeGuide({
+          signature: 'logo-create',
+          target: '#btn-map-tool-add-image',
+          hint: 'Clique em Referência Visual. O tutorial inserirá o logo horizontal oficial do Faber Code.',
+          label: 'Inserir logo Faber Code',
+          revealSelectors: ['#workspace-map-region', '.application-map-toolbar'],
+        });
+      }
+      if (tutorialMapBuildStage === 'frontend-group') {
+        return makeGuide({
+          signature: 'frontend-group',
+          target: '#btn-map-tool-add-group',
+          hint: 'Clique em Novo Grupo para organizar o briefing, o Design System e o logo em Frontend.',
+          label: 'Criar grupo Frontend',
+          revealSelectors: ['#workspace-map-region', '.application-map-toolbar'],
+        });
+      }
+      if (tutorialMapBuildStage === 'rules-group') {
+        return makeGuide({
+          signature: 'rules-group',
+          target: '#btn-map-tool-add-group',
+          hint: 'Crie mais um grupo. Ele receberá as regras de interface e os critérios de aceite.',
+          label: 'Criar grupo Regras',
+          revealSelectors: ['#workspace-map-region', '.application-map-toolbar'],
+        });
+      }
+      if (tutorialMapBuildStage === 'user-name') {
+        return makeGuide({
+          signature: 'user-name',
+          target: '#progressive-tutorial-name-input',
+          hint: 'Digite seu nome e confirme. O briefing será personalizado com uma saudação feita para você.',
+          label: 'Digite seu nome',
+          revealSelectors: ['#progressive-tutorial-name-prompt'],
+        });
+      }
+      const architectureStageMatch = /^architecture-(stack|components|content)-(edit|review)$/.exec(tutorialMapBuildStage);
+      if (architectureStageMatch) {
+        const [, kind, phase] = architectureStageMatch;
+        const labels = {
+          stack: {
+            name: tutorialText('documents.architecture.title'),
+            editHint: 'O Markdown de arquitetura foi preparado. Clique no lápis para abrir e revisar Next.js, JavaScript e Tailwind CSS.',
+          },
+          components: {
+            name: tutorialText('documents.components.title'),
+            editHint: 'O Markdown de componentes foi criado. Clique no lápis para abrir e revisar as responsabilidades da interface.',
+          },
+          content: {
+            name: tutorialText('documents.contentLinks.title'),
+            editHint: 'O último Markdown foi criado. Clique no lápis para revisar a saudação e os placeholders de GitHub e LinkedIn.',
+          },
+        };
+        const copy = labels[kind];
+        if (phase === 'edit') {
+          return makeGuide({
+            signature: `architecture-${kind}-edit:${tutorialMapNodeId}`,
+            target: getTutorialMapNodeEditSelector(tutorialMapNodeId),
+            hint: copy.editHint,
+            label: `Editar ${copy.name}`,
+          });
+        }
+        return makeGuide({
+          signature: `architecture-${kind}-review:${tutorialMapNodeId}`,
+          target: '#btn-map-inspector-close',
+          hint: `Revise ou edite o título, a descrição e o conteúdo de ${copy.name}. Quando estiver pronto, clique no X para concluir este Markdown.`,
+          label: `Concluir ${copy.name}`,
+          revealSelectors: ['#workspace-map-inspector-panel'],
+          interactiveSelectors: ['#workspace-map-inspector-panel'],
+        });
+      }
+      if (tutorialMapBuildStage === 'architecture-stack-create') {
+        return makeGuide({
+          signature: 'architecture-stack-create',
+          target: '#btn-map-tool-add-card',
+          hint: `Olá, ${tutorialUserName}. Crie um Markdown para registrar Next.js, JavaScript e Tailwind CSS como arquitetura do demonstrativo.`,
+          label: 'Criar arquitetura frontend',
+          revealSelectors: ['#workspace-map-region', '.application-map-toolbar'],
+        });
+      }
+      if (tutorialMapBuildStage === 'architecture-components-create') {
+        return makeGuide({
+          signature: 'architecture-components-create',
+          target: '#btn-map-tool-add-card',
+          hint: 'Crie outro Markdown para documentar os componentes e suas responsabilidades.',
+          label: 'Criar componentes da página',
+          revealSelectors: ['#workspace-map-region', '.application-map-toolbar'],
+        });
+      }
+      if (tutorialMapBuildStage === 'architecture-content-create') {
+        return makeGuide({
+          signature: 'architecture-content-create',
+          target: '#btn-map-tool-add-card',
+          hint: 'Crie o último Markdown com os textos da página e placeholders para GitHub e LinkedIn.',
+          label: 'Criar conteúdo e links',
+          revealSelectors: ['#workspace-map-region', '.application-map-toolbar'],
+        });
+      }
+      if (tutorialMapBuildStage === 'development-ready') {
+        return makeGuide({
+          signature: 'development-ready',
+          target: '#workspace-map-region',
+          hint: `Mapa pronto para desenvolvimento: saudação para ${tutorialUserName}, Design System, arquitetura Next.js com Tailwind, componentes, regras, conteúdo e links placeholders. Agora o tutorial abrirá a apresentação do painel direito.`,
+          label: '',
+          revealSelectors: ['#workspace-map-region'],
+          disableCursor: true,
+        });
+      }
+      return makeGuide({
+        signature: 'complete',
+        target: '#workspace-map-region',
+        hint: 'Finalize as informações do mapa antes de avançar.',
+        label: '',
+        revealSelectors: ['#workspace-map-region'],
+      });
+    }
+
+    function getMapChatGuide() {
+      if (tutorialMapChatStage === 'expand-right' && isRightWorkspaceCollapsed()) {
+        return {
+          signature: 'map-chat:expand-right',
+          targets: ['#workspace-restore-right'],
+          revealSelectors: ['#workspace-restore-right', '#workspace-map-region'],
+          revealPadding: 16,
+          hint: 'Expanda o painel direito para conhecer as ferramentas disponíveis antes de abrir o chat do mapa.',
+          demo: async ({ runId }) => {
+            await animateCursorTo('#workspace-restore-right', { runId, pulse: true, label: 'Expandir painel direito' });
+          },
+        };
+      }
+      if (tutorialMapChatStage === 'expand-right' || tutorialMapChatStage === 'right-tools') {
+        const nextTool = getNextRightPanelToolGuide();
+        if (nextTool) {
+          return {
+            signature: `map-chat:right-tool:${nextTool.selector}`,
+            targets: [nextTool.selector],
+            revealSelectors: ['#workspace-actions-region', nextTool.selector],
+            revealPadding: 14,
+            hint: `Passe o mouse sobre ${nextTool.label}: esta ferramenta ${nextTool.description}.`,
+            demo: async ({ runId }) => {
+              await animateCursorTo(nextTool.selector, { runId, pulse: true, label: nextTool.label });
+            },
+          };
+        }
+      }
+      if (tutorialMapChatStage === 'open') {
+        return {
+          signature: 'map-chat:open',
+          targets: ['#btn-map-ai'],
+          revealSelectors: ['#workspace-actions-region', '#btn-map-ai'],
+          revealPadding: 18,
+          hint: 'Clique em IA do Mapa para iniciar uma conversa contextualizada.',
+          demo: async ({ runId }) => {
+            await animateCursorTo('#btn-map-ai', { runId, pulse: true, label: 'Abrir IA do Mapa' });
+          },
+        };
+      }
+      if (tutorialMapChatStage === 'compose') {
+        return {
+          signature: 'map-chat:compose',
+          targets: ['#map-chat-textarea'],
+          revealSelectors: ['#workspace-map-chat-panel'],
+          revealPadding: 18,
+          hint: 'Clique no campo de texto. O tutorial escreverá uma pergunta para revisar o mapa antes da análise.',
+          demo: async ({ runId }) => {
+            await animateCursorTo('#map-chat-textarea', { runId, pulse: true, label: 'Escrever pergunta' });
+          },
+        };
+      }
+      if (tutorialMapChatStage === 'send') {
+        return {
+          signature: 'map-chat:send',
+          targets: ['#btn-map-chat-send'],
+          revealSelectors: ['#workspace-map-chat-panel'],
+          revealPadding: 18,
+          hint: 'Clique em Enviar para ver a resposta simulada da IA sobre o mapa criado.',
+          demo: async ({ runId }) => {
+            await animateCursorTo('#btn-map-chat-send', { runId, pulse: true, label: 'Enviar pergunta' });
+          },
+        };
+      }
+      if (tutorialMapChatStage === 'missing-info') {
+        return {
+          signature: 'map-chat:missing-info',
+          targets: ['#btn-map-chat-add-gap'],
+          revealSelectors: ['#btn-map-chat-add-gap'],
+          revealPadding: 12,
+          disableHighlight: true,
+          hint: 'A conversa identificou a lacuna. Clique em Adicionar documento de SEO ao mapa para voltar ao canvas e registrar a informação no grupo Regras.',
+          demo: async ({ runId }) => {
+            await animateCursorTo('#btn-map-chat-add-gap', { runId, pulse: true, label: 'Adicionar SEO ao mapa' });
+          },
+        };
+      }
+      if (tutorialMapChatStage === 'adjustment-complete') {
+        const target = getTutorialMapNodeSelector(tutorialMapGapNodeId);
+        return {
+          signature: `map-chat:adjustment-complete:${tutorialMapGapNodeId}`,
+          targets: [target],
+          revealSelectors: ['#workspace-map-region', target],
+          revealPadding: 18,
+          hint: 'O tutorial voltou ao mapa e adicionou “SEO e Estados da Interface” ao grupo Regras. A análise do projeto será aberta em seguida.',
+          demo: async ({ runId }) => {
+            await animateCursorTo(target, { runId, pulse: true, label: 'Informação adicionada ao mapa' });
+          },
+        };
+      }
+      return {
+        signature: `map-chat:${tutorialMapChatStage}`,
+        targets: ['#map-chat-log'],
+        revealSelectors: ['#workspace-map-chat-panel'],
+        revealPadding: 18,
+        hint: 'A resposta é emulada localmente para ensinar o fluxo sem consumir créditos ou exigir uma API.',
+        demo: null,
+      };
+    }
+
+    function getMapAnalysisGuide() {
+      if (tutorialMapAnalysisStage === 'history-loading') {
+        return {
+          signature: 'map-analysis:history-loading',
+          targets: [],
+          revealSelectors: [],
+          disableCursor: true,
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Carregando o histórico corrigido do mapa.',
+          demo: null,
+        };
+      }
+      if (tutorialMapAnalysisStage === 'history') {
+        return {
+          signature: 'map-analysis:history',
+          targets: ['#btn-map-render-launcher'],
+          revealSelectors: ['#btn-map-render-launcher'],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'A correção ficou registrada no histórico. Clique em Renderizar o Mapa para transformar os documentos em um plano de desenvolvimento.',
+          demo: async ({ runId }) => {
+            await animateCursorTo('#btn-map-render-launcher', { runId, hideLabel: true });
+          },
+        };
+      }
+      if (tutorialMapAnalysisStage === 'render-list') {
+        return {
+          signature: 'map-analysis:render-list',
+          targets: ['#btn-map-render-open'],
+          revealSelectors: ['#btn-map-render-open'],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Clique em Renderizar o Mapa. Nesta demonstração, a análise será local e não consumirá créditos de nenhuma API.',
+          demo: async ({ runId }) => {
+            await animateCursorTo('#btn-map-render-open', { runId, hideLabel: true });
+          },
+        };
+      }
+      if (tutorialMapAnalysisStage === 'rendering') {
+        return {
+          signature: 'map-analysis:rendering',
+          targets: [],
+          revealSelectors: [],
+          disableCursor: true,
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'O Faber Code está lendo o mapa e seus Markdowns para montar a sequência completa de desenvolvimento.',
+          demo: null,
+        };
+      }
+      if (tutorialMapAnalysisStage === 'plan-ready') {
+        return {
+          signature: 'map-analysis:plan-ready',
+          targets: ['#btn-map-render-save'],
+          revealSelectors: ['#btn-map-render-save'],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'O planejamento está pronto e cada etapa cita os Markdowns importantes. Clique em Salvar em Milestones.',
+          demo: async ({ runId }) => {
+            await animateCursorTo('#btn-map-render-save', { runId, hideLabel: true });
+          },
+        };
+      }
+      if (tutorialMapAnalysisStage === 'confirm') {
+        const confirmButton = resolveElement('#faber-confirm-yes');
+        if (confirmButton) confirmButton.textContent = tutorialText('ui.continue');
+        return {
+          signature: 'map-analysis:confirm',
+          targets: ['#faber-confirm-yes'],
+          revealSelectors: ['#faber-confirm-yes'],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Confirme clicando em Continuar para gravar o planejamento no projeto.',
+          demo: async ({ runId }) => {
+            await animateCursorTo('#faber-confirm-yes', { runId, hideLabel: true });
+          },
+        };
+      }
+      if (tutorialMapAnalysisStage === 'saving') {
+        return {
+          signature: 'map-analysis:saving',
+          targets: [],
+          revealSelectors: [],
+          disableCursor: true,
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Salvando as milestones e gerando a documentação do planejamento dentro do projeto.',
+          demo: null,
+        };
+      }
+      if (tutorialMapAnalysisStage === 'milestones') {
+        return {
+          signature: 'map-analysis:milestones',
+          targets: ['#btn-project-milestones'],
+          revealSelectors: ['#btn-project-milestones'],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'As etapas foram salvas. Clique em Milestones no painel direito para encontrá-las.',
+          demo: async ({ runId }) => {
+            await animateCursorTo('#btn-project-milestones', { runId, hideLabel: true });
+          },
+        };
+      }
+      if (tutorialMapAnalysisStage === 'milestones-loading') {
+        return {
+          signature: 'map-analysis:milestones-loading',
+          targets: [],
+          revealSelectors: [],
+          disableCursor: true,
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Carregando o planejamento salvo no projeto.',
+          demo: null,
+        };
+      }
+      if (tutorialMapAnalysisStage === 'milestone-open') {
+        return {
+          signature: 'map-analysis:milestone-open',
+          targets: ['.milestone-item:first-child .milestone-card'],
+          revealSelectors: ['.milestone-item:first-child .milestone-card'],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Abra a Milestone 1 para revisar tarefas, critérios e Markdowns de referência.',
+          demo: async ({ runId }) => {
+            await animateCursorTo('.milestone-item:first-child .milestone-card', { runId, hideLabel: true });
+          },
+        };
+      }
+      if (tutorialMapAnalysisStage === 'project-chat') {
+        const target = getTutorialCreatedProjectConversationSelector();
+        return {
+          signature: `map-analysis:project-chat:${target}`,
+          targets: [target],
+          revealSelectors: [target],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'A Milestone 1 está aberta. No projeto, clique no botão + à direita do ícone do Mapa da Aplicação para abrir o chat de desenvolvimento.',
+          demo: async ({ runId }) => {
+            await animateCursorTo(target, { runId, hideLabel: true });
+          },
+        };
+      }
+      if (tutorialMapAnalysisStage === 'opening-development-chat') {
+        return {
+          signature: 'map-analysis:opening-development-chat',
+          targets: [],
+          revealSelectors: [],
+          disableCursor: true,
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Preparando uma conversa de desenvolvimento vinculada ao projeto e à Milestone 1.',
+          demo: null,
+        };
+      }
+      return {
+        signature: `map-analysis:${tutorialMapAnalysisStage}`,
+        targets: [],
+        revealSelectors: [],
+        disableCursor: true,
+        disableHighlight: true,
+        disableSpotlight: true,
+        hint: 'O chat de desenvolvimento está aberto. A próxima etapa vai preparar a primeira mensagem.',
+        demo: null,
+      };
+    }
+
+    function getDevelopmentChatGuide() {
+      if (tutorialDevelopmentChatStage === 'compose') {
+        return {
+          signature: 'development-chat:compose',
+          targets: ['#user-input'],
+          revealSelectors: ['#user-input'],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Clique na caixa de texto. O tutorial escreverá a solicitação para iniciar a Milestone 1.',
+          demo: async ({ runId }) => {
+            await animateCursorTo('#user-input', { runId, hideLabel: true });
+          },
+        };
+      }
+      if (tutorialDevelopmentChatStage === 'send') {
+        return {
+          signature: 'development-chat:send',
+          targets: ['#btn-send'],
+          revealSelectors: ['#btn-send'],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Clique em Enviar. A conversa será emulada e salva no projeto sem consumir créditos.',
+          demo: async ({ runId }) => {
+            await animateCursorTo('#btn-send', { runId, hideLabel: true });
+          },
+        };
+      }
+      if (tutorialDevelopmentChatStage === 'sending') {
+        return {
+          signature: 'development-chat:sending',
+          targets: [],
+          revealSelectors: [],
+          disableCursor: true,
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'A IA do tutorial está contextualizando a Milestone 1 e os Markdowns necessários.',
+          demo: null,
+        };
+      }
+      return {
+        signature: 'development-chat:complete',
+        targets: [],
+        revealSelectors: [],
+        disableCursor: true,
+        disableHighlight: true,
+        disableSpotlight: true,
+        hint: tutorialDevelopmentBusy
+          ? 'A IA do tutorial está criando a fundação da landing page dentro da pasta real do projeto.'
+          : 'Fundação criada. Agora vamos revisar e salvar este primeiro conjunto de arquivos no Git.',
+        demo: null,
+      };
+    }
+
+    async function revealAndTrackTutorialTarget(selector, options = {}) {
+      const element = resolveElement(selector);
+      if (!element) return false;
+      try {
+        element.scrollIntoView({
+          block: options.block || 'center',
+          inline: 'nearest',
+          behavior: 'smooth',
+        });
+      } catch {}
+      const ready = await wait(options.scrollDelay || 240, options.runId);
+      if (!ready) return false;
+      return animateCursorTo(selector, {
+        ...options,
+        trackTarget: true,
+        hideLabel: options.hideLabel !== false,
+      });
+    }
+
+    function detectTutorialGitChangeScope() {
+      if (resolveElement('[data-tutorial-git-action="stage"][data-tutorial-git-scope="untracked"]')) {
+        return 'untracked';
+      }
+      if (resolveElement('[data-tutorial-git-action="stage"][data-tutorial-git-scope="modified"]')) {
+        return 'modified';
+      }
+      return tutorialGitChangeScope || 'untracked';
+    }
+
+    function syncTutorialGitPanelStage() {
+      const current = steps()[currentStepIndex];
+      if (!active || !current || current.id !== 'git') return false;
+      if (!doc.body.classList.contains('mode-git')) {
+        tutorialDevelopmentWorkflowStage = 'open-git';
+        persistTutorialDevelopmentState();
+        renderStep();
+        return false;
+      }
+      if (resolveElement('[data-tutorial-git-action="init"]')) {
+        tutorialDevelopmentWorkflowStage = 'open-repo';
+      } else if (resolveElement('[data-tutorial-git-action="commit"]')) {
+        tutorialDevelopmentWorkflowStage = 'select-staged';
+      } else if (resolveElement('[data-tutorial-git-action="stage"]')) {
+        tutorialGitChangeScope = detectTutorialGitChangeScope();
+        tutorialDevelopmentWorkflowStage = 'open-changes';
+      } else if (tutorialDevelopmentCommitCount >= 2) {
+        tutorialDevelopmentWorkflowStage = 'complete';
+      } else {
+        tutorialDevelopmentWorkflowStage = 'open-git';
+      }
+      persistTutorialDevelopmentState();
+      renderStep();
+      return true;
+    }
+
+    async function startTutorialDevelopmentBatch(index) {
+      if (tutorialDevelopmentBusy) return false;
+      const batch = getTutorialDevelopmentBatch(index);
+      if (!batch || typeof actions.simulateTutorialDevelopmentBatch !== 'function') return false;
+      tutorialDevelopmentBusy = true;
+      tutorialDevelopmentWorkflowStage = 'creating';
+      persistTutorialDevelopmentState();
+      renderStep();
+      try {
+        const result = await actions.simulateTutorialDevelopmentBatch(batch);
+        if (!result || result.ok === false) {
+          throw new Error(result && result.message ? result.message : tutorialText('development.createFailed'));
+        }
+        tutorialDevelopmentBatchIndex = index;
+        if (index >= 1) {
+          tutorialDevelopmentWorkflowStage = 'open-files';
+        } else if (index === 0) {
+          tutorialDevelopmentWorkflowStage = 'open-git';
+        } else {
+          tutorialGitChangeScope = detectTutorialGitChangeScope();
+          tutorialDevelopmentWorkflowStage = 'open-changes';
+        }
+        persistTutorialDevelopmentState();
+        return true;
+      } catch {
+        tutorialDevelopmentWorkflowStage = index <= 0 ? 'idle' : 'open-git';
+        persistTutorialDevelopmentState();
+        return false;
+      } finally {
+        tutorialDevelopmentBusy = false;
+        if (active) renderStep();
+      }
+    }
+
+    function resumeTutorialDevelopmentWorkflow(stepId) {
+      if (tutorialDevelopmentBusy) return;
+      if (
+        stepId === 'development-chat'
+        && tutorialDevelopmentConversationComplete
+        && tutorialDevelopmentBatchIndex < 0
+      ) {
+        window.setTimeout(() => {
+          if (active && steps()[currentStepIndex]?.id === 'development-chat') {
+            void startTutorialDevelopmentBatch(0);
+          }
+        }, 0);
+        return;
+      }
+    }
+
+    function getDevelopmentWorkflowGuide() {
+      const stage = tutorialDevelopmentWorkflowStage;
+      const changeScope = tutorialGitChangeScope || 'untracked';
+      const scopeTitle = tutorialPhrase(changeScope === 'modified' ? 'Alterações' : 'Novos Arquivos');
+      const batch = getTutorialDevelopmentBatch(Math.max(0, tutorialDevelopmentBatchIndex));
+
+      if (stage === 'creating') {
+        return {
+          signature: `git:creating:${tutorialDevelopmentBatchIndex + 1}`,
+          targets: [],
+          revealSelectors: [],
+          disableCursor: true,
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'A conversa de desenvolvimento está criando o próximo conjunto de arquivos na pasta do projeto.',
+          demo: null,
+        };
+      }
+      if (stage === 'return-chat') {
+        return {
+          signature: `git:return-chat:${tutorialDevelopmentBatchIndex}`,
+          targets: ['#btn-tab-chat'],
+          revealSelectors: ['#btn-tab-chat'],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'A fundação está versionada. Volte ao Chat para acompanhar a IA concluir a experiência antes da revisão final.',
+          demo: async ({ runId }) => revealAndTrackTutorialTarget('#btn-tab-chat', { runId }),
+        };
+      }
+      if (stage === 'open-repo') {
+        const selector = '[data-tutorial-git-step="repo"] .right-tool-git-step__head';
+        return {
+          signature: 'git:open-repo',
+          targets: [selector],
+          revealSelectors: [selector],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Abra Repositório local para ativar o Git somente dentro desta pasta.',
+          demo: async ({ runId }) => revealAndTrackTutorialTarget(selector, { runId }),
+        };
+      }
+      if (stage === 'init-repo') {
+        const selector = '[data-tutorial-git-action="init"]';
+        return {
+          signature: 'git:init-repo',
+          targets: [selector],
+          revealSelectors: [selector],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Clique em Init repo. Nada será publicado; criaremos apenas o histórico local.',
+          demo: async ({ runId }) => revealAndTrackTutorialTarget(selector, { runId }),
+        };
+      }
+      if (stage === 'open-changes') {
+        const selector = `[data-tutorial-git-step="${changeScope}"] .right-tool-git-step__head`;
+        return {
+          signature: `git:open-changes:${changeScope}:${tutorialDevelopmentBatchIndex}`,
+          targets: [selector],
+          revealSelectors: [selector],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: `Abra ${scopeTitle} para revisar o lote "${batch ? batch.label : 'em desenvolvimento'}".`,
+          demo: async ({ runId }) => revealAndTrackTutorialTarget(selector, { runId }),
+        };
+      }
+      if (stage === 'select-changes') {
+        const selector = `[data-tutorial-git-action="select-all"][data-tutorial-git-scope="${changeScope}"]`;
+        return {
+          signature: `git:select-changes:${changeScope}:${tutorialDevelopmentBatchIndex}`,
+          targets: [selector],
+          revealSelectors: [selector],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Selecione todos os arquivos deste conjunto antes de enviá-los para Staged.',
+          demo: async ({ runId }) => revealAndTrackTutorialTarget(selector, { runId }),
+        };
+      }
+      if (stage === 'stage-changes') {
+        const selector = `[data-tutorial-git-action="stage"][data-tutorial-git-scope="${changeScope}"]`;
+        return {
+          signature: `git:stage-changes:${changeScope}:${tutorialDevelopmentBatchIndex}`,
+          targets: [selector],
+          revealSelectors: [selector],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Clique em Stage it para preparar estes arquivos para o commit.',
+          demo: async ({ runId }) => revealAndTrackTutorialTarget(selector, { runId }),
+        };
+      }
+      if (stage === 'select-staged') {
+        const selector = '[data-tutorial-git-action="select-all"][data-tutorial-git-scope="staged"]';
+        return {
+          signature: `git:select-staged:${tutorialDevelopmentBatchIndex}`,
+          targets: [selector],
+          revealSelectors: [selector],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Os arquivos estão em Staged. Selecione todos para compor o próximo commit.',
+          demo: async ({ runId }) => revealAndTrackTutorialTarget(selector, { runId }),
+        };
+      }
+      if (stage === 'commit-message') {
+        const selector = '[data-tutorial-git-action="message"]';
+        return {
+          signature: `git:commit-message:${tutorialDevelopmentBatchIndex}`,
+          targets: [selector],
+          revealSelectors: [selector],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Clique no campo de mensagem. O tutorial escreverá uma descrição clara para este commit.',
+          demo: async ({ runId }) => revealAndTrackTutorialTarget(selector, { runId }),
+        };
+      }
+      if (stage === 'commit') {
+        const selector = '[data-tutorial-git-action="commit"]';
+        return {
+          signature: `git:commit:${tutorialDevelopmentBatchIndex}`,
+          targets: [selector],
+          revealSelectors: [selector],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Clique em Criar commit com selecionados para salvar esta etapa do desenvolvimento.',
+          demo: async ({ runId }) => revealAndTrackTutorialTarget(selector, { runId }),
+        };
+      }
+      if (stage === 'open-files') {
+        return {
+          signature: 'git:open-files',
+          targets: ['#btn-project-files'],
+          revealSelectors: ['#btn-project-files'],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'A implementação está completa. Abra Arquivos para ver os arquivos finais ainda com as diffs pendentes.',
+          demo: async ({ runId }) => revealAndTrackTutorialTarget('#btn-project-files', { runId }),
+        };
+      }
+      if (stage === 'review-file') {
+        const selector = '.project-tree-row.file.has-diff';
+        return {
+          signature: 'git:review-file',
+          targets: [selector],
+          revealSelectors: [selector],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Clique em um arquivo com diff para visualizar o conteúdo criado antes do último commit.',
+          demo: async ({ runId }) => revealAndTrackTutorialTarget(selector, { runId, block: 'nearest' }),
+        };
+      }
+      if (stage === 'close-file') {
+        return {
+          signature: 'git:close-file',
+          targets: ['#project-file-modal-close'],
+          revealSelectors: ['#project-file-modal-close'],
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'A diff foi revisada. Feche o arquivo para preparar o commit final.',
+          demo: async ({ runId }) => revealAndTrackTutorialTarget('#project-file-modal-close', { runId }),
+        };
+      }
+      if (['inspect-git', 'initializing', 'staging', 'committing', 'loading-files', 'opening-file'].includes(stage)) {
+        return {
+          signature: `git:busy:${stage}`,
+          targets: [],
+          revealSelectors: [],
+          disableCursor: true,
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: stage === 'committing' ? 'Salvando o commit local...' : 'Atualizando o estado real do repositório...',
+          demo: null,
+        };
+      }
+      if (stage === 'complete') {
+        return {
+          signature: 'git:complete',
+          targets: [],
+          revealSelectors: [],
+          disableCursor: true,
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Desenvolvimento concluído em dois commits objetivos. Agora vamos executar o projeto localmente.',
+          demo: null,
+        };
+      }
+      return {
+        signature: `git:open:${tutorialDevelopmentBatchIndex}:${tutorialDevelopmentCommitCount}`,
+        targets: ['#btn-project-git'],
+        revealSelectors: ['#btn-project-git'],
+        disableHighlight: true,
+        disableSpotlight: true,
+        hint: 'Abra a ferramenta Git no painel direito para revisar os arquivos que a conversa acabou de criar.',
+        demo: async ({ runId }) => revealAndTrackTutorialTarget('#btn-project-git', { runId }),
+      };
+    }
+
+    function getFinishGuide() {
+      if (tutorialPreviewLaunching) {
+        return {
+          signature: 'finish:launching',
+          targets: [],
+          revealSelectors: [],
+          disableCursor: true,
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Instalando dependências quando necessário e iniciando o servidor local. O navegador abrirá automaticamente.',
+          demo: null,
+        };
+      }
+      if (tutorialPreviewStarted) {
+        return {
+          signature: 'finish:started',
+          targets: [],
+          revealSelectors: [],
+          disableCursor: true,
+          disableHighlight: true,
+          disableSpotlight: true,
+          hint: 'Servidor local iniciado e página aberta no navegador. Tutorial concluído.',
+          demo: null,
+        };
+      }
+      return {
+        signature: 'finish:run',
+        targets: ['#btn-project-deploy'],
+        revealSelectors: ['#btn-project-deploy'],
+        disableHighlight: true,
+        disableSpotlight: true,
+        hint: 'Clique em Executar. O Faber Code iniciará o projeto de verdade em um servidor local e abrirá o navegador.',
+        demo: async ({ runId }) => revealAndTrackTutorialTarget('#btn-project-deploy', { runId }),
+      };
+    }
+
     function getStepGuide(step) {
       if (!step) return { signature: '', targets: [], hint: '', demo: null };
       if (step.id === 'panels') return getCurrentPanelGuide();
@@ -1689,6 +3303,12 @@
       if (step.id === 'cortex') return getCortexGuide();
       if (step.id === 'apis') return getApiGuide();
       if (step.id === 'map-intro') return getMapGuide();
+      if (step.id === 'map-build') return getMapBuildGuide();
+      if (step.id === 'map-chat') return getMapChatGuide();
+      if (step.id === 'map-analysis') return getMapAnalysisGuide();
+      if (step.id === 'development-chat') return getDevelopmentChatGuide();
+      if (step.id === 'git') return getDevelopmentWorkflowGuide();
+      if (step.id === 'finish') return getFinishGuide();
       return {
         signature: step.id,
         targets: typeof step.targets === 'function' ? step.targets() : [],
@@ -1696,10 +3316,17 @@
         revealPadding: step.revealPadding,
         hint: step.hint || '',
         demo: step.demo || null,
+        disableHighlight: typeof step.disableHighlight === 'function'
+          ? step.disableHighlight()
+          : Boolean(step.disableHighlight),
       };
     }
 
     function steps() {
+      const checklist = (path, states) => {
+        const labels = tutorialValue(path, []);
+        return states.map((done, index) => ({ label: labels[index] || '', done }));
+      };
       return [
         {
           id: 'panels',
@@ -1792,17 +3419,29 @@
             if (hasTutorialReadyProject() && resolveElement(tutorialMapSelector)) {
               return [tutorialMapSelector];
             }
-            return ['#btn-add-project', '#projects-search'];
+            return ['#btn-add-project'];
           },
-          revealSelectors: () => ['.panel-left'],
-          revealPadding: 14,
+          revealSelectors: () => {
+            const tutorialMapSelector = getTutorialCreatedProjectMapSelector();
+            if (hasTutorialReadyProject() && resolveElement(tutorialMapSelector)) {
+              return [tutorialMapSelector];
+            }
+            return ['#btn-add-project'];
+          },
+          revealPadding: 10,
+          disableHighlight: () => !hasTutorialReadyProject(),
           demo: async ({ runId }) => {
             const tutorialMapSelector = getTutorialCreatedProjectMapSelector();
             if (hasTutorialReadyProject() && resolveElement(tutorialMapSelector)) {
               await animateCursorTo(tutorialMapSelector, { runId, pulse: true, label: 'Clique no Mapa da Aplicação' });
               return;
             }
-            await animateCursorTo('#btn-add-project', { runId, pulse: true, label: 'Novo projeto' });
+            await animateCursorTo('#btn-add-project', {
+              runId,
+              pulse: true,
+              offsetX: 112,
+              label: 'Novo projeto',
+            });
           },
         },
         {
@@ -1811,13 +3450,14 @@
           body: translate('mapBody'),
           hint: translate('mapHint'),
           checklist: () => [
-            { label: 'Mapa aberto', done: tutorialMapIconClicked },
+            { label: 'Mapa aberto', done: tutorialMapIconClicked && isMapTabOpen() },
             { label: 'Painel esquerdo recolhido', done: isLeftWorkspaceCollapsed() },
             { label: 'Painel direito recolhido', done: isRightWorkspaceCollapsed() },
             { label: 'Ferramentas do mapa exploradas', done: hoveredMapSelectors.size >= MAP_TOOL_HOVER_SELECTORS.length },
           ],
           canAdvance: () => (
             tutorialMapIconClicked
+            && isMapTabOpen()
             && isLeftWorkspaceCollapsed()
             && isRightWorkspaceCollapsed()
             && hoveredMapSelectors.size >= MAP_TOOL_HOVER_SELECTORS.length
@@ -1832,238 +3472,137 @@
         },
         {
           id: 'map-build',
-          title: 'Aula de Criação de Projeto',
-          body: 'O tutorial monta um planejamento no mapa simulando a criação de um grupo Frontend e de Regras.',
-          hint: 'Acompanhe a construção visual do projeto.',
-          canAdvance: () => true,
-          preview: () => `<div class="progressive-map-preview"><div class="progressive-mini-card"><strong>Frontend</strong></div><div class="progressive-mini-card"><strong>Regras</strong></div></div>`,
-          targets: () => [
-            '#btn-map-tool-add-card',
-            '.map-node-edit-btn',
-            '#inspector-node-title',
-            '#inspector-node-desc',
-            '#inspector-node-content',
-            '.CodeMirror'
-          ],
-          revealSelectors: () => ['.panel-center', '.map-inspector-panel'],
+          title: tutorialText('steps.mapBuild.title', {}, 'Aula de Criação de Projeto'),
+          body: tutorialText('steps.mapBuild.body', {}, 'Documente a página de boas-vindas, o Design System e as regras do projeto diretamente no mapa.'),
+          hint: tutorialText('steps.mapBuild.hint', {}, 'Comece pelo briefing da página de boas-vindas.'),
+          checklist: () => checklist('steps.mapBuild.checklist', [
+            tutorialWelcomeBriefReady,
+            tutorialMapZoomReady,
+            tutorialDesignSystemReady,
+            Boolean(tutorialLogoNodeId),
+            Boolean(tutorialFrontendGroupId),
+            Boolean(tutorialRulesGroupId && tutorialRulesNodeIds.length >= 2),
+            Boolean(tutorialUserName),
+            tutorialArchitectureNodeIds.length >= 1,
+            tutorialArchitectureNodeIds.length >= 2,
+            tutorialArchitectureNodeIds.length >= 3,
+            tutorialDevelopmentReady,
+          ]),
+          canAdvance: () => tutorialMapBuildStage === 'development-ready',
+          preview: () => `<div class="progressive-map-preview"><div class="progressive-mini-card"><small>FRONTEND</small><strong>${tutorialText('steps.mapBuild.frontendPreview', {}, 'Olá Mundo + Design System')}</strong></div><div class="progressive-mini-card"><small>${tutorialText('documents.rules.title', {}, 'REGRAS').toUpperCase()}</small><strong>${tutorialText('steps.mapBuild.rulesPreview', {}, 'Interface + Aceite')}</strong></div></div>`,
+          targets: () => getMapBuildGuide().targets,
+          revealSelectors: () => getMapBuildGuide().revealSelectors,
           revealPadding: 16,
           demo: async ({ runId }) => {
-            try {
-              setCursorLabel('DEBUG: init map-build');
-              const mapController = options.actions && options.actions.getMapController ? options.actions.getMapController() : null;
-              if (!mapController) {
-                setCursorLabel('DEBUG: mapController is null');
-                return;
-              }
-              
-              setCursorLabel('DEBUG: waiting canvasController');
-              let canvasController = null;
-              for (let i = 0; i < 40; i++) {
-                canvasController = typeof mapController.getCanvasController === 'function' ? mapController.getCanvasController() : null;
-                if (canvasController) break;
-                await delay(100);
-              }
-              if (!canvasController) {
-                setCursorLabel('DEBUG: canvasController timeout');
-                return;
-              }
-              
-              setCursorLabel('DEBUG: waiting nodes');
-              for (let i = 0; i < 20; i++) {
-                if (document.querySelectorAll('.map-node').length > 0) break;
-                await delay(100);
-              }
-              
-              const initialNodeCount = document.querySelectorAll('.map-node').length;
-              
-              // Wait for the button to become visible before animating
-              for (let i = 0; i < 20; i++) {
-                if (resolveVisibleElement('#btn-map-tool-add-card')) break;
-                await delay(100);
-              }
-              
-              setCursorLabel('DEBUG: animating to markdown btn');
-              cursorSuppressed = false;
-              await animateCursorTo('#btn-map-tool-add-card', { runId, pulse: true, label: 'Clique na ferramenta Markdown' });
-            
-            while (document.querySelectorAll('.map-node').length <= initialNodeCount) {
-              if (runId !== demoRunId) return;
-              await delay(100);
-            }
-
-            // Utiliza o novo motor de cálculo matemático direto da matriz do canvas, ignorando o DOM
-            if (runId !== demoRunId) return;
-            cursorSuppressed = false;
-            
-            const mapData = canvasController.getMapData ? canvasController.getMapData() : { nodes: [] };
-            const newNodeIndex = Math.max(0, (mapData.nodes || []).length - 1);
-            
-            // Assume que estamos mirando no nó recém-criado (último índice)
-            let trackingCanvas = animateCursorToCanvasNode(newNodeIndex, {
-              runId,
-              mapController,
-              label: 'Clique no ícone de lápis para editar'
-            });
-            } catch (e) {
-              setCursorLabel('DEBUG ERROR: ' + e.message);
-              console.error(e);
-            }
-            
-            // Wait for inspector to open
-            while (!resolveVisibleElement('#inspector-node-title')) {
-              if (runId !== demoRunId) {
-                tracking = false;
-                return;
-              }
-              await delay(100);
-            }
-            tracking = false;
-              
-            // 2. Wait for user to click Title and type Hello World
-            cursorSuppressed = false;
-            await animateCursorTo('#inspector-node-title', { runId, pulse: true, label: 'Clique no Título' });
-            
-            while (document.activeElement !== resolveElement('#inspector-node-title')) {
-              if (runId !== demoRunId) return;
-              await delay(100);
-            }
-            await typeInto('#inspector-node-title', 'Hello World', { runId });
-
-            const node = typeof canvasController !== 'undefined' && canvasController.getMapData().nodes[0];
-            const hasDesc = node && node.description && node.description.includes('boas-vindas');
-            const hasContent = node && node.content && node.content.includes('Hello Word');
-
-            if (!hasDesc && !hasContent) {
-              // Wait a bit for UI to settle
-              for (let i = 0; i < 5; i++) {
-                if (resolveVisibleElement('#inspector-node-desc')) break;
-                await delay(50);
-              }
-              // 3. Wait for user to click Description and type
-              cursorSuppressed = false;
-              await animateCursorTo('#inspector-node-desc', { runId, pulse: true, label: 'Clique na Descrição' });
-              
-              while (document.activeElement !== resolveElement('#inspector-node-desc')) {
-                if (runId !== demoRunId) return;
-                await delay(100);
-              }
-              await typeInto('#inspector-node-desc', 'markdown se trata da descrição para o Faber Code criar um hello world.', { runId });
-            }
-
-            if (!hasContent) {
-              // Wait a bit for UI to settle
-              for (let i = 0; i < 5; i++) {
-                if (resolveVisibleElement('.CodeMirror, #inspector-node-content')) break;
-                await delay(50);
-              }
-              // 4. Wait for user to click Content and type
-              cursorSuppressed = false;
-              await animateCursorTo('.CodeMirror', { runId, pulse: true, label: 'Clique no Conteúdo', offsetX: 30, offsetY: 30 });
-              
-              while (!document.activeElement || !document.activeElement.closest('.CodeMirror')) {
-                if (runId !== demoRunId) return;
-                await delay(100);
-              }
-              
-              // Type into CodeMirror
-              const cmEl = resolveVisibleElement('.CodeMirror');
-              if (cmEl && cmEl.CodeMirror) {
-                const cm = cmEl.CodeMirror;
-                const text = 'página Hello Word recebendo bem o usuário e dando as boas-vindas a plataforma.';
-                cm.setValue('');
-                for (let i = 0; i < text.length; i++) {
-                  if (runId !== demoRunId) return;
-                  cm.replaceRange(text[i], { line: cm.lastLine(), ch: cm.getLine(cm.lastLine()).length });
-                  await delay(24);
-                }
-                const contentEl = document.getElementById('inspector-node-content');
-                if (contentEl) {
-                  contentEl.value = cm.getValue();
-                  contentEl.dispatchEvent(new Event('input'));
-                }
-              } else {
-                 await typeInto('#inspector-node-content', 'página Hello Word recebendo bem o usuário e dando as boas-vindas a plataforma.', { runId });
-              }
-            }
-
-            await delay(1000);
-            if (runId !== demoRunId) return;
-            // Advance to next step (map-chat)
-            const current = steps()[currentStepIndex];
-            if (current && current.id === 'map-build' && current.canAdvance()) nextStep();
+            await getMapBuildGuide().demo?.({ runId });
           },
         },
         {
           id: 'map-chat',
-          title: 'Assistente do Mapa',
-          body: 'Você pode usar o chat do mapa da aplicação para tirar dúvidas sobre o que está desenvolvendo.',
-          hint: 'Observe a interação com o assistente do mapa.',
-          canAdvance: () => true,
-          preview: () => `<div class="progressive-chat-preview"><div class="progressive-chat-message is-assistant">${translate('mapDemoChatReply')}</div></div>`,
-          targets: () => ['#btn-map-ai'],
-          revealSelectors: () => ['.panel-center', '.map-side-panel'],
+          title: tutorialText('steps.mapChat.title', {}, 'Assistente do Mapa'),
+          body: tutorialText('steps.mapChat.body', {}, 'Converse com a IA do mapa para validar os documentos.'),
+          hint: tutorialText('steps.mapChat.hint', {}, 'Conheça o painel direito e abra a IA do Mapa.'),
+          checklist: () => checklist('steps.mapChat.checklist', [
+            !isRightWorkspaceCollapsed(),
+            hoveredRightPanelSelectors.size >= RIGHT_PANEL_HOVER_SELECTORS.length,
+            !['expand-right', 'right-tools', 'open'].includes(tutorialMapChatStage),
+            ['reply', 'missing-info', 'adjustment-complete'].includes(tutorialMapChatStage),
+            ['missing-info', 'adjustment-complete'].includes(tutorialMapChatStage),
+            Boolean(tutorialMapGapNodeId),
+          ]),
+          canAdvance: () => tutorialMapConversationComplete,
+          preview: () => `<div class="progressive-chat-preview"><div class="progressive-chat-message is-user">${tutorialText('mapChat.prompt')}</div><div class="progressive-chat-message is-assistant">${tutorialText('mapChat.reply')}</div></div>`,
+          targets: () => getMapChatGuide().targets,
+          revealSelectors: () => getMapChatGuide().revealSelectors,
           revealPadding: 16,
           demo: async ({ runId }) => {
-            const mapBtn = await animateCursorTo('#btn-map-ai', { runId, pulse: true, label: translate('mapDemoChatQuestion') });
-            if (!mapBtn) return;
-            
-            const aiPanel = document.getElementById('workspace-map-chat-panel');
-            if (aiPanel && aiPanel.classList.contains('hidden')) {
-               const btn = resolveElement('#btn-map-ai');
-               if (btn) btn.click();
-            }
-            await delay(1000);
-            await animateCursorTo('#workspace-chat-region', { runId, pulse: true, label: translate('devMilestonesHint') });
+            await getMapChatGuide().demo?.({ runId });
           },
         },
         {
-          id: 'dev-chat',
-          title: translate('chatTitle'),
-          body: translate('chatBody'),
-          hint: translate('chatHint'),
-          canAdvance: () => true,
-          preview: () => `<div class="progressive-chat-preview"><div class="progressive-chat-message is-user">${translate('mockUserPrompt')}</div><div class="progressive-chat-message is-assistant">${translate('mockAssistantReply')}</div></div>`,
-          targets: () => ['#user-input', '#btn-project-milestones'],
-          revealSelectors: () => ['.panel-center', '.panel-right'],
-          revealPadding: 16,
+          id: 'map-analysis',
+          title: tutorialText('steps.mapAnalysis.title', {}, 'Planejamento em Milestones'),
+          body: tutorialText('steps.mapAnalysis.body', {}, 'Transforme o mapa corrigido em um plano completo.'),
+          hint: tutorialText('steps.mapAnalysis.hint', {}, 'A análise do tutorial é local e não utiliza nenhuma API.'),
+          checklist: () => checklist('steps.mapAnalysis.checklist', [
+            !['history-loading', 'history'].includes(tutorialMapAnalysisStage),
+            !['history-loading', 'history', 'render-list', 'rendering'].includes(tutorialMapAnalysisStage),
+            tutorialMilestonesSaved,
+            ['project-chat', 'opening-development-chat', 'development-chat-open'].includes(tutorialMapAnalysisStage),
+            tutorialMapAnalysisStage === 'development-chat-open',
+          ]),
+          canAdvance: () => tutorialMapAnalysisStage === 'development-chat-open',
+          preview: () => `<div class="progressive-note"><strong>${tutorialText('steps.mapAnalysis.previewTitle', {}, 'Mapa → Milestones → Desenvolvimento')}</strong><p>${tutorialText('steps.mapAnalysis.previewBody', {}, 'O planejamento fica salvo dentro do projeto.')}</p></div>`,
+          targets: () => getMapAnalysisGuide().targets,
+          revealSelectors: () => getMapAnalysisGuide().revealSelectors,
+          revealPadding: 18,
           demo: async ({ runId }) => {
-            const first = await animateCursorTo('#user-input', { runId, pulse: true, label: 'Chat' });
-            if (!first) return;
-            await typeInto('#user-input', translate('mockUserPrompt'), { runId });
-            await delay(1000);
-            if (options.actions && options.actions.simulateChatReply) {
-              options.actions.simulateChatReply(translate('mockAssistantReply'));
-            }
+            await getMapAnalysisGuide().demo?.({ runId });
+          },
+        },
+        {
+          id: 'development-chat',
+          title: tutorialText('steps.developmentChat.title', {}, 'Início do Desenvolvimento'),
+          body: tutorialText('steps.developmentChat.body', {}, 'Inicie a Milestone 1 em uma conversa do projeto.'),
+          hint: tutorialText('steps.developmentChat.hint', {}, 'A demonstração será persistida localmente.'),
+          checklist: () => checklist('steps.developmentChat.checklist', [
+            tutorialDevelopmentChatStage !== 'compose',
+            ['sending', 'complete'].includes(tutorialDevelopmentChatStage),
+            tutorialDevelopmentConversationComplete,
+            tutorialDevelopmentBatchIndex >= 0,
+          ]),
+          canAdvance: () => tutorialDevelopmentConversationComplete && tutorialDevelopmentBatchIndex >= 0,
+          preview: () => `<div class="progressive-chat-preview"><div class="progressive-chat-message is-user">${tutorialText('development.prompt')}</div><div class="progressive-chat-message is-assistant">${tutorialText('steps.developmentChat.previewReply')}</div></div>`,
+          targets: () => getDevelopmentChatGuide().targets,
+          revealSelectors: () => getDevelopmentChatGuide().revealSelectors,
+          revealPadding: 18,
+          demo: async ({ runId }) => {
+            await getDevelopmentChatGuide().demo?.({ runId });
           },
         },
         {
           id: 'git',
-          title: translate('gitTitle'),
-          body: translate('gitBody'),
-          hint: translate('gitHint'),
-          canAdvance: () => true,
-          preview: () => `<div class="progressive-note"><strong>Git</strong><p>${translate('mockGitStatus')}</p></div>`,
-          targets: () => ['#btn-project-git'],
-          revealSelectors: () => ['.panel-right'],
+          title: tutorialText('steps.git.title', {}, 'Desenvolvimento e commits'),
+          body: tutorialText('steps.git.body', {}, 'Acompanhe a conversa, revise as diffs e faça dois commits objetivos.'),
+          hint: tutorialText('steps.git.hint', {}, 'Use o controle apontado pelo cursor.'),
+          checklist: () => checklist('steps.git.checklist', [
+            tutorialDevelopmentBatchIndex >= 0,
+            tutorialDevelopmentCommitCount >= 1,
+            tutorialDevelopmentBatchIndex >= 1,
+            tutorialDevelopmentFilesReviewed,
+            tutorialDevelopmentCommitCount >= 2,
+          ]),
+          canAdvance: () => tutorialDevelopmentWorkflowStage === 'complete' && tutorialDevelopmentCommitCount >= 2,
+          preview: () => `<div class="progressive-note"><strong>${tutorialDevelopmentCommitCount}/2 commits</strong><p>${tutorialText('steps.git.preview')}</p></div>`,
+          targets: () => getDevelopmentWorkflowGuide().targets,
+          revealSelectors: () => getDevelopmentWorkflowGuide().revealSelectors,
           revealPadding: 16,
           demo: async ({ runId }) => {
-            await animateCursorTo('#btn-project-git', { runId, pulse: true, label: translate('gitDemoInit') });
-            await delay(1000);
-            await animateCursorTo('#btn-project-git', { runId, pulse: true, label: translate('gitDemoCommit') });
+            await getDevelopmentWorkflowGuide().demo?.({ runId });
           },
         },
         {
           id: 'finish',
-          title: translate('finishTitle'),
-          body: translate('finishBody'),
-          hint: translate('finishHint'),
-          canAdvance: () => true,
-          preview: () => `<div class="progressive-note"><strong>Hello World</strong><p>${translate('mockRunStatus')}</p></div>`,
-          targets: () => ['#btn-project-deploy'],
-          revealSelectors: () => ['.panel-right'],
+          title: tutorialPreviewStarted
+            ? tutorialText('steps.finish.successTitle', {}, 'Projeto criado com sucesso')
+            : tutorialText('steps.finish.pendingTitle', {}, 'Executar a página de boas-vindas'),
+          body: tutorialPreviewStarted
+            ? tutorialText('steps.finish.successBody')
+            : tutorialText('steps.finish.pendingBody'),
+          hint: tutorialPreviewStarted
+            ? tutorialText('steps.finish.successHint')
+            : tutorialText('steps.finish.pendingHint'),
+          checklist: () => checklist('steps.finish.checklist', [
+            tutorialDevelopmentCommitCount >= 2,
+            tutorialPreviewStarted,
+          ]),
+          canAdvance: () => tutorialPreviewStarted,
+          preview: () => `<div class="progressive-note"><strong>${tutorialText('steps.finish.preview', { name: tutorialUserName || tutorialText('ui.world', {}, 'mundo') })}</strong><p>${tutorialText('steps.finish.previewBody')}</p></div>`,
+          targets: () => getFinishGuide().targets,
+          revealSelectors: () => getFinishGuide().revealSelectors,
           revealPadding: 16,
           demo: async ({ runId }) => {
-            await animateCursorTo('#btn-project-deploy', { runId, pulse: true, label: translate('runDemoPlay') });
+            await getFinishGuide().demo?.({ runId });
           },
         },
       ];
@@ -2071,7 +3610,8 @@
 
     function findStepIndex(stepId) {
       const list = steps();
-      const index = list.findIndex((step) => step.id === stepId);
+      const normalizedStepId = stepId === 'dev-chat' ? 'development-chat' : stepId;
+      const index = list.findIndex((step) => step.id === normalizedStepId);
       return index >= 0 ? index : 0;
     }
 
@@ -2137,12 +3677,34 @@
       items.forEach((item) => {
         const row = doc.createElement('div');
         row.className = `progressive-check-row${item.done ? ' is-done' : ''}`;
-        row.innerHTML = `<span>${item.done ? translate('done') : translate('waiting')}</span><strong>${item.label}</strong>`;
+        const status = doc.createElement('span');
+        status.textContent = item.done ? translate('done') : translate('waiting');
+        const label = doc.createElement('strong');
+        label.textContent = tutorialPhrase(item.label);
+        row.append(status, label);
         elements.tutorialChecklist.appendChild(row);
       });
     }
 
+    function clearAutoAdvance() {
+      if (autoAdvanceTimer != null) window.clearTimeout(autoAdvanceTimer);
+      autoAdvanceTimer = null;
+    }
+
+    function scheduleAutoAdvance(stepId, delay = 260, predicate = null) {
+      clearAutoAdvance();
+      autoAdvanceTimer = window.setTimeout(() => {
+        autoAdvanceTimer = null;
+        if (!active) return;
+        const current = steps()[currentStepIndex];
+        if (!current || current.id !== stepId || !current.canAdvance()) return;
+        if (typeof predicate === 'function' && !predicate()) return;
+        nextStep();
+      }, delay);
+    }
+
     function stopDemoVisuals() {
+      clearAutoAdvance();
       demoRunId += 1;
       restoreTypedFields();
       restoreTutorialFieldDecorators();
@@ -2168,10 +3730,12 @@
     }
 
     function activateStep(step, guide) {
-      highlightTargets(guide.targets || []);
+      highlightTargets(guide.disableHighlight ? [] : (guide.targets || []));
       positionCoach(guide.targets || []);
       showSpotlightForGuide(guide);
-      if (guide && typeof guide.demo === 'function') {
+      if (guide && guide.disableCursor) {
+        hideCursor();
+      } else if (guide && typeof guide.demo === 'function') {
         void startStepDemo({ demo: guide.demo });
       }
       activeStepId = step.id;
@@ -2183,8 +3747,12 @@
       if (!card) return;
       refreshTutorialContext();
       const visibleTargets = targetSelectors
-        .map((selector) => resolveElement(selector))
+        .map((selector) => resolveVisibleElement(selector))
         .filter((element) => isVisibleElement(element));
+      if (visibleTargets.some((element) => card.contains(element))) {
+        card.dataset.position = 'anchored';
+        return;
+      }
       const padding = hasOpenContextualModal() ? 14 : 18;
       const { width: viewportWidth, height: viewportHeight } = getViewportSize();
       card.style.left = '';
@@ -2297,12 +3865,60 @@
     }
 
     function renderStep() {
+      clearAutoAdvance();
       const list = steps();
       const step = list[currentStepIndex];
       if (!step) return;
       syncTutorialRuntime();
       dispatchTutorialProjectsChanged();
       refreshTutorialContext();
+      if (step.id === 'map-analysis') {
+        if (tutorialMapAnalysisStage === 'history-loading' && !tutorialMapHistoryPreparing) {
+          tutorialMapHistoryPreparing = true;
+          Promise.resolve(prepareTutorialMapAnalysisHistory()).then((completed) => {
+            tutorialMapHistoryPreparing = false;
+            const current = steps()[currentStepIndex];
+            if (!active || !current || current.id !== 'map-analysis') return;
+            tutorialMapAnalysisStage = completed ? 'history' : 'history-loading';
+            activeGuideSignature = '';
+            window.requestAnimationFrame(() => {
+              window.requestAnimationFrame(() => {
+                if (active && steps()[currentStepIndex]?.id === 'map-analysis') renderStep();
+              });
+            });
+          }).catch(() => {
+            tutorialMapHistoryPreparing = false;
+          });
+        } else if (
+          ['render-list', 'rendering', 'plan-ready', 'confirm', 'saving'].includes(tutorialMapAnalysisStage)
+          && !doc.body.classList.contains('mode-map-render')
+        ) {
+          prepareTutorialMapAnalysisPanel();
+          refreshTutorialContext();
+        }
+        if (tutorialMapAnalysisStage === 'project-chat') {
+          const conversationSelector = getTutorialCreatedProjectConversationSelector();
+          if (!resolveVisibleElement(conversationSelector) && typeof actions.revealProjectConversationButton === 'function') {
+            actions.revealProjectConversationButton();
+            activeGuideSignature = '';
+            refreshTutorialContext();
+          }
+        }
+      }
+      resumeTutorialDevelopmentWorkflow(step.id);
+      const showNamePrompt = step.id === 'map-build' && tutorialMapBuildStage === 'user-name';
+      setVisible(elements.tutorialNamePrompt, showNamePrompt);
+      if (!showNamePrompt && elements.tutorialNameError) elements.tutorialNameError.textContent = '';
+      if (elements.tutorialNamePrompt) {
+        const label = elements.tutorialNamePrompt.querySelector('label');
+        if (label) label.textContent = tutorialText('ui.nameQuestion', {}, 'Como devemos chamar você?');
+      }
+      if (elements.tutorialNameInput) {
+        elements.tutorialNameInput.placeholder = tutorialText('ui.namePlaceholder', {}, 'Digite seu nome');
+      }
+      if (elements.tutorialNameSave) {
+        elements.tutorialNameSave.textContent = tutorialText('ui.confirm', {}, 'Confirmar');
+      }
       const guide = getStepGuide(step);
       const stepChanged = activeStepId !== step.id;
       const guideChanged = activeGuideSignature !== guide.signature;
@@ -2312,18 +3928,26 @@
         activeGuideSignature = guide.signature;
       }
       if (elements.tutorialLive) elements.tutorialLive.textContent = translate('tutorialLive');
-      if (elements.tutorialTitle) elements.tutorialTitle.textContent = step.title;
-      if (elements.tutorialHint) elements.tutorialHint.textContent = guide.hint || step.hint || '';
+      if (elements.tutorialTitle) elements.tutorialTitle.textContent = tutorialPhrase(step.title);
+      if (elements.tutorialHint) elements.tutorialHint.textContent = tutorialPhrase(guide.hint || step.hint || '');
       if (elements.tutorialCounter) elements.tutorialCounter.textContent = `${currentStepIndex + 1} / ${list.length}`;
       if (elements.tutorialProgress) {
         elements.tutorialProgress.style.setProperty('--progressive-ratio', String((currentStepIndex + 1) / list.length));
       }
-      if (elements.tutorialPreview) elements.tutorialPreview.innerHTML = typeof step.preview === 'function' ? step.preview() : '';
+      if (elements.tutorialPreview) {
+        elements.tutorialPreview.innerHTML = tutorialHtml(typeof step.preview === 'function' ? step.preview() : '');
+      }
       renderChecklist(step);
       positionCoach(guide.targets || []);
       if (elements.tutorialNext) {
-        elements.tutorialNext.textContent = currentStepIndex === list.length - 1 ? translate('finishTutorial') : translate('continue');
-        elements.tutorialNext.disabled = !step.canAdvance();
+        const customNextLabel = typeof step.nextLabel === 'function' ? step.nextLabel() : step.nextLabel;
+        elements.tutorialNext.textContent = customNextLabel || (
+          currentStepIndex === list.length - 1
+            ? translate('finishTutorial')
+            : translate('next')
+        );
+        elements.tutorialNext.disabled = false;
+        elements.tutorialNext.setAttribute('aria-busy', 'false');
       }
       if (elements.tutorialPrev) {
         elements.tutorialPrev.textContent = translate('previous');
@@ -2331,62 +3955,29 @@
       }
       if (elements.tutorialSkipAll) elements.tutorialSkipAll.textContent = translate('stopTutorial');
       writeStorage(TUTORIAL_PROGRESS_KEY, step.id);
-      if (step.id === 'panels' && step.canAdvance()) {
-        window.setTimeout(() => {
-          if (!active) return;
-          const current = steps()[currentStepIndex];
-          if (current && current.id === 'panels' && current.canAdvance()) nextStep();
-        }, 260);
-      }
-      if (step.id === 'left-tools' && step.canAdvance()) {
-        window.setTimeout(() => {
-          if (!active) return;
-          const current = steps()[currentStepIndex];
-          if (current && current.id === 'left-tools' && current.canAdvance()) nextStep();
-        }, 260);
-      }
-      if (step.id === 'apis' && step.canAdvance()) {
-        window.setTimeout(() => {
-          if (!active) return;
-          const current = steps()[currentStepIndex];
-          if (current && current.id === 'apis' && current.canAdvance()) nextStep();
-        }, 260);
-      }
-      if (step.id === 'project-class' && step.canAdvance()) {
-        window.setTimeout(() => {
-          if (!active) return;
-          const current = steps()[currentStepIndex];
-          if (current && current.id === 'project-class' && current.canAdvance()) nextStep();
-        }, 260);
-      }
-      if (step.id === 'sidebar' && sidebarClosedOnce) {
-        window.setTimeout(() => {
-          if (!active) return;
-          const current = steps()[currentStepIndex];
-          if (current && current.id === 'sidebar') nextStep();
-        }, 260);
-      }
-      if (step.id === 'project-class' && step.canAdvance()) {
-        window.setTimeout(() => {
-          if (!active) return;
-          const current = steps()[currentStepIndex];
-          if (current && current.id === 'project-class' && current.canAdvance()) nextStep();
-        }, 260);
-      }
-      if (step.id === 'map-intro' && step.canAdvance()) {
-        window.setTimeout(() => {
-          if (!active) return;
-          const current = steps()[currentStepIndex];
-          if (current && current.id === 'map-intro' && current.canAdvance()) nextStep();
-        }, 260);
+      const fastSteps = new Set(['panels', 'left-tools', 'apis', 'project-class', 'map-intro', 'map-build']);
+      if (fastSteps.has(step.id) && step.canAdvance()) {
+        scheduleAutoAdvance(step.id, 240);
+      } else if (step.id === 'sidebar' && sidebarClosedOnce) {
+        scheduleAutoAdvance(step.id, 240);
+      } else if (step.id === 'map-chat' && tutorialMapChatStage === 'adjustment-complete') {
+        scheduleAutoAdvance(step.id, 720, () => tutorialMapChatStage === 'adjustment-complete');
+      } else if (step.id === 'map-analysis' && step.canAdvance()) {
+        scheduleAutoAdvance(step.id, 280);
+      } else if (step.id === 'development-chat' && step.canAdvance()) {
+        scheduleAutoAdvance(step.id, 360);
+      } else if (step.id === 'git' && step.canAdvance()) {
+        scheduleAutoAdvance(step.id, 420);
       }
     }
 
     function completeTutorial() {
       active = false;
+      tutorialMapCreationPending = false;
       tutorialCortexEntry = null;
       dispatchTutorialCortexChanged();
       stopDemoVisuals();
+      discardTutorialApiDraft();
       clearHighlights();
       setVisible(elements.tutorial, false);
       syncTutorialRuntime();
@@ -2399,9 +3990,11 @@
 
     function dismissTutorial() {
       active = false;
+      tutorialMapCreationPending = false;
       tutorialCortexEntry = null;
       dispatchTutorialCortexChanged();
       stopDemoVisuals();
+      discardTutorialApiDraft();
       clearHighlights();
       setVisible(elements.tutorial, false);
       syncTutorialRuntime();
@@ -2410,10 +4003,68 @@
       activeStepId = '';
     }
 
+    function clickTutorialControl(selector) {
+      const element = resolveVisibleElement(selector) || resolveElement(selector);
+      if (!element || typeof element.click !== 'function') return false;
+      allowTutorialSyntheticClick = true;
+      try {
+        element.click();
+      } finally {
+        allowTutorialSyntheticClick = false;
+      }
+      return true;
+    }
+
+    function prepareMapIntroForAdvance() {
+      if (!tutorialMapIconClicked || !isMapTabOpen()) {
+        const mapSelector = getTutorialCreatedProjectMapSelector();
+        const opened = clickTutorialControl(mapSelector) || clickTutorialControl('.project-mini-btn-map');
+        if (opened) tutorialMapIconClicked = true;
+      }
+
+      if (!isLeftWorkspaceCollapsed()) clickTutorialControl('#workspace-collapse-left');
+      if (!isRightWorkspaceCollapsed()) clickTutorialControl('#workspace-collapse-right');
+
+      hoveredMapSelectors = new Set(MAP_TOOL_HOVER_SELECTORS);
+      refreshTutorialContext();
+    }
+
+    function closeTutorialContextForAdvance() {
+      if (isModalOpen('#ai-settings-modal')) discardTutorialApiDraft();
+      const closeSelectors = [
+        '#project-state-modal-close',
+        '#cortex-modal-close',
+        '#welcome-project-close',
+        '#project-file-modal-close',
+        '#faber-confirm-no',
+        '#btn-map-inspector-close',
+      ];
+      closeSelectors.forEach((selector) => {
+        if (resolveVisibleElement(selector)) clickTutorialControl(selector);
+      });
+    }
+
     function nextStep() {
       const list = steps();
       const step = list[currentStepIndex];
-      if (step && !step.canAdvance()) return;
+      if (!step) return;
+      if (step.id === 'map-build' && !tutorialUserName) {
+        if (tutorialMapBuildStage !== 'user-name') {
+          tutorialMapBuildStage = 'user-name';
+          activeGuideSignature = '';
+          renderStep();
+          window.requestAnimationFrame(() => {
+            if (elements.tutorialNameInput) elements.tutorialNameInput.focus();
+          });
+          return;
+        }
+        submitTutorialUserName();
+        return;
+      }
+      if (step && step.id === 'map-intro' && !step.canAdvance()) {
+        prepareMapIntroForAdvance();
+      }
+      closeTutorialContextForAdvance();
       if (currentStepIndex >= list.length - 1) {
         completeTutorial();
         return;
@@ -2439,8 +4090,41 @@
       sidebarOpenedOnce = false;
       sidebarClosedOnce = false;
       sidebarDemoStage = 'intro';
-      tutorialCreatedProjectId = '';
+      tutorialCreatedProjectId = readStorage(TUTORIAL_PROJECT_ID_KEY, '');
       tutorialMapIconClicked = false;
+      tutorialMapNodeId = '';
+      tutorialMapInspectorOpened = false;
+      tutorialMapBuildStage = 'welcome-create';
+      tutorialWelcomeNodeId = '';
+      tutorialWelcomeBriefReady = false;
+      tutorialDesignSystemNodeId = '';
+      tutorialDesignSystemReady = false;
+      tutorialMapZoomReady = false;
+      tutorialLogoNodeId = '';
+      tutorialFrontendGroupId = '';
+      tutorialRulesGroupId = '';
+      tutorialRulesNodeIds = [];
+      tutorialUserName = readStorage(TUTORIAL_USER_NAME_KEY, '');
+      tutorialArchitectureNodeIds = [];
+      tutorialDevelopmentReady = false;
+      tutorialMapCreationPending = false;
+      tutorialMapChatStage = 'expand-right';
+      tutorialMapGapNodeId = '';
+      tutorialMapConversationComplete = false;
+      tutorialMapAnalysisStage = 'history-loading';
+      tutorialMapHistoryPreparing = false;
+      tutorialMilestonesSaved = false;
+      tutorialDevelopmentChatStage = 'compose';
+      tutorialDevelopmentConversationComplete = false;
+      tutorialDevelopmentBatchIndex = -1;
+      tutorialDevelopmentWorkflowStage = 'idle';
+      tutorialDevelopmentCommitCount = 0;
+      tutorialDevelopmentFilesReviewed = false;
+      tutorialDevelopmentBusy = false;
+      tutorialGitChangeScope = 'untracked';
+      tutorialPreviewStarted = false;
+      tutorialPreviewLaunching = false;
+      restoreTutorialDevelopmentState();
       cortexSavedOnce = false;
       apiDemoPrepared = false;
       apiProviderSelected = false;
@@ -2451,9 +4135,16 @@
       apiEditorSaved = false;
       apiKeyInputOriginalType = '';
       apiTutorialKeyValue = '';
+      if (elements.tutorialNameInput) {
+        elements.tutorialNameInput.value = tutorialUserName;
+        elements.tutorialNameInput.removeAttribute('aria-invalid');
+      }
+      if (elements.tutorialNameError) elements.tutorialNameError.textContent = '';
       tutorialCortexEntry = null;
       dispatchTutorialCortexChanged();
       hoveredSelectors = new Set();
+      hoveredMapSelectors = new Set();
+      hoveredRightPanelSelectors = new Set();
       captureTutorialProjectBaseline();
       currentStepIndex = findStepIndex(readStorage(TUTORIAL_PROGRESS_KEY, 'panels'));
       activeStepId = '';
@@ -2469,8 +4160,12 @@
       writeStorage(TUTORIAL_COMPLETED_KEY, 'false');
       writeStorage(TUTORIAL_DISMISSED_KEY, 'false');
       writeStorage(TUTORIAL_PROGRESS_KEY, 'panels');
+      writeStorage(TUTORIAL_PROJECT_ID_KEY, '');
+      writeStorage(TUTORIAL_USER_NAME_KEY, '');
+      resetTutorialDevelopmentState();
       if (!getAccountUnlocked()) return false;
       stopDemoVisuals();
+      discardTutorialApiDraft();
       clearHighlights();
       currentStepIndex = 0;
       activeStepId = '';
@@ -2518,6 +4213,119 @@
       }, 220);
     }
 
+    function watchTutorialMapOpen(attempt = 0) {
+      window.setTimeout(() => {
+        if (!active) return;
+        const current = steps()[currentStepIndex];
+        if (!current || current.id !== 'map-intro') return;
+        if (tutorialMapIconClicked && isMapTabOpen()) {
+          renderStep();
+          return;
+        }
+        if (attempt < 40) watchTutorialMapOpen(attempt + 1);
+      }, attempt === 0 ? 0 : 100);
+    }
+
+    function waitForTutorialCreatedNode(selector, previousNodeIds, onCreated, attempt = 0) {
+      window.setTimeout(() => {
+        if (!active) {
+          tutorialMapCreationPending = false;
+          return;
+        }
+        const current = steps()[currentStepIndex];
+        if (!current || current.id !== 'map-build') {
+          tutorialMapCreationPending = false;
+          return;
+        }
+        const nodes = Array.from(doc.querySelectorAll(selector));
+        const createdNode = nodes.find((node) => node.id && !previousNodeIds.has(node.id));
+        if (!createdNode) {
+          if (attempt < 40) {
+            waitForTutorialCreatedNode(selector, previousNodeIds, onCreated, attempt + 1);
+          } else {
+            tutorialMapCreationPending = false;
+            activeGuideSignature = '';
+            renderStep();
+          }
+          return;
+        }
+        tutorialMapCreationPending = false;
+        onCreated(createdNode.id);
+        renderStep();
+      }, attempt === 0 ? 0 : 50);
+    }
+
+    function waitForTutorialMapInspector(nextStage, attempt = 0) {
+      window.setTimeout(() => {
+        if (!active) return;
+        const current = steps()[currentStepIndex];
+        if (!current || current.id !== 'map-build') return;
+        if (isTutorialMapInspectorOpen()) {
+          tutorialMapInspectorOpened = true;
+          tutorialMapBuildStage = nextStage;
+          renderStep();
+          return;
+        }
+        if (attempt < 40) waitForTutorialMapInspector(nextStage, attempt + 1);
+      }, attempt === 0 ? 0 : 50);
+    }
+
+    async function typeIntoTutorialMarkdown(text) {
+      const wrapper = resolveVisibleElement('#workspace-map-inspector-panel .CodeMirror');
+      const editor = wrapper && wrapper.CodeMirror;
+      if (!editor) {
+        const textarea = resolveElement('#inspector-node-content');
+        if (!textarea) return false;
+        textarea.value = text;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      }
+
+      const runId = demoRunId;
+      tutorialTypingInProgress = true;
+      pendingTutorialRender = false;
+      editor.focus();
+      editor.setValue('');
+      try {
+        const chunkSize = 6;
+        for (let index = chunkSize; index < text.length + chunkSize; index += chunkSize) {
+          if (!active || runId !== demoRunId) return false;
+          editor.setValue(text.slice(0, Math.min(index, text.length)));
+          const keepGoing = await wait(10, runId);
+          if (!keepGoing) return false;
+        }
+        return true;
+      } finally {
+        tutorialTypingInProgress = false;
+        if (pendingTutorialRender && active) {
+          pendingTutorialRender = false;
+          window.setTimeout(() => renderStep(), 0);
+        }
+      }
+    }
+
+    async function fillTutorialMapField(selector, text, nextStage, options = {}) {
+      if (tutorialTypingInProgress) return;
+      const expectedStage = tutorialMapBuildStage;
+      const runId = demoRunId;
+      const completed = options.markdown
+        ? await typeIntoTutorialMarkdown(text)
+        : await typeInto(selector, text, {
+            runId,
+            preserveValue: true,
+            typingDelay: options.typingDelay || 18,
+            label: options.label || '',
+          });
+      const current = steps()[currentStepIndex];
+      if (!completed || !active || !current || current.id !== 'map-build') return;
+      if (tutorialMapBuildStage !== expectedStage) return;
+      tutorialMapBuildStage = nextStage;
+      if (options.completeWelcome) tutorialWelcomeBriefReady = true;
+      if (options.completeDesign) tutorialDesignSystemReady = true;
+      renderStep();
+    }
+
     function onMouseOver(event) {
       if (!active) return;
       const step = steps()[currentStepIndex];
@@ -2539,6 +4347,19 @@
         if (!selector) return;
         hoveredMapSelectors.add(selector);
         renderStep();
+        return;
+      }
+      if (
+        step.id === 'map-chat'
+        && (tutorialMapChatStage === 'expand-right' || tutorialMapChatStage === 'right-tools')
+      ) {
+        const selector = RIGHT_PANEL_HOVER_SELECTORS.find((entry) => matchedSelector === entry);
+        if (!selector) return;
+        hoveredRightPanelSelectors.add(selector);
+        tutorialMapChatStage = hoveredRightPanelSelectors.size >= RIGHT_PANEL_HOVER_SELECTORS.length
+          ? 'open'
+          : 'right-tools';
+        renderStep();
       }
     }
 
@@ -2553,6 +4374,10 @@
       const related = event.relatedTarget;
       const stillInside = targets.some((selector) => related && related.closest ? related.closest(selector) : null);
       if (stillInside) return;
+      if (guide.disableCursor) {
+        hideCursor();
+        return;
+      }
       showCursor();
       setCursorLabel(elements.tutorialCursorLabel ? elements.tutorialCursorLabel.textContent : '');
     }
@@ -2579,6 +4404,7 @@
 
     function onDocumentClick(event) {
       if (!active) return;
+      if (allowTutorialSyntheticClick && event.type === 'click' && event.isTrusted === false) return;
       const step = steps()[currentStepIndex];
       if (!step) return;
       if (step.id === 'apis' && event.type === 'mousedown') return;
@@ -2590,33 +4416,24 @@
       }
       const guide = getStepGuide(step);
       if (step.id === 'apis') {
-        const directSave = event.target && event.target.closest ? event.target.closest('#ai-settings-save') : null;
-        if (directSave && event.type === 'click' && !isVisibleElement(resolveElement('#ai-settings-editor-key'))) {
+        const directCancel = event.target && event.target.closest ? event.target.closest('#ai-settings-cancel') : null;
+        if (directCancel && event.type === 'click' && !isVisibleElement(resolveElement('#ai-settings-editor-key'))) {
           animateCursorClick();
           hideCursor();
-          window.setTimeout(() => {
-            const watchSave = () => {
-              if (!active) return;
-              if (!isModalOpen('#ai-settings-modal')) {
-                apiDemoPrepared = true;
-                apiEditorSaved = true;
-                restoreTutorialFieldDecorators();
-                refreshTutorialContext();
-                renderStep();
-                const current = steps()[currentStepIndex];
-                if (current && current.id === 'apis') nextStep();
-                return;
-              }
-              window.setTimeout(watchSave, 120);
-            };
-            watchSave();
-          }, 80);
+          finishTutorialApiDemoAfterModalClose();
           return;
         }
       }
       if (isInsideCoach(event.target)) return;
       const match = matchCurrentGuideTarget(event.target, guide);
       if (!match.element) {
+        const isInteractiveGuideArea = (guide.interactiveSelectors || []).some((selector) => (
+          event.target && event.target.closest && event.target.closest(selector)
+        ));
+        if (isInteractiveGuideArea) {
+          hideCursor();
+          return;
+        }
         if (step.id === 'sidebar' && isModalOpen('#project-state-modal')) {
           const modalDialog = event.target && event.target.closest ? event.target.closest('#project-state-modal .project-state-modal__dialog') : null;
           const modalBackdrop = event.target && event.target.closest ? event.target.closest('#project-state-modal [data-close=\"1\"]') : null;
@@ -2721,22 +4538,25 @@
           return;
         }
         if (match.selector === '#ai-settings-editor-provider') {
+          const runId = demoRunId;
           hideCursor();
           window.setTimeout(async () => {
-            if (!active || apiServiceTyped) {
+            if (!active || runId !== demoRunId || apiServiceTyped) {
               refreshTutorialContext();
               renderStep();
               return;
             }
-            await typeInto('#ai-settings-editor-provider', getTutorialApiServiceName(), {
+            const typed = await typeInto('#ai-settings-editor-provider', getTutorialApiServiceName(), {
+              runId,
               preserveValue: true,
               typingDelay: 42,
               label: 'Serviço',
             });
+            if (!typed) return;
             apiServiceTyped = true;
             refreshTutorialContext();
             renderStep();
-          }, 180);
+          }, 360);
           return;
         }
         if (match.selector === '#ai-settings-editor-key') {
@@ -2769,26 +4589,10 @@
           }, 260);
           return;
         }
-        if (match.selector === '#ai-settings-save') {
+        if (match.selector === '#ai-settings-cancel') {
           animateCursorClick();
           hideCursor();
-          window.setTimeout(() => {
-            const watchSave = () => {
-              if (!active) return;
-              if (!isModalOpen('#ai-settings-modal')) {
-                apiDemoPrepared = true;
-                apiEditorSaved = true;
-                restoreTutorialFieldDecorators();
-                refreshTutorialContext();
-                renderStep();
-                const current = steps()[currentStepIndex];
-                if (current && current.id === 'apis') nextStep();
-                return;
-              }
-              window.setTimeout(watchSave, 120);
-            };
-            watchSave();
-          }, 80);
+          finishTutorialApiDemoAfterModalClose();
           return;
         }
         animateCursorClick();
@@ -2800,14 +4604,20 @@
         return;
       }
       if (step.id === 'map-intro') {
+        const projectMapSelector = getTutorialCreatedProjectMapSelector();
+        const isProjectMapTarget = (
+          match.selector === projectMapSelector
+          || match.selector === '.project-mini-btn-map'
+        );
         if (
           match.selector === '#workspace-collapse-left'
           || match.selector === '#workspace-collapse-right'
-          || match.selector === getTutorialCreatedProjectMapSelector()
-          || match.selector === '.project-mini-btn-map'
+          || isProjectMapTarget
         ) {
-          if ((event.type === 'click' || event.type === 'mousedown') && (match.selector === getTutorialCreatedProjectMapSelector() || match.selector === '.project-mini-btn-map')) {
+          if (event.type === 'mousedown') return;
+          if (isProjectMapTarget) {
             tutorialMapIconClicked = true;
+            watchTutorialMapOpen();
           }
           animateCursorClick();
           hideCursor();
@@ -2822,8 +4632,717 @@
         }
       }
       if (step.id === 'map-build') {
+        if (event.type === 'mousedown') return;
+        if (match.selector === '#btn-map-tool-add-card') {
+          if (tutorialMapCreationPending) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            return;
+          }
+          tutorialMapCreationPending = true;
+          const previousNodeIds = new Set(
+            Array.from(doc.querySelectorAll('.map-node.node-text'))
+              .map((node) => node.id)
+              .filter(Boolean)
+          );
+          animateCursorClick();
+          hideCursor();
+          if (tutorialMapBuildStage === 'welcome-create') {
+            waitForTutorialCreatedNode('.map-node.node-text', previousNodeIds, (nodeId) => {
+              tutorialWelcomeNodeId = nodeId;
+              tutorialMapNodeId = nodeId;
+              tutorialMapInspectorOpened = false;
+              tutorialMapBuildStage = 'welcome-edit';
+            });
+          } else if (tutorialMapBuildStage === 'design-create') {
+            waitForTutorialCreatedNode('.map-node.node-text', previousNodeIds, (nodeId) => {
+              tutorialDesignSystemNodeId = nodeId;
+              tutorialMapNodeId = nodeId;
+              tutorialMapInspectorOpened = false;
+              arrangeTutorialMarkdownNodes();
+              tutorialMapBuildStage = isRightWorkspaceCollapsed()
+                ? 'design-edit'
+                : 'design-collapse-right';
+              if (isRightWorkspaceCollapsed()) applyTutorialMapLayout();
+            });
+          } else if (tutorialMapBuildStage === 'architecture-stack-create') {
+            waitForTutorialCreatedNode('.map-node.node-text', previousNodeIds, (nodeId) => {
+              prepareTutorialArchitectureNode(nodeId, 'stack');
+            });
+          } else if (tutorialMapBuildStage === 'architecture-components-create') {
+            waitForTutorialCreatedNode('.map-node.node-text', previousNodeIds, (nodeId) => {
+              prepareTutorialArchitectureNode(nodeId, 'components');
+            });
+          } else if (tutorialMapBuildStage === 'architecture-content-create') {
+            waitForTutorialCreatedNode('.map-node.node-text', previousNodeIds, (nodeId) => {
+              prepareTutorialArchitectureNode(nodeId, 'content');
+            });
+          }
+          return;
+        }
+        if (
+          match.selector === '#workspace-collapse-right'
+          && tutorialMapBuildStage === 'design-collapse-right'
+        ) {
+          animateCursorClick();
+          hideCursor();
+          window.setTimeout(() => {
+            const current = steps()[currentStepIndex];
+            if (!active || !current || current.id !== 'map-build' || !isRightWorkspaceCollapsed()) return;
+            applyTutorialMapLayout();
+            renderStep();
+          }, 180);
+          return;
+        }
+        if (match.element.classList.contains('map-node-edit-btn')) {
+          const isArchitectureEdit = /^architecture-(stack|components|content)-edit$/.test(tutorialMapBuildStage);
+          const nextStage = isArchitectureEdit
+            ? tutorialMapBuildStage.replace(/-edit$/, '-review')
+            : tutorialMapBuildStage === 'welcome-edit'
+              ? 'welcome-title'
+              : 'design-title';
+          allowTutorialSyntheticClick = true;
+          animateCursorClick();
+          hideCursor();
+          window.setTimeout(() => {
+            allowTutorialSyntheticClick = false;
+            waitForTutorialMapInspector(nextStage);
+          }, 0);
+          return;
+        }
+        if (match.selector === '#inspector-node-title') {
+          animateCursorClick();
+          hideCursor();
+          if (tutorialMapBuildStage === 'welcome-title') {
+            window.setTimeout(() => {
+              void fillTutorialMapField(
+                '#inspector-node-title',
+                tutorialText('documents.welcome.title', {}, 'Briefing: Página de Boas-vindas'),
+                'welcome-description',
+                { label: 'Título do briefing' }
+              );
+            }, 90);
+          } else if (tutorialMapBuildStage === 'design-title') {
+            window.setTimeout(() => {
+              void fillTutorialMapField(
+                '#inspector-node-title',
+                tutorialText('documents.design.title', {}, 'Design System Faber Code'),
+                'design-description',
+                { label: 'Título do Design System' }
+              );
+            }, 90);
+          }
+          return;
+        }
+        if (match.selector === '#inspector-node-desc') {
+          animateCursorClick();
+          hideCursor();
+          if (tutorialMapBuildStage === 'welcome-description') {
+            window.setTimeout(() => {
+              void fillTutorialMapField(
+                '#inspector-node-desc',
+                tutorialText('documents.welcome.description', {}, 'Página estática de boas-vindas.'),
+                'welcome-content',
+                { label: 'Descrição do briefing', typingDelay: 14 }
+              );
+            }, 90);
+          } else if (tutorialMapBuildStage === 'design-description') {
+            window.setTimeout(() => {
+              void fillTutorialMapField(
+                '#inspector-node-desc',
+                tutorialText('documents.design.description', {}, 'Cores, tipografias e regras visuais.'),
+                'design-content',
+                { label: 'Descrição do Design System', typingDelay: 14 }
+              );
+            }, 90);
+          }
+          return;
+        }
+        if (match.selector === '#workspace-map-inspector-panel .CodeMirror') {
+          animateCursorClick();
+          hideCursor();
+          if (tutorialMapBuildStage === 'welcome-content') {
+            window.setTimeout(() => {
+              void fillTutorialMapField(
+                '#inspector-node-content',
+                tutorialText('documents.welcome.content'),
+                'welcome-close',
+                { markdown: true, completeWelcome: true }
+              );
+            }, 90);
+          } else if (tutorialMapBuildStage === 'design-content') {
+            window.setTimeout(() => {
+              void fillTutorialMapField(
+                '#inspector-node-content',
+                tutorialText('documents.design.content'),
+                'design-close',
+                { markdown: true, completeDesign: true }
+              );
+            }, 90);
+          }
+          return;
+        }
+        if (match.selector === '#btn-map-inspector-close') {
+          animateCursorClick();
+          hideCursor();
+          const closingStage = tutorialMapBuildStage;
+          const nextStageByClosingStage = {
+            'welcome-close': 'design-create',
+            'design-close': 'logo-create',
+            'architecture-stack-review': 'architecture-components-create',
+            'architecture-components-review': 'architecture-content-create',
+            'architecture-content-review': 'development-ready',
+          };
+          const nextStage = nextStageByClosingStage[closingStage];
+          if (!nextStage) return;
+          window.setTimeout(() => {
+            tutorialMapInspectorOpened = false;
+            tutorialMapBuildStage = nextStage;
+            if (nextStage === 'development-ready') {
+              tutorialDevelopmentReady = true;
+              focusTutorialDevelopmentMap();
+            }
+            renderStep();
+          }, 120);
+          return;
+        }
+        if (match.selector === '#btn-map-tool-add-image') {
+          if (tutorialMapCreationPending) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            return;
+          }
+          tutorialMapCreationPending = true;
+          const previousNodeIds = new Set(
+            Array.from(doc.querySelectorAll('.map-node.node-image'))
+              .map((node) => node.id)
+              .filter(Boolean)
+          );
+          animateCursorClick();
+          hideCursor();
+          waitForTutorialCreatedNode('.map-node.node-image', previousNodeIds, (nodeId) => {
+            if (!configureTutorialLogoNode(nodeId)) return;
+            tutorialLogoNodeId = nodeId;
+            tutorialMapBuildStage = 'frontend-group';
+          });
+          return;
+        }
+        if (match.selector === '#btn-map-tool-add-group') {
+          if (tutorialMapCreationPending) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            return;
+          }
+          tutorialMapCreationPending = true;
+          const previousNodeIds = new Set(
+            Array.from(doc.querySelectorAll('.map-node.node-group'))
+              .map((node) => node.id)
+              .filter(Boolean)
+          );
+          const groupStage = tutorialMapBuildStage;
+          animateCursorClick();
+          hideCursor();
+          waitForTutorialCreatedNode('.map-node.node-group', previousNodeIds, (nodeId) => {
+            if (groupStage === 'frontend-group') {
+              if (!configureTutorialFrontendGroup(nodeId)) return;
+              tutorialFrontendGroupId = nodeId;
+              tutorialMapBuildStage = 'rules-group';
+              return;
+            }
+            if (groupStage === 'rules-group') {
+              if (!configureTutorialRulesGroup(nodeId)) return;
+              tutorialRulesGroupId = nodeId;
+              tutorialMapBuildStage = 'user-name';
+            }
+          });
+          return;
+        }
         animateCursorClick();
         hideCursor();
+        return;
+      }
+      if (step.id === 'map-chat') {
+        if (event.type === 'mousedown') {
+          if (
+            (tutorialMapChatStage === 'expand-right' || tutorialMapChatStage === 'right-tools')
+            && RIGHT_PANEL_HOVER_SELECTORS.includes(match.selector)
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+          }
+          return;
+        }
+        if (match.selector === '#workspace-restore-right' && tutorialMapChatStage === 'expand-right') {
+          animateCursorClick();
+          hideCursor();
+          window.setTimeout(() => {
+            const current = steps()[currentStepIndex];
+            if (!active || !current || current.id !== 'map-chat' || isRightWorkspaceCollapsed()) return;
+            tutorialMapChatStage = 'right-tools';
+            renderStep();
+          }, 180);
+          return;
+        }
+        if (
+          (tutorialMapChatStage === 'expand-right' || tutorialMapChatStage === 'right-tools')
+          && RIGHT_PANEL_HOVER_SELECTORS.includes(match.selector)
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          return;
+        }
+        if (match.selector === '#btn-map-ai' && tutorialMapChatStage === 'open') {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          animateCursorClick();
+          hideCursor();
+          const controller = getTutorialMapController();
+          allowTutorialSyntheticClick = true;
+          const prepared = controller && typeof controller.prepareTutorialMapConversation === 'function'
+            ? controller.prepareTutorialMapConversation()
+            : false;
+          window.setTimeout(() => {
+            allowTutorialSyntheticClick = false;
+            if (!prepared || !active) return;
+            const current = steps()[currentStepIndex];
+            if (!current || current.id !== 'map-chat') return;
+            tutorialMapChatStage = 'compose';
+            renderStep();
+          }, 140);
+          return;
+        }
+        if (match.selector === '#map-chat-textarea') {
+          animateCursorClick();
+          hideCursor();
+          if (tutorialTypingInProgress) return;
+          const runId = demoRunId;
+          window.setTimeout(async () => {
+            const completed = await typeInto('#map-chat-textarea', tutorialText('mapChat.prompt'), {
+              runId,
+              preserveValue: true,
+              typingDelay: 18,
+              label: 'Pergunta para a IA do Mapa',
+            });
+            const current = steps()[currentStepIndex];
+            if (!completed || !active || !current || current.id !== 'map-chat') return;
+            tutorialMapChatStage = 'send';
+            renderStep();
+          }, 90);
+          return;
+        }
+        if (match.selector === '#btn-map-chat-send') {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          animateCursorClick();
+          hideCursor();
+          const textarea = resolveElement('#map-chat-textarea');
+          const userText = String(textarea && textarea.value || '').trim() || tutorialText('mapChat.prompt');
+          if (textarea) textarea.value = '';
+          tutorialMapChatStage = 'reply';
+          renderStep();
+          const controller = getTutorialMapController();
+          const simulation = controller && typeof controller.simulateTutorialMapConversation === 'function'
+            ? controller.simulateTutorialMapConversation(userText, tutorialText('mapChat.reply'))
+            : Promise.resolve(false);
+          Promise.resolve(simulation).then((completed) => {
+            const current = steps()[currentStepIndex];
+            if (!completed || !active || !current || current.id !== 'map-chat') return;
+            tutorialMapChatStage = 'missing-info';
+            renderStep();
+          }).catch(() => {});
+          return;
+        }
+        if (match.selector === '#btn-map-chat-add-gap' && tutorialMapChatStage === 'missing-info') {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          animateCursorClick();
+          hideCursor();
+          applyTutorialMapGapCorrection();
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        return;
+      }
+      if (step.id === 'map-analysis') {
+        if (event.type === 'mousedown') return;
+        if (match.selector === '#btn-map-render-launcher' && tutorialMapAnalysisStage === 'history') {
+          animateCursorClick();
+          hideCursor();
+          tutorialMapAnalysisStage = 'render-list';
+          window.setTimeout(() => {
+            refreshTutorialContext();
+            renderStep();
+          }, 240);
+          return;
+        }
+        if (match.selector === '#btn-map-render-open' && tutorialMapAnalysisStage === 'render-list') {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          animateCursorClick();
+          hideCursor();
+          tutorialMapAnalysisStage = 'rendering';
+          renderStep();
+          const controller = getTutorialMapController();
+          const renderPromise = controller && typeof controller.generateTutorialRenderDraft === 'function'
+            ? controller.generateTutorialRenderDraft()
+            : Promise.resolve(false);
+          Promise.resolve(renderPromise).then((completed) => {
+            const current = steps()[currentStepIndex];
+            if (!active || !current || current.id !== 'map-analysis') return;
+            tutorialMapAnalysisStage = completed ? 'plan-ready' : 'render-list';
+            renderStep();
+          }).catch(() => {
+            if (!active) return;
+            tutorialMapAnalysisStage = 'render-list';
+            renderStep();
+          });
+          return;
+        }
+        if (match.selector === '#btn-map-render-save' && tutorialMapAnalysisStage === 'plan-ready') {
+          animateCursorClick();
+          hideCursor();
+          waitForElement('#faber-confirm-modal:not(.hidden)', { visible: true, timeout: 3000 }).then((modal) => {
+            const current = steps()[currentStepIndex];
+            if (!modal || !active || !current || current.id !== 'map-analysis') return;
+            tutorialMapAnalysisStage = 'confirm';
+            renderStep();
+          });
+          return;
+        }
+        if (match.selector === '#faber-confirm-yes' && tutorialMapAnalysisStage === 'confirm') {
+          animateCursorClick();
+          hideCursor();
+          tutorialMapAnalysisStage = 'saving';
+          window.setTimeout(() => {
+            const confirmButton = resolveElement('#faber-confirm-yes');
+            if (confirmButton) confirmButton.textContent = tutorialText('ui.confirm');
+            if (active) renderStep();
+          }, 180);
+          return;
+        }
+        if (match.selector === '#btn-project-milestones' && tutorialMapAnalysisStage === 'milestones') {
+          animateCursorClick();
+          hideCursor();
+          tutorialMapAnalysisStage = 'milestones-loading';
+          waitForElement('.milestone-item:first-child .milestone-card', { visible: true, timeout: 5000 }).then((card) => {
+            const current = steps()[currentStepIndex];
+            if (!card || !active || !current || current.id !== 'map-analysis') return;
+            tutorialMapAnalysisStage = 'milestone-open';
+            renderStep();
+          });
+          return;
+        }
+        if (
+          match.selector === '.milestone-item:first-child .milestone-card'
+          && tutorialMapAnalysisStage === 'milestone-open'
+        ) {
+          animateCursorClick();
+          hideCursor();
+          window.setTimeout(() => {
+            const current = steps()[currentStepIndex];
+            if (!active || !current || current.id !== 'map-analysis') return;
+            const selectedMilestone = resolveVisibleElement('.milestone-item.selected .milestone-card');
+            if (!selectedMilestone) return;
+            tutorialMapAnalysisStage = 'project-chat';
+            if (typeof actions.revealProjectConversationButton === 'function') {
+              actions.revealProjectConversationButton();
+            }
+            activeGuideSignature = '';
+            renderStep();
+          }, 180);
+          return;
+        }
+        const projectConversationSelector = getTutorialCreatedProjectConversationSelector();
+        if (match.selector === projectConversationSelector && tutorialMapAnalysisStage === 'project-chat') {
+          animateCursorClick();
+          hideCursor();
+          tutorialMapAnalysisStage = 'opening-development-chat';
+          window.setTimeout(() => {
+            if (active) renderStep();
+          }, 80);
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        return;
+      }
+      if (step.id === 'development-chat') {
+        if (event.type === 'mousedown') return;
+        if (match.selector === '#user-input' && tutorialDevelopmentChatStage === 'compose') {
+          animateCursorClick();
+          hideCursor();
+          if (tutorialTypingInProgress) return;
+          const runId = demoRunId;
+          window.setTimeout(async () => {
+            const completed = await typeInto('#user-input', tutorialText('development.prompt'), {
+              runId,
+              preserveValue: true,
+              typingDelay: 18,
+              label: 'Mensagem da Milestone 1',
+            });
+            const current = steps()[currentStepIndex];
+            if (!completed || !active || !current || current.id !== 'development-chat') return;
+            tutorialDevelopmentChatStage = 'send';
+            persistTutorialDevelopmentState();
+            renderStep();
+          }, 90);
+          return;
+        }
+        if (match.selector === '#btn-send' && tutorialDevelopmentChatStage === 'send') {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          animateCursorClick();
+          hideCursor();
+          const input = resolveElement('#user-input');
+          const userText = String(input && input.value || '').trim() || tutorialText('development.prompt');
+          tutorialDevelopmentChatStage = 'sending';
+          persistTutorialDevelopmentState();
+          renderStep();
+          const simulation = typeof actions.simulateTutorialDevelopmentConversation === 'function'
+            ? actions.simulateTutorialDevelopmentConversation(userText, tutorialValue('development.replies', []))
+            : Promise.resolve(false);
+          Promise.resolve(simulation).then((completed) => {
+            const current = steps()[currentStepIndex];
+            if (!completed || !active || !current || current.id !== 'development-chat') return;
+            tutorialDevelopmentChatStage = 'complete';
+            tutorialDevelopmentConversationComplete = true;
+            persistTutorialDevelopmentState();
+            renderStep();
+          }).catch(() => {
+            if (!active) return;
+            tutorialDevelopmentChatStage = 'send';
+            persistTutorialDevelopmentState();
+            renderStep();
+          });
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        return;
+      }
+      if (step.id === 'git') {
+        if (event.type === 'mousedown') return;
+        const stage = tutorialDevelopmentWorkflowStage;
+
+        if (match.selector === '#btn-tab-chat' && stage === 'return-chat') {
+          animateCursorClick();
+          hideCursor();
+          tutorialDevelopmentWorkflowStage = 'creating';
+          persistTutorialDevelopmentState();
+          window.setTimeout(() => {
+            if (!active || steps()[currentStepIndex]?.id !== 'git') return;
+            void startTutorialDevelopmentBatch(1);
+          }, 260);
+          return;
+        }
+
+        if (match.selector === '#btn-project-git' && (stage === 'open-git' || stage === 'idle')) {
+          animateCursorClick();
+          hideCursor();
+          tutorialDevelopmentWorkflowStage = 'inspect-git';
+          persistTutorialDevelopmentState();
+          waitForElement('[data-tutorial-git-step]', { visible: true, timeout: 5000 }).then((panel) => {
+            if (!panel || !active || steps()[currentStepIndex]?.id !== 'git') return;
+            syncTutorialGitPanelStage();
+          });
+          return;
+        }
+
+        if (
+          match.selector === '[data-tutorial-git-step="repo"] .right-tool-git-step__head'
+          && stage === 'open-repo'
+        ) {
+          animateCursorClick();
+          hideCursor();
+          tutorialDevelopmentWorkflowStage = 'init-repo';
+          persistTutorialDevelopmentState();
+          window.setTimeout(() => active && renderStep(), 120);
+          return;
+        }
+
+        if (match.selector === '[data-tutorial-git-action="init"]' && stage === 'init-repo') {
+          animateCursorClick();
+          hideCursor();
+          tutorialDevelopmentWorkflowStage = 'initializing';
+          persistTutorialDevelopmentState();
+          window.setTimeout(() => {
+            if (!active || tutorialDevelopmentWorkflowStage !== 'initializing') return;
+            syncTutorialGitPanelStage();
+          }, 3000);
+          return;
+        }
+
+        if (
+          match.selector === `[data-tutorial-git-step="${tutorialGitChangeScope}"] .right-tool-git-step__head`
+          && stage === 'open-changes'
+        ) {
+          animateCursorClick();
+          hideCursor();
+          tutorialDevelopmentWorkflowStage = 'select-changes';
+          persistTutorialDevelopmentState();
+          window.setTimeout(async () => {
+            if (!active || tutorialDevelopmentWorkflowStage !== 'select-changes') return;
+            const selector = `[data-tutorial-git-action="select-all"][data-tutorial-git-scope="${tutorialGitChangeScope}"]`;
+            const selectAll = await waitForElement(selector, { visible: true, timeout: 2400 });
+            if (selectAll && active && tutorialDevelopmentWorkflowStage === 'select-changes') {
+              selectAll.click();
+            } else if (active) {
+              renderStep();
+            }
+          }, 160);
+          return;
+        }
+
+        if (
+          match.selector === `[data-tutorial-git-action="select-all"][data-tutorial-git-scope="${tutorialGitChangeScope}"]`
+          && stage === 'select-changes'
+        ) {
+          animateCursorClick();
+          hideCursor();
+          tutorialDevelopmentWorkflowStage = 'stage-changes';
+          persistTutorialDevelopmentState();
+          window.setTimeout(() => active && renderStep(), 120);
+          return;
+        }
+
+        if (
+          match.selector === `[data-tutorial-git-action="stage"][data-tutorial-git-scope="${tutorialGitChangeScope}"]`
+          && stage === 'stage-changes'
+        ) {
+          animateCursorClick();
+          hideCursor();
+          tutorialDevelopmentWorkflowStage = 'staging';
+          persistTutorialDevelopmentState();
+          window.setTimeout(() => {
+            if (!active || tutorialDevelopmentWorkflowStage !== 'staging') return;
+            syncTutorialGitPanelStage();
+          }, 3000);
+          return;
+        }
+
+        if (
+          match.selector === '[data-tutorial-git-action="select-all"][data-tutorial-git-scope="staged"]'
+          && stage === 'select-staged'
+        ) {
+          animateCursorClick();
+          hideCursor();
+          tutorialDevelopmentWorkflowStage = 'commit-message';
+          persistTutorialDevelopmentState();
+          window.setTimeout(() => active && renderStep(), 120);
+          return;
+        }
+
+        if (match.selector === '[data-tutorial-git-action="message"]' && stage === 'commit-message') {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          animateCursorClick();
+          hideCursor();
+          if (tutorialTypingInProgress) return;
+          const runId = demoRunId;
+          const batch = getTutorialDevelopmentBatch(tutorialDevelopmentBatchIndex);
+          window.setTimeout(async () => {
+            const typed = await typeInto(
+              '[data-tutorial-git-action="message"]',
+              batch && batch.commitMessage
+                ? batch.commitMessage
+                : tutorialText('development.fallbackCommit', {
+                    number: tutorialDevelopmentCommitCount + 1,
+                  }),
+              { runId, preserveValue: true, typingDelay: 22, label: 'Mensagem do commit' }
+            );
+            if (!typed || !active || steps()[currentStepIndex]?.id !== 'git') return;
+            tutorialDevelopmentWorkflowStage = 'commit';
+            persistTutorialDevelopmentState();
+            renderStep();
+          }, 80);
+          return;
+        }
+
+        if (match.selector === '[data-tutorial-git-action="commit"]' && stage === 'commit') {
+          animateCursorClick();
+          hideCursor();
+          tutorialDevelopmentWorkflowStage = 'committing';
+          persistTutorialDevelopmentState();
+          window.setTimeout(() => {
+            if (!active || tutorialDevelopmentWorkflowStage !== 'committing') return;
+            syncTutorialGitPanelStage();
+          }, 3000);
+          return;
+        }
+
+        if (match.selector === '#btn-project-files' && stage === 'open-files') {
+          animateCursorClick();
+          hideCursor();
+          tutorialDevelopmentWorkflowStage = 'loading-files';
+          persistTutorialDevelopmentState();
+          window.setTimeout(async () => {
+            if (!active || steps()[currentStepIndex]?.id !== 'git') return;
+            if (typeof actions.refreshTutorialFiles === 'function') await actions.refreshTutorialFiles();
+            const row = await waitForElement('.project-tree-row.file.has-diff', { visible: true, timeout: 5000 });
+            if (!active || steps()[currentStepIndex]?.id !== 'git') return;
+            tutorialDevelopmentWorkflowStage = row ? 'review-file' : 'open-files';
+            persistTutorialDevelopmentState();
+            renderStep();
+          }, 260);
+          return;
+        }
+
+        if (match.selector === '.project-tree-row.file.has-diff' && stage === 'review-file') {
+          animateCursorClick();
+          hideCursor();
+          tutorialDevelopmentWorkflowStage = 'opening-file';
+          persistTutorialDevelopmentState();
+          waitForElement('#project-file-modal:not(.hidden)', { visible: true, timeout: 4000 }).then((modal) => {
+            if (!modal || !active || steps()[currentStepIndex]?.id !== 'git') return;
+            tutorialDevelopmentWorkflowStage = 'close-file';
+            persistTutorialDevelopmentState();
+            renderStep();
+          });
+          return;
+        }
+
+        if (match.selector === '#project-file-modal-close' && stage === 'close-file') {
+          animateCursorClick();
+          hideCursor();
+          tutorialDevelopmentFilesReviewed = true;
+          tutorialDevelopmentWorkflowStage = 'open-git';
+          persistTutorialDevelopmentState();
+          window.setTimeout(() => active && renderStep(), 220);
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        return;
+      }
+      if (step.id === 'finish') {
+        if (event.type === 'mousedown') return;
+        if (match.selector === '#btn-project-deploy' && !tutorialPreviewLaunching && !tutorialPreviewStarted) {
+          animateCursorClick();
+          hideCursor();
+          tutorialPreviewLaunching = true;
+          window.setTimeout(() => active && renderStep(), 0);
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
         return;
       }
       animateCursorClick();
@@ -2896,6 +5415,18 @@
       if (elements.tutorialNext) elements.tutorialNext.addEventListener('click', nextStep);
       if (elements.tutorialPrev) elements.tutorialPrev.addEventListener('click', previousStep);
       if (elements.tutorialSkipAll) elements.tutorialSkipAll.addEventListener('click', dismissTutorial);
+      if (elements.tutorialNameSave) elements.tutorialNameSave.addEventListener('click', submitTutorialUserName);
+      if (elements.tutorialNameInput) {
+        elements.tutorialNameInput.addEventListener('input', () => {
+          elements.tutorialNameInput.removeAttribute('aria-invalid');
+          if (elements.tutorialNameError) elements.tutorialNameError.textContent = '';
+        });
+        elements.tutorialNameInput.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter') return;
+          event.preventDefault();
+          submitTutorialUserName();
+        });
+      }
       if (elements.tutorialPreview) {
         elements.tutorialPreview.addEventListener('click', (event) => {
           onPreviewClick(event).catch(() => {});
@@ -2906,13 +5437,87 @@
       doc.addEventListener('change', onDocumentChange, true);
       doc.addEventListener('click', onDocumentClick, true);
       doc.addEventListener('mousedown', onDocumentClick, true);
+      window.addEventListener('faber:milestones-updated', () => {
+        if (!active) return;
+        const current = steps()[currentStepIndex];
+        if (!current || current.id !== 'map-analysis' || tutorialMapAnalysisStage !== 'saving') return;
+        tutorialMilestonesSaved = true;
+        tutorialMapAnalysisStage = 'milestones';
+        const confirmButton = resolveElement('#faber-confirm-yes');
+        if (confirmButton) confirmButton.textContent = tutorialText('ui.confirm');
+        renderStep();
+      });
+      window.addEventListener('faber:project-conversation-prepared', (event) => {
+        if (!active) return;
+        const current = steps()[currentStepIndex];
+        if (!current || current.id !== 'map-analysis' || tutorialMapAnalysisStage !== 'opening-development-chat') return;
+        const projectId = String(event && event.detail && event.detail.projectId || '');
+        const tutorialProject = getTutorialCreatedProject();
+        if (tutorialProject && tutorialProject.id && projectId && projectId !== tutorialProject.id) return;
+        tutorialMapAnalysisStage = 'development-chat-open';
+        tutorialDevelopmentChatStage = 'compose';
+        persistTutorialDevelopmentState();
+        activeGuideSignature = '';
+        renderStep();
+      });
+      window.addEventListener('faber:tutorial-git-action', (event) => {
+        if (!active) return;
+        const current = steps()[currentStepIndex];
+        if (!current || current.id !== 'git') return;
+        const action = String(event && event.detail && event.detail.action || '');
+        if (action === 'init' && tutorialDevelopmentWorkflowStage === 'initializing') {
+          tutorialDevelopmentWorkflowStage = 'inspect-git';
+          persistTutorialDevelopmentState();
+          window.setTimeout(syncTutorialGitPanelStage, 80);
+          return;
+        }
+        if (action === 'stage' && tutorialDevelopmentWorkflowStage === 'staging') {
+          tutorialDevelopmentWorkflowStage = 'select-staged';
+          persistTutorialDevelopmentState();
+          window.setTimeout(async () => {
+            if (!active || tutorialDevelopmentWorkflowStage !== 'select-staged') return;
+            const selectAll = await waitForElement(
+              '[data-tutorial-git-action="select-all"][data-tutorial-git-scope="staged"]',
+              { visible: true, timeout: 2400 }
+            );
+            if (selectAll && active && tutorialDevelopmentWorkflowStage === 'select-staged') {
+              selectAll.click();
+            } else if (active) {
+              renderStep();
+            }
+          }, 100);
+          return;
+        }
+        if (action === 'commit' && tutorialDevelopmentWorkflowStage === 'committing') {
+          tutorialDevelopmentCommitCount = Math.min(2, tutorialDevelopmentCommitCount + 1);
+          tutorialDevelopmentWorkflowStage = tutorialDevelopmentCommitCount >= 2 ? 'complete' : 'return-chat';
+          persistTutorialDevelopmentState();
+          renderStep();
+        }
+      });
+      window.addEventListener('faber:project-preview-started', () => {
+        if (!active) return;
+        const current = steps()[currentStepIndex];
+        if (!current || current.id !== 'finish') return;
+        tutorialPreviewLaunching = false;
+        tutorialPreviewStarted = true;
+        renderStep();
+      });
+      window.addEventListener('faber:project-preview-failed', () => {
+        if (!active) return;
+        const current = steps()[currentStepIndex];
+        if (!current || current.id !== 'finish') return;
+        tutorialPreviewLaunching = false;
+        tutorialPreviewStarted = false;
+        renderStep();
+      });
       window.addEventListener('resize', () => {
         const list = steps();
         const step = list[currentStepIndex];
         refreshTutorialContext();
         if (!active || !step) return;
         const guide = getStepGuide(step);
-        highlightTargets(guide.targets || []);
+        highlightTargets(guide.disableHighlight ? [] : (guide.targets || []));
         positionCoach(guide.targets || []);
         setCursorLabel(elements.tutorialCursorLabel && !elements.tutorialCursorLabel.classList.contains('hidden') ? elements.tutorialCursorLabel.textContent : '');
       });
@@ -2925,22 +5530,21 @@
         return;
       }
       renderStep();
+      maybeAdvanceProjectClassStep();
     }
 
     function notifyProjectCreated(projectId) {
       tutorialCreatedProjectId = String(projectId || '').trim();
+      writeStorage(TUTORIAL_PROJECT_ID_KEY, tutorialCreatedProjectId);
       if (!active) return;
       renderStep();
+      maybeAdvanceProjectClassStep();
+    }
+
+    function maybeAdvanceProjectClassStep() {
       const current = steps()[currentStepIndex];
-      if (current && current.id === 'project-class' && current.canAdvance()) {
-        window.setTimeout(() => {
-          if (!active) return;
-          const refreshed = steps()[currentStepIndex];
-          if (refreshed && refreshed.id === 'project-class' && refreshed.canAdvance()) {
-            nextStep();
-          }
-        }, 80);
-      }
+      if (!active || !current || current.id !== 'project-class' || !current.canAdvance()) return;
+      scheduleAutoAdvance('project-class', 180);
     }
 
     return {

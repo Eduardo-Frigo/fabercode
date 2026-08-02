@@ -1,4 +1,11 @@
 (function () {
+  function uiText(key, fallback, variables = {}) {
+    const translated = typeof window.t === 'function' ? window.t(key, fallback) : fallback;
+    return String(translated || fallback || key).replace(/\{(\w+)\}/g, (_match, name) =>
+      Object.prototype.hasOwnProperty.call(variables, name) ? String(variables[name]) : `{${name}}`
+    );
+  }
+
   function buildDiagnosticsContextHint(report) {
     if (!report || typeof report !== 'object') return null;
     const issues = Array.isArray(report.issues) ? report.issues : [];
@@ -53,30 +60,44 @@
 
     if (isAgentic) {
       if (isOk) {
-        return String((result && result.message) || '').trim() || (modifiedFiles.length ? 'Concluído: apliquei a alteração no projeto.' : 'Concluído.');
+        return String((result && result.message) || '').trim() || (modifiedFiles.length
+          ? uiText('executionApplied', 'Concluído: apliquei a alteração no projeto.')
+          : uiText('executionCompleted', 'Concluído.'));
       }
-      return String((result && result.message) || '').trim() || 'Parei antes de concluir: preciso corrigir a causa mostrada no progresso da execução.';
+      return String((result && result.message) || '').trim() || uiText(
+        'executionNeedsCorrection',
+        'Parei antes de concluir: preciso corrigir a causa mostrada no progresso da execução.'
+      );
     }
 
     if (isOk && effectOk && errors === 0) {
       return modifiedFiles.length
-        ? `Concluído: apliquei a alteração e validei o projeto.`
-        : `Concluído: validei a tarefa e não precisei alterar arquivos.`;
+        ? uiText('executionValidated', 'Concluído: apliquei a alteração e validei o projeto.')
+        : uiText('executionNoChanges', 'Concluído: validei a tarefa e não precisei alterar arquivos.');
     }
 
     if (blockedByValidation || errors > 0) {
       return modifiedFiles.length > 0 
-        ? 'Concluído com observações: apliquei a alteração, mas a validação detectou pontos de atenção.'
-        : 'Parei antes de concluir: a validação real encontrou um problema e o projeto foi preservado.';
+        ? uiText(
+            'executionWithWarnings',
+            'Concluído com observações: apliquei a alteração, mas a validação detectou pontos de atenção.'
+          )
+        : uiText(
+            'executionValidationBlocked',
+            'Parei antes de concluir: a validação real encontrou um problema e o projeto foi preservado.'
+          );
     }
 
     if (blockedByEffect) {
-      return 'A alteração já estava aplicada ou não resultou em mudança.';
+      return uiText('executionNoEffect', 'A alteração já estava aplicada ou não resultou em mudança.');
     }
 
     return isOk
-      ? 'Concluído.'
-      : 'Parei antes de concluir: preciso corrigir a causa mostrada no progresso da execução.';
+      ? uiText('executionCompleted', 'Concluído.')
+      : uiText(
+          'executionNeedsCorrection',
+          'Parei antes de concluir: preciso corrigir a causa mostrada no progresso da execução.'
+        );
   }
 
   function shouldSuppressInterimAssistantPlanMessage(plan) {
@@ -116,26 +137,47 @@
   
       if (httpStatus === 429 || /quota|billing|insufficient_quota|rate limit/i.test(reason)) {
         if (/sambanova/i.test(reason)) {
-          return 'Falha final: limite/rate limit da API SambaNova atingido. Aguarde, reduza cadência ou troque de provedor.';
+          return uiText(
+            'apiQuotaSambaNova',
+            'Falha final: limite/rate limit da API SambaNova atingido. Aguarde, reduza a cadência ou troque de provedor.'
+          );
         }
         if (/openai/i.test(reason)) {
-          return 'Falha final: limite/rate limit da API OpenAI atingido. Aguarde, reduza cadência ou troque de provedor.';
+          return uiText(
+            'apiQuotaOpenAI',
+            'Falha final: limite/rate limit da API OpenAI atingido. Aguarde, reduza a cadência ou troque de provedor.'
+          );
         }
         if (/gemini/i.test(reason)) {
-          return 'Falha final: limite da API Gemini atingido (quota/rate limit). Ajuste a cota/chave ou troque de provedor.';
+          return uiText(
+            'apiQuotaGemini',
+            'Falha final: limite da API Gemini atingido (quota/rate limit). Ajuste a cota ou a chave, ou troque de provedor.'
+          );
         }
-        return 'Falha final: limite de API atingido (quota/rate limit). Ajuste a cota/chave ou troque de provedor.';
+        return uiText(
+          'apiQuotaGeneric',
+          'Falha final: limite de API atingido (quota/rate limit). Ajuste a cota ou a chave, ou troque de provedor.'
+        );
       }
   
       if (/executor.*(json|plano)|plano JSON válido|json válido/i.test(reason)) {
-        return 'Não consegui transformar a resposta da IA em uma alteração segura de arquivos. Mantive o projeto intacto; você pode tentar novamente e eu vou usar o contexto desta falha.';
+        return uiText(
+          'unsafeAiResponse',
+          'Não consegui transformar a resposta da IA em uma alteração segura de arquivos. Mantive o projeto intacto; tente novamente para que eu use o contexto desta falha.'
+        );
       }
   
       if (reason.startsWith('cortex_briefing_error')) {
-        return 'Falha final no briefing da Persona. O job foi encerrado sem repetição automática.';
+        return uiText(
+          'personaBriefingFailed',
+          'Falha final no briefing da Persona. O job foi encerrado sem repetição automática.'
+        );
       }
   
-      return 'Não consegui concluir esta execução. Mantive o projeto protegido para uma nova correção orientada pelo diagnóstico.';
+      return uiText(
+        'executionFailedProtected',
+        'Não consegui concluir esta execução. Mantive o projeto protegido para uma nova correção orientada pelo diagnóstico.'
+      );
     }
   
     return null;
@@ -148,9 +190,9 @@
     const visible = lines.slice(0, maxLines);
     const hasTruncation = lines.length > maxLines;
     return [
-      'Pré-visualização do patch proposto:',
+      uiText('patchPreview', 'Pré-visualização do patch proposto:'),
       visible.join('\n'),
-      hasTruncation ? '... (prévia truncada)' : null,
+      hasTruncation ? uiText('previewTruncated', '... (prévia truncada)') : null,
     ]
       .filter(Boolean)
       .join('\n');
@@ -158,36 +200,60 @@
 
   function formatAiRuntimeMessage(status) {
     if (!status || !status.ok) {
-      return 'IA: não foi possível validar o runtime nesta tentativa.';
+      return uiText('aiRuntimeUnavailable', 'IA: não foi possível validar o runtime nesta tentativa.');
     }
   
     const provider = String(status.provider || 'rwkv');
     if (provider === 'mock') {
-      return 'Modo Mock Local selecionado. O fluxo roda com respostas determinísticas e não consome API.';
+      return uiText(
+        'mockRuntimeReady',
+        'Modo Mock Local selecionado. O fluxo roda com respostas determinísticas e não consome API.'
+      );
     }
   
     if (provider === 'gemini') {
       if (status.ready) {
-        return 'Modo Gemini API selecionado para briefing (chave configurada, conexão ainda será validada no uso).';
+        return uiText(
+          'geminiRuntimeReady',
+          'Modo Gemini API selecionado para briefing (chave configurada; a conexão será validada no uso).'
+        );
       }
-      return 'Modo Gemini API selecionado, mas a chave GEMINI_API_KEY ainda não está configurada.';
+      return uiText(
+        'geminiKeyMissing',
+        'Modo Gemini API selecionado, mas a chave GEMINI_API_KEY ainda não está configurada.'
+      );
     }
   
     if (provider === 'openai') {
       if (status.ready) {
-        return 'Modo OpenAI API selecionado para briefing (chave e modelo configurados, conexão ainda será validada no uso).';
+        return uiText(
+          'openAiRuntimeReady',
+          'Modo OpenAI API selecionado para briefing (chave e modelo configurados; a conexão será validada no uso).'
+        );
       }
       if (status.reason === 'openai_model_missing') {
-        return 'Modo OpenAI API selecionado, mas o modelo OpenAI ainda não está configurado.';
+        return uiText(
+          'openAiModelMissing',
+          'Modo OpenAI API selecionado, mas o modelo OpenAI ainda não está configurado.'
+        );
       }
-      return 'Modo OpenAI API selecionado, mas a chave OPENAI_API_KEY ainda não está configurada.';
+      return uiText(
+        'openAiKeyMissing',
+        'Modo OpenAI API selecionado, mas a chave OPENAI_API_KEY ainda não está configurada.'
+      );
     }
   
     if (provider === 'sambanova') {
       if (status.ready) {
-        return 'Modo SambaNova API selecionado para briefing (chave configurada, conexão ainda será validada no uso).';
+        return uiText(
+          'sambaNovaRuntimeReady',
+          'Modo SambaNova API selecionado para briefing (chave configurada; a conexão será validada no uso).'
+        );
       }
-      return 'Modo SambaNova API selecionado, mas a chave SAMBANOVA_API_KEY ainda não está configurada.';
+      return uiText(
+        'sambaNovaKeyMissing',
+        'Modo SambaNova API selecionado, mas a chave SAMBANOVA_API_KEY ainda não está configurada.'
+      );
     }
   
     if (provider.startsWith('custom:')) {
@@ -196,46 +262,82 @@
           ? String(status.customProvider.providerName)
           : 'API custom';
       if (status.ready) {
-        return `Modo ${name} selecionado para briefing (perfil custom configurado, conexão ainda será validada no uso).`;
+        return uiText(
+          'customRuntimeReady',
+          'Modo {name} selecionado para briefing (perfil customizado configurado; a conexão será validada no uso).',
+          { name }
+        );
       }
-      if (status.reason === 'custom_api_key_missing') return `Modo ${name} selecionado, mas falta API key no perfil.`;
-      if (status.reason === 'custom_api_model_missing') return `Modo ${name} selecionado, mas falta modelo no perfil.`;
-      if (status.reason === 'custom_api_endpoint_missing') return `Modo ${name} selecionado, mas falta endpoint/website válido no perfil.`;
-      return `Modo ${name} selecionado, mas o perfil custom ainda não está pronto.`;
+      if (status.reason === 'custom_api_key_missing') {
+        return uiText('customKeyMissing', 'Modo {name} selecionado, mas falta a API key no perfil.', { name });
+      }
+      if (status.reason === 'custom_api_model_missing') {
+        return uiText('customModelMissing', 'Modo {name} selecionado, mas falta o modelo no perfil.', { name });
+      }
+      if (status.reason === 'custom_api_endpoint_missing') {
+        return uiText(
+          'customEndpointMissing',
+          'Modo {name} selecionado, mas falta um endpoint/site válido no perfil.',
+          { name }
+        );
+      }
+      return uiText(
+        'customRuntimeNotReady',
+        'Modo {name} selecionado, mas o perfil customizado ainda não está pronto.',
+        { name }
+      );
     }
   
     if (status.ready) {
-      return 'Modo RWKV local selecionado e com arquivos mínimos encontrados.';
+      return uiText('rwkvRuntimeReady', 'Modo RWKV local selecionado e com os arquivos mínimos encontrados.');
     }
   
     if (status.reason === 'rwkv_model_missing') {
-      return 'Modo RWKV local selecionado, mas o arquivo do modelo não foi encontrado.';
+      return uiText('rwkvModelMissing', 'Modo RWKV local selecionado, mas o arquivo do modelo não foi encontrado.');
     }
     if (status.reason === 'rwkv_tokenizer_missing') {
-      return 'Modo RWKV local selecionado, mas o tokenizer não foi encontrado.';
+      return uiText('rwkvTokenizerMissing', 'Modo RWKV local selecionado, mas o tokenizer não foi encontrado.');
     }
   
-    return 'Modo RWKV local selecionado, porém ainda não pronto nesta tentativa.';
+    return uiText(
+      'rwkvRuntimeNotReady',
+      'Modo RWKV local selecionado, porém ainda não está pronto nesta tentativa.'
+    );
   }
 
   function formatMempalaceRuntimeMessage(status) {
     if (!status || !status.ok) {
-      return 'MemPalace: não foi possível validar o runtime nesta tentativa.';
+      return uiText(
+        'mempalaceRuntimeUnavailable',
+        'MemPalace: não foi possível validar o runtime nesta tentativa.'
+      );
     }
   
     if (!status.available) {
       if (status.reason === 'repo_not_found') {
-        return 'MemPalace: repositório não encontrado no workspace. A memória avançada ficará em modo inativo até configurar o caminho.';
+        return uiText(
+          'mempalaceRepositoryMissing',
+          'MemPalace: repositório não encontrado no workspace. A memória avançada ficará inativa até o caminho ser configurado.'
+        );
       }
       if (status.reason === 'dependency_missing') {
-        return `MemPalace detectado, porém falta dependência Python (${status.dependency}).`;
+        return uiText(
+          'mempalaceDependencyMissing',
+          'MemPalace detectado, porém falta a dependência Python ({dependency}).',
+          { dependency: status.dependency }
+        );
       }
-      return 'MemPalace detectado, mas indisponível no momento.';
+      return uiText('mempalaceRuntimeNotReady', 'MemPalace detectado, mas está indisponível no momento.');
     }
   
-    return `MemPalace ativo (${status.version || 'versão local'}). Wing atual: ${
-      status.wing || 'global'
-    }.`;
+    return uiText(
+      'mempalaceRuntimeActive',
+      'MemPalace ativo ({version}). Wing atual: {wing}.',
+      {
+        version: status.version || uiText('localVersion', 'versão local'),
+        wing: status.wing || uiText('globalScope', 'global'),
+      }
+    );
   }
   window.FaberAppFormatters = {
     buildDiagnosticsContextHint,

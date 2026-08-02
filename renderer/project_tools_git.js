@@ -14,6 +14,25 @@
   } = projectToolsSupport;
   const { createProjectGithubDeployTool } = projectToolsGithubDeploy;
 
+  function uiText(key, fallback, replacements = {}) {
+    const translated = window.t ? window.t(key, fallback) : fallback;
+    return Object.entries(replacements).reduce(
+      (value, [name, replacement]) => value.replaceAll(`{${name}}`, String(replacement)),
+      String(translated || fallback || key)
+    );
+  }
+
+  function dispatchTutorialGitAction(action, detail = {}) {
+    if (
+      typeof window === 'undefined'
+      || typeof window.dispatchEvent !== 'function'
+      || typeof window.CustomEvent !== 'function'
+    ) return;
+    window.dispatchEvent(new window.CustomEvent('faber:tutorial-git-action', {
+      detail: { action, ...detail },
+    }));
+  }
+
   function createDiffPills(entry = {}) {
     const wrap = document.createElement('span');
     wrap.className = 'right-tool-diff-pills';
@@ -39,16 +58,16 @@
     badge.className = `right-tool-git-status-badge right-tool-git-status-badge--${status}`;
     if (status === 'untracked') {
       badge.textContent = 'U';
-      badge.title = 'Novo arquivo (Untracked)';
+      badge.title = uiText('gitStatusUntracked', 'Novo arquivo (Untracked)');
     } else if (status === 'staged') {
       badge.textContent = 'A';
-      badge.title = 'Preparado (Staged)';
+      badge.title = uiText('gitStatusStaged', 'Preparado (Staged)');
     } else if (status === 'mixed') {
       badge.textContent = 'M';
-      badge.title = 'Alteração mista (Staged + Modificado)';
+      badge.title = uiText('gitStatusMixed', 'Alteração mista (Staged + Modificado)');
     } else {
       badge.textContent = 'M';
-      badge.title = 'Modificado';
+      badge.title = uiText('gitStatusModified', 'Modificado');
     }
     return badge;
   }
@@ -82,18 +101,24 @@
     const nameBtn = document.createElement('button');
     nameBtn.type = 'button';
     nameBtn.className = 'right-tool-file-link';
-    nameBtn.textContent = fileName || 'arquivo';
-    nameBtn.title = `Abrir ${fullPath} na linha ${entry.firstLine || 1}`;
+    const firstLine = Math.max(1, Number(entry.firstLine || 1) || 1);
+    nameBtn.textContent = fileName || uiText('gitFileFallback', 'arquivo');
+    nameBtn.title = uiText('gitOpenFileAtLine', 'Abrir {path} na linha {line}', {
+      path: fullPath,
+      line: firstLine,
+    });
     nameBtn.addEventListener('click', async (event) => {
       event.preventDefault();
       if (typeof deps.openFile === 'function') {
-        await deps.openFile(fullPath, { line: Math.max(1, Number(entry.firstLine || 1) || 1) });
+        await deps.openFile(fullPath, { line: firstLine });
       }
     });
 
     const folderSpan = document.createElement('span');
     folderSpan.className = 'right-tool-file-folder';
-    folderSpan.textContent = folderPath ? ` em ${folderPath}` : '';
+    folderSpan.textContent = folderPath
+      ? ` ${uiText('gitFolderLocation', 'em {folder}', { folder: folderPath })}`
+      : '';
     folderSpan.title = folderPath;
 
     const nameWrapper = document.createElement('div');
@@ -102,7 +127,7 @@
 
     const meta = document.createElement('span');
     meta.className = 'right-tool-git-file-chip__meta';
-    meta.textContent = `linha ${Math.max(1, Number(entry.firstLine || 1) || 1)}`;
+    meta.textContent = uiText('gitLineNumber', 'linha {line}', { line: firstLine });
     
     body.append(nameWrapper, meta);
     
@@ -147,11 +172,22 @@
     summary.className = 'right-tool-selection-summary';
     const selectAll = deps.createToolButton(window.t ? window.t('selectAll', 'Selecionar tudo') : 'Selecionar tudo');
     const clear = deps.createToolButton(window.t ? window.t('clearSelection', 'Limpar seleção') : 'Limpar seleção');
+    const tutorialScope = String(deps.tutorialScope || '').trim();
+    selectAll.dataset.tutorialGitAction = 'select-all';
+    clear.dataset.tutorialGitAction = 'clear-selection';
+    if (tutorialScope) {
+      selectAll.dataset.tutorialGitScope = tutorialScope;
+      clear.dataset.tutorialGitScope = tutorialScope;
+    }
 
     const update = () => {
       const selected = getCheckedGitFiles(list).length;
       const total = list.querySelectorAll('input[type="checkbox"]').length;
-      summary.textContent = `${selected}/${total} ${noun}${total === 1 ? '' : 's'} selecionado${selected === 1 ? '' : 's'}`;
+      summary.textContent = uiText(
+        total === 1 ? 'gitSelectionSingle' : 'gitSelectionPlural',
+        total === 1 ? '{selected}/{total} arquivo selecionado' : '{selected}/{total} arquivos selecionados',
+        { selected, total }
+      );
       if (actionButton) {
         if (Array.isArray(actionButton)) {
           actionButton.forEach((btn) => {
@@ -207,7 +243,7 @@
       item.className = 'right-tool-git-commit-item';
       const isCurrent = Boolean(currentHash) && Boolean(commit && commit.hash) && String(commit.hash).trim() === currentHash;
       const subject = document.createElement('strong');
-      subject.textContent = commit.subject || 'Commit local';
+      subject.textContent = commit.subject || uiText('gitLocalCommit', 'Commit local');
       const meta = document.createElement('span');
       const shortHash = commit.shortHash || (commit.hash ? commit.hash.slice(0, 7) : '');
       meta.textContent = [shortHash, commit.relative, commit.author].filter(Boolean).join(' · ');
@@ -218,7 +254,7 @@
       if (isCurrent) {
         const current = document.createElement('span');
         current.className = 'right-tool-git-commit-current';
-        current.textContent = 'Atual';
+        current.textContent = uiText('gitCurrentCommit', 'Atual');
         actions.appendChild(current);
       } else if (onRollback && commit && commit.hash) {
         const rollback = document.createElement('button');
@@ -282,9 +318,12 @@
       const key = stepOptions.key || String(title || number).toLowerCase();
       const section = document.createElement('section');
       section.className = `right-tool-git-step right-tool-git-step--${state} right-tool-git-step--collapsed`;
+      section.dataset.tutorialGitStep = key;
       const head = document.createElement('button');
       head.type = 'button';
       head.className = 'right-tool-git-step__head';
+      head.dataset.tutorialGitAction = 'toggle-step';
+      head.dataset.tutorialGitScope = key;
       head.setAttribute('aria-expanded', 'false');
       head.title = subtitle ? `${title} - ${subtitle}` : title;
       const badge = document.createElement('span');
@@ -348,13 +387,16 @@
         await runGithubPublishWizard();
         return;
       }
-      const body = openToolSurface('Git', 'Untracked, Modified, Staged, Committed e Deploy.', 'git');
-      renderToolLoading(body, window.t ? window.t('readingRepo', 'Lendo repositório...') : 'Lendo repositório...');
+      const body = openToolSurface('Git', uiText('gitToolSubtitle', 'Untracked, Modified, Staged, Committed e Deploy.'), 'git');
+      renderToolLoading(body, uiText('readingRepo', 'Lendo repositório...'));
       const projectInfo = getProjectRootOrNotify(body);
       if (!projectInfo) return;
       if (!api.getProjectGitWorktree && !api.getProjectGitStatus) {
         body.innerHTML = '';
-        body.appendChild(createToolSection('Git indisponível', 'Este build ainda não expõe as ações Git.'));
+        body.appendChild(createToolSection(
+          uiText('gitUnavailable', 'Git indisponível'),
+          uiText('gitUnavailableDesc', 'Este build ainda não expõe as ações Git.')
+        ));
         return;
       }
 
@@ -369,7 +411,10 @@
       body.innerHTML = '';
 
       if (!worktree || !worktree.ok) {
-        body.appendChild(createToolSection('Não consegui ler o Git', (worktree && worktree.message) || 'Tente novamente.'));
+        body.appendChild(createToolSection(
+          uiText('gitReadFailed', 'Não consegui ler o Git'),
+          (worktree && worktree.message) || uiText('tryAgain', 'Tente novamente.')
+        ));
         return;
       }
 
@@ -389,8 +434,10 @@
       summary.className = 'right-tool-git-summary right-tool-git-summary--clean';
       const branch = document.createElement('strong');
       branch.textContent = worktree.isGitRepo
-        ? worktree.branch ? `branch ${worktree.branch}` : (window.t ? window.t('localRepository', 'repositório local') : 'repositório local')
-        : (window.t ? window.t('gitNotActive', 'Git ainda não ativo') : 'Git ainda não ativo');
+        ? worktree.branch
+          ? uiText('gitBranchName', 'branch {branch}', { branch: worktree.branch })
+          : uiText('localRepository', 'repositório local')
+        : uiText('gitNotActive', 'Git ainda não ativo');
       const counts = document.createElement('div');
       counts.className = 'right-tool-git-counts';
       [
@@ -411,30 +458,35 @@
       if (!worktree.isGitRepo) {
         const setup = createGitStepCard(
           '1',
-          window.t ? window.t('localRepository', 'Repositório local') : 'Repositório local',
-          window.t ? window.t('localHistoryDesc', 'Crie o histórico local antes de stage, commit e deploy.') : 'Crie o histórico local antes de stage, commit e deploy.',
+          uiText('localRepository', 'Repositório local'),
+          uiText('localHistoryDesc', 'Crie o histórico local antes de stage, commit e deploy.'),
           'active',
           createToolIconMark('git'),
           { key: 'repo', compactTitle: 'Git' }
         );
-        appendGitStepEmpty(setup.content, 'Nada será publicado agora. Esta ação só ativa Git dentro da pasta do projeto.');
+        appendGitStepEmpty(setup.content, uiText(
+          'gitActivationNote',
+          'Nada será publicado agora. Esta ação só ativa Git dentro da pasta do projeto.'
+        ));
         const actionRow = document.createElement('div');
         actionRow.className = 'right-tool-actions-row';
-        const action = createToolButton('Init repo', 'right-tool-action--primary');
+        const action = createToolButton(uiText('gitInitRepo', 'Iniciar repositório'), 'right-tool-action--primary');
+        action.dataset.tutorialGitAction = 'init';
         action.addEventListener('click', async () => {
           action.disabled = true;
-          updateStatus('Ativando repositório Git local...');
+          updateStatus(uiText('gitActivatingRepo', 'Ativando repositório Git local...'));
           const result = api.initProjectGitRepository
             ? await api.initProjectGitRepository({ rootPath: projectInfo.rootPath })
-            : { ok: false, message: 'Ação Git init indisponível.' };
+            : { ok: false, message: uiText('gitInitUnavailable', 'Ação Git init indisponível.') };
           if (!result || !result.ok) {
             action.disabled = false;
-            appendTransientAssistantMessage((result && result.message) || 'Não consegui ativar Git neste projeto.');
+            appendTransientAssistantMessage((result && result.message) || uiText('gitInitFailed', 'Não consegui ativar Git neste projeto.'));
             return;
           }
-          updateStatus('Repositório Git local ativo');
+          updateStatus(uiText('gitRepoActive', 'Repositório Git local ativo'));
           await renderGitTool();
           await refreshFileTree();
+          dispatchTutorialGitAction('init', { rootPath: projectInfo.rootPath });
         });
         actionRow.appendChild(action);
         setup.content.appendChild(actionRow);
@@ -450,7 +502,13 @@
         const step = createGitStepCard(
           stepId,
           title,
-          files.length ? `${files.length} ${files.length === 1 ? 'arquivo encontrado' : 'arquivos encontrados'}.` : emptyText,
+          files.length
+            ? uiText(
+              files.length === 1 ? 'gitFilesFoundSingle' : 'gitFilesFoundPlural',
+              files.length === 1 ? '1 arquivo encontrado.' : '{count} arquivos encontrados.',
+              { count: files.length }
+            )
+            : emptyText,
           activeStep === stepKey ? 'active' : files.length ? 'idle' : 'done',
           null,
           {
@@ -469,54 +527,64 @@
         const list = createGitCompactFileList(files, { selectable: true, checked: false }, deps);
         const actionRow = document.createElement('div');
         actionRow.className = 'right-tool-actions-row';
-        const stage = createToolButton('Stage it', 'right-tool-action--primary');
+        const stage = createToolButton(uiText('gitStageIt', 'Preparar arquivos'), 'right-tool-action--primary');
+        stage.dataset.tutorialGitAction = 'stage';
+        stage.dataset.tutorialGitScope = stepKey;
         stage.addEventListener('click', async () => {
           const selectedFiles = getCheckedGitFiles(list);
           if (!selectedFiles.length) {
-            appendTransientAssistantMessage('Escolha ao menos um arquivo antes de enviar para Staged.');
+            appendTransientAssistantMessage(uiText('gitSelectBeforeStage', 'Escolha ao menos um arquivo antes de enviar para Staged.'));
             return;
           }
           stage.disabled = true;
-          updateStatus('Adicionando arquivos ao stage...');
+          updateStatus(uiText('gitAddingStage', 'Adicionando arquivos ao stage...'));
           const result = api.stageProjectGitFiles
             ? await api.stageProjectGitFiles({ rootPath: projectInfo.rootPath, files: selectedFiles })
-            : { ok: false, message: 'Stage indisponível neste build.' };
+            : { ok: false, message: uiText('gitStageUnavailable', 'Stage indisponível neste build.') };
           if (!result || !result.ok) {
             stage.disabled = false;
-            appendTransientAssistantMessage((result && result.message) || 'Não consegui stagear os arquivos.');
+            appendTransientAssistantMessage((result && result.message) || uiText('gitStageFailed', 'Não consegui stagear os arquivos.'));
             return;
           }
-          updateStatus('Arquivos em Staged');
+          updateStatus(uiText('gitFilesStaged', 'Arquivos em Staged'));
           openGitStepKey = 'staged';
           await renderGitTool();
           await refreshFileTree();
+          dispatchTutorialGitAction('stage', {
+            rootPath: projectInfo.rootPath,
+            scope: stepKey,
+            files: selectedFiles.slice(),
+          });
         });
 
-        const rollback = createToolButton('Discard it', 'right-tool-action--danger');
+        const rollback = createToolButton(uiText('gitDiscardIt', 'Descartar alterações'), 'right-tool-action--danger');
         rollback.addEventListener('click', async () => {
           const selectedFiles = getCheckedGitFiles(list);
           if (!selectedFiles.length) {
-            appendTransientAssistantMessage('Escolha ao menos um arquivo para descartar.');
+            appendTransientAssistantMessage(uiText('gitSelectBeforeDiscard', 'Escolha ao menos um arquivo para descartar.'));
             return;
           }
           const confirmed = confirmAction(window.t ? window.t('discardSelectedConfirm', 'Deseja realmente descartar as alterações dos arquivos selecionados? Esta ação não pode ser desfeita.') : 'Deseja realmente descartar as alterações dos arquivos selecionados? Esta ação não pode ser desfeita.');
           if (!confirmed) return;
           rollback.disabled = true;
-          updateStatus('Descartando alterações...');
+          updateStatus(uiText('gitDiscarding', 'Descartando alterações...'));
           const result = api.rollbackProjectGitFiles
             ? await api.rollbackProjectGitFiles({ rootPath: projectInfo.rootPath, files: selectedFiles })
-            : { ok: false, message: 'Rollback indisponível neste build.' };
+            : { ok: false, message: uiText('gitRollbackUnavailable', 'Rollback indisponível neste build.') };
           if (!result || !result.ok) {
             rollback.disabled = false;
-            appendTransientAssistantMessage((result && result.message) || 'Não consegui descartar as alterações.');
+            appendTransientAssistantMessage((result && result.message) || uiText('gitDiscardFailed', 'Não consegui descartar as alterações.'));
             return;
           }
-          updateStatus('Alterações descartadas');
+          updateStatus(uiText('gitDiscarded', 'Alterações descartadas'));
           await renderGitTool();
           await refreshFileTree();
         });
 
-        const selection = createGitSelectionControls(list, [stage, rollback], 'arquivo', deps);
+        const selection = createGitSelectionControls(list, [stage, rollback], 'arquivo', {
+          ...deps,
+          tutorialScope: stepKey,
+        });
         actionRow.append(stage, rollback);
         step.content.append(selection, list, actionRow);
         return step;
@@ -543,75 +611,100 @@
 
       const stagedStep = createGitStepCard(
         '3',
-        window.t ? window.t('stagedTitle', 'Preparados (Staged)') : 'Preparados (Staged)',
+        uiText('stagedTitle', 'Preparados (Staged)'),
         stagedEntries.length
-          ? `${stagedEntries.length} ${stagedEntries.length === 1 ? 'arquivo pronto' : 'arquivos prontos'} para commit.`
-          : window.t ? window.t('nothingStaged', 'Nada em Staged para commit.') : 'Nada em Staged para commit.',
+          ? uiText(
+            stagedEntries.length === 1 ? 'gitReadySingle' : 'gitReadyPlural',
+            stagedEntries.length === 1 ? '1 arquivo pronto para commit.' : '{count} arquivos prontos para commit.',
+            { count: stagedEntries.length }
+          )
+          : uiText('nothingStaged', 'Nada em Staged para commit.'),
         activeStep === 'staged' ? 'active' : stagedEntries.length ? 'idle' : 'locked',
         null,
         { key: 'staged', compactTitle: 'Staged' }
       );
       if (!stagedEntries.length) {
-        appendGitStepEmpty(stagedStep.content, entries.length ? 'Selecione arquivos em Untracked ou Modified antes do commit.' : 'Sem mudanças locais agora.');
+        appendGitStepEmpty(
+          stagedStep.content,
+          entries.length
+            ? uiText('gitSelectBeforeCommit', 'Selecione arquivos em Untracked ou Modified antes do commit.')
+            : uiText('gitNoLocalChanges', 'Sem mudanças locais agora.')
+        );
       } else {
         const list = createGitCompactFileList(stagedEntries, { selectable: true, checked: false }, deps);
         const selectionHelp = document.createElement('p');
         selectionHelp.className = 'right-tool-empty';
-        selectionHelp.textContent = 'Só os arquivos marcados entram no próximo commit. Os demais ficam fora desta passagem.';
+        selectionHelp.textContent = uiText(
+          'gitCommitSelectionHelp',
+          'Só os arquivos marcados entram no próximo commit. Os demais ficam fora desta passagem.'
+        );
         const message = document.createElement('input');
         message.type = 'text';
         message.className = 'right-tool-input';
-        message.placeholder = 'Mensagem do commit';
+        message.placeholder = uiText('gitCommitMessage', 'Mensagem do commit');
+        message.dataset.tutorialGitAction = 'message';
         const actionRow = document.createElement('div');
         actionRow.className = 'right-tool-actions-row';
         const commit = createToolButton(window.t ? window.t('commitSelected', 'Criar commit com selecionados') : 'Criar commit com selecionados', 'right-tool-action--primary');
+        commit.dataset.tutorialGitAction = 'commit';
         commit.addEventListener('click', async () => {
           const selectedFiles = getCheckedGitFiles(list);
           if (!selectedFiles.length) {
-            appendTransientAssistantMessage('Escolha ao menos um arquivo em Staged para criar o commit.');
+            appendTransientAssistantMessage(uiText(
+              'gitSelectStagedBeforeCommit',
+              'Escolha ao menos um arquivo em Staged para criar o commit.'
+            ));
             return;
           }
           commit.disabled = true;
-          updateStatus('Criando commit local...');
+          updateStatus(uiText('gitCreatingCommit', 'Criando commit local...'));
           const result = api.commitProjectGitFiles
             ? await api.commitProjectGitFiles({ rootPath: projectInfo.rootPath, message: message.value, files: selectedFiles })
-            : { ok: false, message: 'Commit indisponível neste build.' };
+            : { ok: false, message: uiText('gitCommitUnavailable', 'Commit indisponível neste build.') };
           if (!result || !result.ok) {
             commit.disabled = false;
-            appendTransientAssistantMessage((result && result.message) || 'Não consegui criar o commit.');
+            appendTransientAssistantMessage((result && result.message) || uiText('gitCommitFailed', 'Não consegui criar o commit.'));
             return;
           }
-          updateStatus('Commit local criado');
+          updateStatus(uiText('gitCommitCreated', 'Commit local criado'));
           openGitStepKey = 'committed';
           await renderGitTool();
           await refreshFileTree();
+          dispatchTutorialGitAction('commit', {
+            rootPath: projectInfo.rootPath,
+            message: message.value,
+            files: selectedFiles.slice(),
+          });
         });
 
-        const rollback = createToolButton('Unstage it', 'right-tool-action--danger');
+        const rollback = createToolButton(uiText('gitUnstageIt', 'Remover do stage'), 'right-tool-action--danger');
         rollback.addEventListener('click', async () => {
           const selectedFiles = getCheckedGitFiles(list);
           if (!selectedFiles.length) {
-            appendTransientAssistantMessage('Escolha ao menos um arquivo para remover do stage.');
+            appendTransientAssistantMessage(uiText('gitSelectBeforeUnstage', 'Escolha ao menos um arquivo para remover do stage.'));
             return;
           }
           const confirmed = confirmAction(window.t ? window.t('stageRemoveConfirm', 'Deseja realmente remover os arquivos selecionados do stage?') : 'Deseja realmente remover os arquivos selecionados do stage?');
           if (!confirmed) return;
           rollback.disabled = true;
-          updateStatus('Removendo arquivos do stage...');
+          updateStatus(uiText('gitUnstaging', 'Removendo arquivos do stage...'));
           const result = api.unstageProjectGitFiles
             ? await api.unstageProjectGitFiles({ rootPath: projectInfo.rootPath, files: selectedFiles })
-            : { ok: false, message: 'Unstage indisponível neste build.' };
+            : { ok: false, message: uiText('gitUnstageUnavailable', 'Unstage indisponível neste build.') };
           if (!result || !result.ok) {
             rollback.disabled = false;
-            appendTransientAssistantMessage((result && result.message) || 'Não consegui remover os arquivos do stage.');
+            appendTransientAssistantMessage((result && result.message) || uiText('gitUnstageFailed', 'Não consegui remover os arquivos do stage.'));
             return;
           }
-          updateStatus('Arquivos removidos do stage');
+          updateStatus(uiText('gitUnstaged', 'Arquivos removidos do stage'));
           await renderGitTool();
           await refreshFileTree();
         });
 
-        const selection = createGitSelectionControls(list, [commit, rollback], 'arquivo', deps);
+        const selection = createGitSelectionControls(list, [commit, rollback], 'arquivo', {
+          ...deps,
+          tutorialScope: 'staged',
+        });
         actionRow.append(commit, rollback);
         stagedStep.content.append(selectionHelp, selection, list, message, actionRow);
       }
@@ -619,14 +712,25 @@
 
       const committedStep = createGitStepCard(
         '4',
-        'Salvos Localmente (Committed)',
-        hasCommit ? `${(commitsResult.commits || []).length || 1} commits encontrados no histórico local.` : 'Nenhum commit local ainda.',
+        uiText('gitCommittedTitle', 'Salvos Localmente (Committed)'),
+        hasCommit
+          ? uiText(
+            ((commitsResult.commits || []).length || 1) === 1 ? 'gitCommitsFoundSingle' : 'gitCommitsFoundPlural',
+            ((commitsResult.commits || []).length || 1) === 1
+              ? '1 commit encontrado no histórico local.'
+              : '{count} commits encontrados no histórico local.',
+            { count: (commitsResult.commits || []).length || 1 }
+          )
+          : uiText('gitNoCommits', 'Nenhum commit local ainda.'),
         activeStep === 'committed' ? 'active' : hasCommit ? 'done' : 'locked',
         null,
         { key: 'committed', compactTitle: 'Committed' }
       );
       if (!hasCommit) {
-        appendGitStepEmpty(committedStep.content, 'Crie um commit em Staged para liberar publicação e deploy.');
+        appendGitStepEmpty(
+          committedStep.content,
+          uiText('gitCreateCommitBeforeDeploy', 'Crie um commit em Staged para liberar publicação e deploy.')
+        );
       } else {
         const commitList = createGitCommitList(
           commitsResult.ok && Array.isArray(commitsResult.commits) && commitsResult.commits.length
@@ -637,20 +741,35 @@
             onRollback: async (commit) => {
               const targetLabel = commit.shortHash || (commit.hash ? commit.hash.slice(0, 7) : 'commit');
               const confirmed = confirmAction(
-                `Deseja voltar o repositório para o commit ${targetLabel}? Uma branch de backup será criada automaticamente antes do rollback.`
+                uiText(
+                  'gitRollbackCommitConfirm',
+                  'Deseja voltar o repositório para o commit {commit}? Uma branch de backup será criada automaticamente antes do rollback.',
+                  { commit: targetLabel }
+                )
               );
               if (!confirmed) return;
-              updateStatus(`Voltando para o commit ${targetLabel}...`);
+              updateStatus(uiText('gitRollingBack', 'Voltando para o commit {commit}...', { commit: targetLabel }));
               const result = api.rollbackProjectGitToCommit
                 ? await api.rollbackProjectGitToCommit({ rootPath: projectInfo.rootPath, commitHash: commit.hash })
-                : { ok: false, message: 'Rollback por commit indisponível neste build.' };
+                : { ok: false, message: uiText('gitCommitRollbackUnavailable', 'Rollback por commit indisponível neste build.') };
               if (!result || !result.ok) {
-                appendTransientAssistantMessage((result && result.message) || 'Não consegui fazer o rollback para este commit.');
+                appendTransientAssistantMessage(
+                  (result && result.message) || uiText('gitCommitRollbackFailed', 'Não consegui fazer o rollback para este commit.')
+                );
                 return;
               }
-              const backupNote = result.backupBranch ? ` Backup criado: ${result.backupBranch}.` : '';
-              appendTransientAssistantMessage(`Rollback concluído para ${targetLabel}.${backupNote}`);
-              updateStatus(`Rollback concluído para ${targetLabel}`);
+              const backupNote = result.backupBranch
+                ? uiText('gitBackupCreated', ' Backup criado: {branch}.', { branch: result.backupBranch })
+                : '';
+              appendTransientAssistantMessage(uiText(
+                'gitRollbackComplete',
+                'Rollback concluído para {commit}.{backup}',
+                { commit: targetLabel, backup: backupNote }
+              ));
+              updateStatus(uiText('gitRollbackComplete', 'Rollback concluído para {commit}.{backup}', {
+                commit: targetLabel,
+                backup: '',
+              }));
               openGitStepKey = 'committed';
               await renderGitTool();
               await refreshFileTree();
@@ -661,7 +780,7 @@
         if (worktree.latestUrl && api.openProjectLatestVersion) {
           const actionRow = document.createElement('div');
           actionRow.className = 'right-tool-actions-row';
-          const openLatest = createToolButton('Open commit');
+          const openLatest = createToolButton(uiText('gitOpenCommit', 'Abrir commit'));
           openLatest.addEventListener('click', async () => {
             await api.openProjectLatestVersion({ rootPath: projectInfo.rootPath });
           });

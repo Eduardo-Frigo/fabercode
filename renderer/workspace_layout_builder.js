@@ -8,6 +8,14 @@
     automations: 'Automações',
     cortex: 'Cortex',
   };
+  const TOOL_LABEL_KEYS = {
+    projects: 'projects',
+    chat: 'chat',
+    files: 'files',
+    terminal: 'terminal',
+    automations: 'workspaceToolAutomations',
+    cortex: 'workspaceToolCortex',
+  };
   const DROP_ZONES = new Set(['left', 'center', 'right', 'bottom', 'hidden']);
   const PANEL_SLOTS = new Set(['projects', 'files', 'terminal', 'automations', 'cortex']);
 
@@ -129,6 +137,7 @@
   function createWorkspaceLayoutBuilder(options = {}) {
     const doc = options.documentRef || document;
     const elements = options.elements || {};
+    const t = typeof options.t === 'function' ? options.t : (_key, fallback = '') => fallback || _key;
     const normalizePreferences = options.normalizePreferences;
     const getLayout = typeof options.getLayout === 'function' ? options.getLayout : () => ({});
     const onChange = typeof options.onChange === 'function' ? options.onChange : null;
@@ -147,7 +156,7 @@
       button.className = 'workspace-tool-chip is-zone-chip';
       button.setAttribute('draggable', 'true');
       button.setAttribute('data-workspace-tool', tool);
-      button.textContent = TOOL_LABELS[tool] || tool;
+      button.textContent = t(TOOL_LABEL_KEYS[tool], TOOL_LABELS[tool] || tool);
       return button;
     }
 

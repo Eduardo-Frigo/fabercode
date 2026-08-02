@@ -610,12 +610,21 @@ function createPlatformAccountService(dependencies = {}) {
   }
 
   async function initializeSession() {
-    if (typeof loadSessionFile === 'function') {
-      const loaded = await loadSessionFile();
-      if (loaded) {
-        currentSession = loaded;
-        await saveSessionRecord(currentSession);
-      }
+    if (typeof loadSessionFile !== 'function') return { ok: true, restored: false };
+    const loaded = await loadSessionFile();
+    if (!loaded) return { ok: true, restored: false };
+
+    currentSession = loaded;
+    try {
+      await saveSessionRecord(currentSession);
+      return { ok: true, restored: true };
+    } catch (error) {
+      return {
+        ok: false,
+        restored: true,
+        reason: 'session_record_sync_failed',
+        message: error && error.message ? error.message : String(error || ''),
+      };
     }
   }
 

@@ -1,6 +1,21 @@
 (function () {
   const ACTIONABLE_STATUSES = new Set(['suggest_blueprint', 'staged', 'trial_passed']);
 
+  function uiText(key, fallback = '', values = {}) {
+    let value = fallback || key;
+    if (typeof window.t === 'function') {
+      value = window.t(key, fallback);
+    } else if (window.FaberI18n && window.FaberI18n.UI_TRANSLATIONS) {
+      const locale = document.documentElement.lang || 'pt-BR';
+      const tables = window.FaberI18n.UI_TRANSLATIONS;
+      value = (tables[locale] && tables[locale][key]) || (tables['pt-BR'] && tables['pt-BR'][key]) || value;
+    }
+    return Object.entries(values).reduce(
+      (text, [name, replacement]) => text.replaceAll(`{${name}}`, String(replacement)),
+      String(value)
+    );
+  }
+
   function safeJson(value) {
     try {
       return JSON.stringify(value || {}, null, 2);
@@ -11,15 +26,15 @@
 
   function statusLabel(status = '') {
     const value = String(status || '');
-    if (value === 'suggest_blueprint') return 'Sugerido';
+    if (value === 'suggest_blueprint') return uiText('automataSuggested', 'Sugerido');
     if (value === 'staged') return 'Staged';
-    if (value === 'trial_running') return 'Em teste';
-    if (value === 'trial_passed') return 'Funcionou';
-    if (value === 'trial_failed') return 'Falhou';
-    if (value === 'local_active') return 'Ativo local';
-    if (value === 'local_disabled') return 'Desativado';
-    if (value === 'rejected') return 'Recusado';
-    return value || 'Pendente';
+    if (value === 'trial_running') return uiText('automataInTest', 'Em teste');
+    if (value === 'trial_passed') return uiText('automataWorked', 'Funcionou');
+    if (value === 'trial_failed') return uiText('automataFailed', 'Falhou');
+    if (value === 'local_active') return uiText('automataLocalActive', 'Ativo local');
+    if (value === 'local_disabled') return uiText('automataDisabled', 'Desativado');
+    if (value === 'rejected') return uiText('automataRejected', 'Recusado');
+    return value || uiText('automataPending', 'Pendente');
   }
 
   function createAutomataContractsController(options = {}) {
@@ -60,8 +75,8 @@
       elements.button.setAttribute(
         'aria-label',
         safeCount > 0
-          ? `${safeCount} contrato(s) Automata aguardando revisao`
-          : 'Contratos Automata'
+          ? uiText('automataReviewCount', '{count} contrato(s) Automata aguardando revisão', { count: safeCount })
+          : uiText('automataContracts', 'Contratos Automata')
       );
     }
 
@@ -103,9 +118,9 @@
       const titleWrap = document.createElement('div');
       const eyebrow = document.createElement('span');
       eyebrow.className = 'automata-contract-preview__eyebrow';
-      eyebrow.textContent = 'Automata Contract';
+      eyebrow.textContent = uiText('automataContractEyebrow', 'Contrato Automata');
       const title = document.createElement('strong');
-      title.textContent = entry.title || contract.title || 'Contrato temporario';
+      title.textContent = entry.title || contract.title || uiText('automataTemporaryContract', 'Contrato temporário');
       titleWrap.append(eyebrow, title);
 
       const status = document.createElement('span');
@@ -116,13 +131,15 @@
 
       const copy = document.createElement('p');
       copy.className = 'automata-contract-preview__copy';
-      copy.textContent =
-        'A proposta fica local e nao altera arquivos agora. Aprove para staged se quiser testar este comportamento no projeto.';
+      copy.textContent = uiText(
+        'automataProposalLocal',
+        'A proposta fica local e não altera arquivos agora. Aprove para staged se quiser testar este comportamento no projeto.'
+      );
 
       const details = document.createElement('details');
       details.className = 'automata-contract-preview__details';
       const summary = document.createElement('summary');
-      summary.textContent = 'Ver contrato temporario';
+      summary.textContent = uiText('automataViewTemporary', 'Ver contrato temporário');
       const pre = document.createElement('pre');
       pre.textContent = safeJson(contract.proposedContract || contract);
       details.append(summary, pre);
@@ -132,11 +149,11 @@
       const approve = document.createElement('button');
       approve.type = 'button';
       approve.className = 'automata-contract-preview__primary';
-      approve.textContent = 'Aprovar para staged';
+      approve.textContent = uiText('automataApproveStaged', 'Aprovar para staged');
       const reject = document.createElement('button');
       reject.type = 'button';
       reject.className = 'automata-contract-preview__ghost';
-      reject.textContent = 'Recusar';
+      reject.textContent = uiText('automataReject', 'Recusar');
       const note = document.createElement('span');
       note.className = 'automata-contract-preview__note';
       note.dataset.contractNote = '1';
@@ -148,16 +165,16 @@
         reject.disabled = true;
         const result = await api.stageAutomataContract({
           id: entry.id,
-          note: 'Aprovado no chat para teste staged.',
+          note: uiText('automataApprovedNote', 'Aprovado no chat para teste staged.'),
         });
         if (result && result.ok) {
-          setPreviewState(wrap, result.entry.status, 'Agora esta em staged. Teste no projeto e depois promova pelo painel.');
-          updateStatus('Contrato Automata em staged.');
+          setPreviewState(wrap, result.entry.status, uiText('automataStagedReady', 'Agora está em staged. Teste no projeto e depois promova pelo painel.'));
+          updateStatus(uiText('automataStagedStatus', 'Contrato Automata em staged.'));
           await refreshSummary();
         } else {
           approve.disabled = false;
           reject.disabled = false;
-          setPreviewState(wrap, entry.status, (result && result.reason) || 'Nao consegui mover para staged.');
+          setPreviewState(wrap, entry.status, (result && result.reason) || uiText('automataStageFailed', 'Não foi possível mover para staged.'));
         }
       });
 
@@ -167,15 +184,15 @@
         reject.disabled = true;
         const result = await api.rejectAutomataContract({
           id: entry.id,
-          note: 'Recusado no chat.',
+          note: uiText('automataRejectedChatNote', 'Recusado no chat.'),
         });
         if (result && result.ok) {
-          setPreviewState(wrap, result.entry.status, 'Contrato recusado. Nada foi alterado.');
+          setPreviewState(wrap, result.entry.status, uiText('automataRejectedNoChanges', 'Contrato recusado. Nada foi alterado.'));
           await refreshSummary();
         } else {
           approve.disabled = false;
           reject.disabled = false;
-          setPreviewState(wrap, entry.status, (result && result.reason) || 'Nao consegui recusar este contrato.');
+          setPreviewState(wrap, entry.status, (result && result.reason) || uiText('automataRejectFailed', 'Não foi possível recusar este contrato.'));
         }
       });
 
@@ -217,13 +234,13 @@
       const body = document.createElement('div');
       body.className = 'automata-ledger-row__body';
       const title = document.createElement('strong');
-      title.textContent = entry.title || (entry.contract && entry.contract.title) || 'Contrato temporario';
+      title.textContent = entry.title || (entry.contract && entry.contract.title) || uiText('automataTemporaryContract', 'Contrato temporário');
       const meta = document.createElement('span');
-      meta.textContent = `${statusLabel(entry.status)} · ${entry.contractId || 'sem id'}`;
+      meta.textContent = `${statusLabel(entry.status)} · ${entry.contractId || uiText('withoutId', 'sem id')}`;
       const details = document.createElement('details');
       details.className = 'automata-ledger-row__details';
       const summary = document.createElement('summary');
-      summary.textContent = 'Contrato';
+      summary.textContent = uiText('contract', 'Contrato');
       const pre = document.createElement('pre');
       pre.textContent = safeJson((entry.contract && entry.contract.proposedContract) || entry.contract || {});
       details.append(summary, pre);
@@ -233,45 +250,45 @@
       actions.className = 'automata-ledger-row__actions';
       const worked = document.createElement('button');
       worked.type = 'button';
-      worked.textContent = 'Funcionou';
+      worked.textContent = uiText('automataWorked', 'Funcionou');
       worked.disabled = entry.status !== 'staged' && entry.status !== 'trial_running';
       worked.addEventListener('click', async () => {
         if (!api.markAutomataContractTrial) return;
-        await api.markAutomataContractTrial({ id: entry.id, passed: true, note: 'Marcado como aprovado pelo usuario.' });
+        await api.markAutomataContractTrial({ id: entry.id, passed: true, note: uiText('automataWorkedNote', 'Marcado como aprovado pelo usuário.') });
         await refreshPanel();
         await refreshSummary();
       });
 
       const failed = document.createElement('button');
       failed.type = 'button';
-      failed.textContent = 'Falhou';
+      failed.textContent = uiText('automataFailed', 'Falhou');
       failed.disabled = entry.status !== 'staged' && entry.status !== 'trial_running';
       failed.addEventListener('click', async () => {
         if (!api.markAutomataContractTrial) return;
-        await api.markAutomataContractTrial({ id: entry.id, passed: false, note: 'Marcado como falhou pelo usuario.' });
+        await api.markAutomataContractTrial({ id: entry.id, passed: false, note: uiText('automataFailedNote', 'Marcado como falhou pelo usuário.') });
         await refreshPanel();
         await refreshSummary();
       });
 
       const push = document.createElement('button');
       push.type = 'button';
-      push.textContent = 'Push local';
+      push.textContent = uiText('automataPushLocal', 'Push local');
       push.disabled = entry.status !== 'trial_passed';
       push.addEventListener('click', async () => {
         if (!api.promoteAutomataContract) return;
-        await api.promoteAutomataContract({ id: entry.id, note: 'Promovido pelo painel do usuario.' });
+        await api.promoteAutomataContract({ id: entry.id, note: uiText('automataPromotedNote', 'Promovido pelo painel do usuário.') });
         selectedForPush.delete(entry.id);
-        appendMessage('assistant', 'Contrato Automata promovido para local_active.', { persistToConversation: false });
+        appendMessage('assistant', uiText('automataPromoted', 'Contrato Automata promovido para local_active.'), { persistToConversation: false });
         await refreshPanel();
         await refreshSummary();
       });
 
       const reject = document.createElement('button');
       reject.type = 'button';
-      reject.textContent = 'Recusar';
+      reject.textContent = uiText('automataReject', 'Recusar');
       reject.addEventListener('click', async () => {
         if (!api.rejectAutomataContract) return;
-        await api.rejectAutomataContract({ id: entry.id, note: 'Recusado pelo painel do usuario.' });
+        await api.rejectAutomataContract({ id: entry.id, note: uiText('automataRejectedPanelNote', 'Recusado pelo painel do usuário.') });
         selectedForPush.delete(entry.id);
         await refreshPanel();
         await refreshSummary();
@@ -308,10 +325,10 @@
       if (!api.promoteAutomataContract || !selectedForPush.size) return;
       const ids = Array.from(selectedForPush);
       for (const id of ids) {
-        await api.promoteAutomataContract({ id, note: 'Promovido em lote pelo painel do usuario.' });
+        await api.promoteAutomataContract({ id, note: uiText('automataBatchPromotedNote', 'Promovido em lote pelo painel do usuário.') });
         selectedForPush.delete(id);
       }
-      appendMessage('assistant', 'Contratos Automata selecionados promovidos para local_active.', { persistToConversation: false });
+      appendMessage('assistant', uiText('automataBatchPromoted', 'Contratos Automata selecionados promovidos para local_active.'), { persistToConversation: false });
       await refreshPanel();
       await refreshSummary();
     }

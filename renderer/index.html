@@ -459,9 +459,9 @@
             <div class="project-terminal-actions">
               <button id="project-terminal-placement" type="button" class="project-terminal-icon-btn" title="Alternar posição" aria-label="Alternar posição">↕</button>
               <button id="project-terminal-new-tab" type="button" class="project-terminal-icon-btn" title="Novo terminal" aria-label="Novo terminal">+</button>
-              <button id="project-terminal-stop" type="button" class="project-terminal-icon-btn" title="Fechar terminal atual" aria-label="Fechar terminal atual">×</button>
+              <button id="project-terminal-stop" type="button" class="project-terminal-icon-btn" title="Fechar terminal atual" aria-label="Fechar terminal atual" data-i18n-title="closeCurrentTerminal" data-i18n-aria-label="closeCurrentTerminal">×</button>
               <button id="project-terminal-minimize" type="button" class="project-terminal-icon-btn" title="Minimizar terminal" aria-label="Minimizar terminal">−</button>
-              <button id="project-terminal-close" type="button" class="project-terminal-icon-btn" title="Fechar terminal" aria-label="Fechar terminal">×</button>
+              <button id="project-terminal-close" type="button" class="project-terminal-icon-btn" title="Fechar terminal" aria-label="Fechar terminal" data-i18n-title="closeTerminal" data-i18n-aria-label="closeTerminal">×</button>
             </div>
           </div>
           <div id="project-terminal-tabs" class="project-terminal-tabs" role="tablist" aria-label="Terminais abertos"></div>
@@ -561,7 +561,7 @@
           <div class="map-render-shell">
             <div id="map-render-list-view" class="map-render-list-view">
               <div class="map-render-list-header">
-                <button id="btn-map-render-list-back" class="map-render-back-btn" title="Voltar para os chats">
+                <button id="btn-map-render-list-back" class="map-render-back-btn" title="Voltar para os chats" data-i18n-title="backToChats">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="19" y1="12" x2="5" y2="12"></line>
                     <polyline points="12 19 5 12 12 5"></polyline>
@@ -580,21 +580,21 @@
 
             <div id="map-render-session-view" class="map-render-session-view hidden">
               <div class="map-render-session-header">
-                <button id="btn-map-render-back" class="map-render-back-btn" title="Voltar para o histórico de render">
+                <button id="btn-map-render-back" class="map-render-back-btn" title="Voltar para o histórico de renderização" data-i18n-title="backToRenderHistory">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="19" y1="12" x2="5" y2="12"></line>
                     <polyline points="12 19 5 12 12 5"></polyline>
                   </svg>
                 </button>
-                <span id="map-render-session-title" class="map-render-session-title">Renderização do Mapa</span>
-                <button id="btn-map-render-save" class="map-render-secondary-btn hidden" type="button">Salvar em Milestones</button>
+                <span id="map-render-session-title" class="map-render-session-title" data-i18n="renderSessionPendingTitle">Renderização do Mapa</span>
+                <button id="btn-map-render-save" class="map-render-secondary-btn hidden" type="button" data-i18n="saveToMilestones">Salvar em Milestones</button>
               </div>
-              <div id="map-render-session-status" class="map-render-session-status">Pronto para iniciar a análise.</div>
+              <div id="map-render-session-status" class="map-render-session-status" data-i18n="renderSessionReady">Pronto para iniciar a análise.</div>
               <div id="map-render-session-log" class="map-render-session-log" aria-live="polite">
                 <!-- Rendered dynamically -->
               </div>
               <div id="map-render-plan-card" class="map-render-plan-card">
-                <strong>Plano de desenvolvimento</strong>
+                <strong data-i18n="developmentPlan">Plano de desenvolvimento</strong>
                 <div id="map-render-session-checklist" class="map-render-session-checklist"></div>
                 <div id="map-render-session-milestones" class="map-render-session-milestones"></div>
               </div>
@@ -602,11 +602,11 @@
                 <div id="map-render-attachment-list" class="attachment-list hidden"></div>
               </div>
               <div class="map-chat-composer map-render-composer">
-                <button id="btn-map-render-attach" class="map-render-attach-btn" title="Anexar imagem ou markdown" aria-label="Anexar imagem ou markdown" type="button">
+                <button id="btn-map-render-attach" class="map-render-attach-btn" title="Anexar imagem ou Markdown" aria-label="Anexar imagem ou Markdown" data-i18n-title="attachImageOrMarkdown" data-i18n-aria-label="attachImageOrMarkdown" type="button">
                   <span data-i18n="attachMapRender">Anexar</span>
                 </button>
                 <textarea id="map-render-textarea" placeholder="Peça ajustes no plano de desenvolvimento..." data-i18n="askMapRenderPlaceholder"></textarea>
-                <button id="btn-map-render-send" class="map-chat-send-btn" title="Enviar ajuste">
+                <button id="btn-map-render-send" class="map-chat-send-btn" title="Enviar ajuste" data-i18n-title="sendAdjustment" data-i18n-aria-label="sendAdjustment">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="m22 2-7 20-4-9-9-4Z"></path>
                     <path d="M22 2 11 13"></path>
@@ -622,8 +622,8 @@
         <div id="workspace-map-inspector-panel" class="next-steps-box hidden workspace-tool-region workspace-tool-region--map-inspector" data-workspace-runtime-tool="map-inspector">
           <div class="application-map-inspector-sidebar-container">
             <div class="application-map-inspector-header">
-              <strong>Detalhes do Item</strong>
-              <button id="btn-map-inspector-close" class="map-inspector-close-btn" title="Fechar detalhes">
+              <strong data-i18n="itemDetails">Detalhes do Item</strong>
+              <button id="btn-map-inspector-close" class="map-inspector-close-btn" title="Fechar detalhes" data-i18n-title="closeDetails" data-i18n-aria-label="closeDetails">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <line x1="18" y1="6" x2="6" y2="18"></line>
                   <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -632,29 +632,29 @@
             </div>
             <div class="application-map-inspector-body">
               <div class="inspector-field">
-                <label for="inspector-node-title">Título</label>
+                <label for="inspector-node-title" data-i18n="fieldTitle">Título</label>
                 <input type="text" id="inspector-node-title">
               </div>
               <div class="inspector-field">
-                <label for="inspector-node-desc">Descrição</label>
+                <label for="inspector-node-desc" data-i18n="fieldDescription">Descrição</label>
                 <textarea id="inspector-node-desc"></textarea>
               </div>
               <div class="inspector-field">
-                <label for="inspector-node-content">Conteúdo (Markdown / Link)</label>
+                <label for="inspector-node-content" data-i18n="markdownContent">Conteúdo (Markdown / Link)</label>
                 <div class="markdown-editor-toolbar">
-                  <button type="button" data-format="h1" title="Título 1">H1</button>
-                  <button type="button" data-format="h2" title="Título 2">H2</button>
-                  <button type="button" data-format="bold" title="Negrito">B</button>
-                  <button type="button" data-format="italic" title="Itálico">I</button>
-                  <button type="button" data-format="list" title="Lista">Lista</button>
-                  <button type="button" data-format="code" title="Código">Código</button>
-                  <button type="button" data-format="link" title="Link">Link</button>
+                  <button type="button" data-format="h1" title="Título 1" data-i18n-title="formatHeading1">H1</button>
+                  <button type="button" data-format="h2" title="Título 2" data-i18n-title="formatHeading2">H2</button>
+                  <button type="button" data-format="bold" title="Negrito" data-i18n-title="formatBold">B</button>
+                  <button type="button" data-format="italic" title="Itálico" data-i18n-title="formatItalic">I</button>
+                  <button type="button" data-format="list" title="Lista" data-i18n="formatList" data-i18n-title="formatList">Lista</button>
+                  <button type="button" data-format="code" title="Código" data-i18n="formatCode" data-i18n-title="formatCode">Código</button>
+                  <button type="button" data-format="link" title="Link" data-i18n="formatLink" data-i18n-title="formatLink">Link</button>
                 </div>
                 <textarea id="inspector-node-content"></textarea>
               </div>
               <div class="inspector-controls">
                 <div class="inspector-field hidden" id="inspector-asset-upload-field">
-                  <label>Selecionar Imagem</label>
+                  <label data-i18n="selectImage">Selecionar imagem</label>
                   <input type="file" id="map-asset-file-input" accept="image/*">
                 </div>
               </div>
@@ -837,27 +837,27 @@
     </div>
 
     <div id="project-file-context-menu" class="project-file-context-menu hidden" role="menu" aria-hidden="true">
-      <button type="button" data-action="open">Abrir</button>
-      <button type="button" data-action="reveal">Mostrar na pasta</button>
+      <button type="button" data-action="open" data-i18n="open">Abrir</button>
+      <button type="button" data-action="reveal" data-i18n="showInFolder">Mostrar na pasta</button>
     </div>
 
     <div id="automata-contract-ledger-panel" class="automata-contract-ledger hidden" aria-hidden="true">
       <div id="automata-contract-ledger-backdrop" class="automata-contract-ledger__backdrop"></div>
-      <div class="automata-contract-ledger__dialog" role="dialog" aria-modal="true" aria-label="Automata Contract Ledger">
+      <div class="automata-contract-ledger__dialog" role="dialog" aria-modal="true" aria-label="Automata Contract Ledger" data-i18n-aria-label="automataLedgerTitle">
         <div class="automata-contract-ledger__head">
           <div>
-            <strong>Automata Contract Ledger</strong>
-            <span>Contratos locais em staged, teste e promocao.</span>
+            <strong data-i18n="automataLedgerTitle">Livro de Contratos Automata</strong>
+            <span data-i18n="automataLedgerSubtitle">Contratos locais em staged, teste e promoção.</span>
           </div>
-          <button id="automata-contract-ledger-close" type="button" class="automata-contract-ledger__close" aria-label="Fechar">×</button>
+          <button id="automata-contract-ledger-close" type="button" class="automata-contract-ledger__close" aria-label="Fechar" data-i18n-aria-label="close">×</button>
         </div>
         <div id="automata-contract-ledger-empty" class="automata-contract-ledger__empty">
-          Nenhum contrato staged neste projeto.
+          <span data-i18n="automataLedgerEmpty">Nenhum contrato staged neste projeto.</span>
         </div>
         <div id="automata-contract-ledger-list" class="automata-contract-ledger__list"></div>
         <div class="automata-contract-ledger__footer">
-          <button id="automata-contract-ledger-push-selected" type="button" class="automata-contract-ledger__push">
-            Push selecionados
+          <button id="automata-contract-ledger-push-selected" type="button" class="automata-contract-ledger__push" data-i18n="automataPushSelected">
+            Promover selecionados
           </button>
         </div>
       </div>
@@ -865,19 +865,19 @@
 
     <div id="project-file-modal" class="project-file-modal hidden" aria-hidden="true">
       <div class="project-file-modal__backdrop" data-close="1"></div>
-      <div class="project-file-modal__dialog" role="dialog" aria-modal="true" aria-label="Visualizador de arquivo">
+      <div class="project-file-modal__dialog" role="dialog" aria-modal="true" aria-label="Visualizador de arquivo" data-i18n-aria-label="fileViewer">
         <div class="project-file-modal__head">
-          <strong id="project-file-modal-title">Arquivo</strong>
+          <strong id="project-file-modal-title" data-i18n="file">Arquivo</strong>
           <div id="project-file-modal-image-nav" class="project-file-modal__image-nav" aria-hidden="true">
-            <button id="project-file-modal-prev" type="button" class="project-file-modal__nav-btn" aria-label="Imagem anterior">←</button>
+            <button id="project-file-modal-prev" type="button" class="project-file-modal__nav-btn" aria-label="Imagem anterior" data-i18n-aria-label="previousImage">←</button>
             <span id="project-file-modal-image-counter" class="project-file-modal__image-counter">1/1</span>
-            <button id="project-file-modal-next" type="button" class="project-file-modal__nav-btn" aria-label="Próxima imagem">→</button>
+            <button id="project-file-modal-next" type="button" class="project-file-modal__nav-btn" aria-label="Próxima imagem" data-i18n-aria-label="nextImage">→</button>
           </div>
           <button id="project-file-modal-close" type="button" class="project-file-modal__close">×</button>
         </div>
         <div class="project-file-modal__tools">
-          <button id="project-file-save" type="button" class="project-file-save" disabled>Salvar</button>
-          <span id="project-file-status" class="project-file-status">Sem alterações</span>
+          <button id="project-file-save" type="button" class="project-file-save" data-i18n="save" disabled>Salvar</button>
+          <span id="project-file-status" class="project-file-status" data-i18n="noChanges">Sem alterações</span>
         </div>
         <div class="project-file-editor-wrap">
           <pre id="project-file-lines" class="project-file-lines" aria-hidden="true"></pre>
@@ -1081,31 +1081,31 @@
 
           <div id="ai-settings-mcp-panel" class="ai-settings-panel hidden">
             <div class="ai-settings-panel-head">
-              <button id="ai-settings-back-home-mcp" type="button" class="btn btn-muted">Voltar</button>
-              <span>MCP externo</span>
+              <button id="ai-settings-back-home-mcp" type="button" class="btn btn-muted" data-i18n="back">Voltar</button>
+              <span data-i18n="externalMcp">MCP externo</span>
             </div>
 
             <p id="ai-settings-mcp-status" class="ai-settings-current">Nenhum servidor MCP externo carregado.</p>
 
-            <div class="ai-settings-mcp-presets" aria-label="Presets de MCP externo">
+            <div class="ai-settings-mcp-presets" aria-label="Presets de MCP externo" data-i18n-aria-label="mcpPresetGroupLabel">
               <label class="ai-settings-field" for="ai-settings-mcp-preset-select">
-                <span>Preset guiado</span>
+                <span data-i18n="mcpGuidedPreset">Preset guiado</span>
                 <select id="ai-settings-mcp-preset-select">
-                  <option value="">Carregando presets...</option>
+                  <option value="" data-i18n="mcpLoadingPresets">Carregando presets...</option>
                 </select>
               </label>
-              <button id="ai-settings-mcp-preset-apply" type="button" class="btn btn-muted">Usar preset</button>
+              <button id="ai-settings-mcp-preset-apply" type="button" class="btn btn-muted" data-i18n="mcpUsePreset">Usar preset</button>
             </div>
 
             <div class="ai-settings-mcp-editor">
               <input id="ai-settings-mcp-id" type="hidden" />
               <div class="ai-settings-mcp-grid">
                 <label class="ai-settings-field" for="ai-settings-mcp-name">
-                  <span>Nome</span>
-                  <input id="ai-settings-mcp-name" type="text" placeholder="Ex: Visual Auditor" autocomplete="off" />
+                  <span data-i18n="mcpServerName">Nome</span>
+                  <input id="ai-settings-mcp-name" type="text" placeholder="Ex: Visual Auditor" autocomplete="off" data-i18n="mcpNamePlaceholder" />
                 </label>
                 <label class="ai-settings-field" for="ai-settings-mcp-transport">
-                  <span>Transporte</span>
+                  <span data-i18n="mcpTransport">Transporte</span>
                   <select id="ai-settings-mcp-transport">
                     <option value="stdio">stdio</option>
                     <option value="http">HTTP</option>
@@ -1115,82 +1115,82 @@
               </div>
 
               <label class="ai-settings-field" for="ai-settings-mcp-command">
-                <span>Comando stdio</span>
-                <input id="ai-settings-mcp-command" type="text" placeholder="node /caminho/server.js" autocomplete="off" />
+                <span data-i18n="mcpStdioCommandLabel">Comando stdio</span>
+                <input id="ai-settings-mcp-command" type="text" placeholder="node /caminho/server.js" autocomplete="off" data-i18n="mcpStdioCommandPlaceholder" />
               </label>
 
               <label class="ai-settings-field" for="ai-settings-mcp-endpoint">
-                <span>Endpoint HTTP/SSE</span>
-                <input id="ai-settings-mcp-endpoint" type="text" placeholder="https://servidor-mcp.example/rpc" autocomplete="off" />
+                <span data-i18n="mcpHttpEndpointLabel">Endpoint HTTP/SSE</span>
+                <input id="ai-settings-mcp-endpoint" type="text" placeholder="https://servidor-mcp.example/rpc" autocomplete="off" data-i18n="mcpEndpointPlaceholder" />
               </label>
 
               <div class="ai-settings-mcp-grid">
                 <label class="ai-settings-field" for="ai-settings-mcp-timeout">
-                  <span>Timeout ms</span>
+                  <span data-i18n="mcpTimeoutLabel">Timeout ms</span>
                   <input id="ai-settings-mcp-timeout" type="number" min="500" max="120000" step="500" value="8000" />
                 </label>
                 <label class="ai-settings-field" for="ai-settings-mcp-max-risk">
-                  <span>Risco máximo</span>
+                  <span data-i18n="mcpMaximumRiskLabel">Risco máximo</span>
                   <select id="ai-settings-mcp-max-risk">
-                    <option value="low">low</option>
-                    <option value="medium">medium</option>
-                    <option value="high" selected>high</option>
-                    <option value="critical">critical</option>
+                    <option value="low" data-i18n="riskLow">low</option>
+                    <option value="medium" data-i18n="riskMedium">medium</option>
+                    <option value="high" selected data-i18n="riskHigh">high</option>
+                    <option value="critical" data-i18n="riskCritical">critical</option>
                   </select>
                 </label>
               </div>
 
               <div class="ai-settings-mcp-grid">
                 <label class="ai-settings-field" for="ai-settings-mcp-allowed">
-                  <span>Tools permitidas</span>
+                  <span data-i18n="mcpAllowedToolsLabel">Tools permitidas</span>
                   <input id="ai-settings-mcp-allowed" type="text" placeholder="visual.capture, demo.echo" autocomplete="off" />
                 </label>
                 <label class="ai-settings-field" for="ai-settings-mcp-blocked">
-                  <span>Tools bloqueadas</span>
+                  <span data-i18n="mcpBlockedToolsLabel">Tools bloqueadas</span>
                   <input id="ai-settings-mcp-blocked" type="text" placeholder="filesystem.write" autocomplete="off" />
                 </label>
               </div>
 
               <div class="ai-settings-mcp-grid">
                 <label class="ai-settings-field" for="ai-settings-mcp-permissions">
-                  <span>Permissões permitidas</span>
+                  <span data-i18n="mcpAllowedPermissionsLabel">Permissões permitidas</span>
                   <input id="ai-settings-mcp-permissions" type="text" placeholder="read, write" autocomplete="off" />
                 </label>
                 <label class="ai-settings-field" for="ai-settings-mcp-blocked-risks">
-                  <span>Riscos bloqueados</span>
+                  <span data-i18n="mcpBlockedRisksLabel">Riscos bloqueados</span>
                   <input id="ai-settings-mcp-blocked-risks" type="text" placeholder="critical" autocomplete="off" />
                 </label>
               </div>
 
               <div class="ai-settings-mcp-grid">
                 <label class="ai-settings-field" for="ai-settings-mcp-allowed-directories">
-                  <span>Diretórios permitidos</span>
+                  <span data-i18n="mcpAllowedDirectoriesLabel">Diretórios permitidos</span>
                   <input id="ai-settings-mcp-allowed-directories" type="text" placeholder=".faber, src" autocomplete="off" />
                 </label>
                 <label class="ai-settings-field" for="ai-settings-mcp-blocked-directories">
-                  <span>Diretórios bloqueados</span>
+                  <span data-i18n="mcpBlockedDirectoriesLabel">Diretórios bloqueados</span>
                   <input id="ai-settings-mcp-blocked-directories" type="text" placeholder=".git, node_modules" autocomplete="off" />
                 </label>
               </div>
 
               <div class="ai-settings-mcp-grid">
                 <label class="ai-settings-field" for="ai-settings-mcp-allowed-network-hosts">
-                  <span>Hosts permitidos</span>
+                  <span data-i18n="mcpAllowedHostsLabel">Hosts permitidos</span>
                   <input id="ai-settings-mcp-allowed-network-hosts" type="text" placeholder="localhost, 127.0.0.1" autocomplete="off" />
                 </label>
                 <label class="ai-settings-field" for="ai-settings-mcp-blocked-network-hosts">
-                  <span>Hosts bloqueados</span>
+                  <span data-i18n="mcpBlockedHostsLabel">Hosts bloqueados</span>
                   <input id="ai-settings-mcp-blocked-network-hosts" type="text" placeholder="example.com" autocomplete="off" />
                 </label>
               </div>
 
               <div class="ai-settings-mcp-secret-grid">
                 <label class="ai-settings-field" for="ai-settings-mcp-env">
-                  <span>Env stdio</span>
+                  <span data-i18n="mcpStdioEnvLabel">Env stdio</span>
                   <textarea id="ai-settings-mcp-env" rows="3" placeholder="MCP_TOKEN=..." autocomplete="off"></textarea>
                 </label>
                 <label class="ai-settings-field" for="ai-settings-mcp-headers">
-                  <span>Headers HTTP/SSE</span>
+                  <span data-i18n="mcpHttpHeadersLabel">Headers HTTP/SSE</span>
                   <textarea id="ai-settings-mcp-headers" rows="3" placeholder="Authorization=Bearer ..." autocomplete="off"></textarea>
                 </label>
               </div>
@@ -1198,35 +1198,35 @@
               <div class="ai-settings-mcp-toggles">
                 <label class="workspace-toggle-row" for="ai-settings-mcp-enabled">
                   <input id="ai-settings-mcp-enabled" type="checkbox" checked />
-                  <span>Ativo</span>
+                  <span data-i18n="mcpActiveLabel">Ativo</span>
                 </label>
                 <label class="workspace-toggle-row" for="ai-settings-mcp-approved">
                   <input id="ai-settings-mcp-approved" type="checkbox" />
-                  <span>Aprovado</span>
+                  <span data-i18n="mcpApprovedLabel">Aprovado</span>
                 </label>
                 <label class="workspace-toggle-row" for="ai-settings-mcp-high-risk-allow">
                   <input id="ai-settings-mcp-high-risk-allow" type="checkbox" />
-                  <span>Alto risco exige allowlist</span>
+                  <span data-i18n="mcpHighRiskAllowlist">Alto risco exige allowlist</span>
                 </label>
                 <label class="workspace-toggle-row" for="ai-settings-mcp-inject-session">
                   <input id="ai-settings-mcp-inject-session" type="checkbox" />
-                  <span>Injetar projectSession</span>
+                  <span data-i18n="mcpInjectProjectSession">Injetar projectSession</span>
                 </label>
                 <label class="workspace-toggle-row" for="ai-settings-mcp-allow-external-network">
                   <input id="ai-settings-mcp-allow-external-network" type="checkbox" />
-                  <span>Rede externa</span>
+                  <span data-i18n="mcpExternalNetwork">Rede externa</span>
                 </label>
               </div>
 
               <div class="ai-settings-editor-actions">
-                <button id="ai-settings-mcp-new" type="button" class="btn btn-muted">Novo</button>
-                <button id="ai-settings-mcp-save" type="button" class="btn btn-success">Salvar servidor</button>
+                <button id="ai-settings-mcp-new" type="button" class="btn btn-muted" data-i18n="mcpNewServer">Novo</button>
+                <button id="ai-settings-mcp-save" type="button" class="btn btn-success" data-i18n="mcpSaveServer">Salvar servidor</button>
               </div>
             </div>
 
             <div id="ai-settings-mcp-list" class="ai-settings-mcp-list"></div>
 
-            <p class="ai-settings-help">
+            <p class="ai-settings-help" data-i18n="mcpPolicyHelp">
               Servidores aprovados podem expor tools para a capability external_mcp. Escrita direta continua bloqueada por política e contrato.
             </p>
           </div>
@@ -1242,22 +1242,22 @@
 
 <div id="unsaved-exit-modal" class="unsaved-exit-modal hidden" aria-hidden="true">
       <div id="unsaved-exit-backdrop" class="unsaved-exit-modal__backdrop"></div>
-      <div class="unsaved-exit-modal__dialog" role="dialog" aria-modal="true" aria-label="Confirmação de saída sem salvar">
-        <p class="unsaved-exit-modal__text">Você alterou o projeto, deseja sair sem salvar?</p>
+      <div class="unsaved-exit-modal__dialog" role="dialog" aria-modal="true" aria-label="Confirmação de saída sem salvar" data-i18n-aria-label="unsavedExitLabel">
+        <p class="unsaved-exit-modal__text" data-i18n="discardUnsavedConfirm">Você alterou o projeto. Deseja sair sem salvar?</p>
         <div class="unsaved-exit-modal__actions">
-          <button id="unsaved-exit-no" type="button" class="unsaved-exit-btn unsaved-exit-btn--primary">Não</button>
-          <button id="unsaved-exit-yes" type="button" class="unsaved-exit-btn unsaved-exit-btn--ghost">Sim</button>
+          <button id="unsaved-exit-no" type="button" class="unsaved-exit-btn unsaved-exit-btn--primary" data-i18n="no">Não</button>
+          <button id="unsaved-exit-yes" type="button" class="unsaved-exit-btn unsaved-exit-btn--ghost" data-i18n="yes">Sim</button>
         </div>
       </div>
     </div>
 
     <div id="faber-confirm-modal" class="unsaved-exit-modal hidden" aria-hidden="true">
       <div id="faber-confirm-backdrop" class="unsaved-exit-modal__backdrop"></div>
-      <div class="unsaved-exit-modal__dialog" role="dialog" aria-modal="true" aria-label="Confirmação">
+      <div class="unsaved-exit-modal__dialog" role="dialog" aria-modal="true" aria-label="Confirmação" data-i18n-aria-label="confirmation">
         <p id="faber-confirm-text" class="unsaved-exit-modal__text"></p>
         <div class="unsaved-exit-modal__actions">
-          <button id="faber-confirm-no" type="button" class="unsaved-exit-btn unsaved-exit-btn--ghost">Cancelar</button>
-          <button id="faber-confirm-yes" type="button" class="unsaved-exit-btn unsaved-exit-btn--primary">Confirmar</button>
+          <button id="faber-confirm-no" type="button" class="unsaved-exit-btn unsaved-exit-btn--ghost" data-i18n="cancel">Cancelar</button>
+          <button id="faber-confirm-yes" type="button" class="unsaved-exit-btn unsaved-exit-btn--primary" data-i18n="confirm">Confirmar</button>
         </div>
       </div>
     </div>
@@ -1296,6 +1296,14 @@
           </div>
           <div id="progressive-tutorial-checklist" class="progressive-checklist hidden"></div>
           <div id="progressive-tutorial-preview" class="progressive-preview"></div>
+          <div id="progressive-tutorial-name-prompt" class="progressive-tutorial__name-prompt hidden">
+            <label for="progressive-tutorial-name-input">Como devemos chamar você?</label>
+            <div class="progressive-tutorial__name-row">
+              <input id="progressive-tutorial-name-input" type="text" maxlength="60" autocomplete="name" placeholder="Digite seu nome">
+              <button id="progressive-tutorial-name-save" type="button">Confirmar</button>
+            </div>
+            <span id="progressive-tutorial-name-error" class="progressive-tutorial__name-error" aria-live="polite"></span>
+          </div>
           <div class="progressive-tutorial__actions">
             <button id="progressive-tutorial-prev" type="button">Voltar</button>
             <button id="progressive-tutorial-skip-all" type="button">Interromper</button>
@@ -1312,6 +1320,7 @@
     <script src="../node_modules/codemirror/mode/htmlmixed/htmlmixed.js"></script>
     <script src="../node_modules/codemirror/mode/markdown/markdown.js"></script>
     <script src="../node_modules/codemirror/mode/meta.js"></script>
+    <script src="./i18n.js"></script>
     <script src="./bootstrap_guard.js"></script>
     <script src="./app_state.js"></script>
     <script src="./app_formatters.js"></script>
@@ -1321,7 +1330,7 @@
     <script src="./app_actions.js"></script>
     <script src="./app_events.js"></script>
     <script src="./startup_preloader.js"></script>
-    <script src="./i18n.js"></script>
+    <script src="./tutorial_copy.js"></script>
     <script src="./ui_appearance.js"></script>
     <script src="./app_preferences.js"></script>
     <script src="./account_gate.js"></script>
@@ -1342,7 +1351,7 @@
     <script src="./job_progress.js"></script>
     <script src="./panel_layout.js"></script>
     <script src="./automata_contracts.js"></script>
-    <script src="./application_map_canvas.js?v=3"></script>
+    <script src="./application_map_canvas.js"></script>
     <script src="./application_map.js"></script>
     <script src="./milestones_panel.js"></script>
     <script src="./project_tools_support.js"></script>
@@ -1357,7 +1366,8 @@
     <script src="./welcome_project_modal.js"></script>
     <script src="./welcome_quotes.js"></script>
     <script src="./hover_tooltips.js"></script>
-    <script src="progressive_disclosure.js?v=3"></script>
+    <script src="./tutorial_welcome_project.js"></script>
+    <script src="./progressive_disclosure.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

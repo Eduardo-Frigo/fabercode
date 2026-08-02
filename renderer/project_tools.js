@@ -17,6 +17,14 @@
   } = projectToolsSupport;
   const { createProjectGitTool } = projectToolsGit;
 
+  function uiText(key, fallback, replacements = {}) {
+    let value = window.t ? window.t(key, fallback) : fallback;
+    Object.entries(replacements).forEach(([name, replacement]) => {
+      value = String(value).split(`{${name}}`).join(String(replacement));
+    });
+    return value;
+  }
+
   function createToolButton(label, className = '') {
     const button = document.createElement('button');
     button.type = 'button';
@@ -40,6 +48,24 @@
     }
     section.appendChild(head);
     return section;
+  }
+
+  function dispatchTutorialPreviewStarted(detail = {}) {
+    if (
+      typeof window === 'undefined'
+      || typeof window.dispatchEvent !== 'function'
+      || typeof window.CustomEvent !== 'function'
+    ) return;
+    window.dispatchEvent(new window.CustomEvent('faber:project-preview-started', { detail }));
+  }
+
+  function dispatchTutorialPreviewFailed(detail = {}) {
+    if (
+      typeof window === 'undefined'
+      || typeof window.dispatchEvent !== 'function'
+      || typeof window.CustomEvent !== 'function'
+    ) return;
+    window.dispatchEvent(new window.CustomEvent('faber:project-preview-failed', { detail }));
   }
 
   function setRightPanelTitle(title) {
@@ -100,7 +126,7 @@
       backdrop.id = 'right-tool-lightbox-backdrop';
       backdrop.className = 'right-tool-lightbox__backdrop';
       backdrop.type = 'button';
-      backdrop.setAttribute('aria-label', 'Fechar ferramenta');
+      backdrop.setAttribute('aria-label', uiText('closeTool', 'Fechar ferramenta'));
 
       const panel = document.createElement('section');
       panel.className = 'right-tool-lightbox__panel';
@@ -119,7 +145,7 @@
       close.id = 'right-tool-lightbox-close';
       close.type = 'button';
       close.className = 'right-tool-lightbox__close';
-      close.setAttribute('aria-label', 'Fechar ferramenta');
+      close.setAttribute('aria-label', uiText('closeTool', 'Fechar ferramenta'));
       close.textContent = '×';
       header.append(titleWrap, close);
 
@@ -241,13 +267,13 @@
       try {
         if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
           await navigator.clipboard.writeText(command);
-          updateStatus('Comando GitHub copiado');
+          updateStatus(uiText('githubCommandCopied', 'Comando GitHub copiado'));
           return;
         }
       } catch {
         // Fall through to chat guidance.
       }
-      appendTransientAssistantMessage(`Rode este comando no terminal:\n${command}`);
+      appendTransientAssistantMessage(uiText('runCommandInTerminal', 'Rode este comando no terminal:\n{command}', { command }));
     }
 
     function createGithubCommandPanel(command) {
@@ -255,7 +281,7 @@
       wrap.className = 'right-tool-command-panel';
       const code = document.createElement('code');
       code.textContent = command;
-      const copy = createToolButton('Copiar comando');
+      const copy = createToolButton(uiText('copyCommand', 'Copiar comando'));
       copy.addEventListener('click', () => copyGithubCommand(command));
       wrap.append(code, copy);
       return wrap;
@@ -265,7 +291,7 @@
       const group = document.createElement('div');
       group.className = 'right-tool-segmented';
       group.setAttribute('role', 'group');
-      group.setAttribute('aria-label', 'Visibilidade do repositório');
+      group.setAttribute('aria-label', uiText('repositoryVisibility', 'Visibilidade do repositório'));
       let value = initial === 'public' ? 'public' : 'private';
 
       function makeButton(nextValue, label) {
@@ -283,7 +309,10 @@
         return button;
       }
 
-      group.append(makeButton('private', 'Privado'), makeButton('public', 'Público'));
+      group.append(
+        makeButton('private', uiText('privateVisibility', 'Privado')),
+        makeButton('public', uiText('publicVisibility', 'Público'))
+      );
       return {
         element: group,
         getValue: () => value,
@@ -296,10 +325,10 @@
       box.className = `right-tool-github-result right-tool-github-result--${plan.ready ? 'ready' : 'blocked'}`;
 
       const title = document.createElement('strong');
-      title.textContent = plan.ready ? 'Revisão pronta' : guidance.title;
+      title.textContent = plan.ready ? uiText('reviewReady', 'Revisão pronta') : guidance.title;
       const copy = document.createElement('p');
       copy.textContent = plan.ready
-        ? 'Confira as ações abaixo. Nada será enviado antes do próximo clique.'
+        ? uiText('githubReviewBeforeSend', 'Confira as ações abaixo. Nada será enviado antes do próximo clique.')
         : guidance.message;
       box.append(title, copy);
 
@@ -309,7 +338,7 @@
         list.className = 'right-tool-step-list';
         actions.forEach((entry) => {
           const item = document.createElement('li');
-          item.textContent = entry.label || entry.id || 'Ação GitHub';
+          item.textContent = entry.label || entry.id || uiText('githubAction', 'Ação GitHub');
           list.appendChild(item);
         });
         box.appendChild(list);
@@ -319,7 +348,7 @@
       if (blockers.length) {
         const blocked = document.createElement('p');
         blocked.className = 'right-tool-github-note';
-        blocked.textContent = `Pendências: ${blockers.join(' ')}`;
+        blocked.textContent = uiText('pendingItems', 'Pendências: {value}', { value: blockers.join(' ') });
         box.appendChild(blocked);
       }
 
@@ -330,10 +359,10 @@
 
       if (!plan.ready) return;
 
-      const publish = createToolButton('Publicar agora', 'right-tool-action--primary');
+      const publish = createToolButton(uiText('publishNow', 'Publicar agora'), 'right-tool-action--primary');
       publish.addEventListener('click', async () => {
         publish.disabled = true;
-        updateStatus('Publicando no GitHub...');
+        updateStatus(uiText('publishingGithub', 'Publicando no GitHub...'));
         box.classList.add('is-working');
         const publishResult = await api.publishProjectToGithub({
           rootPath: projectInfo.rootPath,
@@ -343,19 +372,21 @@
 
         if (!publishResult || !publishResult.ok) {
           publish.disabled = false;
-          const message = (publishResult && publishResult.message) || 'Falha ao publicar no GitHub.';
+          const message = (publishResult && publishResult.message) || uiText('githubPublishFailed', 'Falha ao publicar no GitHub.');
           appendTransientAssistantMessage(message);
-          title.textContent = 'Publicação não concluída';
+          title.textContent = uiText('githubPublishIncomplete', 'Publicação não concluída');
           copy.textContent = message;
-          updateStatus('GitHub: falha na publicação');
+          updateStatus(uiText('githubPublishFailedStatus', 'GitHub: falha na publicação'));
           return;
         }
 
         const repoUrl = publishResult.report && publishResult.report.repoUrl ? publishResult.report.repoUrl : '';
-        title.textContent = 'Publicado no GitHub';
-        copy.textContent = repoUrl || 'Projeto publicado no GitHub.';
-        appendTransientAssistantMessage(repoUrl ? `Projeto publicado no GitHub: ${repoUrl}` : 'Projeto publicado no GitHub.');
-        updateStatus('GitHub publicado');
+        title.textContent = uiText('publishedGithub', 'Publicado no GitHub');
+        copy.textContent = repoUrl || uiText('projectPublishedGithub', 'Projeto publicado no GitHub.');
+        appendTransientAssistantMessage(repoUrl
+          ? uiText('projectPublishedGithubUrl', 'Projeto publicado no GitHub: {url}', { url: repoUrl })
+          : uiText('projectPublishedGithub', 'Projeto publicado no GitHub.'));
+        updateStatus(uiText('githubPublishedStatus', 'GitHub publicado'));
         await refreshFileTree();
       });
       box.appendChild(publish);
@@ -363,7 +394,10 @@
 
     async function renderGithubPublishWizardBody(body, projectInfo) {
       body.innerHTML = '';
-      const section = createToolSection('Publicar no GitHub', 'Conecte a conta local, revise o plano e envie quando estiver pronto.');
+      const section = createToolSection(
+        uiText('publishGithubTitle', 'Publicar no GitHub'),
+        uiText('publishGithubDesc', 'Conecte a conta local, revise o plano e envie quando estiver pronto.')
+      );
       const defaultRepoName = inferGithubRepoNameFromProject(
         getProjects(),
         getSelectedProjectId(),
@@ -389,7 +423,7 @@
       const repoLabel = document.createElement('label');
       repoLabel.className = 'right-tool-field';
       const repoText = document.createElement('span');
-      repoText.textContent = 'Nome do repositório';
+      repoText.textContent = uiText('repositoryName', 'Nome do repositório');
       const repoInput = document.createElement('input');
       repoInput.type = 'text';
       repoInput.className = 'right-tool-input';
@@ -401,24 +435,24 @@
       const visibilityLabel = document.createElement('div');
       visibilityLabel.className = 'right-tool-field';
       const visibilityText = document.createElement('span');
-      visibilityText.textContent = 'Visibilidade';
+      visibilityText.textContent = uiText('visibility', 'Visibilidade');
       const visibility = createGithubVisibilityControl('private');
       visibilityLabel.append(visibilityText, visibility.element);
 
       const resultBox = document.createElement('div');
       resultBox.className = 'right-tool-github-result hidden';
 
-      const review = createToolButton('Revisar plano', 'right-tool-action--primary');
+      const review = createToolButton(uiText('reviewPlan', 'Revisar plano'), 'right-tool-action--primary');
       review.addEventListener('click', async () => {
         review.disabled = true;
         resultBox.classList.remove('hidden');
         resultBox.innerHTML = '';
-        renderToolLoading(resultBox, 'Verificando GitHub...');
+        renderToolLoading(resultBox, uiText('checkingGithub', 'Verificando GitHub...'));
         const publishOptions = {
           repoName: repoInput.value || defaultRepoName,
           visibility: visibility.getValue(),
         };
-        updateStatus('Preparando plano GitHub...');
+        updateStatus(uiText('preparingGithubPlan', 'Preparando plano GitHub...'));
         const planResult = await api.getGithubPublishPlan({
           rootPath: projectInfo.rootPath,
           options: publishOptions,
@@ -426,21 +460,23 @@
         review.disabled = false;
 
         if (!planResult || !planResult.ok || !planResult.plan) {
-          const message = (planResult && planResult.message) || 'Falha ao planejar publicação GitHub.';
+          const message = (planResult && planResult.message) || uiText('githubPlanningFailed', 'Falha ao planejar publicação GitHub.');
           resultBox.innerHTML = '';
           resultBox.className = 'right-tool-github-result right-tool-github-result--blocked';
           const strong = document.createElement('strong');
-          strong.textContent = 'Plano indisponível';
+          strong.textContent = uiText('planUnavailable', 'Plano indisponível');
           const copy = document.createElement('p');
           copy.textContent = message;
           resultBox.append(strong, copy);
           appendTransientAssistantMessage(message);
-          updateStatus('GitHub: plano indisponível');
+          updateStatus(uiText('githubPlanUnavailableStatus', 'GitHub: plano indisponível'));
           return;
         }
 
         renderGithubPlanBox(resultBox, planResult.plan, publishOptions, projectInfo);
-        updateStatus(planResult.plan.ready ? 'GitHub: plano pronto' : 'GitHub: pendências encontradas');
+        updateStatus(planResult.plan.ready
+          ? uiText('githubPlanReadyStatus', 'GitHub: plano pronto')
+          : uiText('githubPendingStatus', 'GitHub: pendências encontradas'));
       });
 
       form.append(repoLabel, visibilityLabel, review, resultBox);
@@ -451,16 +487,16 @@
     async function runGithubPublishWizard() {
       const projectInfo = getSelectedProjectInfo();
       if (!projectInfo || !projectInfo.rootPath) {
-        appendTransientAssistantMessage('Selecione um projeto antes de configurar GitHub.');
+        appendTransientAssistantMessage(uiText('selectProjectBeforeGithub', 'Selecione um projeto antes de configurar GitHub.'));
         return;
       }
       if (!api.getGithubPublishPlan || !api.publishProjectToGithub) {
-        appendTransientAssistantMessage('A integração GitHub ainda não está disponível neste build.');
+        appendTransientAssistantMessage(uiText('githubIntegrationUnavailable', 'A integração GitHub ainda não está disponível neste build.'));
         return;
       }
       if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
-        const body = openToolSurface('GitHub', 'Conta, repositório e envio com revisão local.', 'github');
-        renderToolLoading(body, 'Verificando conta GitHub...');
+        const body = openToolSurface('GitHub', uiText('githubToolDesc', 'Conta, repositório e envio com revisão local.'), 'github');
+        renderToolLoading(body, uiText('checkingGithubAccount', 'Verificando conta GitHub...'));
         await renderGithubPublishWizardBody(body, projectInfo);
         return;
       }
@@ -471,16 +507,16 @@
         projectInfo
       );
       const repoNameInput = await requestTextInput({
-        title: 'Nome do repositório GitHub',
+        title: uiText('repositoryName', 'Nome do repositório GitHub'),
         initialValue: defaultRepoName,
         placeholder: defaultRepoName,
       });
       if (repoNameInput === null) return;
 
       const visibilityInput = await requestTextInput({
-        title: 'Visibilidade do repositório',
+        title: uiText('repositoryVisibility', 'Visibilidade do repositório'),
         initialValue: 'private',
-        placeholder: 'private ou public',
+        placeholder: uiText('visibilityPrompt', 'private ou public'),
       });
       if (visibilityInput === null) return;
 
@@ -489,47 +525,51 @@
         visibility: /^public$/i.test(String(visibilityInput || '').trim()) ? 'public' : 'private',
       };
 
-      updateStatus('Preparando plano GitHub...');
+      updateStatus(uiText('preparingGithubPlan', 'Preparando plano GitHub...'));
       const planResult = await api.getGithubPublishPlan({
         rootPath: projectInfo.rootPath,
         options: publishOptions,
       });
 
       if (!planResult || !planResult.ok || !planResult.plan) {
-        appendTransientAssistantMessage((planResult && planResult.message) || 'Falha ao planejar publicação GitHub.');
-        updateStatus('GitHub: plano indisponível');
+        appendTransientAssistantMessage((planResult && planResult.message) || uiText('githubPlanningFailed', 'Falha ao planejar publicação GitHub.'));
+        updateStatus(uiText('githubPlanUnavailableStatus', 'GitHub: plano indisponível'));
         return;
       }
 
       appendTransientAssistantMessage(formatGithubPublishPlan(planResult.plan));
       if (!planResult.plan.ready) {
-        updateStatus('GitHub: pendências encontradas');
+        updateStatus(uiText('githubPendingStatus', 'GitHub: pendências encontradas'));
         return;
       }
 
       const confirmed = await confirmAction(
-        `Publicar este projeto no GitHub como ${planResult.plan.repoFullName || publishOptions.repoName}?`
+        uiText('githubPublishConfirm', 'Publicar este projeto no GitHub como {repo}?', {
+          repo: planResult.plan.repoFullName || publishOptions.repoName,
+        })
       );
       if (!confirmed) {
-        updateStatus('Publicação GitHub cancelada');
+        updateStatus(uiText('githubPublishCanceled', 'Publicação GitHub cancelada'));
         return;
       }
 
-      updateStatus('Publicando no GitHub...');
+      updateStatus(uiText('publishingGithub', 'Publicando no GitHub...'));
       const publishResult = await api.publishProjectToGithub({
         rootPath: projectInfo.rootPath,
         options: publishOptions,
       });
 
       if (!publishResult || !publishResult.ok) {
-        appendTransientAssistantMessage((publishResult && publishResult.message) || 'Falha ao publicar no GitHub.');
-        updateStatus('GitHub: falha na publicação');
+        appendTransientAssistantMessage((publishResult && publishResult.message) || uiText('githubPublishFailed', 'Falha ao publicar no GitHub.'));
+        updateStatus(uiText('githubPublishFailedStatus', 'GitHub: falha na publicação'));
         return;
       }
 
       const repoUrl = publishResult.report && publishResult.report.repoUrl ? publishResult.report.repoUrl : '';
-      appendTransientAssistantMessage(repoUrl ? `Projeto publicado no GitHub: ${repoUrl}` : 'Projeto publicado no GitHub.');
-      updateStatus('GitHub publicado');
+      appendTransientAssistantMessage(repoUrl
+        ? uiText('projectPublishedGithubUrl', 'Projeto publicado no GitHub: {url}', { url: repoUrl })
+        : uiText('projectPublishedGithub', 'Projeto publicado no GitHub.'));
+      updateStatus(uiText('githubPublishedStatus', 'GitHub publicado'));
     }
 
     const gitTool = createProjectGitTool({
@@ -571,37 +611,57 @@
     }
 
     async function startPreview() {
-      if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
-        await runPreviewStart();
-        return;
+      const selectedProject = getSelectedProjectInfo();
+      try {
+        if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
+          const started = await runPreviewStart();
+          if (started) dispatchTutorialPreviewStarted({ rootPath: selectedProject?.rootPath || '' });
+          else dispatchTutorialPreviewFailed({ rootPath: selectedProject?.rootPath || '' });
+          return started;
+        }
+        const body = openToolSurface(window.t ? window.t('runAppTitle', 'Executar') : 'Executar', window.t ? window.t('runAppDesc', 'Rodar e abrir a visualização local do projeto.') : 'Rodar e abrir a visualização local do projeto.', 'run');
+        const projectInfo = getProjectRootOrNotify(body);
+        if (!projectInfo) {
+          dispatchTutorialPreviewFailed({ message: uiText('noProjectSelectedError', 'Nenhum projeto selecionado para esta ferramenta.') });
+          return false;
+        }
+        renderPreviewToolProgress(body, 18, window.t ? window.t('previewPlanning', 'planejando visualização') : 'planejando visualização');
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        renderPreviewToolProgress(body, 46, window.t ? window.t('previewPreparing', 'preparando terminal ou servidor local') : 'preparando terminal ou servidor local');
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        renderPreviewToolProgress(body, 72, window.t ? window.t('previewStarting', 'iniciando execução') : 'iniciando execução');
+        const started = await runPreviewStart();
+        if (started) {
+          renderPreviewToolProgress(body, 100, window.t ? window.t('previewRequested', 'visualização solicitada') : 'visualização solicitada');
+          dispatchTutorialPreviewStarted({ rootPath: projectInfo.rootPath });
+        } else {
+          dispatchTutorialPreviewFailed({ rootPath: projectInfo.rootPath });
+        }
+        return started;
+      } catch (error) {
+        const message = error && error.message ? error.message : uiText('localRunUnavailable', 'A execução local ainda não está disponível nesta versão.');
+        appendTransientAssistantMessage(message);
+        updateStatus(uiText('previewBlocked', 'Execução bloqueada'));
+        dispatchTutorialPreviewFailed({ rootPath: selectedProject?.rootPath || '', message });
+        return false;
       }
-      const body = openToolSurface(window.t ? window.t('runAppTitle', 'Executar') : 'Executar', window.t ? window.t('runAppDesc', 'Rodar e abrir a visualização local do projeto.') : 'Rodar e abrir a visualização local do projeto.', 'run');
-      const projectInfo = getProjectRootOrNotify(body);
-      if (!projectInfo) return;
-      renderPreviewToolProgress(body, 18, 'planejando preview');
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      renderPreviewToolProgress(body, 46, 'preparando terminal ou servidor local');
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      renderPreviewToolProgress(body, 72, 'iniciando execução');
-      await runPreviewStart();
-      renderPreviewToolProgress(body, 100, window.t ? window.t('previewRequested', 'visualização solicitada') : 'visualização solicitada');
     }
 
     async function runPreviewStart() {
       const projectInfo = getSelectedProjectInfo();
       if (!projectInfo || !projectInfo.rootPath) {
-        appendTransientAssistantMessage('Selecione um projeto antes de executar localmente.');
-        return;
+        appendTransientAssistantMessage(uiText('selectProjectBeforeRun', 'Selecione um projeto antes de executar localmente.'));
+        return false;
       }
       if (!api.startProjectPreview) {
-        appendTransientAssistantMessage('Execução local ainda não está disponível neste build.');
-        return;
+        appendTransientAssistantMessage(uiText('localRunUnavailable', 'A execução local ainda não está disponível nesta versão.'));
+        return false;
       }
 
       const terminalStarted = await startPreviewInTerminal(projectInfo);
-      if (terminalStarted) return;
+      if (terminalStarted !== null) return terminalStarted;
 
-      updateStatus('Executando projeto local...');
+      updateStatus(uiText('previewRunningProject', 'Executando projeto local...'));
       const result = await api.startProjectPreview({
         rootPath: projectInfo.rootPath,
         open: true,
@@ -612,16 +672,17 @@
 
       if (!result || !result.ok || !result.session) {
         appendTransientAssistantMessage(formatPreviewStartFailure(result || null));
-        updateStatus('Execução bloqueada');
-        return;
+        updateStatus(uiText('previewBlocked', 'Execução bloqueada'));
+        return false;
       }
 
       const installNote = result.install && result.install.ok
-        ? ' Dependências instaladas automaticamente antes da execução.'
+        ? uiText('previewDependencyInstall', ' Dependências instaladas automaticamente antes da execução.')
         : '';
       const target = result.session.url || result.session.commandText || 'processo local iniciado';
-      appendTransientAssistantMessage(`Execução local ativa: ${target}.${installNote}`);
-      updateStatus('Execução local ativa');
+      appendTransientAssistantMessage(uiText('previewActiveTarget', 'Execução local ativa: {target}.{installNote}', { target, installNote }));
+      updateStatus(uiText('previewActive', 'Execução local ativa'));
+      return true;
     }
 
     async function startPreviewInTerminal(projectInfo) {
@@ -631,41 +692,40 @@
         !api.getProjectPreviewPlan ||
         !api.startProjectPreview
       ) {
-        return false;
+        return null;
       }
 
-      updateStatus('Planejando execução local...');
+      updateStatus(uiText('previewPlanningStatus', 'Planejando execução local...'));
       const planResult = await api.getProjectPreviewPlan({
         rootPath: projectInfo.rootPath,
       });
       const plan = planResult && planResult.plan ? planResult.plan : null;
       if (!planResult || !planResult.ok || !plan || plan.mode === 'file') {
-        return false;
+        return null;
       }
-
       const command = buildTerminalPreviewCommand(plan);
       if (!command) {
         appendTransientAssistantMessage(formatPreviewStartFailure({
-          message: 'Execução local bloqueada antes de abrir o terminal.',
+          message: uiText('previewBlockedBeforeTerminal', 'Execução local bloqueada antes de abrir o terminal.'),
           plan,
         }));
-        updateStatus('Execução bloqueada');
-        return true;
+        updateStatus(uiText('previewBlocked', 'Execução bloqueada'));
+        return false;
       }
 
-      updateStatus('Executando no terminal interno...');
+      updateStatus(uiText('previewRunningTerminal', 'Executando no terminal interno...'));
       const terminalResult = await terminalController.runProjectCommand(command, {
         createNewTabIfRunning: true,
       });
       if (!terminalResult || !terminalResult.ok) {
-        appendTransientAssistantMessage((terminalResult && terminalResult.message) || 'Não consegui iniciar o comando no terminal interno.');
-        updateStatus('Execução bloqueada');
-        return true;
+        appendTransientAssistantMessage((terminalResult && terminalResult.message) || uiText('previewTerminalStartFailed', 'Não consegui iniciar o comando no terminal interno.'));
+        updateStatus(uiText('previewBlocked', 'Execução bloqueada'));
+        return false;
       }
 
       if (plan.mode !== 'server') {
-        appendTransientAssistantMessage(`Execução local iniciada no terminal interno: ${command}.`);
-        updateStatus('Execução local ativa');
+        appendTransientAssistantMessage(uiText('previewTerminalStartedCommand', 'Execução local iniciada no terminal interno: {command}.', { command }));
+        updateStatus(uiText('previewActive', 'Execução local ativa'));
         return true;
       }
 
@@ -682,13 +742,13 @@
 
       if (!result || !result.ok || !result.session) {
         appendTransientAssistantMessage(formatPreviewStartFailure(result || null));
-        updateStatus('Execução bloqueada');
-        return true;
+        updateStatus(uiText('previewBlocked', 'Execução bloqueada'));
+        return false;
       }
 
       const target = result.session.url || plan.url || 'servidor local iniciado';
-      appendTransientAssistantMessage(`Execução local ativa no terminal interno: ${target}.`);
-      updateStatus('Execução local ativa');
+      appendTransientAssistantMessage(uiText('previewTerminalActiveTarget', 'Execução local ativa no terminal interno: {target}.', { target }));
+      updateStatus(uiText('previewActive', 'Execução local ativa'));
       return true;
     }
 

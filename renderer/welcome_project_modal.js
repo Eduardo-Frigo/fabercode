@@ -55,7 +55,7 @@
         const info = document.createElement('span');
         info.className = 'welcome-project-row__info';
         const name = document.createElement('strong');
-        name.textContent = String(project.name || 'Projeto');
+        name.textContent = String(project.name || t('projectDefaultName', 'Projeto'));
         const path = document.createElement('small');
         path.textContent = String(project.rootPath || '');
         info.append(name, path);

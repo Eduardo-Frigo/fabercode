@@ -2,6 +2,20 @@
   function createJobProgressController(options = {}) {
     const updateStatus = typeof options.updateStatus === 'function' ? options.updateStatus : () => {};
     const onVisibilityChange = typeof options.onVisibilityChange === 'function' ? options.onVisibilityChange : () => {};
+    const textFor = (key, fallback, params = {}) => {
+      let template = '';
+      if (typeof window.t === 'function') {
+        template = window.t(key, fallback);
+      } else {
+        const locale = document.documentElement.lang || 'pt-BR';
+        const translations = window.FaberI18n && window.FaberI18n.UI_TRANSLATIONS;
+        const table = translations && (translations[locale] || translations[locale.split('-')[0]]);
+        template = table && Object.prototype.hasOwnProperty.call(table, key) ? table[key] : fallback;
+      }
+      return String(template || '').replace(/\{([a-zA-Z0-9_]+)\}/g, (match, name) => (
+        Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match
+      ));
+    };
 
     const elements = {
       root: document.getElementById('job-progress'),
@@ -31,15 +45,15 @@
         const jobContext = appState.lastJobContext;
         if (jobContext && jobContext.jobId) {
           elements.cancelBtn.disabled = true;
-          elements.cancelBtn.textContent = 'Parando...';
+          elements.cancelBtn.textContent = textFor('stopping', 'Parando...');
           window.api.cancelJob({ jobId: jobContext.jobId }).then(() => {
             setTimeout(() => {
               elements.cancelBtn.disabled = false;
-              elements.cancelBtn.textContent = 'Parar';
+              elements.cancelBtn.textContent = textFor('stop', 'Parar');
             }, 2000);
           }).catch(() => {
             elements.cancelBtn.disabled = false;
-            elements.cancelBtn.textContent = 'Parar';
+            elements.cancelBtn.textContent = textFor('stop', 'Parar');
           });
         }
       });
@@ -531,7 +545,7 @@
         : [];
       const summary = document.createElement('div');
       summary.className = 'job-progress-final__summary';
-      (summaryLines.length ? summaryLines : ['Resultado registrado.']).forEach((line) => {
+      (summaryLines.length ? summaryLines : [textFor('resultRecorded', 'Resultado registrado.')]).forEach((line) => {
         const row = document.createElement('div');
         row.textContent = line;
         summary.appendChild(row);
@@ -545,7 +559,7 @@
         const details = document.createElement('details');
         details.className = 'job-progress-final__details';
         const summaryNode = document.createElement('summary');
-        summaryNode.textContent = 'Ver caminho da execução';
+        summaryNode.textContent = textFor('viewExecutionPath', 'Ver caminho da execução');
         const list = document.createElement('div');
         list.className = 'job-progress-final__timeline';
         detailLines.forEach((line) => {
@@ -565,7 +579,7 @@
       const phaseSteps = presentation && Array.isArray(presentation.phaseSteps) ? presentation.phaseSteps : [];
       const phaseStrip = renderPhaseSteps(phaseSteps);
       if (phaseStrip) {
-        elements.detail.append(createSectionLabel('Fases'), phaseStrip);
+        elements.detail.append(createSectionLabel(textFor('phases', 'Fases')), phaseStrip);
       }
       if (presentation && presentation.busy === false) {
         elements.detail.appendChild(renderFinalSummary(presentation));
@@ -574,7 +588,7 @@
       const activityLines = presentation && Array.isArray(presentation.activityLines)
         ? presentation.activityLines
         : lines;
-      elements.detail.append(createSectionLabel('Agora'), renderLiveActivity(activityLines, presentation));
+      elements.detail.append(createSectionLabel(textFor('now', 'Agora')), renderLiveActivity(activityLines, presentation));
     }
 
     function render(job) {

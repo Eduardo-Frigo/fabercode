@@ -10,6 +10,7 @@ function registerFileHandlers(dependencies = {}) {
     registerIpcHandler,
     resolveAuthorizedProjectPath,
     shell,
+    bundledAssetPaths = {},
   } = dependencies;
 
   function requireDependency(name, value) {
@@ -218,7 +219,13 @@ function registerFileHandlers(dependencies = {}) {
 
   registerIpcHandler('file:write', (_, payload) => {
     const { projectInfo, relativePath, content } = payload || {};
-    if (!projectInfo || !relativePath || typeof content !== 'string') {
+    const assetKey = payload && typeof payload.assetKey === 'string'
+      ? payload.assetKey.trim()
+      : '';
+    const hasTextContent = typeof content === 'string';
+    const hasBundledAsset = assetKey
+      && Object.prototype.hasOwnProperty.call(bundledAssetPaths, assetKey);
+    if (!projectInfo || !relativePath || (!hasTextContent && !hasBundledAsset)) {
       return { ok: false, message: 'Parâmetros inválidos para salvar arquivo.' };
     }
 
@@ -229,17 +236,30 @@ function registerFileHandlers(dependencies = {}) {
     const abs = resolved.absolutePath;
 
     try {
-      const previous = fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : '';
-      fs.writeFileSync(abs, content, 'utf8');
-
-      const rel = normalizeRelativePathForDiff(normalizedRelative);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
       const diffStats = {};
-      mergeDiffStatsEntry(diffStats, rel, computeLineChangeStats(previous, content));
-      if (Object.keys(diffStats).length) {
-        ingestRuntimeDiffStats(rootPath, diffStats);
+
+      if (hasBundledAsset) {
+        const sourcePath = path.resolve(String(bundledAssetPaths[assetKey] || ''));
+        if (!sourcePath || !fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
+          return { ok: false, message: 'Asset oficial não encontrado no aplicativo.' };
+        }
+        fs.copyFileSync(sourcePath, abs);
+      } else {
+        const previous = fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : '';
+        fs.writeFileSync(abs, content, 'utf8');
+        const rel = normalizeRelativePathForDiff(normalizedRelative);
+        mergeDiffStatsEntry(diffStats, rel, computeLineChangeStats(previous, content));
+        if (Object.keys(diffStats).length) {
+          ingestRuntimeDiffStats(rootPath, diffStats);
+        }
       }
 
-      appendAuditEvent('file.saved_from_lightbox', { rootPath, relativePath: normalizedRelative });
+      appendAuditEvent('file.saved_from_lightbox', {
+        rootPath,
+        relativePath: normalizedRelative,
+        assetKey: hasBundledAsset ? assetKey : undefined,
+      });
       return { ok: true, relativePath: normalizedRelative, diffStats };
     } catch (error) {
       return { ok: false, message: `Falha ao salvar arquivo: ${error.message}` };

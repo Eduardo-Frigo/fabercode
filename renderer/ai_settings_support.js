@@ -1,4 +1,8 @@
 (function () {
+  function textFor(key, fallback) {
+    return typeof window.t === 'function' ? window.t(key, fallback) : fallback;
+  }
+
   function normalizeKnownProvider(rawValue) {
     const normalized = String(rawValue || '').trim().toLowerCase();
     if (normalized.startsWith('custom:')) return normalized;
@@ -12,12 +16,12 @@
 
   function providerStatusLabel(providerValue) {
     const normalized = normalizeKnownProvider(providerValue);
-    if (normalized === 'mock') return 'Mock local';
+    if (normalized === 'mock') return textFor('mockLocal', 'Mock local');
     if (normalized === 'openai') return 'OpenAI API';
     if (normalized === 'gemini') return 'Gemini API';
     if (normalized === 'sambanova') return 'SambaNova API';
-    if (normalized.startsWith('custom:')) return 'API custom';
-    return 'RWKV local';
+    if (normalized.startsWith('custom:')) return textFor('customApi', 'API customizada');
+    return textFor('rwkvLocal', 'RWKV local');
   }
 
   function normalizeInterfaceLanguage(rawValue) {
@@ -51,7 +55,8 @@
     if (normalized.includes('openai')) return 'OpenAI API';
     if (normalized.includes('pexels')) return 'Pexels';
     if (normalized.includes('deepseek')) return 'DeepSeek API';
-    return String(rawValue || 'Serviço customizado').trim() || 'Serviço customizado';
+    return String(rawValue || textFor('customService', 'Serviço customizado')).trim()
+      || textFor('customService', 'Serviço customizado');
   }
 
   function providerDocsUrl(providerName) {
@@ -66,11 +71,11 @@
 
   const MODEL_PRESETS = {
     openai: [
-      { value: 'gpt-5-codex', label: 'GPT-5 Codex - recomendado para smoke de código' },
-      { value: 'gpt-5.4', label: 'GPT-5.4 - raciocínio forte' },
-      { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini - rápido e econômico' },
-      { value: 'gpt-5.2', label: 'GPT-5.2 - fallback estável' },
-      { value: 'gpt-4.1-mini', label: 'GPT-4.1 Mini - legado econômico' },
+      { value: 'gpt-5-codex', labelKey: 'modelGpt5Codex', fallback: 'GPT-5 Codex - recomendado para código' },
+      { value: 'gpt-5.4', labelKey: 'modelGpt54', fallback: 'GPT-5.4 - raciocínio avançado' },
+      { value: 'gpt-5.4-mini', labelKey: 'modelGpt54Mini', fallback: 'GPT-5.4 Mini - rápido e econômico' },
+      { value: 'gpt-5.2', labelKey: 'modelGpt52', fallback: 'GPT-5.2 - alternativa estável' },
+      { value: 'gpt-4.1-mini', labelKey: 'modelGpt41Mini', fallback: 'GPT-4.1 Mini - opção econômica legada' },
     ],
     gemini: [
       { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
@@ -99,10 +104,13 @@
 
   function buildModelPresetOptions(rowOrProvider, currentModel = '') {
     const provider = inferModelPresetProvider(rowOrProvider);
-    const presets = MODEL_PRESETS[provider] || [];
+    const presets = (MODEL_PRESETS[provider] || []).map((item) => ({
+      ...item,
+      label: item.labelKey ? textFor(item.labelKey, item.fallback) : item.label,
+    }));
     const current = String(currentModel || '').trim();
     const hasCurrentPreset = presets.some((item) => item.value === current);
-    const options = [{ value: '', label: 'Modelo customizado' }, ...presets];
+    const options = [{ value: '', label: textFor('modelCustom', 'Modelo customizado') }, ...presets];
     if (current && !hasCurrentPreset) options.push({ value: current, label: current });
     return options;
   }
@@ -153,7 +161,7 @@
       const selectable = hasKey && model && (supportedKind || website);
       if (!selectable) return;
 
-      const labelBase = humanizeProviderName(providerName || 'API custom');
+      const labelBase = humanizeProviderName(providerName || textFor('customApi', 'API customizada'));
       const labelSuffix = String((item && item.apiLabel) || '').trim();
       const label = labelSuffix ? `${labelBase} - ${labelSuffix}` : labelBase;
       options.push({ value: `custom:${id}`, label });

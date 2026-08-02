@@ -48,13 +48,13 @@ export function BuildBlueprint({ name, started, onActivate, onPointerMove }) {
             {started ? "Sinal conectado · siga o fio" : "Toque no sinal para iniciar"}
           </span>
           <svg className="signal-thread" viewBox="0 0 420 320" preserveAspectRatio="none" aria-hidden="true">
-            <path className="signal-thread-shadow" d="M210 156 C278 164 254 236 406 274" />
-            <path className="signal-thread-line" d="M210 156 C278 164 254 236 406 274" />
+            <path className="signal-thread-shadow" d="M210 156 C274 162 280 226 390 272" />
+            <path className="signal-thread-line" d="M210 156 C274 162 280 226 390 272" />
             <circle className="signal-thread-dot" r="5">
-              <animateMotion dur="4.8s" repeatCount="indefinite" path="M210 156 C278 164 254 236 406 274" />
+              <animateMotion dur="4.8s" repeatCount="indefinite" path="M210 156 C274 162 280 226 390 272" />
             </circle>
           </svg>
-          <span className="journey-thread-anchor" data-journey-thread-start aria-hidden="true" />
+          <span className="journey-thread-anchor" data-journey-thread-start="true" aria-hidden="true" />
         </div>
 
         <div className="blueprint-code" aria-label={`Sessão personalizada para ${name}`}>

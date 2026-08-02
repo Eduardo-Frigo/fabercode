@@ -1,4 +1,12 @@
 (function () {
+  function uiText(key, fallback, vars = {}) {
+    const value = window.t ? window.t(key, fallback) : fallback;
+    return Object.entries(vars).reduce(
+      (text, [name, replacement]) => String(text).replaceAll(`{${name}}`, String(replacement)),
+      String(value == null ? '' : value)
+    );
+  }
+
   function createApplicationMapCanvas(container, options = {}) {
     const onNodeSelected = typeof options.onNodeSelected === 'function' ? options.onNodeSelected : () => {};
     const onMapChanged = typeof options.onMapChanged === 'function' ? options.onMapChanged : () => {};
@@ -141,7 +149,7 @@
 
       const rootInfo = getSelectedProjectInfo();
       if (!rootInfo || !rootInfo.rootPath) {
-        alert('Selecione um projeto antes de fazer upload de imagens.');
+        alert(window.t ? window.t('uploadImageSelectProject', 'Selecione um projeto antes de fazer upload de imagens.') : 'Selecione um projeto antes de fazer upload de imagens.');
         return;
       }
 
@@ -180,7 +188,10 @@
             selectNode(node.id, false);
             onMapChanged();
           } else {
-            alert('Falha ao importar imagem via drag & drop: ' + (result.message || 'Erro desconhecido.'));
+            const fallback = 'Falha ao importar imagem: {message}';
+            const translated = window.t ? window.t('uploadImageFailed', fallback) : fallback;
+            const unknown = window.t ? window.t('unknownError', 'Erro desconhecido.') : 'Erro desconhecido.';
+            alert(translated.replace('{message}', result.message || unknown));
           }
         };
         reader.readAsDataURL(file);
@@ -358,11 +369,60 @@
       onMapChanged();
     }
 
+    function setZoomLevel(value) {
+      const nextZoom = Number(value);
+      if (!Number.isFinite(nextZoom)) return false;
+      zoomLevel = Math.max(0.3, Math.min(2.0, nextZoom));
+      if (zoomSlider) zoomSlider.value = zoomLevel;
+      if (zoomValueEl) zoomValueEl.textContent = `${Math.round(zoomLevel * 100)}%`;
+      updateTransform();
+      onMapChanged();
+      return true;
+    }
+
+    function focusNodes(nodeIds, focusOptions = {}) {
+      const requestedIds = new Set(Array.isArray(nodeIds) ? nodeIds.filter(Boolean) : []);
+      const targetNodes = nodes.filter((node) => requestedIds.has(node.id));
+      if (!targetNodes.length) return false;
+
+      const bounds = targetNodes.map(getNodeBounds).reduce((acc, current) => ({
+        x1: Math.min(acc.x1, current.x1),
+        y1: Math.min(acc.y1, current.y1),
+        x2: Math.max(acc.x2, current.x2),
+        y2: Math.max(acc.y2, current.y2),
+      }));
+      const requestedZoom = Number(focusOptions.zoom);
+      zoomLevel = Number.isFinite(requestedZoom)
+        ? Math.max(0.3, Math.min(2.0, requestedZoom))
+        : zoomLevel;
+
+      const stageRect = stage.getBoundingClientRect();
+      const viewportWidth = Math.max(1, stage.clientWidth || stageRect.width || 1);
+      const viewportHeight = Math.max(1, stage.clientHeight || stageRect.height || 1);
+      const horizontalAnchor = Math.max(0.1, Math.min(0.9, Number(focusOptions.horizontalAnchor) || 0.5));
+      const verticalAnchor = Math.max(0.15, Math.min(0.75, Number(focusOptions.verticalAnchor) || 0.3));
+      const centerX = (bounds.x1 + bounds.x2) / 2;
+      const centerY = (bounds.y1 + bounds.y2) / 2;
+
+      panOffset = {
+        x: (viewportWidth * horizontalAnchor) - (centerX * zoomLevel),
+        y: (viewportHeight * verticalAnchor) - (centerY * zoomLevel),
+      };
+      if (zoomSlider) zoomSlider.value = zoomLevel;
+      if (zoomValueEl) zoomValueEl.textContent = `${Math.round(zoomLevel * 100)}%`;
+      updateTransform();
+      onMapChanged();
+      return true;
+    }
+
     // Node placement and CRUD helper
-    function addNodeAt(x, y, type) {
+    function addNodeAt(x, y, type, initialData = {}) {
       // Calculate coordinates on the infinite canvas stage
       const canvasX = (x - panOffset.x) / zoomLevel;
       const canvasY = (y - panOffset.y) / zoomLevel;
+      const defaultSize = type === 'group'
+        ? { width: 320, height: 240 }
+        : { width: 220, height: 120 };
 
       const node = {
         id: 'node-' + Date.now(),
@@ -371,29 +431,37 @@
         description: '',
         content: '',
         position: { x: canvasX, y: canvasY },
-        size: type === 'group' ? { width: 320, height: 240 } : { width: 220, height: 120 },
+        size: defaultSize,
         tags: [],
-        collapsed: type === 'group' ? true : undefined
+        collapsed: type === 'group' ? true : undefined,
+        ...initialData,
+        type,
+        position: initialData.position
+          ? { ...initialData.position }
+          : { x: canvasX, y: canvasY },
+        size: { ...defaultSize, ...(initialData.size || {}) },
+        tags: Array.isArray(initialData.tags) ? [...initialData.tags] : []
       };
 
       nodes.push(node);
       renderAllNodes();
       selectNode(node.id);
       onMapChanged();
+      return { ...node, position: { ...node.position }, size: { ...node.size }, tags: [...node.tags] };
     }
 
-    function addNodeAtCenter(type) {
+    function addNodeAtCenter(type, initialData = {}) {
       const rect = stage.getBoundingClientRect();
       const x = rect.width / 2;
       const y = rect.height / 2;
-      addNodeAt(x, y, type);
+      return addNodeAt(x, y, type, initialData);
     }
 
     function getPlaceholderTitle(type) {
-      if (type === 'group') return 'Novo Grupo';
-      if (type === 'decision') return 'Nova Decisão';
-      if (type === 'image') return 'Nova Referência Visual';
-      return 'Nota de Texto';
+      if (type === 'group') return uiText('newGroupTool', 'Novo grupo');
+      if (type === 'decision') return uiText('newDecisionTool', 'Nova decisão');
+      if (type === 'image') return uiText('visualReference', 'Referência Visual');
+      return uiText('textNote', 'Nota de Texto');
     }
 
     function renderAllNodes() {
@@ -449,6 +517,7 @@
 
       if (node.type === 'image' && (node.assetId || node.content)) {
         el.classList.add('has-image');
+        if (node.imageFit === 'contain') el.classList.add('image-fit-contain');
       }
 
       // Group cover banner preview
@@ -471,13 +540,15 @@
       header.className = 'map-node-header';
       const typeBadge = document.createElement('span');
       typeBadge.className = 'map-node-type';
-      typeBadge.textContent = node.type + (node.type === 'group' ? (node.collapsed ? ' (fechado)' : ' (aberto)') : '');
+      typeBadge.textContent = node.type + (node.type === 'group'
+        ? ` (${node.collapsed ? uiText('nodeStateClosed', 'fechado') : uiText('nodeStateOpen', 'aberto')})`
+        : '');
       header.appendChild(typeBadge);
 
       // Pencil edit button
       const editBtn = document.createElement('button');
       editBtn.className = 'map-node-edit-btn';
-      editBtn.title = 'Editar';
+      editBtn.title = uiText('edit', 'Editar');
       editBtn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
       editBtn.addEventListener('mousedown', (e) => {
         e.stopPropagation();
@@ -497,7 +568,7 @@
 
       const descEl = document.createElement('p');
       descEl.className = 'map-node-desc';
-      descEl.textContent = node.description || 'Sem descrição.';
+      descEl.textContent = node.description || uiText('noDescription', 'Sem descrição.');
       el.appendChild(descEl);
 
       if (node.type === 'image' && (node.assetId || node.content)) {
@@ -981,6 +1052,26 @@
       onMapChanged();
     }
 
+    function updateNode(nodeId, updatedData = {}) {
+      const node = nodes.find((entry) => entry.id === nodeId);
+      if (!node) return null;
+
+      const previousSize = node.size;
+      Object.assign(node, updatedData);
+      if (updatedData.position) node.position = { ...updatedData.position };
+      if (updatedData.size) node.size = { ...(previousSize || {}), ...updatedData.size };
+      if (Array.isArray(updatedData.tags)) node.tags = [...updatedData.tags];
+
+      renderAllNodes();
+      onMapChanged();
+      return {
+        ...node,
+        position: { ...(node.position || {}) },
+        size: { ...(node.size || {}) },
+        tags: Array.isArray(node.tags) ? [...node.tags] : [],
+      };
+    }
+
     let contextMenuEl = null;
 
     function showContextMenu(clientX, clientY) {
@@ -995,22 +1086,22 @@
 
       const options = [
         {
-          label: 'Adicionar Grupo',
+          label: uiText('addGroup', 'Adicionar grupo'),
           svg: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`,
           action: () => addNodeAtMouse(clientX, clientY, 'group')
         },
         {
-          label: 'Adicionar Card de Texto',
+          label: uiText('addTextCard', 'Adicionar card de texto'),
           svg: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>`,
           action: () => addNodeAtMouse(clientX, clientY, 'text')
         },
         {
-          label: 'Adicionar Referência Visual',
+          label: uiText('addVisualReference', 'Adicionar referência visual'),
           svg: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>`,
           action: () => addNodeAtMouse(clientX, clientY, 'image')
         },
         {
-          label: 'Adicionar Decisão',
+          label: uiText('addDecision', 'Adicionar decisão'),
           svg: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A5 5 0 0 0 8 8c0 1 .3 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>`,
           action: () => addNodeAtMouse(clientX, clientY, 'decision')
         }
@@ -1084,9 +1175,9 @@
 
     function getMapData() {
       return {
-        nodes,
-        edges,
-        viewport: panOffset,
+        nodes: nodes.map(n => ({ ...n, position: { ...n.position } })),
+        edges: edges.map(e => ({ ...e })),
+        viewport: { ...panOffset },
         zoom: zoomLevel
       };
     }
@@ -1141,7 +1232,7 @@
     }
 
     async function clearMap() {
-      if (await window.faberConfirm('Deseja limpar todo o mapa da aplicação?')) {
+      if (await window.faberConfirm(uiText('clearMapConfirm', 'Deseja limpar todo o mapa da aplicação?'))) {
         nodes = [];
         edges = [];
         content.innerHTML = '';
@@ -1175,13 +1266,18 @@
       setTool,
       clearMap,
       resetZoom,
+      setZoomLevel,
+      focusNodes,
       getSelectedNode,
       deleteSelectedNode,
       updateSelectedNode,
+      updateNode,
       drawEdges,
       addNodeAtCenter,
       renderAllNodes,
-      selectNode
+      selectNode,
+      getPanOffset: () => panOffset,
+      getZoomLevel: () => zoomLevel
     };
   }
 

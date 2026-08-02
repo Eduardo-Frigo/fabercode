@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 const planets = [
   {
@@ -26,6 +27,12 @@ const planets = [
   },
 ];
 
+const orbitConfigs = [
+  { id: "clarity", inset: "0.5%", depth: "outer" },
+  { id: "structure", inset: "15%", depth: "middle" },
+  { id: "evolution", inset: "29%", depth: "inner" },
+];
+
 const connectionOrigin = { x: 14, y: 50 };
 
 const connectionStartPoints = {
@@ -43,19 +50,19 @@ const connectionDockPoints = {
 const connectionProgress = [
   {
     label: "FONTE DO MAPA",
-    text: "Aguardando a primeira decisão.",
+    text: "O núcleo aguarda o primeiro vínculo para ganhar direção.",
   },
   {
     label: "PRIMEIRO SINAL",
-    text: "Uma decisão ganhou direção.",
+    text: "A primeira camada responde. O sistema já entende a intenção.",
   },
   {
     label: "CONTEXTO ALINHADO",
-    text: "Duas decisões compartilham o mapa.",
+    text: "O mapa deixa de ser ponto isolado e começa a agir como estrutura.",
   },
   {
     label: "MAPA EM MOVIMENTO",
-    text: "As três decisões avançam juntas.",
+    text: "Clareza, estrutura e evolução entram no mesmo fluxo de execução.",
   },
 ];
 
@@ -99,22 +106,38 @@ function initialTargetPositions() {
 function ConnectionLab() {
   const surfaceRef = useRef(null);
   const dragStateRef = useRef(null);
+  const completionTimerRef = useRef(null);
   const [targetPositions, setTargetPositions] = useState(initialTargetPositions);
   const [draggingId, setDraggingId] = useState(null);
   const [pointerVisible, setPointerVisible] = useState(false);
   const [connected, setConnected] = useState([]);
+  const [lastConnectedId, setLastConnectedId] = useState(null);
   const isComplete = connected.length === planets.length;
   const originStep = connectionProgress[connected.length];
 
   useEffect(() => {
+    return () => {
+      if (completionTimerRef.current) window.clearTimeout(completionTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!lastConnectedId) return undefined;
+    const reset = window.setTimeout(() => setLastConnectedId(null), 960);
+    return () => window.clearTimeout(reset);
+  }, [lastConnectedId]);
+
+  useEffect(() => {
     if (!isComplete) return undefined;
-    const transition = window.setTimeout(() => {
+    completionTimerRef.current = window.setTimeout(() => {
       document.getElementById("signal-story")?.scrollIntoView({
         behavior: "smooth",
         block: "start",
       });
-    }, 3200);
-    return () => window.clearTimeout(transition);
+    }, 3600);
+    return () => {
+      if (completionTimerRef.current) window.clearTimeout(completionTimerRef.current);
+    };
   }, [isComplete]);
 
   function readPoint(event) {
@@ -132,6 +155,7 @@ function ConnectionLab() {
   }
 
   function connect(id) {
+    setLastConnectedId(id);
     setConnected((current) => (current.includes(id) ? current : [...current, id]));
     setTargetPositions((current) => ({
       ...current,
@@ -248,13 +272,15 @@ function ConnectionLab() {
 
         <div
           key={`origin-${connected.length}`}
-          className={`connection-origin connection-origin--${connected.length}${connected.length ? " has-connections" : ""}${isComplete ? " is-complete" : ""}`}
+          className={`connection-origin connection-origin--${connected.length}${connected.length ? " has-connections" : ""}${isComplete ? " is-complete" : ""}${lastConnectedId ? ` is-reacting is-reacting--${lastConnectedId}` : ""}`}
           style={{ left: `${connectionOrigin.x}%`, top: `${connectionOrigin.y}%` }}
           aria-label="Fonte do mapa"
         >
           <span className="connection-origin-core" />
           <span className="connection-origin-ring connection-origin-ring--one" />
           <span className="connection-origin-ring connection-origin-ring--two" />
+          <span className="connection-origin-ring connection-origin-ring--three" />
+          <span className="connection-origin-beam" aria-hidden="true" />
           <span className="connection-origin-copy">
             <strong>{originStep.label}</strong>
             <small>{originStep.text}</small>
@@ -314,14 +340,14 @@ function ConnectionLab() {
 
         <p className="connection-status" aria-live="polite">
           {isComplete
-            ? "Preparando a próxima etapa..."
+            ? "Mapa conectado. Abrindo a próxima camada..."
             : `${connected.length} de ${planets.length} decisões conectadas`}
         </p>
 
         <div className={`connection-complete-message${isComplete ? " is-visible" : ""}`} aria-live="polite">
           <small>MAPA CONECTADO</small>
-          <strong>Direção pronta para virar plano.</strong>
-          <span>Clareza, estrutura e evolução agora avançam juntas.</span>
+          <strong>O sistema agora tem direção suficiente para virar plano.</strong>
+          <span>O núcleo consolidou contexto, intenção e evolução. A próxima camada já pode responder com milestones e execução.</span>
         </div>
       </div>
     </section>
@@ -441,7 +467,6 @@ function SignalStory() {
 }
 
 export function BuildPath({ started, onStart }) {
-  const systemRef = useRef(null);
   const hoveredTargetRef = useRef(null);
   const hoverCardRef = useRef(null);
   const [focusedPlanet, setFocusedPlanet] = useState("clarity");
@@ -452,94 +477,78 @@ export function BuildPath({ started, onStart }) {
 
   useEffect(() => {
     let frame = 0;
-    const system = systemRef.current;
     const target = hoveredTargetRef.current;
     const card = hoverCardRef.current;
-    if (!hoverPlanetId || !system || !target || !card) return undefined;
+    if (!hoverPlanetId || !target || !card) return undefined;
 
     function updateHoverCard() {
-      if (frame) window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(() => {
-        frame = 0;
-        const systemBounds = system.getBoundingClientRect();
-        const targetBounds = target.getBoundingClientRect();
-        const cardBounds = card.getBoundingClientRect();
-        if (!cardBounds.width || !cardBounds.height) return;
+      frame = 0;
+      const targetBounds = target.getBoundingClientRect();
+      const cardBounds = card.getBoundingClientRect();
+      if (!cardBounds.width || !cardBounds.height) {
+        frame = window.requestAnimationFrame(updateHoverCard);
+        return;
+      }
 
-        const margin = 10;
-        const gap = 14;
-        const viewport = window.visualViewport;
-        const viewportLeft = viewport?.offsetLeft || 0;
-        const viewportTop = viewport?.offsetTop || 0;
-        const viewportWidth = viewport?.width || window.innerWidth;
-        const viewportHeight = viewport?.height || window.innerHeight;
-        const anchorX = targetBounds.left + targetBounds.width / 2 - systemBounds.left;
-        const anchorY = targetBounds.top + targetBounds.height / 2 - systemBounds.top;
-        const targetTop = targetBounds.top - systemBounds.top;
-        const targetBottom = targetBounds.bottom - systemBounds.top;
-        const visibleLeft = viewportLeft - systemBounds.left + margin;
-        const visibleRight = viewportLeft + viewportWidth - systemBounds.left - margin;
-        const visibleTop = viewportTop - systemBounds.top + margin;
-        const visibleBottom = viewportTop + viewportHeight - systemBounds.top - margin;
-        const maxLeft = Math.max(visibleLeft, visibleRight - cardBounds.width);
-        const left = clamp(anchorX - cardBounds.width / 2, visibleLeft, maxLeft);
-        const aboveTop = targetTop - cardBounds.height - gap;
-        const belowTop = targetBottom + gap;
-        const fitsAbove = aboveTop >= visibleTop;
-        const fitsBelow = belowTop + cardBounds.height <= visibleBottom;
-        let placement = "above";
+      const inlineMargin = window.innerWidth <= 640 ? 12 : 18;
+      const blockMargin = window.innerWidth <= 640 ? 10 : 16;
+      const gap = window.innerWidth <= 640 ? 10 : 14;
+      const viewport = window.visualViewport;
+      const viewportLeft = viewport?.offsetLeft || 0;
+      const viewportTop = viewport?.offsetTop || 0;
+      const viewportRight = viewportLeft + (viewport?.width || window.innerWidth);
+      const viewportBottom = viewportTop + (viewport?.height || window.innerHeight);
+      const viewportLeftLimit = viewportLeft + inlineMargin;
+      const viewportRightLimit = viewportRight - inlineMargin;
+      const viewportTopLimit = viewportTop + blockMargin;
+      const viewportBottomLimit = viewportBottom - blockMargin;
+      const visibleLeft = viewportLeftLimit;
+      const visibleRight = viewportRightLimit;
+      const visibleTop = viewportTopLimit;
+      const visibleBottom = viewportBottomLimit;
 
-        if (fitsBelow && !fitsAbove) placement = "below";
-        else if (fitsAbove && fitsBelow) {
-          placement = anchorY < (visibleTop + visibleBottom) / 2 ? "below" : "above";
-        } else if (!fitsAbove && !fitsBelow) {
-          placement = anchorY - visibleTop > visibleBottom - anchorY ? "above" : "below";
-        }
+      const anchorX = targetBounds.left + targetBounds.width / 2;
+      const maxLeft = Math.max(visibleLeft, visibleRight - cardBounds.width);
+      const left = clamp(anchorX - cardBounds.width / 2, visibleLeft, maxLeft);
+      const aboveTop = targetBounds.top - cardBounds.height - gap;
+      const belowTop = targetBounds.bottom + gap;
+      const spaceAbove = targetBounds.top - gap - visibleTop;
+      const spaceBelow = visibleBottom - targetBounds.bottom - gap;
+      let placement = "above";
 
-        const proposedTop = placement === "above" ? aboveTop : belowTop;
-        const maxTop = Math.max(visibleTop, visibleBottom - cardBounds.height);
-        const top = clamp(proposedTop, visibleTop, maxTop);
-        const connectorX = clamp(anchorX - left, 12, cardBounds.width - 12);
-        const nextPosition = {
-          left: Number(left.toFixed(1)),
-          top: Number(top.toFixed(1)),
-          connectorX: Number(connectorX.toFixed(1)),
-          placement,
-          positioned: true,
-        };
+      if (spaceBelow >= cardBounds.height && spaceBelow >= spaceAbove) placement = "below";
+      else if (spaceAbove < cardBounds.height && spaceBelow > spaceAbove) placement = "below";
 
-        setHoverCard((current) => {
-          if (!current || current.planet.id !== hoverPlanetId) return current;
-          if (
-            current.left === nextPosition.left
-            && current.top === nextPosition.top
-            && current.placement === nextPosition.placement
-            && current.connectorX === nextPosition.connectorX
-            && current.positioned
-          ) return current;
-          return { ...current, ...nextPosition };
-        });
+      const proposedTop = placement === "above" ? aboveTop : belowTop;
+      const maxTop = Math.max(visibleTop, visibleBottom - cardBounds.height);
+      const top = clamp(proposedTop, visibleTop, maxTop);
+      const connectorX = clamp(anchorX - left, 12, cardBounds.width - 12);
+      const nextPosition = {
+        left: Number(left.toFixed(1)),
+        top: Number(top.toFixed(1)),
+        connectorX: Number(connectorX.toFixed(1)),
+        placement,
+        positioned: true,
+      };
+
+      setHoverCard((current) => {
+        if (!current || current.planet.id !== hoverPlanetId) return current;
+        if (
+          current.left === nextPosition.left
+          && current.top === nextPosition.top
+          && current.placement === nextPosition.placement
+          && current.connectorX === nextPosition.connectorX
+          && current.positioned
+        ) return current;
+        return { ...current, ...nextPosition };
       });
+
+      frame = window.requestAnimationFrame(updateHoverCard);
     }
 
-    updateHoverCard();
-    const resizeObserver = typeof ResizeObserver === "undefined"
-      ? null
-      : new ResizeObserver(updateHoverCard);
-    resizeObserver?.observe(system);
-    resizeObserver?.observe(target);
-    resizeObserver?.observe(card);
-    window.addEventListener("resize", updateHoverCard);
-    window.addEventListener("scroll", updateHoverCard, true);
-    window.visualViewport?.addEventListener("resize", updateHoverCard);
-    window.visualViewport?.addEventListener("scroll", updateHoverCard);
+    frame = window.requestAnimationFrame(updateHoverCard);
 
     return () => {
-      resizeObserver?.disconnect();
-      window.removeEventListener("resize", updateHoverCard);
-      window.removeEventListener("scroll", updateHoverCard, true);
-      window.visualViewport?.removeEventListener("resize", updateHoverCard);
-      window.visualViewport?.removeEventListener("scroll", updateHoverCard);
       if (frame) window.cancelAnimationFrame(frame);
     };
   }, [hoverPlanetId]);
@@ -571,13 +580,13 @@ export function BuildPath({ started, onStart }) {
         </div>
 
         <div className="planetary-stage" data-enter>
-          <div ref={systemRef} className="planetary-system" aria-label="Órbita interativa das decisões do projeto">
+          <div className="planetary-system" aria-label="Órbita interativa das decisões do projeto">
             <span className="planetary-axis" aria-hidden="true" />
             <button
               className="planetary-core"
               type="button"
               onClick={onStart}
-              data-journey-thread-end
+              data-journey-thread-end="true"
               aria-label="Ativar órbitas"
             >
               <span />
@@ -586,6 +595,7 @@ export function BuildPath({ started, onStart }) {
               <div
                 key={planet.id}
                 className={`planet-orbit planet-orbit--${index + 1}${hoveredPlanet === planet.id ? " is-paused" : ""}`}
+                style={{ "--orbit-inset": orbitConfigs[index].inset }}
               >
                 <button
                   className={`planet planet--${planet.id}`}
@@ -603,23 +613,25 @@ export function BuildPath({ started, onStart }) {
               </div>
             ))}
 
-            {hoverCard && (
-              <div
-                ref={hoverCardRef}
-                className={`planet-hover-card planet-hover-card--${hoverCard.placement || "above"}${hoverCard.positioned ? " is-positioned" : ""}`}
-                style={{
-                  left: `${hoverCard.left || 0}px`,
-                  top: `${hoverCard.top || 0}px`,
-                  "--planet-card-connector": `${hoverCard.connectorX || 24}px`,
-                }}
-                role="status"
-              >
-                <small>{hoverCard.planet.number} · {hoverCard.planet.label}</small>
-                <strong>{hoverCard.planet.title}</strong>
-                <span>{hoverCard.planet.text}</span>
-              </div>
-            )}
           </div>
+
+          {hoverCard && typeof document !== "undefined" && createPortal(
+            <div
+              ref={hoverCardRef}
+              className={`planet-hover-card planet-hover-card--${hoverCard.placement || "above"}${hoverCard.positioned ? " is-positioned" : ""}`}
+              style={{
+                left: `${hoverCard.left || 0}px`,
+                top: `${hoverCard.top || 0}px`,
+                "--planet-card-connector": `${hoverCard.connectorX || 24}px`,
+              }}
+              role="status"
+            >
+              <small>{hoverCard.planet.number} · {hoverCard.planet.label}</small>
+              <strong>{hoverCard.planet.title}</strong>
+              <span>{hoverCard.planet.text}</span>
+            </div>,
+            document.body,
+          )}
 
           <aside className="orbit-readout" aria-live="polite">
             <span>{currentPlanet.number} / 03</span>

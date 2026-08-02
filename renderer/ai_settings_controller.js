@@ -49,6 +49,13 @@
       return typeof options.t === 'function' ? options.t(key, fallback) : fallback || key;
     }
 
+    function translateMessage(key, fallback = '', replacements = {}) {
+      return Object.entries(replacements).reduce(
+        (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+        String(translate(key, fallback)),
+      );
+    }
+
     function notify(message) {
       if (typeof options.notify === 'function') options.notify(message);
     }
@@ -131,6 +138,7 @@
       workspaceLayoutBuilder = workspaceLayoutBuilderModule.createWorkspaceLayoutBuilder({
         documentRef: document,
         elements,
+        t: translate,
         normalizePreferences: normalizeWorkspacePreferences,
         getLayout: () => (draft ? draft.workspaceLayout : null),
         onChange: (partial) => updateWorkspaceDraft(partial),
@@ -150,6 +158,12 @@
 
     function updateStatus(message) {
       if (typeof options.updateStatus === 'function') options.updateStatus(message);
+    }
+
+    function selectedProviderStatus() {
+      return translateMessage('selectedProviderStatus', 'Provedor selecionado: {provider}', {
+        provider: providerStatusLabel(getSelectedProvider()),
+      });
     }
 
     function compactKeyLabel(hasKey, keyMasked) {
@@ -323,6 +337,7 @@
           api,
           elements,
           notify,
+          t: translate,
         })
       : null;
 
@@ -390,7 +405,11 @@
       const entry = draft.customApis.find((item) => item.id === customId);
       if (!entry) return;
       const label = entry.apiLabel || humanizeProviderName(entry.providerName || translate('customApis'));
-      const confirmed = await window.faberConfirm(`Remover "${label}" das APIs salvas? A remoção só será gravada ao clicar em Salvar.`);
+      const confirmed = await window.faberConfirm(translateMessage(
+        'removeCustomApiConfirm',
+        'Remover “{label}” das APIs salvas? A remoção só será gravada ao clicar em Salvar.',
+        { label },
+      ));
       if (!confirmed) return;
 
       draft.customApis = draft.customApis.filter((item) => item.id !== customId);
@@ -418,7 +437,11 @@
       if (!config) return;
 
       const label = normalized === 'openai' ? 'OpenAI API' : normalized === 'gemini' ? 'Gemini API' : 'SambaNova API';
-      const confirmed = await window.faberConfirm(`Remover "${label}" da lista de APIs do projeto? O provedor continuará disponível para adicionar novamente.`);
+      const confirmed = await window.faberConfirm(translateMessage(
+        'removeBuiltinApiConfirm',
+        'Remover “{label}” da lista de APIs do projeto? O provedor continuará disponível para adicionar novamente.',
+        { label },
+      ));
       if (!confirmed) return;
 
       setBuiltInProviderDisabled(normalized, true);
@@ -674,7 +697,7 @@
         if (entry) {
           const providerName = normalizeCustomProviderName(providerText) || entry.providerName;
           if (!providerName) {
-            window.alert('Informe o serviço da API antes de salvar este perfil.');
+            window.alert(translate('aiApiServiceRequired', 'Informe o serviço da API antes de salvar este perfil.'));
             return false;
           }
           entry.providerName = providerName;
@@ -697,7 +720,7 @@
 
     async function open() {
       if (!elements.modal || !api.getAiSettings) {
-        notify('Configurações de IA indisponíveis nesta build.');
+        notify(translate('aiSettingsUnavailable', 'Configurações de IA indisponíveis nesta versão.'));
         return;
       }
 
@@ -705,12 +728,12 @@
       try {
         settings = await api.getAiSettings();
       } catch {
-        notify('Não consegui carregar as configurações de IA agora.');
+        notify(translate('aiSettingsLoadFailed', 'Não foi possível carregar as configurações de IA agora.'));
         return;
       }
 
       if (!settings || !settings.ok) {
-        notify('Não consegui carregar as configurações de IA agora.');
+        notify(translate('aiSettingsLoadFailed', 'Não foi possível carregar as configurações de IA agora.'));
         return;
       }
 
@@ -739,7 +762,7 @@
 
     async function saveFromModal() {
       if (!api.saveAiSettings || !draft) {
-        notify('Salvar configurações de IA ainda não está disponível nesta build.');
+        notify(translate('aiSettingsSaveUnavailable', 'Salvar configurações de IA ainda não está disponível nesta versão.'));
         return;
       }
 
@@ -787,7 +810,7 @@
 
       const saved = await api.saveAiSettings(payload);
       if (!saved || !saved.ok) {
-        notify('Não consegui salvar as configurações de IA nesta tentativa.');
+        notify(translate('aiSettingsSaveFailed', 'Não foi possível salvar as configurações de IA nesta tentativa.'));
         return;
       }
 
@@ -809,7 +832,7 @@
       }
       if (typeof options.refreshAiStatus === 'function') await options.refreshAiStatus();
 
-      updateStatus('Provedor selecionado: ' + providerStatusLabel(getSelectedProvider()));
+      updateStatus(selectedProviderStatus());
       close();
     }
 
@@ -821,7 +844,7 @@
         const saved = await api.setAiProvider(chosen);
         if (saved && saved.ok) {
           setSelectedProvider(String(saved.provider || chosen));
-          updateStatus('Provedor selecionado: ' + providerStatusLabel(getSelectedProvider()));
+          updateStatus(selectedProviderStatus());
         }
       } catch {
         // segue com provedor atual
@@ -864,7 +887,7 @@
           const saved = await api.setAiProvider(chosen);
           if (saved && saved.ok) {
             setSelectedProvider(String(saved.provider || chosen));
-            updateStatus('Provedor selecionado: ' + providerStatusLabel(getSelectedProvider()));
+            updateStatus(selectedProviderStatus());
           }
         });
       }

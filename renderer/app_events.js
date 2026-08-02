@@ -14,6 +14,8 @@
       projectGitBtnEl = null,
       projectPreviewBtnEl = null,
       projectSettingsBtnEl = null,
+      workspaceCenterToolsZoneEl = null,
+      workspaceCenterZoneEl = null,
     } = elements;
     const {
       aiSettingsController = null,
@@ -43,6 +45,7 @@
       onProjectGitClick = async () => {},
       onProjectPreviewClick = async () => {},
       onSend = async () => {},
+      onClearProjectSelection = () => {},
       openAiSettingsModal = async () => {},
       openCortexModal = async () => {},
     } = callbacks;
@@ -65,6 +68,21 @@
           await toggleWindowFromChrome(event);
         });
       }
+
+      const neutralSelectionZones = [
+        workspaceCenterZoneEl,
+        workspaceCenterToolsZoneEl,
+        document.getElementById('projects-list'),
+        document.getElementById('chat-log'),
+        document.querySelector('.panel-center > .panel-header'),
+      ].filter(Boolean);
+      neutralSelectionZones.forEach((zone) => {
+        zone.addEventListener('click', (event) => {
+          if (event.target !== zone) return;
+          if (document.body.classList.contains('progressive-tutorial-active')) return;
+          onClearProjectSelection();
+        });
+      });
     
       document.getElementById('btn-add-project').addEventListener('click', onAddProject);
       if (newConversationBtnEl) newConversationBtnEl.addEventListener('click', onNewConversation);

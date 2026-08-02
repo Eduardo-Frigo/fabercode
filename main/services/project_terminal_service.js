@@ -132,7 +132,7 @@ function createProjectTerminalService(dependencies = {}) {
       updatedAt: timestamp,
       child: null,
     };
-    appendSystemLine(session, `Sessão iniciada em ${formatCwd(session)}`);
+    appendSystemLine(session, `__FABER_TERMINAL_SESSION_STARTED__:${formatCwd(session)}`);
     sessions.set(id, session);
     return { ok: true, session: serializeSession(session) };
   }

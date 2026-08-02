@@ -12,6 +12,7 @@ const factory = sandbox.window.FaberAppConversations.createAppConversationContro
 assert.strictEqual(typeof factory, 'function');
 
 const events = [];
+const persistedMessages = [];
 const state = {
   selectedProjectId: 'project-1',
   uiMode: 'default',
@@ -28,7 +29,12 @@ const state = {
 };
 
 const controller = factory({
-  api: {},
+  api: {
+    addConversationMessage: async (payload) => {
+      persistedMessages.push(payload);
+      return { ok: true };
+    },
+  },
   chatController: {
     clearMessages: () => events.push('clear'),
     hasRecentAssistantMessage: () => false,
@@ -48,11 +54,22 @@ assert.deepStrictEqual(events.slice(-3), [
 ]);
 
 events.length = 0;
-controller.appendMessage('assistant', 'Nova resposta', { persistToConversation: false });
+controller.appendMessage('assistant', 'Nova resposta', [], { persistToConversation: false });
 assert.deepStrictEqual(events.slice(-3), [
   'message:Nova resposta',
   'welcome',
   'scroll',
 ]);
 
-console.log('renderer-app-conversations.test.js: ok');
+const persistence = controller.appendMessage('user', 'Iniciar Milestone 1');
+assert.strictEqual(typeof persistence.then, 'function', 'appendMessage deve expor a conclusão da persistência');
+
+persistence.then(() => {
+  assert.strictEqual(persistedMessages.length, 1, 'a mensagem do tutorial deve ser persistida uma única vez');
+  assert.strictEqual(persistedMessages[0].conversationId, 'conversation-1');
+  assert.strictEqual(persistedMessages[0].text, 'Iniciar Milestone 1');
+  console.log('renderer-app-conversations.test.js: ok');
+}).catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

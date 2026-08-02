@@ -48,6 +48,10 @@
   function createCortexController(options = {}) {
     const api = options.api || {};
     const t = typeof options.t === 'function' ? options.t : (key, fallback = '') => fallback || key;
+    const message = (key, fallback = '', values = {}) => Object.entries(values).reduce(
+      (text, [name, replacement]) => text.replaceAll(`{${name}}`, String(replacement)),
+      String(t(key, fallback))
+    );
     const getProjectId = typeof options.getProjectId === 'function' ? options.getProjectId : () => null;
     const getProjectInfo = typeof options.getProjectInfo === 'function' ? options.getProjectInfo : () => null;
     const getInterfaceLanguage = typeof options.getInterfaceLanguage === 'function'
@@ -307,7 +311,7 @@
       if (!records.length) {
         const empty = document.createElement('div');
         empty.className = 'cortex-empty-state';
-        empty.textContent = rawRecords.length ? 'Nenhuma memória combina com os filtros.' : t('noLibraryDocs');
+        empty.textContent = rawRecords.length ? t('memoryNoMatches', 'Nenhuma memória combina com os filtros.') : t('noLibraryDocs');
         elements.libraryList.appendChild(empty);
         return;
       }
@@ -335,10 +339,10 @@
         const actions = document.createElement('div');
         actions.className = 'cortex-memory-actions';
         actions.append(
-          createMemoryActionButton(memory, 'edit', '✎', 'Editar memória'),
-          createMemoryActionButton(memory, 'promote', '↑', 'Promover memória'),
-          createMemoryActionButton(memory, 'expire', '⏱', 'Expirar memória'),
-          createMemoryActionButton(memory, 'delete', '×', 'Apagar memória')
+          createMemoryActionButton(memory, 'edit', '✎', t('memoryEdit', 'Editar memória')),
+          createMemoryActionButton(memory, 'promote', '↑', t('memoryPromote', 'Promover memória')),
+          createMemoryActionButton(memory, 'expire', '⏱', t('memoryExpire', 'Expirar memória')),
+          createMemoryActionButton(memory, 'delete', '×', t('memoryDelete', 'Apagar memória'))
         );
 
         head.append(title, topic, status);
@@ -352,13 +356,17 @@
       elements.memoryAuditList.innerHTML = '';
       const title = document.createElement('div');
       title.className = 'cortex-memory-audit-title';
-      title.innerHTML = '<strong>Auditoria</strong><span>Histórico recente de memória, lifecycle e provenance</span>';
+      const titleStrong = document.createElement('strong');
+      titleStrong.textContent = t('memoryAuditTitle', 'Auditoria');
+      const titleSubtitle = document.createElement('span');
+      titleSubtitle.textContent = t('memoryAuditSubtitle', 'Histórico recente de memória, ciclo de vida e proveniência');
+      title.append(titleStrong, titleSubtitle);
       elements.memoryAuditList.appendChild(title);
       const source = Array.isArray(entries) ? entries.slice(0, 10) : [];
       if (!source.length) {
         const empty = document.createElement('div');
         empty.className = 'cortex-empty-state';
-        empty.textContent = 'Nenhum evento auditável de memória registrado ainda.';
+        empty.textContent = t('memoryAuditEmpty', 'Nenhum evento auditável de memória registrado ainda.');
         elements.memoryAuditList.appendChild(empty);
         return;
       }
@@ -473,18 +481,18 @@
 
     function formatContextSourceLabel(value) {
       const source = String(value || '').trim();
-      if (source === 'current_message') return 'mensagem atual';
-      if (source === 'conversation_brief') return 'briefing da conversa';
-      if (source === 'active_memory') return 'memória ativa';
-      if (source === 'project_files') return 'arquivos do projeto';
-      if (source === 'current_message_or_conversation') return 'mensagem/conversa';
-      return source || 'indefinido';
+      if (source === 'current_message') return t('contextCurrentMessage', 'mensagem atual');
+      if (source === 'conversation_brief') return t('contextConversationBrief', 'briefing da conversa');
+      if (source === 'active_memory') return t('contextActiveMemory', 'memória ativa');
+      if (source === 'project_files') return t('contextProjectFiles', 'arquivos do projeto');
+      if (source === 'current_message_or_conversation') return t('contextCurrentOrConversation', 'mensagem/conversa');
+      return source || t('undefinedValue', 'indefinido');
     }
 
     function createContextPills(values = [], className = '') {
       const wrap = document.createElement('div');
       wrap.className = 'cortex-context-pills';
-      (Array.isArray(values) && values.length ? values : ['nenhuma']).forEach((value) => {
+      (Array.isArray(values) && values.length ? values : [t('noneValue', 'nenhuma')]).forEach((value) => {
         const pill = document.createElement('span');
         pill.className = `cortex-context-pill${className ? ` ${className}` : ''}`;
         pill.textContent = formatContextSourceLabel(value);
@@ -507,7 +515,7 @@
       const statusText = document.createElement('p');
       const mode = status && status.mode ? status.mode : 'local_only';
       const warnings = status && Array.isArray(status.warnings) ? status.warnings.length : 0;
-      statusText.textContent = `${mode}${warnings ? ` · ${warnings} pendência(s)` : ''}`;
+      statusText.textContent = `${mode}${warnings ? ` · ${message('runtimePendingCount', '{count} pendência(s)', { count: warnings })}` : ''}`;
       statusItem.append(statusTitle, statusText);
       elements.contextDiagnostics.appendChild(statusItem);
 
@@ -516,14 +524,20 @@
         const item = document.createElement('article');
         item.className = `cortex-context-item${frame.confirmation && frame.confirmation.required ? ' warning' : ''}`;
         const title = document.createElement('strong');
-        title.textContent = `Fonte dominante: ${formatContextSourceLabel(frame.dominantSource)}`;
+        title.textContent = message('dominantSource', 'Fonte dominante: {source}', {
+          source: formatContextSourceLabel(frame.dominantSource),
+        });
         const summary = document.createElement('p');
         const active = frame.activeMemory || {};
         summary.textContent = active.suppressed
-          ? `Memória suprimida: ${active.suppressionReason || 'sem motivo informado'}`
+          ? message('memorySuppressedReason', 'Memória suprimida: {reason}', {
+              reason: active.suppressionReason || t('reasonNotProvided', 'sem motivo informado'),
+            })
           : active.allowedForBriefing || active.allowedForRouting
-            ? `Memória usada com ${Number(active.citationsCount || 0)} citação(ões)`
-            : 'Memória não usada nesta decisão';
+            ? message('memoryUsedCitations', 'Memória usada com {count} citação(ões)', {
+                count: Number(active.citationsCount || 0),
+              })
+            : t('memoryNotUsedDecision', 'Memória não usada nesta decisão');
         item.append(title, summary);
         item.appendChild(createContextPills(frame.allowedSources || [], 'ready'));
         if (Array.isArray(frame.blockedSources) && frame.blockedSources.length) {
@@ -545,9 +559,15 @@
         const semantic = provenance.confidence && Number.isFinite(Number(provenance.confidence.semanticAverage))
           ? Math.round(Number(provenance.confidence.semanticAverage) * 100)
           : 0;
-        title.textContent = `Provenance: ${used.length} usada(s), ${blocked.length} bloqueada(s)`;
+        title.textContent = message('provenanceUsage', 'Proveniência: {used} usada(s), {blocked} bloqueada(s)', {
+          used: used.length,
+          blocked: blocked.length,
+        });
         const summary = document.createElement('p');
-        summary.textContent = `Confiança média ${confidence}%; vetor ${semantic}%. ${latestProvenance.message || ''}`.trim();
+        summary.textContent = `${message('provenanceConfidence', 'Confiança média {confidence}%; vetor {semantic}%.', {
+          confidence,
+          semantic,
+        })} ${latestProvenance.message || ''}`.trim();
         item.append(title, summary);
         item.appendChild(createContextPills(used.slice(0, 5).map((entry) => entry.title || entry.sourceType), 'ready'));
         elements.contextDiagnostics.appendChild(item);
@@ -556,7 +576,7 @@
       if (!entries.length) {
         const empty = document.createElement('div');
         empty.className = 'cortex-empty-state';
-        empty.textContent = 'Nenhuma evidência de memória registrada para este projeto ainda.';
+        empty.textContent = t('memoryNoEvidence', 'Nenhuma evidência de memória registrada para este projeto ainda.');
         elements.contextDiagnostics.appendChild(empty);
       }
       renderMemoryAudit(entries);
@@ -611,7 +631,7 @@
       const projectId = getProjectId();
       const projectInfo = getProjectInfo();
       if (!projectId || !projectInfo || typeof api.runKnowledgeMemoryLifecycle !== 'function') {
-        renderChatMessage('assistant', 'Lifecycle de memória indisponível para este projeto.');
+        renderChatMessage('assistant', t('memoryLifecycleUnavailable', 'O ciclo de vida da memória está indisponível para este projeto.'));
         return null;
       }
       try {
@@ -626,11 +646,11 @@
         await refreshLearningPanel();
         await refreshKnowledgeRuntimeStatus();
         await refreshManagedMemories();
-        renderChatMessage('assistant', (result && result.message) || 'Operação de memória executada.');
-        updateStatus((result && result.message) || 'Memória atualizada.');
+        renderChatMessage('assistant', (result && result.message) || t('memoryOperationDone', 'Operação de memória executada.'));
+        updateStatus((result && result.message) || t('memoryUpdated', 'Memória atualizada.'));
         return result;
       } catch {
-        renderChatMessage('assistant', 'Não foi possível executar a operação de memória.');
+        renderChatMessage('assistant', t('memoryOperationFailed', 'Não foi possível executar a operação de memória.'));
         return null;
       }
     }
@@ -640,9 +660,9 @@
       if (!memoryId) return;
       if (action === 'edit') {
         const nextText = String(await requestTextInput({
-          title: 'Editar memória',
+          title: t('editMemoryTitle', 'Editar memória'),
           initialValue: memory.text || memory.summary || '',
-          placeholder: 'Conteúdo da memória',
+          placeholder: t('memoryContentPlaceholder', 'Conteúdo da memória'),
         }) || '').trim();
         if (!nextText || nextText === String(memory.text || memory.summary || '').trim()) return;
         await runMemoryLifecycle({
@@ -654,7 +674,7 @@
         return;
       }
       if (action === 'delete') {
-        const confirmed = !window.faberConfirm || await window.faberConfirm('Apagar esta memória do Cortex?');
+        const confirmed = !window.faberConfirm || await window.faberConfirm(t('deleteMemoryConfirm', 'Apagar esta memória do Cortex?'));
         if (!confirmed) return;
       }
       await runMemoryLifecycle({

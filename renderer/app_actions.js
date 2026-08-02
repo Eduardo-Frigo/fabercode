@@ -58,6 +58,13 @@
       shouldSuppressInterimAssistantPlanMessage = () => false,
     } = formatters;
 
+    function uiText(key, fallback, variables = {}) {
+      const translated = typeof t === 'function' ? t(key, fallback) : fallback;
+      return String(translated || fallback || key).replace(/\{(\w+)\}/g, (_match, name) =>
+        Object.prototype.hasOwnProperty.call(variables, name) ? String(variables[name]) : `{${name}}`
+      );
+    }
+
     async function applyComposerProviderBeforeSend() {
       if (aiSettingsController) await aiSettingsController.applyComposerProviderBeforeSend();
     }
@@ -66,7 +73,7 @@
       if (!accountGateController) return true;
       const unlocked = await accountGateController.ensureUnlocked();
       if (!unlocked) {
-        updateStatus('Login obrigatório para usar o Faber Code.');
+        updateStatus(uiText('loginRequired', 'Login obrigatório para usar o Faber Code.'));
       }
       return unlocked;
     }
@@ -100,7 +107,7 @@
     async function executePendingAction() {
       if (!state.pendingAction || !state.selectedProjectInfo) return;
 
-      updateStatus('Estou trabalhando no projeto.');
+      updateStatus(uiText('workingOnProject', 'Estou trabalhando no projeto.'));
       const pendingJobId =
         (state.pendingAction && state.pendingAction.jobId ? state.pendingAction.jobId : null) ||
         state.activeJobId ||
@@ -119,21 +126,30 @@
 
       const selectedProjectReady = await ensureSelectedProjectInfoReady({ forceRefresh: true });
       if (!selectedProjectReady || !state.selectedProjectInfo) {
-        appendMessage('assistant', 'Não consegui atualizar o contexto desse projeto no disco antes de executar.');
-        updateStatus('Projeto indisponível para execução');
+        appendMessage(
+          'assistant',
+          uiText(
+            'projectContextExecutionFailed',
+            'Não consegui atualizar o contexto desse projeto no disco antes de executar.'
+          )
+        );
+        updateStatus(uiText('projectUnavailableExecution', 'Projeto indisponível para execução'));
         return;
       }
       if (!pendingActionMatchesSelectedProject(state.pendingAction, state.selectedProjectInfo)) {
         appendMessage(
           'assistant',
-          'Descartei a confirmação pendente porque ela pertencia a outro projeto. Gere a ação novamente no projeto selecionado antes de executar.',
+          uiText(
+            'pendingActionOtherProject',
+            'Descartei a confirmação pendente porque ela pertencia a outro projeto. Gere a ação novamente no projeto selecionado antes de executar.'
+          ),
           { persistToConversation: false }
         );
         stopJobPolling();
         state.activeJobId = null;
         clearPending();
         hideJobProgress();
-        updateStatus('Confirmação antiga descartada');
+        updateStatus(uiText('oldConfirmationDiscarded', 'Confirmação antiga descartada'));
         return;
       }
 
@@ -148,18 +164,28 @@
         state.lastQualityReport = result && result.qualityReport ? result.qualityReport : state.lastQualityReport;
         if (projectFileTreeController) await projectFileTreeController.refresh();
         const finalMessage = buildExecutionOutcomeAssistantMessage(result, state.pendingAction, state.lastQualityReport);
-        appendMessage('assistant', finalMessage || result.message || 'Falha ao executar ação.');
+        appendMessage(
+          'assistant',
+          finalMessage || result.message || uiText('actionExecutionFailed', 'Falha ao executar ação.')
+        );
 
         if (Array.isArray(result.modifiedFiles) && result.modifiedFiles.length) {
           appendChangeCard(state.pendingAction, result);
           showChangeSummary(state.pendingAction, result);
-          showModificationAlert(`Arquivo modificado: ${result.modifiedFiles.join(', ')}`);
+          showModificationAlert(
+            uiText('fileModified', 'Arquivo modificado: {files}', { files: result.modifiedFiles.join(', ') })
+          );
         }
 
         if (result && result.blockedByPostExecutionValidation) {
-          updateStatus('Validação técnica encontrou observações; correção incremental recomendada');
+          updateStatus(
+            uiText(
+              'validationWarningsStatus',
+              'A validação técnica encontrou observações; uma correção incremental é recomendada'
+            )
+          );
         } else {
-          updateStatus('Falha na execução');
+          updateStatus(uiText('executionFailedStatus', 'Falha na execução'));
         }
         clearPending();
         return;
@@ -176,14 +202,22 @@
       const finalMessage = buildExecutionOutcomeAssistantMessage(result, state.pendingAction, state.lastQualityReport);
 
       if (Array.isArray(result.modifiedFiles) && result.modifiedFiles.length) {
-        appendMessage('assistant', finalMessage || result.message || 'Concluído.');
+        appendMessage(
+          'assistant',
+          finalMessage || result.message || uiText('executionCompleted', 'Concluído.')
+        );
         appendChangeCard(state.pendingAction, result);
         showChangeSummary(state.pendingAction, result);
-        showModificationAlert(`Arquivo modificado: ${result.modifiedFiles.join(', ')}`);
-        updateStatus('Alteração aplicada com sucesso');
+        showModificationAlert(
+          uiText('fileModified', 'Arquivo modificado: {files}', { files: result.modifiedFiles.join(', ') })
+        );
+        updateStatus(uiText('changeApplied', 'Alteração aplicada com sucesso'));
       } else {
-        appendMessage('assistant', finalMessage || result.message || 'Concluído.');
-        updateStatus('Ação concluída');
+        appendMessage(
+          'assistant',
+          finalMessage || result.message || uiText('executionCompleted', 'Concluído.')
+        );
+        updateStatus(uiText('actionCompleted', 'Ação concluída'));
       }
       clearPending();
     }
@@ -195,7 +229,7 @@
       await applyComposerProviderBeforeSend();
     
       const attachmentSummary = state.attachments.map((file) => file.name);
-      const visibleUserMessage = userMessage || '[Somente anexos]';
+      const visibleUserMessage = userMessage || uiText('attachmentsOnly', '[Somente anexos]');
       const composedUserMessage = attachmentSummary.length
         ? `${visibleUserMessage}\n\nAnexos: ${attachmentSummary.join(', ')}`
         : visibleUserMessage;
@@ -228,7 +262,14 @@
       }
       const selectedProjectReady = await ensureSelectedProjectInfoReady({ forceRefresh: true });
       if (!selectedProjectReady || !state.selectedProjectInfo) {
-        appendMessage('assistant', 'Não consegui atualizar o contexto desse projeto no disco antes de enviar.', { persistToConversation: false });
+        appendMessage(
+          'assistant',
+          uiText(
+            'projectContextSendFailed',
+            'Não consegui atualizar o contexto desse projeto no disco antes de enviar.'
+          ),
+          { persistToConversation: false }
+        );
         return;
       }
     
@@ -266,13 +307,16 @@
           appendMessage('assistant', learningResult.message);
           updateStatus(t('memoryUpdated'));
         } else {
-          appendMessage('assistant', learningResult?.message || 'Não consegui registrar essa memória do projeto.');
-          updateStatus('Falha ao salvar memória');
+          appendMessage(
+            'assistant',
+            learningResult?.message || uiText('memorySaveFailed', 'Não consegui registrar essa memória do projeto.')
+          );
+          updateStatus(uiText('memorySaveFailedStatus', 'Falha ao salvar memória'));
         }
         return;
       }
     
-      updateStatus('Conversando com o modelo.');
+      updateStatus(uiText('talkingToModel', 'Conversando com o modelo.'));
       showPersonaThinkingIndicator();
       const stopLatestJobWatch = watchLatestProjectJob({
         projectId: state.selectedProjectId,
@@ -287,10 +331,13 @@
         renderAttachments();
         appendMessage(
           'assistant',
-          'Não iniciei execução. O fluxo de assistente não está disponível nesta versão, então não posso decidir e planejar com segurança.',
+          uiText(
+            'assistantFlowUnavailable',
+            'Não iniciei a execução. O fluxo de assistente não está disponível nesta versão, então não posso decidir e planejar com segurança.'
+          ),
           { persistToConversation: true }
         );
-        updateStatus('Assistente indisponível.');
+        updateStatus(uiText('assistantUnavailableStatus', 'Assistente indisponível.'));
         return;
       }
     
@@ -310,12 +357,14 @@
         renderAttachments();
         appendMessage(
           'assistant',
-          `A IA não conseguiu responder pelo provedor selecionado. Detalhe: ${
-            error && error.message ? error.message : String(error || '')
-          }`,
+          uiText(
+            'aiProviderFailure',
+            'A IA não conseguiu responder pelo provedor selecionado. Detalhe: {detail}',
+            { detail: error && error.message ? error.message : String(error || '') }
+          ),
           { persistToConversation: true }
         );
-        updateStatus('IA desconectada ou indisponível.');
+        updateStatus(uiText('aiDisconnected', 'IA desconectada ou indisponível.'));
         return;
       }
     
@@ -329,33 +378,40 @@
       if (!suppressInterim && plan && plan.response) {
         appendMessage('assistant', plan.response);
       } else if (plan && plan.ok && plan.action && plan.meta && plan.meta.autoExecute) {
-        appendMessage('assistant', plan.executionMessage || plan.response || 'Certo, vou começar o ajuste do projeto!');
+        appendMessage(
+          'assistant',
+          plan.executionMessage || plan.response || uiText('startProjectAdjustment', 'Certo, vou começar o ajuste do projeto!')
+        );
       }
       if (plan && plan.automataContractSuggestion && automataContractsController) {
         automataContractsController.appendContractPreview(plan.automataContractSuggestion);
       }
       if (plan && plan.ok && plan.action) {
         if (plan.action.targetFile) {
-          updateStatus(`Encontrei a raiz do problema em ${plan.action.targetFile}.`);
+          updateStatus(
+            uiText('problemRootFound', 'Encontrei a raiz do problema em {file}.', {
+              file: plan.action.targetFile,
+            })
+          );
         } else {
-          updateStatus('Planejamento concluído. Pronto para corrigir.');
+          updateStatus(uiText('planReady', 'Planejamento concluído. Pronto para corrigir.'));
         }
       } else if (plan && !plan.action) {
         const reason = String((plan && plan.meta && plan.meta.reason) || '');
         if (reason === 'cortex_briefing_clarification_needed') {
-          updateStatus('Aguardando suas respostas para fechar o briefing.');
+          updateStatus(uiText('briefingWaiting', 'Aguardando suas respostas para fechar o briefing.'));
         } else if (reason === 'persona_clarification_needed') {
-          updateStatus('Aguardando sua resposta.');
+          updateStatus(uiText('responseWaiting', 'Aguardando sua resposta.'));
         } else if (plan && plan.meta && plan.meta.providerError) {
-          updateStatus('IA desconectada ou indisponível.');
+          updateStatus(uiText('aiDisconnected', 'IA desconectada ou indisponível.'));
         } else if (reason === 'conversation_only') {
-          updateStatus('Resposta enviada.');
+          updateStatus(uiText('responseSent', 'Resposta enviada.'));
         } else if (reason === 'edit_needs_target') {
-          updateStatus('Preciso de um alvo mais claro antes de editar.');
+          updateStatus(uiText('editTargetNeeded', 'Preciso de um alvo mais claro antes de editar.'));
         } else if (reason === 'automata_contract_suggestion_ready') {
-          updateStatus('Contrato temporário pronto para revisão.');
+          updateStatus(uiText('contractReadyReview', 'Contrato temporário pronto para revisão.'));
         } else {
-          updateStatus('Nenhuma alteração foi preparada nesta rodada.');
+          updateStatus(uiText('noChangePrepared', 'Nenhuma alteração foi preparada nesta rodada.'));
         }
       }
       state.lastAssistantMeta = plan && plan.meta ? { ...plan.meta, lastHadAction: Boolean(plan.action) } : null;
@@ -370,7 +426,10 @@
           return;
         }
         showPending(
-          `Pronto para executar em uma área temporária. Só aplico no projeto se passar na validação real.`,
+          uiText(
+            'safeTemporaryExecution',
+            'Pronto para executar em uma área temporária. Só aplico no projeto se passar na validação real.'
+          ),
           plan.action
         );
       } else {
@@ -400,7 +459,7 @@
         }
       }
     
-      appendMessage('assistant', 'Ação cancelada. Nenhum arquivo foi alterado.');
+      appendMessage('assistant', uiText('actionCancelled', 'Ação cancelada. Nenhum arquivo foi alterado.'));
       api
         .appendAuditEvent('assistant.execute_cancelled', {
           rootPath: state.selectedProjectInfo ? state.selectedProjectInfo.rootPath : null,

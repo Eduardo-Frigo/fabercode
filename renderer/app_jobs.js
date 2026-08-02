@@ -1,4 +1,11 @@
 (function () {
+  function uiText(key, fallback, variables = {}) {
+    const translated = typeof window.t === 'function' ? window.t(key, fallback) : fallback;
+    return String(translated || fallback || key).replace(/\{(\w+)\}/g, (_match, name) =>
+      Object.prototype.hasOwnProperty.call(variables, name) ? String(variables[name]) : `{${name}}`
+    );
+  }
+
   function createAppJobController({
     api = {},
     automataContractsController = null,
@@ -59,7 +66,7 @@
     
       state.autoRetryInFlightByJob[job.id] = true;
       state.autoRetryLastRunByJob[job.id] = Date.now();
-      updateStatus('Retentativa automática da Persona...');
+      updateStatus(uiText('personaAutomaticRetry', 'Retentativa automática da Persona...'));
       showPersonaThinkingIndicator();
     
       try {
@@ -109,7 +116,13 @@
         }
     
         if (plan && plan.ok && plan.action) {
-          showPending('Pronto para executar em uma área temporária. Só aplico no projeto se passar na validação real.', plan.action);
+          showPending(
+            uiText(
+              'safeTemporaryExecution',
+              'Pronto para executar em uma área temporária. Só aplico no projeto se passar na validação real.'
+            ),
+            plan.action
+          );
         }
       } catch {
         // silêncio para não poluir chat; o watchdog seguirá tentando.

@@ -79,6 +79,9 @@
     const storageKey = options.storageKey || DEFAULT_STORAGE_KEY;
     const onboardingKey = options.onboardingKey || DEFAULT_ONBOARDING_KEY;
     const state = options.state || {};
+    const translate = typeof options.translate === 'function'
+      ? options.translate
+      : (_key, fallback) => fallback;
     const panelLayoutController = options.panelLayoutController || null;
     const layoutRuntimeController = options.layoutRuntimeController || null;
     const onLayoutChanged = typeof options.onLayoutChanged === 'function' ? options.onLayoutChanged : () => {};
@@ -234,10 +237,30 @@
       state.workspaceLayoutPreferences = current;
       rememberExpandedLayout(previous, current);
       applyBodyState(current);
-      setButtonState('workspace-collapse-left', current.leftCollapsed, 'Recolher painel esquerdo', 'Expandir painel esquerdo');
-      setButtonState('workspace-collapse-right', current.rightCollapsed, 'Recolher painel direito', 'Expandir painel direito');
-      setButtonState('workspace-restore-left', current.leftCollapsed, 'Recolher painel esquerdo', 'Expandir painel esquerdo');
-      setButtonState('workspace-restore-right', current.rightCollapsed, 'Recolher painel direito', 'Expandir painel direito');
+      setButtonState(
+        'workspace-collapse-left',
+        current.leftCollapsed,
+        translate('collapseLeft', 'Recolher painel esquerdo'),
+        translate('expandLeft', 'Expandir painel esquerdo'),
+      );
+      setButtonState(
+        'workspace-collapse-right',
+        current.rightCollapsed,
+        translate('collapseRight', 'Recolher painel direito'),
+        translate('expandRight', 'Expandir painel direito'),
+      );
+      setButtonState(
+        'workspace-restore-left',
+        current.leftCollapsed,
+        translate('collapseLeft', 'Recolher painel esquerdo'),
+        translate('expandLeft', 'Expandir painel esquerdo'),
+      );
+      setButtonState(
+        'workspace-restore-right',
+        current.rightCollapsed,
+        translate('collapseRight', 'Recolher painel direito'),
+        translate('expandRight', 'Expandir painel direito'),
+      );
       setOnboardingSelection(current.mode);
       if (applyOptions.applyPreset) applyPanelPreset(current.mode);
       applyCollapsedWidths(current, previous);

@@ -32,6 +32,7 @@ function createElement(id = '') {
     innerHTML: '',
     _listeners: {},
     appendChild(child) {
+      child.parentNode = this;
       this.children.push(child);
       return child;
     },
@@ -40,6 +41,10 @@ function createElement(id = '') {
     },
     remove() {
       this._removed = true;
+      if (this.parentNode && Array.isArray(this.parentNode.children)) {
+        this.parentNode.children = this.parentNode.children.filter((child) => child !== this);
+      }
+      this.parentNode = null;
     },
     focus() {
       this._focused = true;
@@ -84,6 +89,7 @@ function createDocument(ids) {
 
   const documentRef = {
     body,
+    documentElement: { lang: 'pt-BR' },
     getElementById(id) {
       return elements.get(id) || null;
     },
@@ -195,7 +201,11 @@ const terminalController = {
 const api = {
   renderApplicationMap: async () => ({ ok: true }),
   readProjectFile: async () => ({ ok: false }),
-  sendAssistantMessage: async () => ({ ok: true, response: 'ok' }),
+  sendAssistantMessageCalls: 0,
+  sendAssistantMessage: async () => {
+    api.sendAssistantMessageCalls += 1;
+    return { ok: true, response: 'ok' };
+  },
   saveMilestones: async () => ({ ok: true }),
   renderMilestones: async () => ({ ok: true }),
   listMilestones: async () => ({ ok: true, milestones: [{ id: 'm1', number: 1, title: 'Milestone 1', summary: 'Resumo', status: 'active', tasks: [] }] }),
@@ -247,6 +257,8 @@ const windowRef = {
   localcodeApi: api,
   FaberApplicationMapCanvas: { createApplicationMapCanvas: () => canvasController },
   faberConfirm: async () => true,
+  setTimeout,
+  clearTimeout,
   addEventListener() {},
   removeEventListener() {},
   dispatchEvent() {},
@@ -269,9 +281,11 @@ const sandbox = {
   CustomEvent: windowRef.CustomEvent,
 };
 
+const tutorialCopy = loadModule(path.join(__dirname, '..', 'renderer', 'tutorial_copy.js'), sandbox, 'FaberTutorialCopy');
 const applicationMap = loadModule(path.join(__dirname, '..', 'renderer', 'application_map.js'), sandbox, 'FaberApplicationMap');
 const milestonesPanel = loadModule(path.join(__dirname, '..', 'renderer', 'milestones_panel.js'), sandbox, 'FaberMilestonesPanel');
 
+assert.ok(tutorialCopy, 'Tutorial copy module should register');
 assert.ok(applicationMap, 'Application map module should register');
 assert.ok(milestonesPanel, 'Milestones panel module should register');
 
@@ -310,6 +324,16 @@ assert.ok(btnMilestones, 'Milestones button must exist');
 async function flush() {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function findDescendant(root, predicate) {
+  if (!root) return null;
+  if (predicate(root)) return root;
+  for (const child of root.children || []) {
+    const found = findDescendant(child, predicate);
+    if (found) return found;
+  }
+  return null;
 }
 
 (async () => {
@@ -353,6 +377,77 @@ async function flush() {
   assert.strictEqual(body.classList.contains('mode-terminal'), false, 'Terminal mode should close when opening milestones');
   assert.strictEqual(rightTitle.textContent, 'Milestones', 'Right panel title should switch to milestones');
   assert.strictEqual(terminalController.closeCalls > 1, true, 'Terminal should also be closed when opening milestones');
+
+  const timeline = documentRef.getElementById('milestones-timeline-content');
+  const collapsedItem = timeline.children.at(-1);
+  const collapsedCard = collapsedItem.children[1];
+  collapsedCard.dispatchEvent({
+    type: 'click',
+    target: { tagName: 'DIV', closest: () => null },
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  const expandedItem = timeline.children.at(-1);
+  const developmentChatButton = findDescendant(
+    expandedItem,
+    (element) => element.className === 'milestone-development-chat-btn'
+  );
+  assert.strictEqual(
+    developmentChatButton,
+    null,
+    'Expanded milestones must not expose a tutorial-only development chat action'
+  );
+
+  const persistedConversationCount = api.addConversationCalls;
+  const persistedMessageCount = api.addConversationMessageCalls;
+  const providerCallsBeforeTutorial = api.sendAssistantMessageCalls;
+  assert.strictEqual(controller.prepareTutorialMapConversation(), true, 'Tutorial map chat should open without backend setup');
+  assert.strictEqual(documentRef.getElementById('map-chat-list-view').classList.contains('hidden'), true, 'Tutorial should hide conversation history');
+  assert.strictEqual(documentRef.getElementById('map-chat-session-view').classList.contains('hidden'), false, 'Tutorial should display the simulated session');
+
+  const simulated = await controller.simulateTutorialMapConversation('O briefing está completo?', 'Sim, o mapa está completo.');
+  assert.strictEqual(simulated, true, 'Tutorial map conversation should complete');
+  assert.strictEqual(documentRef.getElementById('map-chat-log').children.length, 2, 'Tutorial chat should render user and assistant messages');
+  const tutorialAssistantMessage = documentRef.getElementById('map-chat-log').children[1];
+  const tutorialGapAction = tutorialAssistantMessage.children.find((child) => child.id === 'btn-map-chat-add-gap');
+  assert.ok(tutorialGapAction, 'Tutorial assistant reply should offer the contextual SEO map action');
+  assert.strictEqual(tutorialGapAction.textContent, 'Adicionar documento de SEO ao mapa', 'Tutorial SEO action should explain the resulting map change');
+  assert.strictEqual(api.addConversationCalls, persistedConversationCount + 1, 'Tutorial chat should persist one map conversation');
+  assert.strictEqual(api.addConversationMessageCalls, persistedMessageCount + 2, 'Tutorial chat should persist both simulated messages');
+  assert.strictEqual(api.addConversationPayloads.at(-1).meta.source, 'map_chat', 'Tutorial history must use the isolated map_chat source');
+  assert.strictEqual(
+    api.addConversationMessagePayloads.slice(-2).every((payload) => payload.meta && payload.meta.source === 'map_chat'),
+    true,
+    'Tutorial messages must remain isolated from the development chat'
+  );
+  assert.strictEqual(api.sendAssistantMessageCalls, providerCallsBeforeTutorial, 'Tutorial map chat must not call an AI provider');
+
+  assert.strictEqual(controller.showTutorialMapCanvas(), true, 'Tutorial should return to the map after applying missing information');
+  assert.strictEqual(body.classList.contains('mode-map-chat'), false, 'Returning to the tutorial map should close chat mode');
+  assert.strictEqual(await controller.prepareTutorialMapHistory(), true, 'Tutorial should return to the persisted map history');
+  assert.strictEqual(body.classList.contains('mode-map-chat'), true, 'Tutorial history should reopen map chat mode');
+  assert.strictEqual(documentRef.getElementById('map-chat-list-view').classList.contains('hidden'), false, 'Tutorial should display conversation history before rendering');
+  assert.strictEqual(api.addConversationMessageCalls, persistedMessageCount + 3, 'Tutorial history should persist the SEO correction result');
+
+  const conversationCountBeforeAnalysis = api.addConversationCalls;
+  const messageCountBeforeAnalysis = api.addConversationMessageCalls;
+  assert.strictEqual(controller.prepareTutorialMapAnalysis(), true, 'Tutorial should open map analysis without starting a provider request');
+  assert.strictEqual(body.classList.contains('mode-map-render'), true, 'Tutorial analysis should display the render panel');
+  assert.strictEqual(documentRef.getElementById('map-render-list-view').classList.contains('hidden'), false, 'Tutorial analysis should stop at the render history screen');
+  assert.strictEqual(api.addConversationCalls, conversationCountBeforeAnalysis, 'Opening tutorial analysis must not create a conversation');
+  assert.strictEqual(api.addConversationMessageCalls, messageCountBeforeAnalysis, 'Opening tutorial analysis must not persist messages');
+
+  assert.strictEqual(await controller.generateTutorialRenderDraft(), true, 'Tutorial should generate a local development plan');
+  assert.strictEqual(api.sendAssistantMessageCalls, providerCallsBeforeTutorial, 'Tutorial rendering must not call an AI provider');
+  assert.strictEqual(api.addConversationCalls, conversationCountBeforeAnalysis + 1, 'Tutorial rendering should persist its own history');
+  assert.strictEqual(api.addConversationPayloads.at(-1).meta.source, 'map_render', 'Tutorial rendering must use the map_render source');
+  assert.strictEqual(documentRef.getElementById('map-render-session-view').classList.contains('hidden'), false, 'Tutorial plan should open in the render session');
+  assert.strictEqual(
+    documentRef.getElementById('map-render-session-milestones').children.filter((child) => child.className === 'map-render-milestone-card').length >= 5,
+    true,
+    'Tutorial plan should render its five complete milestones'
+  );
+  assert.strictEqual(documentRef.getElementById('btn-map-render-save').classList.contains('hidden'), false, 'Ready tutorial plan should expose Save to Milestones');
 
   console.log('renderer-map-tool-switching.test.js: ok');
 })().catch((error) => {

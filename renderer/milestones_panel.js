@@ -5,6 +5,7 @@
     const getSelectedProjectInfo = typeof options.getSelectedProjectInfo === 'function' ? options.getSelectedProjectInfo : () => null;
     const updateStatus = typeof options.updateStatus === 'function' ? options.updateStatus : () => {};
     const getTerminalController = typeof options.getTerminalController === 'function' ? options.getTerminalController : () => null;
+    const uiText = (key, fallback) => window.t ? window.t(key, fallback) : fallback;
 
     const container = document.getElementById('workspace-milestones-panel');
     const timelineContent = document.getElementById('milestones-timeline-content');
@@ -110,13 +111,16 @@
 
         const eyebrow = document.createElement('span');
         eyebrow.className = 'milestone-empty-eyebrow';
-        eyebrow.textContent = 'Aguardando renderização';
+        eyebrow.textContent = uiText('milestonesWaiting', 'Aguardando renderização');
 
         const title = document.createElement('strong');
-        title.textContent = 'Nenhuma milestone gerada ainda';
+        title.textContent = uiText('noMilestonesYet', 'Nenhuma milestone gerada ainda');
 
         const copy = document.createElement('p');
-        copy.textContent = 'Execute a renderização do mapa para gerar o passo a passo de desenvolvimento e preencher esta área com etapas reais.';
+        copy.textContent = uiText(
+          'milestonesEmptyHelp',
+          'Execute a renderização do mapa para gerar o passo a passo de desenvolvimento e preencher esta área com etapas reais.'
+        );
 
         empty.appendChild(eyebrow);
         empty.appendChild(title);
@@ -202,12 +206,13 @@
                 updateBadge();
               } else {
                 checkbox.checked = !checkbox.checked;
-                alert('Erro ao atualizar tarefa: ' + ((updateRes && updateRes.message) || 'Erro desconhecido.'));
+                alert(uiText('milestoneTaskUpdateFailed', 'Erro ao atualizar tarefa: {message}')
+                  .replace('{message}', (updateRes && updateRes.message) || uiText('unknownError', 'Erro desconhecido.')));
               }
             });
 
             const label = document.createElement('span');
-            label.textContent = task.title || 'Tarefa sem título';
+            label.textContent = task.title || uiText('untitledTask', 'Tarefa sem título');
 
             taskItem.appendChild(checkbox);
             taskItem.appendChild(label);
@@ -222,7 +227,7 @@
           referencesContainer.className = 'milestone-references';
 
           const referencesTitle = document.createElement('span');
-          referencesTitle.textContent = 'Markdowns de referência';
+          referencesTitle.textContent = uiText('referenceMarkdowns', 'MARKDOWNS DE REFERÊNCIA');
 
           const referencesList = document.createElement('ul');
           milestone.references.forEach((reference) => {

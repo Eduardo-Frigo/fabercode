@@ -10,6 +10,8 @@ window.faberConfirm = function(message) {
       return;
     }
 
+    btnNo.textContent = window.t ? window.t('cancel', 'Cancelar') : 'Cancelar';
+    btnYes.textContent = window.t ? window.t('confirm', 'Confirmar') : 'Confirmar';
     text.textContent = message;
     modal.classList.remove('hidden');
     modal.setAttribute('aria-hidden', 'false');
@@ -85,7 +87,7 @@ window.faberAlert = function(message) {
       modal.classList.add('hidden');
       modal.setAttribute('aria-hidden', 'true');
       if (btnNo) btnNo.style.display = '';
-      btnYes.textContent = 'Confirmar';
+      btnYes.textContent = window.t ? window.t('confirm', 'Confirmar') : 'Confirmar';
       btnYes.removeEventListener('click', onYes);
       if (backdrop) backdrop.removeEventListener('click', onYes);
       document.removeEventListener('keydown', onKeydown);
@@ -117,6 +119,8 @@ let welcomePanelAnimationFrame = null;
 const appDragRegionEl = document.getElementById('app-drag-region');
 const appShellEl = document.querySelector('.app-shell');
 const panelCenterEl = document.querySelector('.panel-center');
+const workspaceCenterZoneEl = document.getElementById('workspace-center-zone');
+const workspaceCenterToolsZoneEl = document.getElementById('workspace-center-tools-zone');
 const projectsListEl = document.getElementById('projects-list');
 const chatLogEl = document.getElementById('chat-log');
 const welcomePanelEl = document.getElementById('welcome-panel');
@@ -151,6 +155,7 @@ const REQUIRED_RENDERER_MODULES = [
   { globalName: 'FaberAppFormatters', methods: ['buildDiagnosticsContextHint', 'buildExecutionOutcomeAssistantMessage', 'buildJobContextForPersona', 'buildTerminalJobMessage', 'formatAiRuntimeMessage', 'formatDiffPreviewForChat', 'formatMempalaceRuntimeMessage', 'isManualRetryMessage', 'parseProviderHttpStatusFromReason', 'shouldSuppressInterimAssistantPlanMessage'] },
   { globalName: 'FaberStartupPreloader', methods: ['createStartupPreloaderController'] },
   { globalName: 'FaberI18n', methods: ['createI18nController'] },
+  { globalName: 'FaberTutorialCopy', methods: ['normalizeLocale', 'translate', 'translatePhrase', 'value'] },
   { globalName: 'FaberUiAppearance', methods: ['createUiAppearanceController', 'normalizeInterfaceTheme', 'normalizePanelFontScale'] },
   { globalName: 'FaberAppPreferences', methods: ['createAppPreferencesController'] },
   { globalName: 'FaberAccountGate', methods: ['createAccountGateController', 'hasPlatformMedia', 'isSignedIn'] },
@@ -174,6 +179,7 @@ const REQUIRED_RENDERER_MODULES = [
   { globalName: 'FaberProjectSidebar', methods: ['createProjectSidebarController', 'normalizeProjectItems'] },
   { globalName: 'FaberProjectStateModal', methods: ['createProjectStateModalController'] },
   { globalName: 'FaberProjectTerminal', methods: ['createProjectTerminalController'] },
+  { globalName: 'FaberTutorialWelcomeProject', methods: ['createWelcomeProjectBatches', 'normalizeWelcomeName'] },
   { globalName: 'FaberProgressiveDisclosure', methods: ['createProgressiveDisclosureController'] },
   { globalName: 'FaberWelcomeProjectModal', methods: ['createWelcomeProjectModalController'] },
   { globalName: 'FaberWelcomeQuotes', methods: ['applyWelcomeQuote', 'getWelcomeQuote', 'setLastAuthor'] },
@@ -211,6 +217,7 @@ const workspaceLayoutController = window.FaberWorkspaceLayoutPreferences
       onLayoutChanged: () => requestChatScrollToBottom(),
       panelLayoutController,
       state,
+      translate: t,
     })
   : null;
 const inlineInputDialogController = window.FaberInlineInputDialog
@@ -262,6 +269,7 @@ const applicationMapController = window.FaberApplicationMap
       api: window.localcodeApi,
       getSelectedProjectId: () => state.selectedProjectId,
       getSelectedProjectInfo: () => state.selectedProjectInfo,
+      getLocale: () => state.interfaceLanguage,
       appendMessage,
       getTerminalController: () => projectTerminalController,
     })
@@ -426,6 +434,28 @@ progressiveDisclosureController = window.FaberProgressiveDisclosure
         openApis: async () => {
           await openAiSettingsSection('ai-settings-open-apis');
         },
+        closeApis: () => {
+          if (aiSettingsController) aiSettingsController.close();
+        },
+        getMapController: () => applicationMapController,
+        revealProjectConversationButton: () => {
+          if (!projectSidebarController) return false;
+          projectSidebarController.render();
+          if (document.body.classList.contains('workspace-left-collapsed')) {
+            projectSidebarController.setRailMenuOpen(true);
+          }
+          return true;
+        },
+        simulateChatReply: (message) => appendMessage('assistant', message),
+        simulateTutorialDevelopmentConversation,
+        simulateTutorialDevelopmentBatch,
+        refreshTutorialFiles: async () => {
+          await ensureSelectedProjectInfoReady({ forceRefresh: true });
+          if (projectFileTreeController) await projectFileTreeController.refresh();
+        },
+        refreshTutorialGit: async () => {
+          if (projectToolsController) await projectToolsController.publishToGithub();
+        },
       },
     })
   : null;
@@ -515,13 +545,13 @@ const projectSidebarController = window.FaberProjectSidebar
         if (!nextName) return;
         const result = await window.localcodeApi.renameProject({ id: projectId, name: nextName });
         if (!result || !result.ok) {
-          appendMessage('assistant', (result && result.message) || 'Falha ao renomear projeto.', { persistToConversation: false });
+          appendMessage('assistant', (result && result.message) || t('renameProjectFailed', 'Falha ao renomear projeto.'), { persistToConversation: false });
           return;
         }
         state.projects = normalizeProjectItems(result.projects);
         renderProjects();
         if (state.selectedProjectId === projectId && state.selectedProjectInfo) {
-          updateStatus(`Projeto ativo: ${nextName}`);
+          updateStatus(`${t('activeProjectLabel', 'Projeto ativo')}: ${nextName}`);
         }
       },
       onRenameConversation: requestConversationRename,
@@ -575,9 +605,9 @@ projectFileTreeController = window.FaberProjectFileTree
         if (projectFileEditorController) await projectFileEditorController.open(relativePath, options);
       },
       requestFileRename: async ({ currentName }) => requestTextInputDialog({
-        title: 'Renomear arquivo',
+        title: t('renameFile', 'Renomear arquivo'),
         initialValue: currentName,
-        placeholder: 'Novo nome do arquivo',
+        placeholder: t('newFileName', 'Novo nome do arquivo:'),
       }),
       notify: (message) => appendMessage('assistant', message, { persistToConversation: false }),
     })
@@ -689,6 +719,7 @@ eventsController = window.FaberAppEvents
         hideProjectContextMenu,
         onAddProject,
         onCancel,
+        onClearProjectSelection: clearSelectionState,
         onConfirm,
         onNewConversation,
         onProjectGitClick,
@@ -710,6 +741,7 @@ eventsController = window.FaberAppEvents
         projectTerminalController,
         welcomeProjectModalController,
         workspaceLayoutController,
+        applicationMapController,
       },
       elements: {
         appDragRegionEl,
@@ -720,6 +752,8 @@ eventsController = window.FaberAppEvents
         projectGitBtnEl,
         projectPreviewBtnEl,
         projectSettingsBtnEl,
+        workspaceCenterToolsZoneEl,
+        workspaceCenterZoneEl,
       },
     })
   : null;
@@ -756,6 +790,8 @@ preferencesController = window.FaberAppPreferences
 function t(key, fallback = '') {
   return i18nController ? i18nController.translate(key, fallback) : fallback || key;
 }
+
+window.t = t;
 
 function applyStaticTranslations() {
   if (i18nController) i18nController.applyStaticTranslations();
@@ -1025,7 +1061,9 @@ async function persistConversationMessage(role, text) {
 }
 
 function appendMessage(role, text, attachments = [], options = {}) {
-  if (conversationController) conversationController.appendMessage(role, text, attachments, options);
+  return conversationController
+    ? conversationController.appendMessage(role, text, attachments, options)
+    : Promise.resolve(null);
 }
 
 function renderChatForActiveConversation() {
@@ -1047,6 +1085,117 @@ async function addConversationForProject(projectId, text) {
 
 async function ensureActiveConversationForSend(initialUserMessage) {
   return conversationController ? conversationController.ensureActiveConversationForSend(initialUserMessage) : null;
+}
+
+function tutorialAppText(path, variables = {}, fallback = '') {
+  const copy = window.FaberTutorialCopy;
+  if (!copy || typeof copy.translate !== 'function') return fallback;
+  return copy.translate(state.interfaceLanguage, path, variables, fallback);
+}
+
+async function simulateTutorialDevelopmentConversation(userText, assistantMessages = []) {
+  const normalizedUserText = String(userText || '').trim();
+  if (!state.selectedProjectId || !normalizedUserText) return false;
+
+  const conversationId = await ensureActiveConversationForSend(normalizedUserText);
+  if (!conversationId) return false;
+
+  clearTransientChatNotices();
+  await appendMessage('user', normalizedUserText);
+  if (inputEl) inputEl.value = '';
+  resetTextareaHeight();
+
+  const replies = Array.isArray(assistantMessages) ? assistantMessages.filter(Boolean) : [];
+  for (const reply of replies) {
+    await new Promise((resolve) => window.setTimeout(resolve, 520));
+    await appendMessage('assistant', String(reply));
+  }
+
+  renderProjects();
+  updateStatus(tutorialAppText(
+    'development.conversationSaved',
+    {},
+    'Conversa de desenvolvimento do tutorial salva no projeto.'
+  ));
+  return true;
+}
+
+async function simulateTutorialDevelopmentBatch(batch = {}) {
+  const files = Array.isArray(batch.files)
+    ? batch.files.filter((file) => (
+      file
+      && file.path
+      && (typeof file.content === 'string' || typeof file.assetKey === 'string')
+    ))
+    : [];
+  if (!state.selectedProjectId || !files.length) return { ok: false, files: [] };
+
+  const ready = await ensureSelectedProjectInfoReady();
+  const projectInfo = state.selectedProjectInfo;
+  if (!ready || !projectInfo || !projectInfo.rootPath) {
+    await appendMessage('assistant', tutorialAppText(
+      'development.folderUnavailable',
+      {},
+      'Não foi possível acessar a pasta do projeto do tutorial.'
+    ));
+    return { ok: false, files: [] };
+  }
+
+  const intro = String(batch.intro || '').trim();
+  if (intro) await appendMessage('assistant', intro);
+  await new Promise((resolve) => window.setTimeout(resolve, 360));
+
+  const writtenFiles = [];
+  const progressMessage = String(batch.progress || '').trim();
+  const progressFileIndex = Math.max(0, Math.ceil(files.length / 2) - 1);
+  for (const [fileIndex, file] of files.entries()) {
+    updateStatus(tutorialAppText('development.creating', { label: file.path }, `Criando ${file.path}...`));
+    const result = await window.localcodeApi.writeProjectFile({
+      projectInfo,
+      relativePath: file.path,
+      content: file.content,
+      assetKey: file.assetKey,
+    });
+    if (!result || !result.ok) {
+      const reason = result && result.message
+        ? result.message
+        : tutorialAppText('development.unknownFailure', {}, 'falha desconhecida');
+      await appendMessage('assistant', tutorialAppText(
+        'development.fileCreationInterrupted',
+        { file: file.path, reason },
+        `A criação de ${file.path} foi interrompida: ${reason}`
+      ));
+      updateStatus(tutorialAppText('development.creationInterrupted', {}, 'Criação de arquivos interrompida'));
+      return { ok: false, files: writtenFiles, failedFile: file.path };
+    }
+    writtenFiles.push(file.path);
+    await new Promise((resolve) => window.setTimeout(resolve, 90));
+    if (progressMessage && fileIndex === progressFileIndex) {
+      await appendMessage('assistant', progressMessage);
+      await new Promise((resolve) => window.setTimeout(resolve, 240));
+    }
+  }
+
+  await ensureSelectedProjectInfoReady({ forceRefresh: true });
+  if (projectFileTreeController) await projectFileTreeController.refresh();
+  if (document.body.classList.contains('mode-git') && projectToolsController) {
+    await projectToolsController.publishToGithub();
+  }
+
+  const complete = String(batch.complete || '').trim();
+  const fileSummary = writtenFiles.map((file) => `- ${file}`).join('\n');
+  const stageComplete = complete || tutorialAppText('development.stageComplete', {}, 'Etapa concluída.');
+  const filesHeading = tutorialAppText('development.filesHeading', {}, 'Arquivos criados:');
+  await appendMessage('assistant', `${stageComplete}\n\n${filesHeading}\n${fileSummary}`);
+  updateStatus(tutorialAppText(
+    'development.filesCreated',
+    { count: writtenFiles.length },
+    `${writtenFiles.length} arquivos criados no projeto`
+  ));
+  window.dispatchEvent(new CustomEvent('faber:tutorial-files-written', {
+    detail: { batchId: String(batch.id || ''), files: writtenFiles.slice() },
+  }));
+  return { ok: true, files: writtenFiles };
 }
 
 function appendChangeCard(action, result) {
@@ -1247,7 +1396,7 @@ function editActiveConversationTitle() {
   const projectId = state.selectedProjectId;
   const conversation = getActiveConversation();
   if (!projectId || !conversation || state.uiMode === 'cortex') return;
-  const currentTitle = String(conversation.title || 'Conversa').trim();
+  const currentTitle = String(conversation.title || t('conversation', 'Conversa')).trim();
   centerTitleEl.classList.add('center-title--editing');
   centerTitleEl.classList.remove('center-title--editable');
   centerTitleEl.textContent = '';
@@ -1255,8 +1404,8 @@ function editActiveConversationTitle() {
   input.type = 'text';
   input.className = 'center-title-input';
   input.value = currentTitle;
-  input.placeholder = 'Título da conversa';
-  input.setAttribute('aria-label', 'Título da conversa');
+  input.placeholder = t('conversationTitlePlaceholder', 'Título da conversa');
+  input.setAttribute('aria-label', t('conversationTitlePlaceholder', 'Título da conversa'));
   centerTitleEl.appendChild(input);
 
   let closed = false;
@@ -1462,28 +1611,30 @@ async function setupAppUpdater() {
 
   updateBtn.addEventListener('click', async () => {
     if (updateBtn.disabled) return;
-    const confirm = await window.faberConfirm('Deseja baixar e instalar a atualização do Faber Code agora? A aplicação será reiniciada após a instalação.');
+    const confirm = await window.faberConfirm(t('updateInstallConfirm', 'Deseja baixar e instalar a atualização do Faber Code agora? A aplicação será reiniciada após a instalação.'));
     if (!confirm) return;
 
     try {
       updateBtn.disabled = true;
       const textSpan = updateBtn.querySelector('.update-text');
-      if (textSpan) textSpan.textContent = 'Baixando...';
+      if (textSpan) textSpan.textContent = t('updateDownloading', 'Baixando...');
       const result = await window.localcodeApi.installUpdate({
         downloadUrl: updateBtn.dataset.downloadUrl || '',
         installToken: updateBtn.dataset.installToken || '',
       });
       if (result && !result.ok) {
-        await window.faberAlert('Erro ao instalar atualização: ' + result.message);
+        await window.faberAlert(
+          t('updateInstallError', 'Erro ao instalar atualização: {message}').replace('{message}', result.message || '')
+        );
         updateBtn.disabled = false;
-        if (textSpan) textSpan.textContent = 'Update';
+        if (textSpan) textSpan.textContent = t('update', 'Atualizar');
       }
     } catch (err) {
       console.error(err);
-      await window.faberAlert('Falha ao processar atualização.');
+      await window.faberAlert(t('updateProcessingFailed', 'Falha ao processar atualização.'));
       updateBtn.disabled = false;
       const textSpan = updateBtn.querySelector('.update-text');
-      if (textSpan) textSpan.textContent = 'Update';
+      if (textSpan) textSpan.textContent = t('update', 'Atualizar');
     }
   });
 

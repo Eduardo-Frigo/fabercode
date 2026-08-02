@@ -36,14 +36,24 @@
     const api = options.api || {};
     const elements = options.elements || {};
     const notify = typeof options.notify === 'function' ? options.notify : () => {};
+    const t = typeof options.t === 'function' ? options.t : (_key, fallback = '') => fallback || _key;
     let servers = [];
     let presets = [];
+
+    function textFor(key, fallback = '', replacements = {}) {
+      return Object.entries(replacements).reduce(
+        (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+        String(t(key, fallback) || fallback || key),
+      );
+    }
 
     function setStatus(message, ok) {
       if (!elements.mcpStatus) return;
       elements.mcpStatus.innerHTML = '';
       const title = document.createElement('strong');
-      title.textContent = ok === false ? 'MCP externo precisa de atenção' : 'MCP externo';
+      title.textContent = ok === false
+        ? textFor('externalMcpAttention', 'MCP externo precisa de atenção')
+        : textFor('externalMcp', 'MCP externo');
       const detail = document.createElement('span');
       detail.textContent = String(message || '');
       elements.mcpStatus.append(title, detail);
@@ -112,12 +122,14 @@
       elements.mcpPresetSelect.innerHTML = '';
       const empty = document.createElement('option');
       empty.value = '';
-      empty.textContent = presets.length ? 'Escolha um preset...' : 'Nenhum preset disponível';
+      empty.textContent = presets.length
+        ? textFor('mcpChoosePreset', 'Escolha um preset...')
+        : textFor('mcpNoPresets', 'Nenhum preset disponível');
       elements.mcpPresetSelect.appendChild(empty);
       presets.forEach((preset) => {
         const option = document.createElement('option');
         option.value = preset.id;
-        option.textContent = `${preset.name}${preset.requiresSecrets ? ' · requer segredo' : ''}`;
+        option.textContent = `${preset.name}${preset.requiresSecrets ? ` · ${textFor('mcpRequiresSecret', 'requer segredo')}` : ''}`;
         option.title = preset.description || '';
         elements.mcpPresetSelect.appendChild(option);
       });
@@ -139,16 +151,18 @@
       if (!elements.mcpPresetSelect || !api.applyExternalMcpPreset) return;
       const presetId = String(elements.mcpPresetSelect.value || '').trim();
       if (!presetId) {
-        notify('Escolha um preset MCP para preencher o cadastro.');
+        notify(textFor('mcpChoosePresetPrompt', 'Escolha um preset MCP para preencher o cadastro.'));
         return;
       }
       const result = await api.applyExternalMcpPreset({ presetId });
       if (!result || !result.ok || !result.server) {
-        notify(result && result.message ? result.message : 'Não consegui carregar este preset MCP.');
+        notify(result && result.message ? result.message : textFor('mcpPresetLoadFailed', 'Não foi possível carregar este preset MCP.'));
         return;
       }
       fillEditor(result.server);
-      setStatus(`Preset carregado: ${result.server.name || presetId}. Revise e aprove antes de salvar.`, true);
+      setStatus(textFor('mcpPresetLoaded', 'Preset carregado: {name}. Revise e aprove antes de salvar.', {
+        name: result.server.name || presetId,
+      }), true);
     }
 
     function buildPayloadFromEditor() {
@@ -193,7 +207,7 @@
       const toolList = document.createElement('div');
       toolList.className = 'ai-settings-mcp-tools';
       if (!Array.isArray(tools) || !tools.length) {
-        toolList.textContent = 'Nenhuma tool descoberta nesta rodada.';
+        toolList.textContent = textFor('mcpNoTools', 'Nenhuma tool descoberta nesta rodada.');
         container.appendChild(toolList);
         return;
       }
@@ -202,7 +216,9 @@
         chip.className = `ai-settings-api-badge${tool.allowed ? ' is-active' : ' is-warning'}`;
         const risk = tool.riskLevel ? ` ${tool.riskLevel}` : '';
         const permission = tool.permission ? `/${tool.permission}` : '';
-        const blocked = tool.allowed ? '' : ` bloqueada${tool.blockedReason ? `: ${tool.blockedReason}` : ''}`;
+        const blocked = tool.allowed
+          ? ''
+          : ` ${textFor('mcpToolBlocked', 'bloqueada')}${tool.blockedReason ? `: ${tool.blockedReason}` : ''}`;
         chip.textContent = `${tool.name}${risk}${permission}${blocked}`;
         toolList.appendChild(chip);
       });
@@ -213,7 +229,9 @@
       if (!cache || !Array.isArray(cache.tools) || !cache.tools.length) return;
       const cacheHeader = document.createElement('div');
       cacheHeader.className = 'ai-settings-mcp-cache-title';
-      cacheHeader.textContent = `Cache visual: ${cache.toolCount || cache.tools.length} tools`;
+      cacheHeader.textContent = textFor('mcpVisualCache', 'Cache visual: {count} tools', {
+        count: cache.toolCount || cache.tools.length,
+      });
       const cacheTools = document.createElement('div');
       cacheTools.className = 'ai-settings-mcp-tools ai-settings-mcp-cache';
       cache.tools.slice(0, 12).forEach((tool) => {
@@ -239,12 +257,14 @@
       if (!servers.length) {
         const empty = document.createElement('p');
         empty.className = 'ai-settings-api-empty';
-        empty.textContent = 'Nenhum servidor MCP externo configurado.';
+        empty.textContent = textFor('mcpNoServers', 'Nenhum servidor MCP externo configurado.');
         elements.mcpList.appendChild(empty);
-        setStatus('Nenhum servidor configurado ainda.', false);
+        setStatus(textFor('mcpNoServersStatus', 'Nenhum servidor configurado ainda.'), false);
         return;
       }
-      setStatus(`${servers.length} servidor(es) configurado(s).`, true);
+      setStatus(textFor('mcpServersConfigured', '{count} servidor(es) configurado(s).', {
+        count: servers.length,
+      }), true);
       servers.forEach((server) => {
         const item = document.createElement('div');
         item.className = 'ai-settings-api-item ai-settings-mcp-item';
@@ -263,23 +283,40 @@
         titleRow.appendChild(transport);
         const status = document.createElement('span');
         status.className = `ai-settings-api-badge${server.trust === 'approved' && server.ready ? ' is-active' : ' is-warning'}`;
-        status.textContent = server.trust === 'approved' && server.ready ? 'pronto' : 'pendente';
+        status.textContent = server.trust === 'approved' && server.ready
+          ? textFor('mcpReady', 'pronto')
+          : textFor('mcpPending', 'pendente');
         titleRow.appendChild(status);
         const detail = document.createElement('div');
         detail.className = 'ai-settings-api-detail';
-        detail.textContent = server.transport === 'stdio' ? server.command || 'Comando ausente' : server.endpoint || 'Endpoint ausente';
+        detail.textContent = server.transport === 'stdio'
+          ? server.command || textFor('mcpCommandMissing', 'Comando ausente')
+          : server.endpoint || textFor('mcpEndpointMissing', 'Endpoint ausente');
         const facts = document.createElement('div');
         facts.className = 'ai-settings-api-facts';
         const riskPolicy = server.riskPolicy || {};
         facts.textContent = [
-          `Permitidas: ${listToText(server.allowedTools) || 'todas'}`,
-          `Bloqueadas: ${listToText(server.blockedTools) || 'nenhuma'}`,
-          `Risco max: ${riskPolicy.maxRiskLevel || 'high'}`,
-          `Permissoes: ${listToText(riskPolicy.allowedPermissions || ['read', 'write'])}`,
-          `Dirs: ${listToText(server.scopePolicy && server.scopePolicy.allowedDirectories) || 'raiz do projeto'}`,
-          `Rede: ${server.scopePolicy && server.scopePolicy.allowExternalNetwork ? 'externa permitida' : 'hosts permitidos'}`,
-          server.hasEnv ? 'env configurado' : '',
-          server.hasHeaders ? 'headers configurados' : '',
+          textFor('mcpAllowedTools', 'Permitidas: {value}', {
+            value: listToText(server.allowedTools) || textFor('mcpAll', 'todas'),
+          }),
+          textFor('mcpBlockedTools', 'Bloqueadas: {value}', {
+            value: listToText(server.blockedTools) || textFor('mcpNone', 'nenhuma'),
+          }),
+          textFor('mcpMaxRisk', 'Risco máximo: {value}', { value: riskPolicy.maxRiskLevel || 'high' }),
+          textFor('mcpPermissions', 'Permissões: {value}', {
+            value: listToText(riskPolicy.allowedPermissions || ['read', 'write']),
+          }),
+          textFor('mcpDirectories', 'Diretórios: {value}', {
+            value: listToText(server.scopePolicy && server.scopePolicy.allowedDirectories)
+              || textFor('mcpProjectRoot', 'raiz do projeto'),
+          }),
+          textFor('mcpNetwork', 'Rede: {value}', {
+            value: server.scopePolicy && server.scopePolicy.allowExternalNetwork
+              ? textFor('mcpExternalAllowed', 'externa permitida')
+              : textFor('mcpAllowedHosts', 'hosts permitidos'),
+          }),
+          server.hasEnv ? textFor('mcpEnvConfigured', 'env configurado') : '',
+          server.hasHeaders ? textFor('mcpHeadersConfigured', 'headers configurados') : '',
         ].filter(Boolean).join(' | ');
         meta.append(titleRow, detail, facts);
         renderDiscoveryCache(meta, server.discoveryCache);
@@ -289,19 +326,19 @@
         const edit = document.createElement('button');
         edit.type = 'button';
         edit.className = 'btn btn-muted';
-        edit.textContent = 'Editar';
+        edit.textContent = textFor('mcpEdit', 'Editar');
         edit.addEventListener('click', () => fillEditor(server));
         const discover = document.createElement('button');
         discover.type = 'button';
         discover.className = 'btn btn-success';
-        discover.textContent = 'Descobrir';
+        discover.textContent = textFor('mcpDiscover', 'Descobrir');
         discover.addEventListener('click', async () => {
           if (!api.discoverExternalMcpTools) return;
           discover.disabled = true;
           const result = await api.discoverExternalMcpTools({ serverId: server.id, refresh: true });
           discover.disabled = false;
           if (!result || !result.ok) {
-            setStatus(result && result.message ? result.message : 'Falha ao descobrir tools.', false);
+            setStatus(result && result.message ? result.message : textFor('mcpDiscoverFailed', 'Falha ao descobrir tools.'), false);
             return;
           }
           const tools = result.data && result.data.tools ? result.data.tools : [];
@@ -312,17 +349,19 @@
             tools,
           };
           renderServers();
-          setStatus(`Tools descobertas em ${server.name || server.id}.`, true);
+          setStatus(textFor('mcpToolsDiscovered', 'Tools descobertas em {name}.', {
+            name: server.name || server.id,
+          }), true);
         });
         const remove = document.createElement('button');
         remove.type = 'button';
         remove.className = 'btn btn-danger';
-        remove.textContent = 'Remover';
+        remove.textContent = textFor('mcpRemove', 'Remover');
         remove.addEventListener('click', async () => {
           if (!api.removeExternalMcpServer) return;
           const result = await api.removeExternalMcpServer({ serverId: server.id });
           if (!result || !result.ok) {
-            notify(result && result.message ? result.message : 'Não consegui remover o servidor MCP.');
+            notify(result && result.message ? result.message : textFor('mcpRemoveFailed', 'Não foi possível remover o servidor MCP.'));
             return;
           }
           servers = result.servers || [];
@@ -337,12 +376,12 @@
     async function refresh() {
       await refreshPresets();
       if (!api.listExternalMcpServers) {
-        setStatus('IPC de MCP externo indisponível nesta build.', false);
+        setStatus(textFor('mcpIpcUnavailable', 'IPC de MCP externo indisponível nesta versão.'), false);
         return;
       }
       const result = await api.listExternalMcpServers();
       if (!result || !result.ok) {
-        setStatus(result && result.message ? result.message : 'Não consegui carregar MCP externo.', false);
+        setStatus(result && result.message ? result.message : textFor('mcpLoadFailed', 'Não foi possível carregar o MCP externo.'), false);
         return;
       }
       servers = result.servers || [];
@@ -353,30 +392,30 @@
       if (!api.saveExternalMcpServer) return;
       const payload = buildPayloadFromEditor();
       if (!payload.name) {
-        notify('Informe um nome para o servidor MCP.');
+        notify(textFor('mcpNameRequired', 'Informe um nome para o servidor MCP.'));
         return;
       }
       if (payload.transport === 'stdio' && !payload.command) {
-        notify('Informe o comando stdio.');
+        notify(textFor('mcpStdioRequired', 'Informe o comando stdio.'));
         return;
       }
       if (payload.transport !== 'stdio' && !payload.endpoint) {
-        notify('Informe o endpoint HTTP/SSE.');
+        notify(textFor('mcpEndpointRequired', 'Informe o endpoint HTTP/SSE.'));
         return;
       }
       if (payload.requestTimeoutMs < 500 || payload.requestTimeoutMs > 120000 || !Number.isFinite(payload.requestTimeoutMs)) {
-        notify('Informe timeout entre 500 e 120000 ms.');
+        notify(textFor('mcpTimeoutInvalid', 'Informe um timeout entre 500 e 120000 ms.'));
         return;
       }
       const result = await api.saveExternalMcpServer({ server: payload });
       if (!result || !result.ok) {
-        notify(result && result.message ? result.message : 'Não consegui salvar o servidor MCP.');
+        notify(result && result.message ? result.message : textFor('mcpSaveFailed', 'Não foi possível salvar o servidor MCP.'));
         return;
       }
       servers = result.servers || [];
       clearEditor();
       renderServers();
-      setStatus('Servidor MCP salvo.', true);
+      setStatus(textFor('mcpSaved', 'Servidor MCP salvo.'), true);
     }
 
     function syncTransportFields() {

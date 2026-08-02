@@ -79,9 +79,17 @@ class FakeElement {
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'project_sidebar.js'), 'utf8');
 const documentListeners = {};
+const windowEvents = [];
 const body = new FakeElement();
+class FakeCustomEvent {
+  constructor(type, init = {}) {
+    this.type = type;
+    this.detail = init.detail;
+  }
+}
 const sandbox = {
   Element: FakeElement,
+  CustomEvent: FakeCustomEvent,
   document: {
     body,
     addEventListener: (type, handler) => {
@@ -90,9 +98,12 @@ const sandbox = {
     createElement: () => new FakeElement(),
     getElementById: () => null,
   },
-  window: {},
+  window: {
+    dispatchEvent: (event) => windowEvents.push(event),
+  },
 };
 sandbox.window.window = sandbox.window;
+sandbox.window.addEventListener = () => {};
 
 vm.runInNewContext(source, sandbox, { filename: 'project_sidebar.js' });
 
@@ -219,7 +230,84 @@ async function testCollapsedRailHeaderOnlyExpandsProject() {
   sandbox.document.body = previousBody;
 }
 
+async function testContextMenuActionRunsOnFirstPress() {
+  const contextMenu = new FakeElement(['project-context-menu', 'hidden']);
+  const actionButton = new FakeElement([], contextMenu);
+  actionButton.dataset.action = 'trash';
+  const actions = [];
+  const controller = sidebar.createProjectSidebarController({
+    listEl: new FakeElement(),
+    contextMenuEl: contextMenu,
+    getProjects: () => [{ id: 'project-a', name: 'Projeto Alpha' }],
+    getExpandedProjects: () => ({}),
+    onContextAction: async (action, projectId) => {
+      actions.push({ action, projectId });
+    },
+  });
+  controller.bindEvents();
+  controller.showContextMenu('project-a', 24, 24);
+
+  const pointerEvent = {
+    button: 0,
+    target: { closest: () => actionButton },
+    preventDefault: () => {},
+    stopPropagation: () => {},
+  };
+  await contextMenu.listeners.pointerdown(pointerEvent);
+  assert.deepStrictEqual(actions, [{ action: 'trash', projectId: 'project-a' }]);
+  assert.strictEqual(contextMenu.classList.contains('hidden'), true, 'menu should close on the first press');
+
+  await contextMenu.listeners.click(pointerEvent);
+  assert.strictEqual(actions.length, 1, 'the synthetic click after pointerdown must not repeat the action');
+}
+
+async function testNewConversationUsesRealProjectAction() {
+  const localBody = new FakeElement(['workspace-left-collapsed']);
+  const localRailToggle = new FakeElement();
+  const localLightbox = new FakeElement(['project-rail-lightbox', 'hidden']);
+  const localList = new FakeElement(['project-rail-lightbox-list'], localLightbox);
+  const preparedProjects = [];
+  const previousBody = sandbox.document.body;
+  sandbox.document.body = localBody;
+  windowEvents.length = 0;
+
+  const localController = sidebar.createProjectSidebarController({
+    listEl: new FakeElement(),
+    railMenuToggleEl: localRailToggle,
+    railLightboxEl: localLightbox,
+    railMenuListEl: localList,
+    getProjects: () => [{ id: 'project-a', name: 'Projeto Alpha' }],
+    getExpandedProjects: () => ({}),
+    onPrepareNewConversation: async (projectId) => {
+      preparedProjects.push(projectId);
+    },
+  });
+
+  localController.setRailMenuOpen(true);
+  const projectHeader = localList.children[0] && localList.children[0].children[0];
+  const projectActions = projectHeader && projectHeader.children[3];
+  const newConversationButton = projectActions && projectActions.children.find((child) => (
+    child.classList.contains('project-mini-btn-new-conv')
+  ));
+  assert.ok(newConversationButton && newConversationButton.listeners.click, 'real project + action should be available in the collapsed rail');
+
+  await newConversationButton.listeners.click({
+    preventDefault() {},
+    stopPropagation() {},
+  });
+
+  assert.deepStrictEqual(preparedProjects, ['project-a'], 'real project + action should prepare the selected project chat');
+  assert.strictEqual(localBody.classList.contains('project-rail-menu-open'), false, 'project lightbox should close after preparing the chat');
+  assert.strictEqual(windowEvents.length, 1, 'chat preparation should emit one completion event');
+  assert.strictEqual(windowEvents[0].type, 'faber:project-conversation-prepared');
+  assert.strictEqual(windowEvents[0].detail.projectId, 'project-a');
+
+  sandbox.document.body = previousBody;
+}
+
 testCollapsedRailHeaderOnlyExpandsProject()
+  .then(testContextMenuActionRunsOnFirstPress)
+  .then(testNewConversationUsesRealProjectAction)
   .then(() => {
     console.log('renderer-project-sidebar.test.js: ok');
   })

@@ -1,88 +1,61 @@
-# Handoff: Landing Page Boas-Vindas
+# Handoff final: Landing Page Boas-Vindas
 
-## Estado atual
+**Status:** concluída e validada
+**Última atualização:** 2 de agosto de 2026
 
-- A landing page `Boas-Vindas/` foi criada em Next.js com foco em apresentação estática e interativa.
-- O nome do usuário já está limitado à primeira palavra em `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/Boas-Vindas/app/page.js`.
-- Os links finais de GitHub e LinkedIn do Eduardo já estão configurados.
-- A experiência principal está dividida entre:
-  - `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/Boas-Vindas/components/WelcomeHero.js`
-  - `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/Boas-Vindas/components/BuildBlueprint.js`
-  - `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/Boas-Vindas/components/BuildPath.js`
-  - `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/Boas-Vindas/components/WelcomeExperience.js`
-  - `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/Boas-Vindas/app/globals.css`
+## Resultado consolidado
 
-## Pendências visuais confirmadas
+A landing page de boas-vindas do tutorial está implementada em Next.js, com identidade visual Faber Code, conteúdo personalizado pelo nome informado no tutorial e comportamento consistente entre o protótipo, as LPs já geradas e o gerador usado por novos usuários.
 
-### 1. Conexão entre sessão 1 e sessão 2
+O nome continua limitado à primeira palavra na saudação. GitHub e LinkedIn usam os links configurados para a demonstração, e todo o conteúdo textual suportado pelo tutorial permanece disponível em português, inglês e espanhol.
 
-- A linha guia que sai da primeira sessão ainda não se conecta de forma suave com a segunda.
-- Em algumas larguras a curva mostra uma quebra visível em vez de uma parábola contínua.
-- O trecho destacado nas imagens `01 As linhas da primeira sessão e da segunda não estão conectando de maneira satisfatória.png` ainda precisa ser suavizado.
+## Correções finais
 
-### 2. Tooltips/cards orbitais cortando
+### Conexão entre a primeira e a segunda sessão
 
-- Quando o ponto orbital está muito alto na animação, o card de texto:
-  - pode não aparecer;
-  - pode aparecer cortado;
-  - pode encostar no topo da área útil.
-- Isso foi visto nas imagens:
-  - `02 o texto não aparece quando o ponto está muito pra cima na animação.png`
-  - `03 também corta a caixa do texto quando o ponto está muito pra cima na animação.png`
-  - `04 também corta a caixa do texto quando o ponto está muito pra cima na animação.png`
-- A referência correta de comportamento é `02 ok.png`.
+- A trajetória entra pela borda direita e chega ao núcleo orbital em uma única curva Bézier.
+- Os pontos inicial e final são calculados a partir do viewport e do núcleo real, sem emendas independentes.
+- A curvatura foi suavizada para manter leitura orgânica sem formar um “S” artificial.
+- A antiga linha inferior acionada pelo clique (`signal-tail`) foi removida do JSX, do CSS e do gerador.
 
-### 3. Distribuição das esferas orbitais
+### Cards orbitais
 
-- As esferas menores ainda ficam muito próximas do centro em alguns estados.
-- Isso atrapalha leitura, separação visual e o entendimento da hierarquia.
-- O principal ajuste restante está na composição da sessão orbital da `BuildPath`.
+- Os cards de hover são renderizados em `document.body` por portal.
+- O posicionamento usa coordenadas fixas de viewport, inverte acima/abaixo quando necessário e aplica margem de segurança nas quatro bordas.
+- O card não depende mais do `overflow` da seção orbital; título, texto e contorno permanecem completos quando o planeta está no topo ou na base da órbita.
+- A órbita correspondente continua pausando durante o hover.
 
-### 4. Conclusão da etapa drag-and-drop
+### Geometria e progressão
 
-- A base da interação já existe.
-- Próximo refinamento esperado:
-  - o núcleo da esquerda deve reagir de forma diferente a cada conexão concluída;
-  - após a terceira conexão, um texto final curto deve aparecer;
-  - a transição para a próxima sessão precisa acontecer de forma mais suave e mais “celebratória”.
+- As órbitas e os planetas foram redistribuídos para melhorar separação visual e legibilidade.
+- O sistema de conexões reforça o feedback incremental no ponto de origem.
+- A conclusão das conexões apresenta mensagem final e transição suave para o próximo bloco.
+- O scroll horizontal permanece contido, sem vazamento lateral da composição.
 
-## Onde continuar
+### Responsividade
 
-### Ajustar geometria da linha principal
+- Desktop validado em `1600x900`.
+- Tablet validado em `768x900`.
+- Mobile validado em `390x844`.
+- Nos três tamanhos, a linha começa fora da borda, o card permanece dentro do viewport e não existe overflow horizontal.
 
-- Arquivo principal:
-  - `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/Boas-Vindas/components/WelcomeExperience.js`
-- Objetivo:
-  - recalcular melhor o SVG `journey-thread`;
-  - evitar quebra entre o terminal da primeira área e o início visual da segunda.
+## Fontes de verdade
 
-### Ajustar órbitas, cards e limites de hover
+- Protótipo: `Boas-Vindas/`
+- Gerador: `renderer/tutorial_welcome_project.js`
+- Copy localizada: `renderer/tutorial_copy.js`
+- Regressões do gerador: `tests/renderer-tutorial-welcome-project.test.js`
+- Fluxo do tutorial: `renderer/progressive_disclosure.js`
 
-- Arquivo principal:
-  - `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/Boas-Vindas/components/BuildPath.js`
-- Arquivo de suporte visual:
-  - `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/Boas-Vindas/app/globals.css`
-- Objetivo:
-  - afastar melhor os planetas menores do centro;
-  - reposicionar os cards dinamicamente quando o ponto estiver próximo do topo;
-  - impedir clipping dos cards nas bordas da seção;
-  - manter o comportamento consistente em desktop, tablet e mobile.
+As LPs locais `Apollo` e `Salem` receberam as mesmas correções para validar o comportamento real de projetos já gerados. Novos projetos recebem a versão corrigida diretamente pelo gerador.
 
-## Critérios para considerar finalizado
+## Validação executada
 
-- A linha entre sessão 1 e sessão 2 parece contínua em qualquer viewport.
-- Nenhum card orbital some ou corta quando o ponto está no topo da órbita.
-- As esferas não ficam visualmente sobrepostas ao núcleo central.
-- O fim da interação de conexões entrega uma sensação clara de progressão e conclusão.
+- `npm run lint` nas LPs `Apollo` e `Salem`.
+- `npm run build` na LP ativa `Apollo`.
+- `npm run test:renderer-tutorial-project` no repositório principal.
+- Inspeção visual da curva, do clique no sinal, dos cards orbitais e do overflow em desktop, tablet e mobile.
 
-## Como retomar rápido em outra janela
+## Critério de encerramento
 
-1. Abrir a pasta:
-   - `/Users/eduardofrigo/Desktop/Faber code/localcode-studio-architecture-base/Boas-Vindas`
-2. Rodar:
-   - `npm install`
-   - `npm run dev`
-3. Priorizar:
-   - `WelcomeExperience.js`
-   - `BuildPath.js`
-   - `app/globals.css`
+A LP é considerada finalizada porque a conexão visual é contínua, a linha residual não existe mais, os cards orbitais não sofrem clipping, a interação mantém feedback claro e o resultado é reproduzido pelo gerador para os idiomas suportados.

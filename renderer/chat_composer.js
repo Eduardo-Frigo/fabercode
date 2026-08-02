@@ -2,6 +2,17 @@
   const BASE_TEXTAREA_HEIGHT = 84;
   const MAX_TEXTAREA_HEIGHT = Math.round(BASE_TEXTAREA_HEIGHT * 1.5);
 
+  function uiText(key, fallback) {
+    return window.t ? window.t(key, fallback) : fallback;
+  }
+
+  function changedFilesLabel(count) {
+    return `${count} ${uiText(
+      count === 1 ? 'filesChangedSingle' : 'filesChangedPlural',
+      count === 1 ? 'arquivo alterado' : 'arquivos alterados'
+    )}`;
+  }
+
   function createChatComposerController(options = {}) {
     const api = options.api || {};
     const getProjectInfo = typeof options.getProjectInfo === 'function' ? options.getProjectInfo : () => null;
@@ -88,7 +99,7 @@
         const remove = document.createElement('button');
         remove.className = 'attachment-remove';
         remove.type = 'button';
-        remove.title = 'Remover anexo';
+        remove.title = uiText('removeAttachment', 'Remover anexo');
         remove.textContent = 'x';
         remove.onclick = () => {
           const next = (Array.isArray(getAttachments()) ? getAttachments() : []).slice();
@@ -152,7 +163,7 @@
           } else {
             const pill = document.createElement('div');
             pill.className = 'attachment-chip';
-            pill.textContent = att.name || 'Anexo';
+            pill.textContent = att.name || uiText('attachment', 'Anexo');
             attachContainer.appendChild(pill);
           }
         });
@@ -203,7 +214,7 @@
       bubble.className = 'msg assistant thinking';
       bubble.setAttribute('aria-live', 'polite');
       bubble.innerHTML =
-        '<span class="thinking-label">Pensando</span><span class="thinking-dots"><span></span><span></span><span></span></span>';
+        `<span class="thinking-label">${uiText('thinking', 'Pensando')}</span><span class="thinking-dots"><span></span><span></span><span></span></span>`;
 
       elements.chatLog.appendChild(bubble);
       scrollToBottom();
@@ -268,9 +279,9 @@
       fileBtn.type = 'button';
       fileBtn.className = 'change-card-file';
       fileBtn.textContent = summary.fileCount > 1
-        ? `${summary.fileCount} arquivos alterados`
+        ? changedFilesLabel(summary.fileCount)
         : targetFile;
-      fileBtn.title = 'Abrir no Finder';
+      fileBtn.title = uiText('openInFinder', 'Abrir no Finder');
       fileBtn.onclick = async () => {
         if (!api.revealFileInFolder) return;
         await api.revealFileInFolder({
@@ -282,18 +293,22 @@
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'change-card-toggle';
-      toggle.textContent = 'Expandir código';
+      toggle.textContent = uiText('expandCode', 'Expandir código');
 
       const body = document.createElement('div');
       body.className = 'change-card-body hidden';
       const pre = document.createElement('pre');
-      pre.textContent = (action && action.diffPreview) || (result && result.message) || 'Sem diff disponível.';
+      pre.textContent = (action && action.diffPreview)
+        || (result && result.message)
+        || uiText('noDiffAvailable', 'Sem diff disponível.');
       body.appendChild(pre);
 
       toggle.onclick = () => {
         const hidden = body.classList.contains('hidden');
         body.classList.toggle('hidden', !hidden);
-        toggle.textContent = hidden ? 'Recolher código' : 'Expandir código';
+        toggle.textContent = hidden
+          ? uiText('collapseCode', 'Recolher código')
+          : uiText('expandCode', 'Expandir código');
       };
 
       header.append(fileBtn, toggle);
@@ -323,7 +338,7 @@
       const label = document.createElement('div');
       label.className = 'change-summary-strip__label';
       const count = document.createElement('span');
-      count.textContent = `${summary.fileCount} ${summary.fileCount === 1 ? 'arquivo alterado' : 'arquivos alterados'}`;
+      count.textContent = changedFilesLabel(summary.fileCount);
       label.appendChild(count);
 
       if (summary.add > 0) {
@@ -347,7 +362,7 @@
       const review = document.createElement('button');
       review.type = 'button';
       review.className = 'change-summary-strip__review';
-      review.textContent = 'Revisar';
+      review.textContent = uiText('review', 'Revisar');
       
       const targetFile = action && action.targetFile ? action.targetFile : summary.files[0] || '';
       review.onclick = async () => {

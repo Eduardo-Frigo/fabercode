@@ -74,20 +74,22 @@
     
       // Evita spam visual quando o mesmo erro/resposta é reenviado em loop de retentativa.
       if (role === 'assistant' && chatController && chatController.hasRecentAssistantMessage(text)) {
-        return;
+        return Promise.resolve(null);
       }
       const projectId = state.selectedProjectId;
       const conversationId = getActiveConversationId(projectId);
+      let persistence = Promise.resolve(null);
     
       if (persistToConversation && conversationId) {
         ensureConversationMessagesBucket(conversationId);
         state.conversationMessagesById[conversationId].push({ role, text, attachments, createdAt: new Date().toISOString() });
-        persistConversationMessage(role, text, attachments);
+        persistence = persistConversationMessage(role, text, attachments);
       }
     
       renderMessageBubble(role, text, attachments);
       renderWelcomePanel();
       if (chatController) chatController.scrollToBottom();
+      return persistence;
     }
     
     function renderChatForActiveConversation() {
@@ -147,7 +149,8 @@
     async function addConversationForProject(projectId, text) {
       if (!projectId || !text) return null;
     
-      const title = text.trim().replace(/\s+/g, ' ').slice(0, 52) || 'Conversa sem título';
+      const title = text.trim().replace(/\s+/g, ' ').slice(0, 52)
+        || (window.t ? window.t('untitledConversation', 'Conversa sem título') : 'Conversa sem título');
     
       try {
         const result = await api.addConversation({

@@ -2,6 +2,18 @@
 
 Landing page estática do tutorial Faber Code, construída com Next.js, JavaScript e Tailwind CSS.
 
+## Estado
+
+A experiência está concluída e validada em desktop, tablet e mobile. Ela inclui:
+
+- conexão responsiva entre hero e sistema orbital;
+- cards orbitais sem clipping nas bordas do viewport;
+- feedback de conexões e conclusão da jornada;
+- contenção de overflow horizontal;
+- suporte à personalização e aos idiomas do tutorial.
+
+Este diretório é o protótipo visual. Novas LPs do tutorial são geradas por `../renderer/tutorial_welcome_project.js` com copy de `../renderer/tutorial_copy.js`.
+
 ## Configuração
 
 1. Duplique `.env.example` como `.env.local`.

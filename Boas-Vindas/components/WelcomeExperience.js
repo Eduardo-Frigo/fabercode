@@ -48,10 +48,12 @@ export function WelcomeExperience({ name }) {
 
   useEffect(() => {
     let frame = 0;
+    let entranceFrame = 0;
     const root = rootRef.current;
     const start = root?.querySelector("[data-journey-thread-start]");
     const end = root?.querySelector("[data-journey-thread-end]");
-    if (!root || !start || !end) return undefined;
+    const orbitalLab = root?.querySelector("#orbital-lab");
+    if (!root || !start || !end || !orbitalLab) return undefined;
 
     function updateJourneyThread() {
       if (frame) window.cancelAnimationFrame(frame);
@@ -60,27 +62,31 @@ export function WelcomeExperience({ name }) {
         const rootBounds = root.getBoundingClientRect();
         const startBounds = start.getBoundingClientRect();
         const endBounds = end.getBoundingClientRect();
+        const orbitalBounds = orbitalLab.getBoundingClientRect();
         const width = Math.max(rootBounds.width, 1);
         const height = Math.max(rootBounds.height, 1);
         const startX = startBounds.left + startBounds.width / 2 - rootBounds.left;
         const startY = startBounds.top + startBounds.height / 2 - rootBounds.top;
         const endX = endBounds.left + endBounds.width / 2 - rootBounds.left;
         const endY = endBounds.top + endBounds.height / 2 - rootBounds.top;
-        const verticalDistance = Math.max(endY - startY, 1);
-        const firstControlX = clamp(
-          startX + clamp(width * 0.08, 36, 104),
-          16,
-          width - 16,
+        const orbitalTop = orbitalBounds.top - rootBounds.top;
+        const edgeX = width + clamp(width * 0.025, 24, 42);
+        const distanceToEdge = Math.max(edgeX - startX, 80);
+        const exitY = Math.min(
+          startY + clamp((orbitalTop - startY) * 0.34, 72, 170),
+          orbitalTop - 28,
         );
-        const secondControlX = clamp(
-          endX + clamp(Math.abs(startX - endX) * 0.42, 42, width * 0.28),
-          16,
-          width - 16,
-        );
-        const path = [
+        const entryY = orbitalTop + clamp((endY - orbitalTop) * 0.17, 64, 148);
+        const outboundPath = [
           `M ${startX.toFixed(1)} ${startY.toFixed(1)}`,
-          `C ${firstControlX.toFixed(1)} ${(startY + verticalDistance * 0.24).toFixed(1)}`,
-          `${secondControlX.toFixed(1)} ${(endY - verticalDistance * 0.3).toFixed(1)}`,
+          `C ${(startX + distanceToEdge * 0.34).toFixed(1)} ${(startY + 18).toFixed(1)}`,
+          `${(edgeX - distanceToEdge * 0.2).toFixed(1)} ${(exitY - 34).toFixed(1)}`,
+          `${edgeX.toFixed(1)} ${exitY.toFixed(1)}`,
+        ].join(" ");
+        const inboundPath = [
+          `M ${edgeX.toFixed(1)} ${entryY.toFixed(1)}`,
+          `C ${(width - clamp(width * 0.045, 38, 74)).toFixed(1)} ${(entryY + 48).toFixed(1)}`,
+          `${(endX + Math.max((width - endX) * 0.32, 92)).toFixed(1)} ${(endY - Math.max((endY - entryY) * 0.38, 92)).toFixed(1)}`,
           `${endX.toFixed(1)} ${endY.toFixed(1)}`,
         ].join(" ");
 
@@ -89,25 +95,44 @@ export function WelcomeExperience({ name }) {
           height: Number(height.toFixed(1)),
           endX: Number(endX.toFixed(1)),
           endY: Number(endY.toFixed(1)),
-          path,
+          outboundPath,
+          inboundPath,
         };
-        setJourneyThread((current) => (current?.path === path ? current : nextThread));
+        setJourneyThread((current) => (
+          current?.outboundPath === outboundPath && current?.inboundPath === inboundPath
+            ? current
+            : nextThread
+        ));
       });
     }
 
     updateJourneyThread();
+    const entranceEndsAt = window.performance.now() + 1400;
+    function followEntrance() {
+      updateJourneyThread();
+      if (window.performance.now() < entranceEndsAt) {
+        entranceFrame = window.requestAnimationFrame(followEntrance);
+      }
+    }
+    entranceFrame = window.requestAnimationFrame(followEntrance);
+
+    const animatedStart = start.closest(".reveal");
+    animatedStart?.addEventListener("animationend", updateJourneyThread);
     const resizeObserver = typeof ResizeObserver === "undefined"
       ? null
       : new ResizeObserver(updateJourneyThread);
     resizeObserver?.observe(root);
     resizeObserver?.observe(start);
     resizeObserver?.observe(end);
+    resizeObserver?.observe(orbitalLab);
     window.addEventListener("resize", updateJourneyThread);
 
     return () => {
       resizeObserver?.disconnect();
+      animatedStart?.removeEventListener("animationend", updateJourneyThread);
       window.removeEventListener("resize", updateJourneyThread);
       if (frame) window.cancelAnimationFrame(frame);
+      if (entranceFrame) window.cancelAnimationFrame(entranceFrame);
     };
   }, []);
 
@@ -133,9 +158,13 @@ export function WelcomeExperience({ name }) {
           preserveAspectRatio="none"
           aria-hidden="true"
         >
-          <path d={journeyThread.path} />
-          <circle key={journeyThread.path} className="journey-thread-signal" r="5">
-            <animateMotion dur="7.2s" repeatCount="indefinite" path={journeyThread.path} />
+          <path className="journey-thread-path journey-thread-path--outbound" d={journeyThread.outboundPath} />
+          <path className="journey-thread-path journey-thread-path--inbound" d={journeyThread.inboundPath} />
+          <circle key={journeyThread.outboundPath} className="journey-thread-signal journey-thread-signal--outbound" r="5">
+            <animateMotion dur="5.8s" repeatCount="indefinite" path={journeyThread.outboundPath} />
+          </circle>
+          <circle key={journeyThread.inboundPath} className="journey-thread-signal journey-thread-signal--inbound" r="5">
+            <animateMotion begin="1.4s" dur="6.6s" repeatCount="indefinite" path={journeyThread.inboundPath} />
           </circle>
           <circle
             className="journey-thread-terminal"

@@ -1,4 +1,15 @@
 (function () {
+  function uiText(key, fallback) {
+    return window.t ? window.t(key, fallback) : fallback;
+  }
+
+  function currentLocale() {
+    const lang = String(document.documentElement.lang || 'pt-BR').toLowerCase();
+    if (lang.startsWith('en')) return 'en-US';
+    if (lang.startsWith('es')) return 'es-ES';
+    return 'pt-BR';
+  }
+
   function createProjectStateModalController(options = {}) {
     const api = options.api || {};
     const notify = typeof options.notify === 'function' ? options.notify : () => {};
@@ -22,17 +33,17 @@
 
     function formatDate(project) {
       const raw = project && (project.archivedAt || project.deletedAt || project.createdAt);
-      if (!raw) return 'sem data';
+      if (!raw) return uiText('noDate', 'sem data');
       const dt = new Date(raw);
-      if (Number.isNaN(dt.getTime())) return 'sem data';
-      return dt.toLocaleString('pt-BR');
+      if (Number.isNaN(dt.getTime())) return uiText('noDate', 'sem data');
+      return dt.toLocaleString(currentLocale());
     }
 
     function setTitle(mode) {
       if (!elements.title) return;
       elements.title.textContent = mode === 'archived'
-        ? (window.t ? window.t('archivedProjects', 'Projetos arquivados') : 'Projetos arquivados')
-        : (window.t ? window.t('trashModalTitle', 'Lixeira de projetos') : 'Lixeira de projetos');
+        ? uiText('archivedProjects', 'Projetos arquivados')
+        : uiText('trashModalTitle', 'Lixeira de projetos');
     }
 
     function showEmpty(mode) {
@@ -40,8 +51,8 @@
       const empty = document.createElement('div');
       empty.className = 'project-state-empty';
       empty.textContent = mode === 'archived'
-        ? window.t ? window.t('noArchivedProjects', 'Nenhum projeto arquivado.') : 'Nenhum projeto arquivado.'
-        : 'A lixeira está vazia.';
+        ? uiText('noArchivedProjects', 'Nenhum projeto arquivado.')
+        : uiText('trashEmpty', 'A lixeira está vazia.');
       elements.list.appendChild(empty);
     }
 
@@ -75,7 +86,7 @@
       const restoreBtn = document.createElement('button');
       restoreBtn.type = 'button';
       restoreBtn.className = 'project-state-restore';
-      restoreBtn.textContent = window.t ? window.t('restoreBtn', 'Restaurar') : 'Restaurar';
+      restoreBtn.textContent = uiText('restoreBtn', 'Restaurar');
       restoreBtn.addEventListener('click', async () => {
         if (project && project.__tutorialPlaceholder) {
           const outcome = await runTutorialAction({ action: 'restore', mode, projectId: project.id });
@@ -90,7 +101,7 @@
         }
         const result = await api.restoreProject({ id: project.id });
         if (!result || !result.ok) {
-          notify((result && result.message) || 'Falha ao restaurar projeto.');
+          notify((result && result.message) || uiText('restoreProjectFailed', 'Falha ao restaurar projeto.'));
           return;
         }
         await refreshAfterMutation(mode);
@@ -102,11 +113,11 @@
       const trashBtn = document.createElement('button');
       trashBtn.type = 'button';
       trashBtn.className = 'project-state-clear';
-      trashBtn.textContent = 'Mover para lixeira';
+      trashBtn.textContent = uiText('moveToTrash', 'Mover para lixeira');
       trashBtn.addEventListener('click', async () => {
         const result = await api.trashProject({ id: project.id });
         if (!result || !result.ok) {
-          notify((result && result.message) || 'Falha ao mover projeto para a lixeira.');
+          notify((result && result.message) || uiText('trashProjectFailed', 'Falha ao mover projeto para a lixeira.'));
           return;
         }
         await refreshAfterMutation(mode);
@@ -118,7 +129,7 @@
       const deleteBtn = document.createElement('button');
       deleteBtn.type = 'button';
       deleteBtn.className = 'project-state-clear';
-      deleteBtn.textContent = window.t ? window.t('deleteDefinitiveBtn', 'Excluir definitivo') : 'Excluir definitivo';
+      deleteBtn.textContent = uiText('deleteDefinitiveBtn', 'Excluir definitivo');
       deleteBtn.addEventListener('click', async () => {
         if (project && project.__tutorialPlaceholder) {
           const outcome = await runTutorialAction({ action: 'delete', mode, projectId: project.id });
@@ -127,10 +138,10 @@
             return;
           }
         }
-        if (!await window.faberConfirm('Excluir definitivamente este projeto da lista?')) return;
+        if (!await window.faberConfirm(uiText('permanentDeleteConfirm', 'Excluir definitivamente este projeto da lista?'))) return;
         const result = await api.removeProject(project.id);
         if (!result || !result.ok) {
-          notify((result && result.message) || 'Falha ao excluir projeto.');
+          notify((result && result.message) || uiText('deleteProjectFailed', 'Falha ao excluir projeto.'));
           return;
         }
         await refreshAfterMutation(mode);
@@ -145,11 +156,11 @@
       const info = document.createElement('div');
       info.className = 'project-state-info';
       const title = document.createElement('strong');
-      title.textContent = String(project.name || 'Projeto');
+      title.textContent = String(project.name || uiText('defaultProjectName', 'Projeto'));
       const meta = document.createElement('span');
       const stateLabel = mode === 'archived'
-        ? (window.t ? window.t('archivedAt', 'Arquivado em') : 'Arquivado em')
-        : (window.t ? window.t('deletedAt', 'Excluído em') : 'Excluído em');
+        ? uiText('archivedAt', 'Arquivado em')
+        : uiText('deletedAt', 'Excluído em');
       meta.textContent = `${stateLabel}: ${formatDate(project)} • ${String(project.rootPath || '')}`;
       info.append(title, meta);
 
@@ -168,14 +179,14 @@
       const clearBtn = document.createElement('button');
       clearBtn.type = 'button';
       clearBtn.className = 'project-state-clear';
-      clearBtn.textContent = window.t ? window.t('emptyTrashBtn', 'Esvaziar lixeira') : 'Esvaziar lixeira';
+      clearBtn.textContent = uiText('emptyTrashBtn', 'Esvaziar lixeira');
       clearBtn.disabled = rows.length === 0;
       clearBtn.addEventListener('click', async () => {
         if (!rows.length) return;
-        if (!await window.faberConfirm('Esvaziar toda a lixeira? Essa ação não pode ser desfeita.')) return;
+        if (!await window.faberConfirm(uiText('emptyTrashConfirm', 'Esvaziar toda a lixeira? Essa ação não pode ser desfeita.'))) return;
         const result = await api.clearTrashProjects();
         if (!result || !result.ok) {
-          notify((result && result.message) || 'Falha ao esvaziar lixeira.');
+          notify((result && result.message) || uiText('emptyTrashFailed', 'Falha ao esvaziar lixeira.'));
           return;
         }
         await refreshProjects();

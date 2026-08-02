@@ -1,4 +1,12 @@
 (function () {
+  function uiText(key, fallback, replacements = {}) {
+    let text = window.t ? window.t(key, fallback) : fallback;
+    Object.entries(replacements).forEach(([token, value]) => {
+      text = String(text).replaceAll(`{${token}}`, String(value));
+    });
+    return text;
+  }
+
   function normalizeProjectItems(rawProjects) {
     const arr = Array.isArray(rawProjects)
       ? rawProjects
@@ -8,7 +16,7 @@
 
     return arr.map((project, index) => {
       const safe = project && typeof project === 'object' ? project : {};
-      const safeName = (safe.name && String(safe.name).trim()) || 'Projeto';
+      const safeName = (safe.name && String(safe.name).trim()) || uiText('defaultProject', 'Projeto');
       const safeRoot = safe.rootPath ? String(safe.rootPath) : '';
       const safeId = safe.id || `legacy-${index}-${safeRoot || safeName}`;
       return {
@@ -125,6 +133,20 @@
       contextProjectId = null;
     }
 
+    async function activateContextMenuAction(event) {
+      const btn = event && event.target && event.target.closest
+        ? event.target.closest('button[data-action]')
+        : null;
+      if (!btn || !contextProjectId) return false;
+      if (event && typeof event.preventDefault === 'function') event.preventDefault();
+      if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+      const action = btn.dataset.action;
+      const targetProjectId = contextProjectId;
+      hideContextMenu();
+      await onContextAction(action, targetProjectId);
+      return true;
+    }
+
     function isContextMenuOpen() {
       return Boolean(elements.contextMenu && !elements.contextMenu.classList.contains('hidden'));
     }
@@ -215,7 +237,7 @@
         convItem.type = 'button';
         const isActiveConversation = getActiveConversationId(projectId) === conv.id;
         convItem.className = 'conversation-item' + (isActiveConversation ? ' active' : '');
-        convItem.textContent = conv.title || 'Conversa';
+        convItem.textContent = conv.title || uiText('defaultConversation', 'Conversa');
 
         convItem.addEventListener('dblclick', async (event) => {
           event.stopPropagation();
@@ -232,8 +254,8 @@
         const renameBtn = document.createElement('button');
         renameBtn.type = 'button';
         renameBtn.className = 'conversation-rename-btn';
-        renameBtn.title = 'Renomear conversa';
-        renameBtn.setAttribute('aria-label', 'Renomear conversa');
+        renameBtn.title = uiText('renameConversation', 'Renomear conversa');
+        renameBtn.setAttribute('aria-label', uiText('renameConversation', 'Renomear conversa'));
         renameBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="sidebar-icon-12"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
         renameBtn.addEventListener('click', async (event) => {
           event.preventDefault();
@@ -251,7 +273,7 @@
     function renderProject(project, index) {
       const safe = project && typeof project === 'object' ? project : {};
       const id = safe.id || ('fallback-' + index);
-      const name = (safe.name && String(safe.name).trim()) || 'Projeto';
+      const name = (safe.name && String(safe.name).trim()) || uiText('defaultProject', 'Projeto');
       const expanded = isProjectExpanded(id);
 
       const wrapper = document.createElement('div');
@@ -268,7 +290,7 @@
       headerBtn.title = name;
       headerBtn.setAttribute('role', 'button');
       headerBtn.tabIndex = 0;
-      headerBtn.setAttribute('aria-label', `Abrir projeto ${name}`);
+      headerBtn.setAttribute('aria-label', uiText('openProjectNamed', 'Abrir projeto {name}', { name }));
 
       async function handleHeaderActivate() {
         const railMenuMode = isRailMenuOpen() || isInsideRailMenu(headerBtn);
@@ -311,21 +333,29 @@
       const newConvBtn = document.createElement('button');
       newConvBtn.type = 'button';
       newConvBtn.className = 'project-mini-btn project-mini-btn-new-conv';
-      newConvBtn.title = 'Nova conversa neste projeto';
-      newConvBtn.setAttribute('aria-label', 'Nova conversa neste projeto');
+      newConvBtn.title = uiText('newConversationInProject', 'Nova conversa neste projeto');
+      newConvBtn.setAttribute('aria-label', uiText('newConversationInProject', 'Nova conversa neste projeto'));
       newConvBtn.textContent = '+';
       newConvBtn.addEventListener('click', async (event) => {
         event.preventDefault();
         event.stopPropagation();
+        const railMenuMode = isRailMenuOpen() || isInsideRailMenu(newConvBtn);
         await onPrepareNewConversation(id);
-        render();
+        if (railMenuMode) {
+          setRailMenuOpen(false);
+        } else {
+          render();
+        }
+        window.dispatchEvent(new CustomEvent('faber:project-conversation-prepared', {
+          detail: { projectId: id },
+        }));
       });
 
       const menuBtn = document.createElement('button');
       menuBtn.type = 'button';
       menuBtn.className = 'project-mini-btn project-mini-btn-menu';
-      menuBtn.title = 'Opções do projeto';
-      menuBtn.setAttribute('aria-label', 'Opções do projeto');
+      menuBtn.title = uiText('projectOptions', 'Opções do projeto');
+      menuBtn.setAttribute('aria-label', uiText('projectOptions', 'Opções do projeto'));
       menuBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="sidebar-icon-13"><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/><circle cx="5" cy="12" r="1.5"/></svg>`;
       menuBtn.addEventListener('click', (event) => {
         event.preventDefault();
@@ -337,8 +367,8 @@
       mapBtn.type = 'button';
       const isMapActive = getSelectedProjectId() === id && document.getElementById('btn-tab-map')?.classList.contains('active');
       mapBtn.className = 'project-mini-btn project-mini-btn-map' + (isMapActive ? ' active' : '');
-      mapBtn.title = 'Mapa da Aplicação';
-      mapBtn.setAttribute('aria-label', 'Mapa da Aplicação');
+      mapBtn.title = uiText('applicationMap', 'Mapa da Aplicação');
+      mapBtn.setAttribute('aria-label', uiText('applicationMap', 'Mapa da Aplicação'));
       mapBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="sidebar-icon-13"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>`;
 
       mapBtn.addEventListener('mousedown', (event) => {
@@ -453,13 +483,12 @@
       });
 
       if (elements.contextMenu) {
+        elements.contextMenu.addEventListener('pointerdown', async (event) => {
+          if (typeof event.button === 'number' && event.button !== 0) return;
+          await activateContextMenuAction(event);
+        });
         elements.contextMenu.addEventListener('click', async (event) => {
-          const btn = event.target && event.target.closest ? event.target.closest('button[data-action]') : null;
-          if (!btn || !contextProjectId) return;
-          const action = btn.dataset.action;
-          const targetProjectId = contextProjectId;
-          hideContextMenu();
-          await onContextAction(action, targetProjectId);
+          await activateContextMenuAction(event);
         });
       }
 

@@ -38,17 +38,19 @@
       ensureConversationStateForProject = () => {},
     } = callbacks;
 
+    let selectProjectSequence = 0;
+
     function summarizeProject(info) {
-      if (!info) return window.t ? window.t('noProjectSelected', 'Nenhum projeto selecionado.') : 'Nenhum projeto selecionado.';
+      if (!info) return t('noProjectSelected', 'Nenhum projeto selecionado.');
     
       const c = info.counters;
       return [
-        `Pasta: ${info.rootPath}`,
-        `Stacks detectadas: ${info.stacks.join(', ')}`,
-        `Arquivos lidos: ${info.totalFiles} (limite de análise: ${info.scannedLimit})`,
-        `Tipos: TS=${c.ts}, TSX=${c.tsx}, JS=${c.js}, JSX=${c.jsx}, PHP=${c.php}, CSS/SCSS=${c.css}, MD=${c.md}, Outros=${c.other}`,
+        `${t('projectFolderLabel', 'Pasta')}: ${info.rootPath}`,
+        `${t('detectedStacksLabel', 'Stacks detectadas')}: ${info.stacks.join(', ')}`,
+        `${t('filesReadLabel', 'Arquivos lidos')}: ${info.totalFiles} (${t('analysisLimitLabel', 'limite de análise')}: ${info.scannedLimit})`,
+        `${t('fileTypesLabel', 'Tipos')}: TS=${c.ts}, TSX=${c.tsx}, JS=${c.js}, JSX=${c.jsx}, PHP=${c.php}, CSS/SCSS=${c.css}, MD=${c.md}, ${t('otherFilesLabel', 'Outros')}=${c.other}`,
         '',
-        'A IA já recebe esse inventário para decidir melhor o arquivo-alvo.',
+        t('aiInventoryHint', 'A IA já recebe esse inventário para decidir melhor o arquivo-alvo.'),
       ].join('\n');
     }
     
@@ -84,7 +86,7 @@
       if (milestonesPanelController) milestonesPanelController.resetForNoProject();
       clearPending();
       if (chatController) chatController.clearMessages();
-      updateStatus('Aguardando projeto');
+      updateStatus(t('waitingProject', 'Aguardando projeto'));
       renderWelcomePanel();
     }
     
@@ -108,11 +110,11 @@
         : Promise.resolve(null);
     }
     
-    async function requestProjectRename(projectId, currentName = 'Projeto') {
+    async function requestProjectRename(projectId, currentName = t('defaultProjectName', 'Projeto')) {
       const nextNameRaw = await requestTextInputDialog({
-        title: 'Novo nome do projeto:',
+        title: t('renameProjectPrompt', 'Novo nome do projeto:'),
         initialValue: currentName,
-        placeholder: 'Nome do projeto',
+        placeholder: t('projectNamePlaceholder', 'Nome do projeto'),
       });
       if (!nextNameRaw || !nextNameRaw.trim()) return null;
       return nextNameRaw.trim();
@@ -120,7 +122,7 @@
     
     async function renameConversation(projectId, conversation, nextTitleRaw) {
       if (!projectId || !conversation) return;
-      const currentTitle = String(conversation.title || 'Conversa').trim();
+      const currentTitle = String(conversation.title || t('defaultConversationName', 'Conversa')).trim();
       const normalized = String(nextTitleRaw || '').trim();
       if (!normalized || normalized === currentTitle) return;
 
@@ -137,7 +139,7 @@
       });
 
       if (!result || !result.ok) {
-        appendMessage('assistant', (result && result.message) || 'Falha ao renomear conversa.', { persistToConversation: false });
+        appendMessage('assistant', (result && result.message) || t('renameConversationFailed', 'Falha ao renomear conversa.'), { persistToConversation: false });
         return result || { ok: false };
       }
 
@@ -150,11 +152,11 @@
 
     async function requestConversationRename(projectId, conversation) {
       if (!projectId || !conversation) return;
-      const currentTitle = String(conversation.title || 'Conversa').trim();
+      const currentTitle = String(conversation.title || t('defaultConversationName', 'Conversa')).trim();
       const nextTitle = await requestTextInputDialog({
-        title: 'Renomear conversa:',
+        title: t('renameConversationPrompt', 'Renomear conversa:'),
         initialValue: currentTitle,
-        placeholder: 'Título da conversa',
+        placeholder: t('conversationTitlePlaceholder', 'Título da conversa'),
       });
       return renameConversation(projectId, conversation, nextTitle);
     }
@@ -174,7 +176,10 @@
 
       // renderSystemNotice ANTES de mudar o tab: garante que o chat-log tenha conteúdo
       // para que o welcome panel não apareça por cima do chat vazio
-      renderSystemNotice('Nova conversa preparada. Sua próxima mensagem abre um chat separado neste projeto.');
+      renderSystemNotice(t(
+        'newConversationPrepared',
+        'Nova conversa preparada. Sua próxima mensagem abre um chat separado neste projeto.',
+      ));
 
       // Muda o painel central para o chat sem fechar o painel lateral do mapa
       // (não usamos switchTab pois ele chama setMapSidePanelMode(null) que fecha o painel "Perguntar à IA")
@@ -206,18 +211,19 @@
     
       if (action === 'rename') {
         const target = state.projects.find((project) => project.id === projectId);
-        const currentName = target ? String(target.name || 'Projeto') : 'Projeto';
+        const defaultProjectName = t('defaultProjectName', 'Projeto');
+        const currentName = target ? String(target.name || defaultProjectName) : defaultProjectName;
         const nextName = await requestProjectRename(projectId, currentName);
         if (!nextName) return;
         const result = await api.renameProject({ id: projectId, name: nextName });
         if (!result || !result.ok) {
-          appendMessage('assistant', (result && result.message) || 'Falha ao renomear projeto.', { persistToConversation: false });
+          appendMessage('assistant', (result && result.message) || t('renameProjectFailed', 'Falha ao renomear projeto.'), { persistToConversation: false });
           return;
         }
         state.projects = normalizeProjectItems(result.projects);
         renderProjects();
         if (state.selectedProjectId === projectId && state.selectedProjectInfo) {
-          updateStatus(`Projeto ativo: ${nextName}`);
+          updateStatus(`${t('activeProjectLabel', 'Projeto ativo')}: ${nextName}`);
         }
         return;
       }
@@ -225,26 +231,26 @@
       if (action === 'archive') {
         const result = await api.archiveProject({ id: projectId });
         if (!result || !result.ok) {
-          appendMessage('assistant', (result && result.message) || 'Falha ao arquivar projeto.', { persistToConversation: false });
+          appendMessage('assistant', (result && result.message) || t('archiveProjectFailed', 'Falha ao arquivar projeto.'), { persistToConversation: false });
           return;
         }
         state.projects = normalizeProjectItems(result.projects);
         reconcileSelectionAfterProjectListUpdate();
         renderProjects();
-        appendMessage('assistant', 'Projeto arquivado com sucesso.', { persistToConversation: false });
+        appendMessage('assistant', t('projectArchivedSuccess', 'Projeto arquivado com sucesso.'), { persistToConversation: false });
         return;
       }
     
       if (action === 'trash') {
         const result = await api.trashProject({ id: projectId });
         if (!result || !result.ok) {
-          appendMessage('assistant', (result && result.message) || 'Falha ao mover projeto para a lixeira.', { persistToConversation: false });
+          appendMessage('assistant', (result && result.message) || t('trashProjectFailed', 'Falha ao mover projeto para a lixeira.'), { persistToConversation: false });
           return;
         }
         state.projects = normalizeProjectItems(result.projects);
         reconcileSelectionAfterProjectListUpdate();
         renderProjects();
-        appendMessage('assistant', 'Projeto movido para a lixeira.', { persistToConversation: false });
+        appendMessage('assistant', t('projectTrashedSuccess', 'Projeto movido para a lixeira.'), { persistToConversation: false });
       }
     }
     
@@ -304,7 +310,9 @@
       const hasFiles = Number(state.selectedProjectInfo.totalFiles || 0) > 0;
       incrementalModeBadgeEl.classList.remove('hidden', 'is-edit', 'is-init');
       incrementalModeBadgeEl.classList.add(hasFiles ? 'is-edit' : 'is-init');
-      incrementalModeBadgeEl.textContent = hasFiles ? (window.t ? window.t('incrementalEditingActive', 'Edição incremental ativa') : 'Edição incremental ativa') : (window.t ? window.t('initialCreationMode', 'Modo criação inicial') : 'Modo criação inicial');
+      incrementalModeBadgeEl.textContent = hasFiles
+        ? t('incrementalEditingActive', 'Edição incremental ativa')
+        : t('initialCreationMode', 'Modo criação inicial');
     }
     
     async function ensureSelectedProjectInfoReady(options = {}) {
@@ -359,6 +367,8 @@
     }
     
     async function selectProject(projectId, options = {}) {
+      const currentSequence = ++selectProjectSequence;
+
       const previousProjectId = state.selectedProjectId;
       if (previousProjectId && previousProjectId !== projectId) {
         state.pendingAction = null;
@@ -371,12 +381,23 @@
       const project = state.projects.find((p) => p.id === projectId);
       if (!project) return;
     
-      updateStatus('Analisando projeto...');
+      if (options && options.initialTab === 'map') {
+        if (applicationMapController) {
+          ensureMapTabVisible().catch(console.error);
+          applicationMapController.loadProjectMap(project.id, { ...options, fallbackRootPath: project.rootPath }).catch(console.error);
+        }
+      }
+
+      updateStatus(t('analyzingProject', 'Analisando projeto...'));
     
       const scan = await api.scanProject(project.rootPath);
+
+      // Abortar caso o usuário tenha clicado novamente no mapa ou outro projeto
+      if (selectProjectSequence !== currentSequence) return;
+
       if (!scan.ok) {
-        appendMessage('assistant', scan.message || 'Não consegui analisar essa pasta.');
-        updateStatus('Erro na análise');
+        appendMessage('assistant', scan.message || t('projectScanFailed', 'Não consegui analisar essa pasta.'));
+        updateStatus(t('projectAnalysisError', 'Erro na análise'));
         return;
       }
     
@@ -396,9 +417,8 @@
         state.automataContractSummary = await automataContractsController.refreshSummary();
       }
       if (applicationMapController) {
-        await applicationMapController.loadProjectMap(project.id, options);
-        if (options && options.initialTab === 'map') {
-          await ensureMapTabVisible();
+        if (!options || options.initialTab !== 'map') {
+          await applicationMapController.loadProjectMap(project.id, options);
         }
       }
       if (milestonesPanelController) {
@@ -411,7 +431,7 @@
         state.mempalaceStatus = null;
       }
     
-      updateStatus(`Projeto ativo: ${project.name}`);
+      updateStatus(`${t('activeProjectLabel', 'Projeto ativo')}: ${project.name}`);
       const activeConversationId = getActiveConversationId(project.id);
       if (activeConversationId) {
         await loadConversationMessages(activeConversationId);

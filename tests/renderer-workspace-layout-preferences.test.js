@@ -96,6 +96,14 @@ const controller = workspace.createWorkspaceLayoutPreferenceController({
   appShell,
   documentRef,
   state,
+  translate(key, fallback) {
+    return {
+      collapseLeft: 'Collapse left panel',
+      expandLeft: 'Expand left panel',
+      collapseRight: 'Collapse right panel',
+      expandRight: 'Expand right panel',
+    }[key] || fallback;
+  },
   onLayoutChanged() {
     layoutChangedCount += 1;
   },
@@ -115,6 +123,8 @@ controller.initialize();
 assert.strictEqual(body.dataset.workspaceMode, 'chat');
 assert.strictEqual(leftButton.attrs['aria-pressed'], 'false');
 assert.strictEqual(rightButton.attrs['aria-pressed'], 'false');
+assert.strictEqual(leftButton.attrs.title, 'Collapse left panel');
+assert.strictEqual(rightButton.attrs.title, 'Collapse right panel');
 
 controller.updatePreferences({ mode: 'ide', rightCollapsed: true }, { persist: true });
 assert.strictEqual(body.dataset.workspaceMode, 'ide');
@@ -125,6 +135,7 @@ assert.strictEqual(appShell.style.values['--faber-right-panel-width'], '58px');
 assert.strictEqual(appShell.style.values['--faber-right-splitter-width'], '0px');
 assert.strictEqual(rightButton.attrs['aria-pressed'], 'true');
 assert.strictEqual(rightRestoreButton.attrs['aria-pressed'], 'true');
+assert.strictEqual(rightButton.attrs.title, 'Expand right panel');
 assert.strictEqual(runtimeApplied.mode, 'ide');
 assert.strictEqual(runtimeApplied.rightCollapsed, true);
 
