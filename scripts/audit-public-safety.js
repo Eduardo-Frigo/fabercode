@@ -37,6 +37,12 @@ const binaryExtensions = new Set([
   '.zip',
 ]);
 
+// Tutorial-only value rendered in the API-key walkthrough. Keep this allowlist
+// exact so realistic-looking credentials continue to fail the public audit.
+const knownSafePlaceholderPatterns = [
+  /(^|[^A-Za-z0-9_-])sk-faber-tutorial-placeholder-not-real(?![A-Za-z0-9_-])/g,
+];
+
 const checks = [
   {
     label: 'absolute local user path',
@@ -133,7 +139,10 @@ function scanFile(relativePath) {
   const findings = [];
   const lines = text.split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
+    const line = knownSafePlaceholderPatterns.reduce(
+      (candidate, pattern) => candidate.replace(pattern, '$1<known-safe-placeholder>'),
+      lines[index]
+    );
     for (const check of checks) {
       if (check.pattern.test(line)) {
         findings.push({

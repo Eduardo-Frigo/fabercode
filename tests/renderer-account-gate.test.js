@@ -300,7 +300,7 @@ async function run() {
   };
   await controller.refresh();
   assert.strictEqual(controller.isUnlocked(), false);
-  assert.match(statusEl.textContent, /midia de plataforma/);
+  assert.match(statusEl.textContent, /mídia da plataforma/i);
   assert.strictEqual(wizardEl.classList.contains('hidden'), true);
 
   console.log('renderer-account-gate.test.js: ok');

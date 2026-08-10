@@ -1,0 +1,49 @@
+{
+  "renderedAt": "2026-08-01T12:30:00.000Z",
+  "source": "application-map-render",
+  "milestones": [
+    {
+      "id": "render-milestone-1",
+      "number": 1,
+      "title": "Fundação",
+      "summary": "Preparar a base técnica e os contratos do produto.",
+      "status": "active",
+      "tasks": [
+        {
+          "id": "render-task-1-1",
+          "title": "Configurar a estrutura do projeto",
+          "status": "done"
+        },
+        {
+          "id": "render-task-1-2",
+          "title": "Congelar contratos públicos",
+          "description": "Registrar formatos persistidos e IPCs.",
+          "status": "pending",
+          "relatedFiles": [
+            "preload.js"
+          ]
+        }
+      ],
+      "acceptanceCriteria": "O projeto inicia e os contratos possuem cobertura automatizada.",
+      "validationCommands": "npm run test:architecture",
+      "commits": [
+        {
+          "hash": "abcdef1234567890",
+          "message": "test: freeze persistence contracts",
+          "createdAt": "2026-08-01T12:20:00.000Z"
+        }
+      ],
+      "notes": "Milestone gerada a partir do mapa.",
+      "references": [
+        {
+          "path": "docs/application-map/README.md"
+        },
+        {
+          "path": "docs/application-map/decisions.md"
+        }
+      ],
+      "startedAt": "2026-08-01T12:10:00.000Z",
+      "updatedAt": "2026-08-01T12:20:00.000Z"
+    }
+  ]
+}

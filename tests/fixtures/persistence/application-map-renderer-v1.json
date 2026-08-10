@@ -1,0 +1,97 @@
+{
+  "nodes": [
+    {
+      "id": "map-group-frontend",
+      "type": "group",
+      "title": "Frontend",
+      "description": "Experiência web do produto",
+      "content": "Rotas, componentes e linguagem visual.",
+      "position": {
+        "x": 80,
+        "y": 120
+      },
+      "size": {
+        "width": 360,
+        "height": 280
+      },
+      "tags": [
+        "web",
+        "ui"
+      ],
+      "collapsed": false
+    },
+    {
+      "id": "map-node-dashboard",
+      "type": "text",
+      "title": "Dashboard",
+      "description": "Visão resumida do projeto",
+      "content": "Exibe milestones, atividade e atalhos.",
+      "parentId": "map-group-frontend",
+      "position": {
+        "x": 120,
+        "y": 190
+      },
+      "size": {
+        "width": 220,
+        "height": 120
+      },
+      "tags": [
+        "route"
+      ]
+    },
+    {
+      "id": "map-node-brand-reference",
+      "type": "image",
+      "title": "Referência de marca",
+      "description": "Direção visual aprovada",
+      "content": "Map assets/references/brand-board.png",
+      "assetId": "Map assets/references/brand-board.png",
+      "position": {
+        "x": 520,
+        "y": 140
+      },
+      "size": {
+        "width": 220,
+        "height": 120
+      },
+      "tags": [
+        "brand"
+      ]
+    },
+    {
+      "id": "map-node-react-decision",
+      "type": "decision",
+      "title": "Usar React",
+      "description": "Padronizar a interface em componentes React.",
+      "content": "Decisão registrada no mapa.",
+      "position": {
+        "x": 520,
+        "y": 320
+      },
+      "size": {
+        "width": 220,
+        "height": 120
+      },
+      "tags": [
+        "decisão"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "map-edge-dashboard-brand",
+      "sourceNodeId": "map-node-dashboard",
+      "sourcePort": "right",
+      "targetNodeId": "map-node-brand-reference",
+      "targetPort": "left",
+      "type": "depends_on",
+      "label": "segue identidade"
+    }
+  ],
+  "viewport": {
+    "x": -120,
+    "y": 64
+  },
+  "zoom": 1.25,
+  "updatedAt": "2026-08-01T12:00:00.000Z"
+}

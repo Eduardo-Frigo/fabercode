@@ -38,6 +38,85 @@ vm.runInNewContext(source, sandbox, { filename: 'preload.js' });
 const api = exposed.localcodeApi;
 assert.ok(api, 'localcodeApi should be exposed through contextBridge');
 
+const preservedFeatureFunctionNames = [
+  // Cortex memory.
+  'getCortexLearning',
+  'learnWithCortex',
+  'upsertCortexTopic',
+  'renameCortexTopic',
+  'getMempalaceStatus',
+  'indexProjectInMempalace',
+  'searchMempalace',
+  'getKnowledgeRuntimeStatus',
+  'searchKnowledgeRuntime',
+  'listMemoryEvidence',
+  'runKnowledgeMemoryLifecycle',
+  // Files panel.
+  'getProjectFilesTree',
+  'revealFileInFolder',
+  'readProjectFile',
+  'previewProjectImage',
+  'writeProjectFile',
+  'renameProjectFile',
+  // Git panel.
+  'getProjectGitStatus',
+  'getProjectGitWorktree',
+  'getProjectGitCommits',
+  'initProjectGitRepository',
+  'stageProjectGitFiles',
+  'unstageProjectGitFiles',
+  'commitProjectGitFiles',
+  'rollbackProjectGitFiles',
+  'rollbackProjectGitToCommit',
+  // Application map.
+  'getApplicationMap',
+  'saveApplicationMap',
+  'upsertApplicationMapNode',
+  'removeApplicationMapNode',
+  'upsertApplicationMapEdge',
+  'removeApplicationMapEdge',
+  'importApplicationMapAsset',
+  'renderApplicationMap',
+  'getApplicationMapSummary',
+  // Milestones.
+  'listMilestones',
+  'getMilestone',
+  'saveMilestones',
+  'updateMilestoneStatus',
+  'updateMilestoneTask',
+  'linkMilestoneCommit',
+  'getMilestoneGitStatus',
+  'renderMilestones',
+  // Application-map chat and persisted conversations.
+  'sendAssistantMessage',
+  'listConversations',
+  'addConversation',
+  'renameConversation',
+  'deleteConversation',
+  'listConversationMessages',
+  'addConversationMessage',
+  // Assistant execution and local project execution.
+  'executePlan',
+  'getProjectPreviewPlan',
+  'startProjectPreview',
+  'stopProjectPreview',
+  'getProjectPreviewRuntimeStatus',
+  'listProjectTerminalSessions',
+  'createProjectTerminalSession',
+  'runProjectTerminalCommand',
+  'stopProjectTerminalCommand',
+  'clearProjectTerminalSession',
+  'closeProjectTerminalSession',
+];
+
+for (const methodName of preservedFeatureFunctionNames) {
+  assert.strictEqual(
+    typeof api[methodName],
+    'function',
+    `${methodName} should remain exposed as a function`
+  );
+}
+
 async function assertInvoke(methodName, args, expectedChannel, expectedArgs = args) {
   calls.length = 0;
   await api[methodName](...args);
@@ -96,6 +175,14 @@ async function assertInvoke(methodName, args, expectedChannel, expectedArgs = ar
     [{ rootPath: '/tmp/app' }],
     'project:preview:runtime-status'
   );
+  const pendingAction = { type: 'implement', prompt: 'Build the application' };
+  const selectedProjectInfo = { id: 'project-1', rootPath: '/tmp/app' };
+  await assertInvoke(
+    'executePlan',
+    [pendingAction, selectedProjectInfo],
+    'assistant:execute',
+    [pendingAction, selectedProjectInfo]
+  );
 
   await assertInvoke('listProjectTerminalSessions', [{ rootPath: '/tmp/app' }], 'project:terminal:list');
   await assertInvoke('createProjectTerminalSession', [{ rootPath: '/tmp/app' }], 'project:terminal:create');
@@ -152,6 +239,11 @@ async function assertInvoke(methodName, args, expectedChannel, expectedArgs = ar
 
   await assertInvoke('getProjectGitStatus', [{ rootPath: '/tmp/app' }], 'project:git:status');
   await assertInvoke('getProjectGitWorktree', [{ rootPath: '/tmp/app' }], 'project:git:worktree');
+  await assertInvoke(
+    'getProjectGitCommits',
+    [{ rootPath: '/tmp/app', limit: 20 }],
+    'project:git:commits'
+  );
   await assertInvoke('initProjectGitRepository', [{ rootPath: '/tmp/app' }], 'project:git:init');
   await assertInvoke(
     'stageProjectGitFiles',
@@ -167,6 +259,16 @@ async function assertInvoke(methodName, args, expectedChannel, expectedArgs = ar
     'commitProjectGitFiles',
     [{ rootPath: '/tmp/app', message: 'Ajusta UI' }],
     'project:git:commit'
+  );
+  await assertInvoke(
+    'rollbackProjectGitFiles',
+    [{ rootPath: '/tmp/app', files: ['src/app.js'] }],
+    'project:git:rollback'
+  );
+  await assertInvoke(
+    'rollbackProjectGitToCommit',
+    [{ rootPath: '/tmp/app', commitHash: 'abc1234' }],
+    'project:git:rollback-to-commit'
   );
   await assertInvoke('getGithubAuthStatus', [], 'project:github:auth-status');
   await assertInvoke('listGithubRepositories', [{ limit: 20 }], 'project:github:list-repos');
@@ -254,6 +356,147 @@ async function assertInvoke(methodName, args, expectedChannel, expectedArgs = ar
     'runKnowledgeMemoryLifecycle',
     [{ projectInfo: { rootPath: '/tmp/app' }, action: 'reindex' }],
     'knowledge:runtime:lifecycle'
+  );
+  await assertInvoke('getCortexLearning', [{ projectId: 'project-1' }], 'cortex:learning:get');
+  await assertInvoke(
+    'learnWithCortex',
+    [{
+      projectId: 'project-1',
+      projectInfo: { rootPath: '/tmp/app' },
+      userMessage: 'Use semantic design tokens.',
+      attachments: [],
+      topic: 'design',
+    }],
+    'cortex:learning:learn'
+  );
+  await assertInvoke(
+    'upsertCortexTopic',
+    [{ projectId: 'project-1', topic: { id: 'design', label: 'Design System' } }],
+    'cortex:topic:upsert'
+  );
+  await assertInvoke(
+    'renameCortexTopic',
+    [{ projectId: 'project-1', topicId: 'design', label: 'UI e Experiencia' }],
+    'cortex:topic:rename'
+  );
+
+  const mapPayload = { rootPath: '/tmp/app' };
+  await assertInvoke('getApplicationMap', [mapPayload], 'application-map:get');
+  await assertInvoke(
+    'saveApplicationMap',
+    [{ rootPath: '/tmp/app', map: { nodes: [], edges: [], viewport: {} } }],
+    'application-map:save'
+  );
+  await assertInvoke(
+    'upsertApplicationMapNode',
+    [{ rootPath: '/tmp/app', node: { id: 'screen-home', type: 'screen' } }],
+    'application-map:node:upsert'
+  );
+  await assertInvoke(
+    'removeApplicationMapNode',
+    [{ rootPath: '/tmp/app', nodeId: 'screen-home' }],
+    'application-map:node:remove'
+  );
+  await assertInvoke(
+    'upsertApplicationMapEdge',
+    [{
+      rootPath: '/tmp/app',
+      edge: { id: 'edge-1', sourceNodeId: 'a', targetNodeId: 'b' },
+    }],
+    'application-map:edge:upsert'
+  );
+  await assertInvoke(
+    'removeApplicationMapEdge',
+    [{ rootPath: '/tmp/app', edgeId: 'edge-1' }],
+    'application-map:edge:remove'
+  );
+  await assertInvoke(
+    'importApplicationMapAsset',
+    [{ rootPath: '/tmp/app', kind: 'image', sourcePath: '/tmp/reference.png' }],
+    'application-map:asset:import'
+  );
+  await assertInvoke('renderApplicationMap', [mapPayload], 'application-map:render');
+  await assertInvoke('getApplicationMapSummary', [mapPayload], 'application-map:summary');
+
+  await assertInvoke('listMilestones', [mapPayload], 'milestones:list');
+  await assertInvoke(
+    'getMilestone',
+    [{ rootPath: '/tmp/app', milestoneId: 'milestone-1' }],
+    'milestones:get'
+  );
+  await assertInvoke(
+    'saveMilestones',
+    [{ rootPath: '/tmp/app', milestones: [{ id: 'milestone-1', tasks: [] }] }],
+    'milestones:save'
+  );
+  await assertInvoke(
+    'updateMilestoneStatus',
+    [{ rootPath: '/tmp/app', milestoneId: 'milestone-1', status: 'active' }],
+    'milestones:update-status'
+  );
+  await assertInvoke(
+    'updateMilestoneTask',
+    [{
+      rootPath: '/tmp/app',
+      milestoneId: 'milestone-1',
+      taskId: 'task-1',
+      task: { status: 'done' },
+    }],
+    'milestones:update-task'
+  );
+  await assertInvoke(
+    'linkMilestoneCommit',
+    [{ rootPath: '/tmp/app', milestoneId: 'milestone-1', commit: { hash: 'abc1234' } }],
+    'milestones:link-commit'
+  );
+  await assertInvoke(
+    'getMilestoneGitStatus',
+    [{ rootPath: '/tmp/app', milestoneId: 'milestone-1' }],
+    'milestones:git-status'
+  );
+  await assertInvoke('renderMilestones', [mapPayload], 'milestones:render');
+
+  const mapChatPayload = {
+    projectInfo: { rootPath: '/tmp/app' },
+    userMessage: 'Quais partes do mapa ainda precisam de definição?',
+    contextHint: 'Atue somente como assistente de modelagem.',
+    conversationMessages: [],
+    attachments: [],
+    isMapChat: true,
+  };
+  await assertInvoke('sendAssistantMessage', [mapChatPayload], 'assistant:message');
+  await assertInvoke('listConversations', [], 'orchestration:conversations:list');
+  await assertInvoke(
+    'addConversation',
+    [{ projectId: 'project-1', title: 'Mapa', meta: { source: 'map_chat' } }],
+    'orchestration:conversation:add'
+  );
+  await assertInvoke(
+    'renameConversation',
+    [{ projectId: 'project-1', conversationId: 'conversation-1', title: 'Mapa revisado' }],
+    'orchestration:conversation:rename'
+  );
+  await assertInvoke(
+    'deleteConversation',
+    [{ projectId: 'project-1', conversationId: 'conversation-1' }],
+    'orchestration:conversation:delete'
+  );
+  await assertInvoke(
+    'listConversationMessages',
+    [{ conversationId: 'conversation-1', limit: 200 }],
+    'orchestration:conversation:messages:list'
+  );
+  await assertInvoke(
+    'addConversationMessage',
+    [{
+      projectId: 'project-1',
+      conversationId: 'conversation-1',
+      role: 'user',
+      text: 'Revisar mapa',
+      attachments: [],
+      meta: { mode: 'map_chat' },
+    }],
+    'orchestration:conversation:message:add'
   );
 
   console.log('preload-api-contract.test.js: ok');

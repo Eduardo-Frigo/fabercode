@@ -1,0 +1,90 @@
+{
+  "conversationsByProject": {
+    "project-contract-v1": [
+      {
+        "id": "conversation-map-v1",
+        "title": "Mapa da aplicação",
+        "createdAt": "2026-08-01T10:00:00.000Z",
+        "source": "map_chat"
+      },
+      {
+        "id": "conversation-render-v1",
+        "title": "Render do mapa",
+        "createdAt": "2026-08-01T10:05:00.000Z",
+        "source": "map_render"
+      }
+    ]
+  },
+  "messagesByConversation": {
+    "conversation-map-v1": [
+      {
+        "id": "message-map-user-v1",
+        "role": "user",
+        "text": "Precisamos de dashboard e autenticação.",
+        "createdAt": "2026-08-01T10:01:00.000Z",
+        "mode": "map_chat"
+      },
+      {
+        "id": "message-map-assistant-v1",
+        "role": "assistant",
+        "text": "Vou registrar esses domínios no mapa.",
+        "createdAt": "2026-08-01T10:02:00.000Z",
+        "mode": "map_chat"
+      }
+    ],
+    "conversation-render-v1": [
+      {
+        "id": "message-render-assistant-v1",
+        "role": "assistant",
+        "text": "O mapa está pronto para gerar milestones.",
+        "createdAt": "2026-08-01T10:06:00.000Z",
+        "mode": "map_render"
+      }
+    ]
+  },
+  "cortexLearningByProject": {
+    "project-contract-v1": {
+      "persona": [
+        {
+          "summary": "O usuário prefere decisões com tradeoffs explícitos."
+        }
+      ],
+      "executor": [
+        {
+          "summary": "Executar os testes antes de avançar de etapa."
+        }
+      ],
+      "events": [
+        {
+          "id": "memory-contract-v1",
+          "memoryId": "memory-contract-v1",
+          "type": "learned",
+          "topic": "workflow",
+          "status": "active",
+          "content": "Trabalhar uma etapa por vez.",
+          "createdAt": "2026-08-01T10:10:00.000Z"
+        }
+      ],
+      "topics": [
+        {
+          "id": "workflow",
+          "label": "Fluxo de trabalho",
+          "updatedAt": "2026-08-01T10:10:00.000Z"
+        }
+      ],
+      "updatedAt": "2026-08-01T10:10:00.000Z"
+    }
+  },
+  "auditTrail": [
+    {
+      "id": "audit-conversation-v1",
+      "type": "conversation.added",
+      "payload": {
+        "projectId": "project-contract-v1",
+        "conversationId": "conversation-map-v1",
+        "source": "map_chat"
+      },
+      "createdAt": "2026-08-01T10:00:00.000Z"
+    }
+  ]
+}

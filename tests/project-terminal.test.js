@@ -87,7 +87,10 @@ async function waitFor(predicate, timeoutMs = 200) {
   });
   assert.strictEqual(created.ok, true);
   assert.strictEqual(created.session.cwd, '.');
-  assert.ok(created.session.output.includes('Sessão iniciada'));
+  assert.ok(
+    created.session.output.includes('__FABER_TERMINAL_SESSION_STARTED__:.'),
+    'terminal service should expose the stable session-start marker consumed by the renderer'
+  );
 
   const cdResult = service.runCommand({
     rootPath: projectRoot,

@@ -1,0 +1,126 @@
+{
+  "jobsById": {
+    "job-contract-running-v1": {
+      "id": "job-contract-running-v1",
+      "status": "running",
+      "phase": "execute_staging",
+      "createdAt": "2026-08-01T11:00:00.000Z",
+      "updatedAt": "2026-08-01T11:02:00.000Z",
+      "projectId": "project-contract-v1",
+      "rootPath": "/workspace/faber-contract-app",
+      "mode": "edit",
+      "request": {
+        "userMessage": "Implementar o dashboard",
+        "attachments": [
+          {
+            "name": "dashboard.png",
+            "type": "image/png"
+          }
+        ]
+      },
+      "attemptsByPhase": {
+        "persona_plan": 1,
+        "execute_staging": 1
+      },
+      "checkpoints": {
+        "plan": {
+          "savedAt": "2026-08-01T11:01:00.000Z",
+          "data": {
+            "summary": "Editar o dashboard e validar o build."
+          }
+        }
+      },
+      "progress": {
+        "pct": 44,
+        "updatedAt": "2026-08-01T11:02:00.000Z",
+        "lastDelta": 18,
+        "phasePct": {
+          "persona_plan": 18,
+          "execute_staging": 44
+        }
+      },
+      "retryState": {
+        "stagnationCount": 0,
+        "noProgressSince": "2026-08-01T11:02:00.000Z",
+        "lastRetryAt": null,
+        "nextRetryAt": null,
+        "retryable": true,
+        "softTimeoutExceeded": false
+      },
+      "lastError": null,
+      "events": [
+        {
+          "id": "job-event-phase-v1",
+          "type": "job.phase_changed",
+          "payload": {
+            "phase": "execute_staging",
+            "attempt": 1,
+            "progressPct": 44
+          },
+          "createdAt": "2026-08-01T11:02:00.000Z"
+        },
+        {
+          "id": "job-event-created-v1",
+          "type": "job.created",
+          "payload": {
+            "projectId": "project-contract-v1",
+            "rootPath": "/workspace/faber-contract-app",
+            "userMessagePreview": "Implementar o dashboard",
+            "attachmentsCount": 1
+          },
+          "createdAt": "2026-08-01T11:00:00.000Z"
+        }
+      ]
+    },
+    "job-contract-completed-v1": {
+      "id": "job-contract-completed-v1",
+      "status": "completed",
+      "phase": "done",
+      "createdAt": "2026-07-31T18:00:00.000Z",
+      "updatedAt": "2026-07-31T18:05:00.000Z",
+      "projectId": "project-other-v1",
+      "rootPath": "/workspace/other-app",
+      "mode": "default",
+      "request": {
+        "userMessage": "Explicar a estrutura",
+        "attachments": []
+      },
+      "attemptsByPhase": {
+        "persona_plan": 1
+      },
+      "checkpoints": {},
+      "progress": {
+        "pct": 100,
+        "updatedAt": "2026-07-31T18:05:00.000Z",
+        "lastDelta": 82,
+        "phasePct": {
+          "persona_plan": 18,
+          "done": 100
+        }
+      },
+      "retryState": {
+        "stagnationCount": 0,
+        "noProgressSince": "2026-07-31T18:00:00.000Z",
+        "lastRetryAt": "2026-07-31T18:05:00.000Z",
+        "nextRetryAt": null,
+        "retryable": false,
+        "softTimeoutExceeded": false
+      },
+      "lastError": null,
+      "events": [
+        {
+          "id": "job-event-completed-v1",
+          "type": "job.completed",
+          "payload": {
+            "progressPct": 100
+          },
+          "createdAt": "2026-07-31T18:05:00.000Z"
+        }
+      ]
+    }
+  },
+  "jobOrder": [
+    "job-contract-running-v1",
+    "job-contract-completed-v1"
+  ]
+}

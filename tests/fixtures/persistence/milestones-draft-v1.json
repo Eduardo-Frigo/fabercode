@@ -1,0 +1,60 @@
+[
+  {
+    "id": "render-milestone-1",
+    "number": 1,
+    "title": "Fundação",
+    "summary": "Preparar a base técnica e os contratos do produto.",
+    "status": "planned",
+    "tasks": [
+      {
+        "id": "render-task-1-1",
+        "title": "Configurar a estrutura do projeto",
+        "status": "pending"
+      },
+      {
+        "id": "render-task-1-2",
+        "title": "Congelar contratos públicos",
+        "description": "Registrar formatos persistidos e IPCs.",
+        "status": "pending",
+        "relatedFiles": [
+          "preload.js"
+        ]
+      }
+    ],
+    "acceptanceCriteria": "O projeto inicia e os contratos possuem cobertura automatizada.",
+    "validationCommands": "npm run test:architecture",
+    "commits": [],
+    "notes": "Milestone gerada a partir do mapa.",
+    "references": [
+      {
+        "path": "docs/application-map/README.md"
+      },
+      {
+        "path": "docs/application-map/decisions.md"
+      }
+    ]
+  },
+  {
+    "id": "render-milestone-2",
+    "number": 2,
+    "title": "Experiência principal",
+    "summary": "Implementar o fluxo principal do usuário.",
+    "status": "planned",
+    "tasks": [
+      {
+        "id": "render-task-2-1",
+        "title": "Implementar dashboard",
+        "status": "pending"
+      }
+    ],
+    "acceptanceCriteria": "O dashboard atende ao mapa e funciona em viewport desktop.",
+    "validationCommands": "npm test\nnpm run build",
+    "commits": [],
+    "notes": "",
+    "references": [
+      {
+        "path": "docs/application-map/frontend.md"
+      }
+    ]
+  }
+]

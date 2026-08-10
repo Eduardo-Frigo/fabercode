@@ -96,7 +96,7 @@ vm.runInNewContext(source, sandbox, { filename: 'cortex_controller.js' });
 
 const controller = sandbox.window.FaberCortex.createCortexController({
   api: {},
-  t: (key) => key,
+  t: (_key, fallback = '') => fallback,
   getProjectId: () => 'project-1',
   getProjectInfo: () => ({ rootPath: '/tmp/project' }),
 });
@@ -143,7 +143,7 @@ controller.renderMemoryDiagnostics({
 const text = document.getElementById('cortex-context-diagnostics').textContent;
 assert.match(text, /Runtime/);
 assert.match(text, /Fonte dominante: memória ativa/);
-assert.match(text, /Provenance: 2 usada/);
+assert.match(text, /Proveniência: 2 usada/);
 assert.match(text, /Confiança média 64%/);
 const auditText = document.getElementById('cortex-memory-audit-list').textContent;
 assert.match(auditText, /Auditoria/);
