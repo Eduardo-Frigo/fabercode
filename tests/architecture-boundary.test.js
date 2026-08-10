@@ -121,6 +121,57 @@ function assertMainBoundary() {
   }
 }
 
+function assertAgentRuntimeBoundary() {
+  const runtimeDir = path.join(rootDir, 'main', 'agent_runtime');
+  const runtimeFiles = walkJsFiles(runtimeDir);
+  assert.ok(runtimeFiles.length >= 5, 'agent runtime boundary must include contracts, config, router, and kernels');
+
+  for (const filePath of runtimeFiles) {
+    const rel = relative(filePath);
+    const source = fs.readFileSync(filePath, 'utf8');
+    assertDoesNotMatch(source, /require\(['"]electron['"]\)/, `${rel} must not import Electron`);
+    assertDoesNotMatch(source, /require\(['"][^'"]*renderer[^'"]*['"]\)/, `${rel} must not import renderer modules`);
+    assertDoesNotMatch(source, /require\(['"][^'"]*cortex[^'"]*['"]\)/, `${rel} must not import Cortex internals`);
+    assertDoesNotMatch(source, /\bipc(?:Main|Renderer)\b/, `${rel} must not own IPC transport`);
+  }
+
+  const routerSource = read('main/agent_runtime/harness_router.js');
+  assertDoesNotMatch(
+    routerSource,
+    /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
+    'HarnessRouter must depend on the AgentKernel contract, not the legacy adapter implementation'
+  );
+}
+
+function assertAssistantHarnessCompositionBoundary() {
+  const mainSource = read('main.js');
+  const handlerSource = read('main/ipc/assistant_handlers.js');
+  const mainRuntimeSources = [
+    mainSource,
+    ...walkJsFiles(path.join(rootDir, 'main')).map((filePath) => fs.readFileSync(filePath, 'utf8')),
+  ].join('\n');
+
+  for (const operation of ['plan', 'message', 'execute']) {
+    const registrationPattern = new RegExp(
+      `registerIpcHandler\\(\\s*['"]assistant:${operation}['"]`,
+      'g'
+    );
+    assert.strictEqual(
+      (mainRuntimeSources.match(registrationPattern) || []).length,
+      1,
+      `assistant:${operation} must be registered exactly once in the main process`
+    );
+    assert.ok(
+      registrationPattern.test(handlerSource),
+      `assistant:${operation} must be owned by main/ipc/assistant_handlers.js`
+    );
+  }
+
+  assert.ok(mainSource.includes('createLegacyKernelAdapter({'), 'main.js must compose the legacy kernel adapter');
+  assert.ok(mainSource.includes('createHarnessRouter({'), 'main.js must compose the HarnessRouter');
+  assert.ok(mainSource.includes('registerAssistantHandlers({'), 'main.js must register assistant IPC through the harness');
+}
+
 function assertProductToolchainUsesExecutionBoundary() {
   const productContract = read('tests/product-toolchain-contract.test.js');
   assert.ok(
@@ -143,6 +194,8 @@ assertRendererBoundary();
 assertPreloadBoundary();
 assertCortexBoundary();
 assertMainBoundary();
+assertAgentRuntimeBoundary();
+assertAssistantHarnessCompositionBoundary();
 assertProductToolchainUsesExecutionBoundary();
 
 console.log('architecture-boundary.test.js: ok');

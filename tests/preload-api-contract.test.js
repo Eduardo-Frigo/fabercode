@@ -88,6 +88,8 @@ const preservedFeatureFunctionNames = [
   'getMilestoneGitStatus',
   'renderMilestones',
   // Application-map chat and persisted conversations.
+  'routePersonaRequest',
+  'buildPlan',
   'sendAssistantMessage',
   'listConversations',
   'addConversation',
@@ -177,6 +179,12 @@ async function assertInvoke(methodName, args, expectedChannel, expectedArgs = ar
   );
   const pendingAction = { type: 'implement', prompt: 'Build the application' };
   const selectedProjectInfo = { id: 'project-1', rootPath: '/tmp/app' };
+  const assistantPayload = {
+    projectInfo: selectedProjectInfo,
+    userMessage: 'Build the application',
+  };
+  await assertInvoke('routePersonaRequest', [assistantPayload], 'assistant:route');
+  await assertInvoke('buildPlan', [assistantPayload], 'assistant:plan');
   await assertInvoke(
     'executePlan',
     [pendingAction, selectedProjectInfo],

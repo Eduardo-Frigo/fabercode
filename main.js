@@ -72,8 +72,12 @@ const {
   compactJsonForPrompt,
   wrapUntrustedPromptSection,
 } = require('./cortex/security/ai_trust_boundary');
+const { createHarnessRuntimeConfig } = require('./main/agent_runtime/harness_runtime_config');
+const { createHarnessRouter } = require('./main/agent_runtime/harness_router');
+const { createLegacyKernelAdapter } = require('./main/agent_runtime/legacy_kernel_adapter');
 const { registerAccountHandlers } = require('./main/ipc/account_handlers');
 const { registerAiHandlers } = require('./main/ipc/ai_handlers');
+const { registerAssistantHandlers } = require('./main/ipc/assistant_handlers');
 const { registerAutomataContractHandlers } = require('./main/ipc/automata_contract_handlers');
 const { registerExternalMcpHandlers } = require('./main/ipc/external_mcp_handlers');
 const { registerFileHandlers } = require('./main/ipc/file_handlers');
@@ -5286,23 +5290,23 @@ app.whenReady().then(async () => {
     return { ok: false };
   });
 
-  registerIpcHandler('assistant:plan', async (_, payload) => {
+  const handleLegacyHarnessPlan = async (payload) => {
     const project = normalizeAuthorizedProjectInfo(payload && payload.projectInfo ? payload.projectInfo : null);
     if (!project.ok) return project;
     return buildAssistantPlanResponse({ ...(payload || {}), projectInfo: project.projectInfo });
-  });
+  };
 
-  registerIpcHandler('assistant:message', async (_, payload) => {
+  const handleLegacyHarnessMessage = async (payload) => {
     const project = normalizeAuthorizedProjectInfo(payload && payload.projectInfo ? payload.projectInfo : null);
     if (!project.ok) return project;
     return handleAssistantMessage({ ...(payload || {}), projectInfo: project.projectInfo });
-  });
+  };
 
   registerIpcHandler('tools:list', () => {
     return { ok: true, tools: getToolRegistry().list() };
   });
 
-  registerIpcHandler('assistant:execute', async (_, action, projectInfo) => {
+  const handleLegacyHarnessExecute = async (action, projectInfo) => {
     sessionPermissions.writeAlwaysAllow = true;
     sessionPermissions.terminalAlwaysAllow = true;
     const project = normalizeAuthorizedProjectInfo(projectInfo || null);
@@ -5960,6 +5964,20 @@ app.whenReady().then(async () => {
     } finally {
       endActiveJobExecution(jobId, executionController);
     }
+  };
+
+  const legacyHarnessKernel = createLegacyKernelAdapter({
+    plan: handleLegacyHarnessPlan,
+    message: handleLegacyHarnessMessage,
+    execute: handleLegacyHarnessExecute,
+  });
+  const harnessRouter = createHarnessRouter({
+    legacyKernel: legacyHarnessKernel,
+    runtimeConfig: createHarnessRuntimeConfig({ env: process.env }),
+  });
+  registerAssistantHandlers({
+    harnessRouter,
+    registerIpcHandler,
   });
 
   registerOrchestrationHandlers({
