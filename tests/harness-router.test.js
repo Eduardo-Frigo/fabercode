@@ -96,10 +96,18 @@ async function run() {
   };
   const action = { type: 'operation_batch', operations: [] };
   const projectInfo = { rootPath: '/tmp/project' };
+  const abortController = new AbortController();
+  const executionContext = {
+    jobId: 'job-1',
+    signal: abortController.signal,
+  };
 
   assert.strictEqual(await router.plan(planPayload), outputByOperation.plan);
   assert.strictEqual(await router.message(messagePayload), outputByOperation.message);
-  assert.strictEqual(await router.execute(action, projectInfo), outputByOperation.execute);
+  assert.strictEqual(
+    await router.execute(action, projectInfo, executionContext),
+    outputByOperation.execute
+  );
   assert.strictEqual(requestIdCalls, 3);
   assert.strictEqual(kernel.calls.length, 3);
 
@@ -115,6 +123,8 @@ async function run() {
   assert.strictEqual(executeCall[1].requestId, 'request-execute');
   assert.strictEqual(executeCall[1].action, action);
   assert.strictEqual(executeCall[1].projectInfo, projectInfo);
+  assert.strictEqual(executeCall[1].executionContext, executionContext);
+  assert.strictEqual(executeCall[1].executionContext.signal, abortController.signal);
 
   const status = router.getStatus();
   assert.strictEqual(status.ok, true);
@@ -134,7 +144,7 @@ async function run() {
   const rejection = new Error('kernel failed');
   kernel.rejection = rejection;
   await assert.rejects(
-    router.message(messagePayload),
+    router.execute(action, projectInfo, executionContext),
     (error) => error === rejection
   );
   kernel.rejection = null;
@@ -147,11 +157,15 @@ async function run() {
   kernel.invalidResult = null;
 
   const legacyConfig = createHarnessRuntimeConfig({ env: {} });
+  const legacyKernel = new RecordingLegacyKernel(outputByOperation);
   const legacyRouter = createHarnessRouter({
-    legacyKernel: new RecordingLegacyKernel(outputByOperation),
+    legacyKernel,
     runtimeConfig: legacyConfig,
     requestIdFactory: () => 'legacy-request',
   });
+  assert.strictEqual(await legacyRouter.execute(action, projectInfo), outputByOperation.execute);
+  const legacyExecuteRequest = legacyKernel.calls[0][1];
+  assert.strictEqual(Object.hasOwn(legacyExecuteRequest, 'executionContext'), false);
   const legacyStatus = legacyRouter.getStatus();
   assert.strictEqual(legacyStatus.configuredMode, 'legacy');
   assert.strictEqual(legacyStatus.effectiveMode, 'legacy');

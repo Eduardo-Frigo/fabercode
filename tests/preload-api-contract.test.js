@@ -99,6 +99,8 @@ const preservedFeatureFunctionNames = [
   'addConversationMessage',
   // Assistant execution and local project execution.
   'executePlan',
+  'cancelJob',
+  'retryJob',
   'getProjectPreviewPlan',
   'startProjectPreview',
   'stopProjectPreview',
@@ -177,7 +179,6 @@ async function assertInvoke(methodName, args, expectedChannel, expectedArgs = ar
     [{ rootPath: '/tmp/app' }],
     'project:preview:runtime-status'
   );
-  const pendingAction = { type: 'implement', prompt: 'Build the application' };
   const selectedProjectInfo = { id: 'project-1', rootPath: '/tmp/app' };
   const assistantPayload = {
     projectInfo: selectedProjectInfo,
@@ -187,10 +188,14 @@ async function assertInvoke(methodName, args, expectedChannel, expectedArgs = ar
   await assertInvoke('buildPlan', [assistantPayload], 'assistant:plan');
   await assertInvoke(
     'executePlan',
-    [pendingAction, selectedProjectInfo],
+    [{ jobId: 'job-1' }],
     'assistant:execute',
-    [pendingAction, selectedProjectInfo]
+    [{ jobId: 'job-1' }]
   );
+  await assertInvoke('cancelJob', [{ jobId: 'job-1' }], 'orchestration:jobs:cancel');
+  await assertInvoke('retryJob', [{ jobId: 'job-1' }], 'orchestration:jobs:retry');
+  assert.strictEqual((source.match(/\bcancelJob\s*:/g) || []).length, 1);
+  assert.strictEqual(source.includes("ipcRenderer.invoke('job:cancel'"), false);
 
   await assertInvoke('listProjectTerminalSessions', [{ rootPath: '/tmp/app' }], 'project:terminal:list');
   await assertInvoke('createProjectTerminalSession', [{ rootPath: '/tmp/app' }], 'project:terminal:create');

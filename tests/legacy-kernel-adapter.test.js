@@ -35,6 +35,7 @@ async function run() {
   const planOutput = { ok: true, action: { type: 'plan' } };
   const messageOutput = { ok: true, response: 'mensagem legada' };
   const executeOutput = { ok: true, modifiedFiles: ['src/app.js'] };
+  const executeArgumentCounts = [];
   const adapter = createLegacyKernelAdapter({
     plan: async (payload) => {
       calls.push(['plan', payload]);
@@ -44,8 +45,9 @@ async function run() {
       calls.push(['message', payload]);
       return messageOutput;
     },
-    execute: async (action, projectInfo) => {
-      calls.push(['execute', action, projectInfo]);
+    execute: async function execute(action, projectInfo, executionContext) {
+      executeArgumentCounts.push(arguments.length);
+      calls.push(['execute', action, projectInfo, executionContext]);
       return executeOutput;
     },
   });
@@ -66,13 +68,25 @@ async function run() {
   };
   const action = { type: 'operation_batch', operations: [] };
   const projectInfo = { rootPath: '/tmp/project' };
+  const abortController = new AbortController();
+  const executionContext = {
+    jobId: 'job-1',
+    signal: abortController.signal,
+  };
   const planRequest = createPlanRequest(planPayload, { requestId: 'request-plan' });
   const messageRequest = createMessageRequest(messagePayload, { requestId: 'request-message' });
-  const executeRequest = createExecuteRequest(action, projectInfo, { requestId: 'request-execute' });
+  const executeRequest = createExecuteRequest(action, projectInfo, {
+    requestId: 'request-execute',
+    executionContext,
+  });
+  const legacyExecuteRequest = createExecuteRequest(action, projectInfo, {
+    requestId: 'request-execute-legacy',
+  });
 
   const planResult = await adapter.plan(planRequest);
   const messageResult = await adapter.message(messageRequest);
   const executeResult = await adapter.execute(executeRequest);
+  const legacyExecuteResult = await adapter.execute(legacyExecuteRequest);
 
   for (const [result, request, output] of [
     [planResult, planRequest, planOutput],
@@ -91,12 +105,21 @@ async function run() {
   assert.deepStrictEqual(calls, [
     ['plan', planPayload],
     ['message', messagePayload],
-    ['execute', action, projectInfo],
+    ['execute', action, projectInfo, executionContext],
+    ['execute', action, projectInfo, undefined],
   ]);
   assert.strictEqual(calls[0][1], planPayload);
   assert.strictEqual(calls[1][1], messagePayload);
   assert.strictEqual(calls[2][1], action);
   assert.strictEqual(calls[2][2], projectInfo);
+  assert.strictEqual(calls[2][3], executionContext);
+  assert.strictEqual(calls[2][3].signal, abortController.signal);
+  assert.strictEqual(calls[3][3], undefined);
+  assert.deepStrictEqual(executeArgumentCounts, [3, 3]);
+  assert.strictEqual(Object.hasOwn(legacyExecuteRequest, 'executionContext'), false);
+  assert.strictEqual(Object.hasOwn(executeResult, 'executionContext'), false);
+  assert.strictEqual(legacyExecuteResult.requestId, legacyExecuteRequest.requestId);
+  assert.strictEqual(legacyExecuteResult.output, executeOutput);
 
   await assert.rejects(
     adapter.plan(messageRequest),

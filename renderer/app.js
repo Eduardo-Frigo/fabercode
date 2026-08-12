@@ -1493,6 +1493,7 @@ async function selectProject(projectId, options = {}) {
 
 function clearPending() {
   state.pendingAction = null;
+  state.pendingActionJobId = null;
   pendingActionEl.classList.add('hidden');
   pendingActionEl.removeAttribute('data-ux-tone');
   pendingTextEl.textContent = '';

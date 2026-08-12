@@ -15,22 +15,25 @@ function createHandlerMap() {
 async function run() {
   assert.throws(
     () => registerAssistantHandlers(),
-    /harnessRouter/
+    /assistantRuntime/
   );
   assert.throws(
-    () => registerAssistantHandlers({ harnessRouter: {} }),
+    () => registerAssistantHandlers({ assistantRuntime: {} }),
     /registerIpcHandler/
+  );
+  assert.throws(
+    () => registerAssistantHandlers({ assistantRuntime: {}, registerIpcHandler: () => {} }),
+    /runtime missing method: plan/
   );
 
   const calls = [];
   const planPayload = { projectInfo: { rootPath: '/tmp/project' }, userMessage: 'planejar' };
   const messagePayload = { projectInfo: { rootPath: '/tmp/project' }, isMapChat: true };
-  const action = { type: 'operation_batch', operations: [] };
-  const projectInfo = { rootPath: '/tmp/project' };
+  const executePayload = { jobId: 'job-1' };
   const planResult = { ok: true, action: null };
   const messageResult = { ok: true, response: 'ok' };
   const executeResult = { ok: false, modifiedFiles: ['src/app.js'] };
-  const harnessRouter = {
+  const assistantRuntime = {
     plan: async (payload) => {
       calls.push(['plan', payload]);
       return planResult;
@@ -45,7 +48,7 @@ async function run() {
     },
   };
   const { handlers, registerIpcHandler } = createHandlerMap();
-  registerAssistantHandlers({ harnessRouter, registerIpcHandler });
+  registerAssistantHandlers({ assistantRuntime, registerIpcHandler });
 
   assert.deepStrictEqual(Object.keys(handlers).sort(), [
     'assistant:execute',
@@ -58,17 +61,66 @@ async function run() {
 
   assert.strictEqual(await handlers['assistant:plan'](null, planPayload), planResult);
   assert.strictEqual(await handlers['assistant:message'](null, messagePayload), messageResult);
-  assert.strictEqual(await handlers['assistant:execute'](null, action, projectInfo), executeResult);
+  assert.strictEqual(await handlers['assistant:execute'](null, executePayload), executeResult);
   assert.deepStrictEqual(calls, [
     ['plan', planPayload],
     ['message', messagePayload],
-    ['execute', action, projectInfo],
+    ['execute', executePayload],
   ]);
+
+  const invalidInput = { ok: false, code: 'assistant_ipc_invalid_input' };
+  const callsBeforeInvalidInput = calls.length;
+  for (const channel of ['assistant:plan', 'assistant:message']) {
+    assert.deepStrictEqual(await handlers[channel](null), invalidInput);
+    assert.deepStrictEqual(await handlers[channel](null, {}, {}), invalidInput);
+    assert.deepStrictEqual(await handlers[channel](null, null), invalidInput);
+    assert.deepStrictEqual(await handlers[channel](null, []), invalidInput);
+    assert.deepStrictEqual(await handlers[channel](null, Object.create({ inherited: true })), invalidInput);
+
+    let getterReads = 0;
+    const accessorPayload = {};
+    Object.defineProperty(accessorPayload, 'userMessage', {
+      enumerable: true,
+      get() {
+        getterReads += 1;
+        return 'não deve ser lido';
+      },
+    });
+    assert.deepStrictEqual(await handlers[channel](null, accessorPayload), invalidInput);
+    assert.strictEqual(getterReads, 0);
+
+    const symbolPayload = {};
+    symbolPayload[Symbol('hostile')] = true;
+    assert.deepStrictEqual(await handlers[channel](null, symbolPayload), invalidInput);
+  }
+
+  assert.deepStrictEqual(await handlers['assistant:execute'](null), invalidInput);
+  assert.deepStrictEqual(await handlers['assistant:execute'](null, executePayload, {}), invalidInput);
+  assert.deepStrictEqual(await handlers['assistant:execute'](null, { jobId: 'job-1', action: {} }), invalidInput);
+  assert.deepStrictEqual(await handlers['assistant:execute'](null, {}), invalidInput);
+  assert.deepStrictEqual(await handlers['assistant:execute'](null, Object.create({ jobId: 'job-1' })), invalidInput);
+
+  let jobIdGetterReads = 0;
+  const accessorExecute = {};
+  Object.defineProperty(accessorExecute, 'jobId', {
+    enumerable: true,
+    get() {
+      jobIdGetterReads += 1;
+      return 'job-1';
+    },
+  });
+  assert.deepStrictEqual(await handlers['assistant:execute'](null, accessorExecute), invalidInput);
+  assert.strictEqual(jobIdGetterReads, 0);
+
+  const symbolExecute = { jobId: 'job-1' };
+  symbolExecute[Symbol('hostile')] = true;
+  assert.deepStrictEqual(await handlers['assistant:execute'](null, symbolExecute), invalidInput);
+  assert.strictEqual(calls.length, callsBeforeInvalidInput);
 
   const rejection = new Error('kernel unavailable');
   const rejectedMap = createHandlerMap();
   registerAssistantHandlers({
-    harnessRouter: {
+    assistantRuntime: {
       plan: async () => { throw rejection; },
       message: async () => { throw rejection; },
       execute: async () => { throw rejection; },
@@ -77,6 +129,14 @@ async function run() {
   });
   await assert.rejects(
     rejectedMap.handlers['assistant:message'](null, messagePayload),
+    (error) => error === rejection
+  );
+  await assert.rejects(
+    rejectedMap.handlers['assistant:plan'](null, planPayload),
+    (error) => error === rejection
+  );
+  await assert.rejects(
+    rejectedMap.handlers['assistant:execute'](null, executePayload),
     (error) => error === rejection
   );
 

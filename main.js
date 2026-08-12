@@ -72,6 +72,9 @@ const {
   compactJsonForPrompt,
   wrapUntrustedPromptSection,
 } = require('./cortex/security/ai_trust_boundary');
+const { createAssistantExecutionCoordinator } = require('./main/agent_runtime/assistant_execution_coordinator');
+const { createAssistantPlanningAuthorizer } = require('./main/agent_runtime/assistant_planning_authorizer');
+const { createAssistantRuntimeFacade } = require('./main/agent_runtime/assistant_runtime_facade');
 const { createHarnessRuntimeConfig } = require('./main/agent_runtime/harness_runtime_config');
 const { createHarnessRouter } = require('./main/agent_runtime/harness_router');
 const { createLegacyKernelAdapter } = require('./main/agent_runtime/legacy_kernel_adapter');
@@ -100,6 +103,10 @@ const { createIpcSecurity } = require('./main/security/ipc_security');
 const { createProjectAccess } = require('./main/security/project_access');
 const { createSecretStore } = require('./main/security/secret_store');
 const { normalizeExternalUrl, normalizePreviewOpenUrl } = require('./main/security/url_policy');
+const {
+  createActionDigest,
+  createAssistantJobAuthorityService,
+} = require('./main/services/assistant_job_authority_service');
 const { createArtifactStoreService } = require('./main/services/artifact_store_service');
 const { createCommandRunner } = require('./main/services/command_runner');
 const { createCortexRuntimeJobService } = require('./main/services/cortex_runtime_job_service');
@@ -1090,6 +1097,18 @@ const rwkvProviderClient = createRwkvProviderClient({
 
 const { callRwkvProviderChat } = rwkvProviderClient;
 
+let assistantExecutionCoordinatorInstance = null;
+let assistantRuntimeLifecycleReason = null;
+
+function observeAssistantJobTerminal(job = null) {
+  const coordinator = assistantExecutionCoordinatorInstance;
+  if (!coordinator || !job || typeof job !== 'object' || Array.isArray(job)) return;
+  const jobId = typeof job.id === 'string' ? job.id : '';
+  const status = job.phase === 'runtime_interrupted' ? 'runtime_interrupted' : job.status;
+  if (!jobId || !['completed', 'failed', 'cancelled', 'runtime_interrupted'].includes(status)) return;
+  coordinator.onJobTerminal({ jobId, status });
+}
+
 const projectStore = createProjectStore({
   fs,
   getUserDataPath: () => app.getPath('userData'),
@@ -1124,6 +1143,7 @@ const orchestrationStateStore = createOrchestrationStateStore({
   fs,
   getUserDataPath: () => app.getPath("userData"),
   isNonRetriableProviderReason,
+  onJobTerminal: observeAssistantJobTerminal,
   path,
 });
 
@@ -1132,8 +1152,10 @@ const {
   addConversationMessage,
   appendAuditEvent,
   appendJobEvent,
-  createAssistantJob,
+  bindJobActionDigest,
+  createAuthorizedAssistantJob,
   getCortexLearning,
+  getAuthorizedJobById,
   getJobById,
   isJobCancelled,
   listConversationMessages,
@@ -1141,6 +1163,7 @@ const {
   markJobCancelled,
   markJobCompleted,
   markJobFailed,
+  markJobAwaitingUserInput,
   markJobPausedForMemory,
   markJobPhase,
   markJobRetryPending,
@@ -1155,11 +1178,6 @@ const {
   upsertCortexTopic,
   writeOrchestrationState,
 } = orchestrationStateStore;
-
-const interruptedJobsRecovery = recoverInterruptedJobs('runtime_restarted_before_job_completed');
-if (interruptedJobsRecovery && interruptedJobsRecovery.recovered > 0) {
-  console.warn('[jobs] recovered interrupted jobs after runtime start', interruptedJobsRecovery);
-}
 
 projectContextService = createProjectContextService({
   CORTEX_STOPWORDS,
@@ -4938,6 +4956,18 @@ function formatVisualValidationSummary(validation = null) {
 
 let personaOrchestratorInstance = null;
 
+function createCoordinatedAssistantPlanningJob(input = {}) {
+  const coordinator = assistantExecutionCoordinatorInstance;
+  if (!coordinator) {
+    return {
+      ok: false,
+      code: 'assistant_runtime_not_ready',
+      message: 'Runtime autoritativo do assistente indisponível.',
+    };
+  }
+  return coordinator.createPlanningJob(input);
+}
+
 function getPersonaOrchestrator() {
   if (!personaOrchestratorInstance) {
     personaOrchestratorInstance = createPersonaOrchestrator({
@@ -4949,9 +4979,10 @@ function getPersonaOrchestrator() {
       buildConversationOnlyPlan,
       buildPlanWithCortexRuntime,
       clipText,
-      createAssistantJob,
+      createAssistantJob: createCoordinatedAssistantPlanningJob,
       getSelectedAiProvider,
       isAiRetryableReason,
+      markJobAwaitingUserInput,
       markJobCompleted,
       markJobFailed,
       markJobPausedForMemory,
@@ -5002,6 +5033,20 @@ function resolveAppIconPath() {
 let mainWindow = null;
 let ipcSecurityInstance = null;
 let projectAccessInstance = null;
+
+function clearAssistantRuntimeAuthority(reason = 'runtime_lifecycle_changed') {
+  for (const jobId of activeExecutionControllersByJobId.keys()) {
+    abortActiveJobExecution(jobId, reason);
+  }
+  activeExecutionControllersByJobId.clear();
+  if (!assistantExecutionCoordinatorInstance) return { ok: true, cleared: 0 };
+  assistantRuntimeLifecycleReason = reason;
+  try {
+    return assistantExecutionCoordinatorInstance.clear();
+  } finally {
+    assistantRuntimeLifecycleReason = null;
+  }
+}
 
 function getIpcSecurity() {
   if (!ipcSecurityInstance) {
@@ -5080,6 +5125,15 @@ function createWindow() {
       event.preventDefault();
     }
   });
+  win.webContents.on('did-start-navigation', (_event, _url, _isInPlace, isMainFrame) => {
+    if (isMainFrame) clearAssistantRuntimeAuthority('renderer_navigation');
+  });
+  win.webContents.on('render-process-gone', () => {
+    clearAssistantRuntimeAuthority('renderer_process_gone');
+  });
+  win.webContents.on('destroyed', () => {
+    clearAssistantRuntimeAuthority('renderer_destroyed');
+  });
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.once('ready-to-show', () => {
@@ -5090,6 +5144,7 @@ function createWindow() {
   });
   mainWindow = win;
   win.on('closed', () => {
+    clearAssistantRuntimeAuthority('window_closed');
     if (mainWindow === win) mainWindow = null;
   });
   return win;
@@ -5125,6 +5180,9 @@ app.whenReady().then(async () => {
     accountService: platformAccountService,
     appendAuditEvent,
     emitAccountEvent: (payload) => {
+      if (payload && payload.type === 'signed-out') {
+        clearAssistantRuntimeAuthority('account_signed_out');
+      }
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('account:event', payload);
       }
@@ -5280,16 +5338,6 @@ app.whenReady().then(async () => {
     });
   });
 
-  registerIpcHandler('job:cancel', async (_, payload) => {
-    const jobId = payload && payload.jobId ? String(payload.jobId) : null;
-    if (jobId) {
-      abortActiveJobExecution(jobId, 'cancelled_by_user');
-      markJobCancelled(jobId, 'cancelled_by_user');
-      return { ok: true };
-    }
-    return { ok: false };
-  });
-
   const handleLegacyHarnessPlan = async (payload) => {
     const project = normalizeAuthorizedProjectInfo(payload && payload.projectInfo ? payload.projectInfo : null);
     if (!project.ok) return project;
@@ -5306,16 +5354,65 @@ app.whenReady().then(async () => {
     return { ok: true, tools: getToolRegistry().list() };
   });
 
-  const handleLegacyHarnessExecute = async (action, projectInfo) => {
-    sessionPermissions.writeAlwaysAllow = true;
-    sessionPermissions.terminalAlwaysAllow = true;
-    const project = normalizeAuthorizedProjectInfo(projectInfo || null);
-    if (!project.ok) return project;
+  const handleLegacyHarnessExecute = async (action, projectInfo, executionContext = null) => {
+    const jobId = executionContext && typeof executionContext.jobId === 'string'
+      ? executionContext.jobId
+      : null;
+    const requestedMode = executionContext && typeof executionContext.requestedMode === 'string'
+      ? executionContext.requestedMode
+      : 'ask_each';
+    const executionSignal = executionContext && executionContext.signal
+      ? executionContext.signal
+      : null;
+    let project;
+    try {
+      project = normalizeAuthorizedProjectInfo(projectInfo || null);
+    } catch (error) {
+      if (jobId) markJobFailed(jobId, 'project_authorization_failed', 'execute_authorization_failed');
+      return {
+        ok: false,
+        code: 'project_authorization_failed',
+        message: error && error.message ? error.message : 'O projeto não pôde ser reautorizado.',
+      };
+    }
+    if (!project.ok) {
+      if (jobId) {
+        markJobFailed(
+          jobId,
+          project.code || project.message || 'project_not_authorized',
+          'execute_authorization_failed',
+        );
+      }
+      return project;
+    }
     projectInfo = project.projectInfo;
-    const initialAction = bindActionToAuthorizedProject(action, projectInfo);
-    const jobId = initialAction && initialAction.jobId ? initialAction.jobId : null;
+    let initialAction;
+    try {
+      initialAction = bindActionToAuthorizedProject(action, projectInfo);
+    } catch (error) {
+      if (jobId) markJobFailed(jobId, 'action_rebind_failed', 'execute_authorization_failed');
+      return {
+        ok: false,
+        code: 'action_rebind_failed',
+        message: error && error.message ? error.message : 'A ação autorizada não pôde ser vinculada ao projeto.',
+      };
+    }
+    const markRetryOrRequireFreshApproval = (reason, phase) => {
+      if (!jobId) return null;
+      if (executionContext) {
+        return markJobFailed(jobId, reason, `${phase}_fresh_approval_required`);
+      }
+      const retryMarked = markJobRetryPending(jobId, reason, phase);
+      if (retryMarked.ok
+        && retryMarked.job
+        && retryMarked.job.retryState
+        && retryMarked.job.retryState.retryable === false) {
+        markJobFailed(jobId, reason, `${phase}_retry_exhausted`);
+      }
+      return retryMarked;
+    };
     if (isJobCancelled(jobId)) {
-      return { ok: false, message: 'Ação cancelada pelo usuário. Nenhum arquivo foi alterado.' };
+      return { ok: false, cancelled: true, message: 'Tarefa cancelada. Nenhuma nova operação será iniciada.' };
     }
     if (jobId) {
       markJobPhase(jobId, 'execute_pending', {
@@ -5326,13 +5423,14 @@ app.whenReady().then(async () => {
         hasExecutionCommand: Boolean(initialAction && initialAction.executionCommand),
       });
     }
-    const executionController = beginActiveJobExecution(jobId);
-    const executionSignal = executionController ? executionController.signal : null;
-
     try {
       assertJobExecutionNotCancelled(jobId, executionSignal);
       const rootPath = projectInfo && projectInfo.rootPath ? String(projectInfo.rootPath) : '';
-      const autoRepairMaxPasses = Math.max(0, Math.min(5, Number.isFinite(Number(AUTO_REPAIR_MAX_PASSES)) ? Number(AUTO_REPAIR_MAX_PASSES) : 0));
+      // A coordinated execution is bound to one exact action digest. Derived
+      // repair actions need a fresh broker decision and cannot inherit it.
+      const autoRepairMaxPasses = executionContext
+        ? 0
+        : Math.max(0, Math.min(5, Number.isFinite(Number(AUTO_REPAIR_MAX_PASSES)) ? Number(AUTO_REPAIR_MAX_PASSES) : 0));
       const originalUserMessage = initialAction && typeof initialAction.userMessage === 'string' ? initialAction.userMessage : '';
       const originalAttachments = initialAction && Array.isArray(initialAction.attachments) ? initialAction.attachments : [];
 
@@ -5346,7 +5444,11 @@ app.whenReady().then(async () => {
             model: getEffectiveOpenAiModel(),
           });
         }
-        const agenticResult = await getAgenticToolLoopService().executeAction(initialAction, projectInfo, { jobId });
+        const agenticResult = await getAgenticToolLoopService().executeAction(initialAction, projectInfo, {
+          jobId,
+          requestedMode,
+          signal: executionSignal,
+        });
         const refreshed = scanProject(rootPath);
         const finalResult = {
           ...agenticResult,
@@ -5552,10 +5654,7 @@ app.whenReady().then(async () => {
                     : gateReason,
                   blockedBy: 'verified_execution',
                 });
-                const retryMarked = markJobRetryPending(jobId, gateReason, 'execute_validation');
-                if (retryMarked.ok && retryMarked.job && retryMarked.job.retryState && retryMarked.job.retryState.retryable === false) {
-                  markJobFailed(jobId, gateReason, 'execute_validation_retry_exhausted');
-                }
+                markRetryOrRequireFreshApproval(gateReason, 'execute_validation');
               }
               const repairMessage = repairPlan && repairPlan.response
                 ? String(repairPlan.response)
@@ -5600,10 +5699,7 @@ app.whenReady().then(async () => {
           if (jobId) {
             const message = String(result.message || 'execution_rejected');
             if (message.toLowerCase().includes('timeout') || message.toLowerCase().includes('abort')) {
-              const retryMarked = markJobRetryPending(jobId, message, 'execute_pending');
-              if (retryMarked.ok && retryMarked.job && retryMarked.job.retryState && retryMarked.job.retryState.retryable === false) {
-                markJobFailed(jobId, message, 'execute_retry_exhausted');
-              }
+              markRetryOrRequireFreshApproval(message, 'execute_pending');
             } else {
               markJobFailed(jobId, message, 'execute_failed');
             }
@@ -5791,10 +5887,7 @@ app.whenReady().then(async () => {
             totalDelta: Number(effectGate.totalDelta || 0),
             autoRepairAttempt,
           });
-          const retryMarked = markJobRetryPending(jobId, gateReason, 'execute_validation');
-            if (retryMarked.ok && retryMarked.job && retryMarked.job.retryState && retryMarked.job.retryState.retryable === false) {
-              markJobFailed(jobId, gateReason, 'execute_validation_retry_exhausted');
-            }
+          markRetryOrRequireFreshApproval(gateReason, 'execute_validation');
           }
           return {
             ok: false,
@@ -5892,10 +5985,7 @@ app.whenReady().then(async () => {
             ? String(repairPlan.response)
             : 'Não consegui montar um plano de reparo automático nesta rodada.';
           if (jobId) {
-            const retryMarked = markJobRetryPending(jobId, gateReason, 'execute_validation');
-            if (retryMarked.ok && retryMarked.job && retryMarked.job.retryState && retryMarked.job.retryState.retryable === false) {
-              markJobFailed(jobId, gateReason, 'execute_validation_retry_exhausted');
-            }
+            markRetryOrRequireFreshApproval(gateReason, 'execute_validation');
           }
           return {
             ok: false,
@@ -5961,8 +6051,6 @@ app.whenReady().then(async () => {
         message: error.message,
       });
       return { ok: false, message: `Erro na execução: ${error.message}` };
-    } finally {
-      endActiveJobExecution(jobId, executionController);
     }
   };
 
@@ -5975,26 +6063,99 @@ app.whenReady().then(async () => {
     legacyKernel: legacyHarnessKernel,
     runtimeConfig: createHarnessRuntimeConfig({ env: process.env }),
   });
-  registerAssistantHandlers({
+
+  const assistantJobAuthorityService = createAssistantJobAuthorityService({
+    authorizeProjectBinding: (projectId, rootPath) => (
+      getProjectAccess().authorizeProjectBinding(projectId, rootPath)
+    ),
+    getJobById: getAuthorizedJobById,
+  });
+  const assistantPlanningAuthorizer = createAssistantPlanningAuthorizer({
+    authorizeProjectBinding: (projectId, rootPath) => (
+      getProjectAccess().authorizeProjectBinding(projectId, rootPath)
+    ),
+    authorizeProjectRootBinding: (rootPath) => (
+      getProjectAccess().authorizeProjectRootBinding(rootPath)
+    ),
+    normalizeProjectInfo: (projectInfo, options) => (
+      getProjectAccess().normalizeProjectInfo(projectInfo, options)
+    ),
+  });
+  const assistantExecutionCoordinator = createAssistantExecutionCoordinator({
+    authorityService: assistantJobAuthorityService,
+    bindActionToProject: bindActionToAuthorizedProject,
+    bindJobActionDigest,
+    createActionDigest,
+    createAuthorizedAssistantJob,
+    executeAction: (action, projectInfo, executionContext) => (
+      harnessRouter.execute(action, projectInfo, executionContext)
+    ),
+    onAuthorityRevoked: (jobId, reason) => {
+      abortActiveJobExecution(jobId, reason);
+      if (assistantRuntimeLifecycleReason) {
+        markJobCancelled(jobId, assistantRuntimeLifecycleReason);
+      }
+    },
+    onPlanningFailure: (jobId, reason) => {
+      markJobFailed(jobId, reason, 'assistant_planning_failed');
+    },
+  });
+  assistantExecutionCoordinatorInstance = assistantExecutionCoordinator;
+
+  const assistantRuntime = createAssistantRuntimeFacade({
+    authorizePlanningPayload: assistantPlanningAuthorizer.authorize,
+    coordinator: assistantExecutionCoordinator,
     harnessRouter,
+    kernelId: legacyHarnessKernel.id,
+  });
+
+  const interruptedJobsRecovery = recoverInterruptedJobs('runtime_restarted_before_job_completed');
+  if (interruptedJobsRecovery && interruptedJobsRecovery.recovered > 0) {
+    console.warn('[jobs] recovered interrupted jobs after runtime start', interruptedJobsRecovery);
+  }
+
+  registerAssistantHandlers({
+    assistantRuntime,
     registerIpcHandler,
   });
+
+  const cancelAssistantJob = async ({ jobId }) => {
+    const revoked = assistantExecutionCoordinator.revokeJob({ jobId });
+    if (!revoked.ok) {
+      const current = getJobById(jobId);
+      if (current && current.ok && current.job
+        && ['completed', 'failed', 'cancelled'].includes(current.job.status)) {
+        return { ok: true, idempotent: true, job: current.job };
+      }
+      return revoked;
+    }
+    const cancelled = markJobCancelled(jobId, 'cancelled_by_user');
+    if (!cancelled || cancelled.ok !== true) {
+      return {
+        ok: true,
+        revoked: true,
+        persistenceWarning: true,
+        message: 'A autoridade da tarefa foi revogada, mas o histórico não pôde ser atualizado.',
+      };
+    }
+    return { ok: true, job: cancelled.job };
+  };
+
+  const retryAssistantJob = ({ jobId }) => assistantRuntime.retry({ jobId });
 
   registerOrchestrationHandlers({
     MAX_CONVERSATION_MESSAGES,
     addConversationEntry,
     addConversationMessage,
     appendAuditEvent,
-    appendJobEvent,
+    cancelAssistantJob,
     getJobById,
     listConversationMessages,
     listJobs,
-    abortActiveJobExecution,
-    markJobCancelled,
-    markJobPhase,
     readOrchestrationState,
     registerIpcHandler,
     renameConversationEntry,
+    retryAssistantJob,
     deleteConversationEntry,
   });
 
@@ -6099,6 +6260,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('before-quit', () => {
+  clearAssistantRuntimeAuthority('app_before_quit');
   platformBackendService.stop().catch(() => {});
   resetFaberCapabilityRuntime();
   projectTerminalService.stopAllSessions();

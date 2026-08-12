@@ -72,7 +72,14 @@ class LegacyKernelAdapter extends AgentKernel {
 
   async execute(request) {
     assertRequestOperation(request, HARNESS_OPERATIONS.EXECUTE);
-    const output = await this.legacyExecute(request.action, request.projectInfo);
+    const executionContext = Object.prototype.hasOwnProperty.call(request, 'executionContext')
+      ? request.executionContext
+      : undefined;
+    const output = await this.legacyExecute(
+      request.action,
+      request.projectInfo,
+      executionContext
+    );
     return createHarnessResult({
       requestId: request.requestId,
       operation: request.operation,

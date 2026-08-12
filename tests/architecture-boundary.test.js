@@ -136,16 +136,127 @@ function assertAgentRuntimeBoundary() {
   }
 
   const routerSource = read('main/agent_runtime/harness_router.js');
+  const facadeSource = read('main/agent_runtime/assistant_runtime_facade.js');
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
     'HarnessRouter must depend on the AgentKernel contract, not the legacy adapter implementation'
+  );
+  assertDoesNotMatch(
+    facadeSource,
+    /\.execute\(\s*action\b|execute\(\s*action\s*,\s*projectInfo/,
+    'AssistantRuntimeFacade must expose execution by authoritative job locator only'
+  );
+  assert.ok(
+    facadeSource.includes('coordinator.execute(input)'),
+    'AssistantRuntimeFacade must delegate public execution to the main-only coordinator'
+  );
+  assert.ok(
+    facadeSource.includes('coordinator.retry({'),
+    'AssistantRuntimeFacade must delegate retry to the main-only coordinator'
+  );
+}
+
+function assertProjectCapabilityBoundary() {
+  const capabilityDir = path.join(rootDir, 'main', 'capabilities');
+  const capabilityFiles = walkJsFiles(capabilityDir);
+  assert.ok(
+    capabilityFiles.length >= 10,
+    'project capability boundary must include contracts, policy, grants, approvals, task delegation, broker, and sandbox ports'
+  );
+
+  for (const filePath of capabilityFiles) {
+    const rel = relative(filePath);
+    const source = fs.readFileSync(filePath, 'utf8');
+    assertDoesNotMatch(source, /require\(['"]electron['"]\)/, `${rel} must not import Electron`);
+    assertDoesNotMatch(source, /require\(['"][^'"]*renderer[^'"]*['"]\)/, `${rel} must not import renderer modules`);
+    assertDoesNotMatch(source, /require\(['"][^'"]*cortex[^'"]*['"]\)/, `${rel} must not import Cortex internals`);
+    assertDoesNotMatch(source, /require\(['"][^'"]*legacy[^'"]*['"]\)/, `${rel} must not depend on the legacy harness`);
+    assertDoesNotMatch(source, /\bipc(?:Main|Renderer)\b/, `${rel} must not own IPC transport`);
+  }
+
+  const brokerSource = read('main/capabilities/project_capability_broker.js');
+  const registrySource = read('main/capabilities/sandbox_backend_registry.js');
+  const delegationStoreSource = read('main/capabilities/task_delegation_store.js');
+  for (const [label, source] of [
+    ['ProjectCapabilityBroker', brokerSource],
+    ['SandboxBackendRegistry', registrySource],
+  ]) {
+    assertDoesNotMatch(source, /\bprocess\.platform\b/, `${label} must select behavior by injected capabilities`);
+    assertDoesNotMatch(source, /require\(['"]child_process['"]\)/, `${label} must not spawn host processes directly`);
+  }
+
+  assert.ok(
+    delegationStoreSource.includes('consentAuthority.consume'),
+    'TaskDelegationStore must consume consent through an injected main-process authority'
+  );
+  assert.ok(
+    delegationStoreSource.includes('authorizeRoot'),
+    'TaskDelegationStore must revalidate an authoritative project root'
+  );
+  assertDoesNotMatch(
+    delegationStoreSource,
+    /writeAlwaysAllow|terminalAlwaysAllow|autoExecute/,
+    'Task delegation must not reuse legacy global or model-controlled authority flags'
+  );
+
+  const publicConsentBoundarySources = [
+    ['preload.js', read('preload.js')],
+    ...walkJsFiles(path.join(rootDir, 'renderer')).map((filePath) => [
+      relative(filePath),
+      fs.readFileSync(filePath, 'utf8'),
+    ]),
+    ...walkJsFiles(path.join(rootDir, 'main', 'ipc')).map((filePath) => [
+      relative(filePath),
+      fs.readFileSync(filePath, 'utf8'),
+    ]),
+  ];
+  for (const [label, source] of publicConsentBoundarySources) {
+    assertDoesNotMatch(
+      source,
+      /\bconsentHandle\b|\bissueFromNativeConfirmation\b|trusted_consent_authority/,
+      `${label} must not expose or accept main-only trusted consent authority handles`
+    );
+    assertDoesNotMatch(
+      source,
+      /\bsubmissionId\b|\bbeginSubmission\b|assistant_job_authority_service/,
+      `${label} must not expose main-only assistant job authority handles`
+    );
+  }
+
+  const jobAuthoritySource = read('main/services/assistant_job_authority_service.js');
+  assertDoesNotMatch(jobAuthoritySource, /require\(['"]electron['"]\)/, 'Assistant job authority must not import Electron');
+  assertDoesNotMatch(jobAuthoritySource, /require\(['"][^'"]*renderer[^'"]*['"]\)/, 'Assistant job authority must not import renderer modules');
+  assertDoesNotMatch(jobAuthoritySource, /require\(['"][^'"]*cortex[^'"]*['"]\)/, 'Assistant job authority must receive persistence through injection');
+  assertDoesNotMatch(jobAuthoritySource, /\bipc(?:Main|Renderer)\b/, 'Assistant job authority must not own IPC transport');
+
+  const nativeConsentSource = read('main/services/native_task_consent_service.js');
+  assertDoesNotMatch(nativeConsentSource, /require\(['"]electron['"]\)/, 'Native task consent must receive the dialog adapter through injection');
+  assertDoesNotMatch(nativeConsentSource, /require\(['"][^'"]*renderer[^'"]*['"]\)/, 'Native task consent must not import renderer modules');
+  assertDoesNotMatch(nativeConsentSource, /require\(['"][^'"]*cortex[^'"]*['"]\)/, 'Native task consent must not import Cortex internals');
+  assertDoesNotMatch(nativeConsentSource, /\bipc(?:Main|Renderer)\b/, 'Native task consent must not own IPC transport');
+
+  for (const [label, source] of publicConsentBoundarySources) {
+    assertDoesNotMatch(
+      source,
+      /\bensureTaskDelegation\b|native_task_consent_service/,
+      `${label} must not expose the main-only native consent service`
+    );
+  }
+
+  const orchestrationIpcSource = read('main/ipc/orchestration_handlers.js');
+  assertDoesNotMatch(
+    orchestrationIpcSource,
+    /\bgetAuthorizedJobById\b|\bbindJobActionDigest\b/,
+    'Orchestration IPC must use only public redacted job APIs'
   );
 }
 
 function assertAssistantHarnessCompositionBoundary() {
   const mainSource = read('main.js');
   const handlerSource = read('main/ipc/assistant_handlers.js');
+  const preloadSource = read('preload.js');
+  const appActionsSource = read('renderer/app_actions.js');
   const mainRuntimeSources = [
     mainSource,
     ...walkJsFiles(path.join(rootDir, 'main')).map((filePath) => fs.readFileSync(filePath, 'utf8')),
@@ -170,6 +281,25 @@ function assertAssistantHarnessCompositionBoundary() {
   assert.ok(mainSource.includes('createLegacyKernelAdapter({'), 'main.js must compose the legacy kernel adapter');
   assert.ok(mainSource.includes('createHarnessRouter({'), 'main.js must compose the HarnessRouter');
   assert.ok(mainSource.includes('registerAssistantHandlers({'), 'main.js must register assistant IPC through the harness');
+  assert.ok(
+    mainSource.includes('assistantRuntime,'),
+    'assistant IPC must receive the authoritative runtime facade'
+  );
+  assertDoesNotMatch(
+    preloadSource,
+    /executePlan:\s*\(\s*action\s*,\s*projectInfo\s*\)|ipcRenderer\.invoke\(['"]job:cancel['"]|assistant:execute['"],\s*action/,
+    'preload must expose execute and cancel by authoritative job locator only'
+  );
+  assertDoesNotMatch(
+    appActionsSource,
+    /meta\.autoExecute|pendingAction\.jobId|executePlan\(\s*state\.pendingAction/,
+    'renderer plans and actions must never mint execution authority'
+  );
+  assertDoesNotMatch(
+    mainSource,
+    /registerIpcHandler\(\s*['"]job:cancel['"]|sessionPermissions\.(?:writeAlwaysAllow|terminalAlwaysAllow)\s*=\s*true;[\s\S]{0,300}normalizeAuthorizedProjectInfo\(projectInfo/,
+    'main must not retain raw cancellation or assistant auto-grant bypasses'
+  );
 }
 
 function assertProductToolchainUsesExecutionBoundary() {
@@ -195,6 +325,7 @@ assertPreloadBoundary();
 assertCortexBoundary();
 assertMainBoundary();
 assertAgentRuntimeBoundary();
+assertProjectCapabilityBoundary();
 assertAssistantHarnessCompositionBoundary();
 assertProductToolchainUsesExecutionBoundary();
 

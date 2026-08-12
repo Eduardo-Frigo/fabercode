@@ -45,9 +45,17 @@ function createMessageRequest(payload, options) {
 }
 
 function createExecuteRequest(action, projectInfo, options) {
+  const fields = { action, projectInfo };
+  if (
+    options
+    && Object.prototype.hasOwnProperty.call(options, 'executionContext')
+  ) {
+    fields.executionContext = options.executionContext;
+  }
+
   return createHarnessRequest(
     HARNESS_OPERATIONS.EXECUTE,
-    { action, projectInfo },
+    fields,
     options
   );
 }
@@ -82,8 +90,14 @@ function isHarnessRequest(request) {
   if (!SUPPORTED_OPERATIONS.has(request.operation)) return false;
 
   if (request.operation === HARNESS_OPERATIONS.EXECUTE) {
-    return Object.prototype.hasOwnProperty.call(request, 'action')
-      && Object.prototype.hasOwnProperty.call(request, 'projectInfo');
+    const hasOwn = Object.prototype.hasOwnProperty;
+    if (!hasOwn.call(request, 'action') || !hasOwn.call(request, 'projectInfo')) {
+      return false;
+    }
+    if (!hasOwn.call(request, 'executionContext') && 'executionContext' in request) {
+      return false;
+    }
+    return true;
   }
 
   return Object.prototype.hasOwnProperty.call(request, 'payload');

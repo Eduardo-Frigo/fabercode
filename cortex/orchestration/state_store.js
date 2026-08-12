@@ -20,7 +20,9 @@ function createOrchestrationStateStore(dependencies = {}) {
     fs,
     getUserDataPath,
     isNonRetriableProviderReason,
+    onJobTerminal,
     path,
+    randomUUID,
   } = dependencies;
 
   function requireDependency(name, value) {
@@ -106,7 +108,13 @@ function createOrchestrationStateStore(dependencies = {}) {
     try {
       const raw = fs.readFileSync(storePath, 'utf8');
       const parsed = JSON.parse(raw);
-      const jobsById = parsed && parsed.jobsById && typeof parsed.jobsById === 'object' ? parsed.jobsById : {};
+      const jobsById =
+        parsed &&
+        parsed.jobsById &&
+        typeof parsed.jobsById === 'object' &&
+        !Array.isArray(parsed.jobsById)
+          ? parsed.jobsById
+          : {};
       const jobOrder = parsed && Array.isArray(parsed.jobOrder) ? parsed.jobOrder : [];
       return { jobsById, jobOrder };
     } catch {
@@ -152,16 +160,22 @@ function createOrchestrationStateStore(dependencies = {}) {
     appendAuditEvent,
     computeRetryBackoffMs,
     isNonRetriableProviderReason,
+    onJobTerminal,
+    randomUUID,
     readJobsState,
     writeJobsState,
   });
 
   const {
     appendJobEvent,
+    bindJobActionDigest,
+    createAuthorizedAssistantJob,
     createAssistantJob,
+    getAuthorizedJobById,
     getJobById,
     isJobCancelled,
     listJobs,
+    markJobAwaitingUserInput,
     markJobCancelled,
     markJobCompleted,
     markJobFailed,
@@ -543,12 +557,16 @@ function createOrchestrationStateStore(dependencies = {}) {
     addConversationMessage,
     appendAuditEvent,
     appendJobEvent,
+    bindJobActionDigest,
+    createAuthorizedAssistantJob,
     createAssistantJob,
     getCortexLearning,
+    getAuthorizedJobById,
     getJobById,
     isJobCancelled,
     listConversationMessages,
     listJobs,
+    markJobAwaitingUserInput,
     markJobCancelled,
     markJobCompleted,
     markJobFailed,

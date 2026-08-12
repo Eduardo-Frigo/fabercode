@@ -31,6 +31,27 @@ function shouldPreferCortexRuntimeForRoute(routeDecision) {
   );
 }
 
+function stripPlannerExecutionAuthority(plan) {
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return plan;
+  let sanitized = plan;
+
+  if (plan.meta && typeof plan.meta === 'object' && !Array.isArray(plan.meta)) {
+    const { autoExecute: _ignoredAutoExecute, ...publicMeta } = plan.meta;
+    if (Object.prototype.hasOwnProperty.call(plan.meta, 'autoExecute')) {
+      sanitized = { ...sanitized, meta: publicMeta };
+    }
+  }
+
+  if (plan.action && typeof plan.action === 'object' && !Array.isArray(plan.action)) {
+    const { jobId: _ignoredActionJobId, ...publicAction } = plan.action;
+    if (Object.prototype.hasOwnProperty.call(plan.action, 'jobId')) {
+      sanitized = { ...sanitized, action: publicAction };
+    }
+  }
+
+  return sanitized;
+}
+
 function createPersonaOrchestrator(dependencies = {}) {
   const {
     appendAuditEvent,
@@ -44,6 +65,7 @@ function createPersonaOrchestrator(dependencies = {}) {
     createAssistantJob,
     getSelectedAiProvider,
     isAiRetryableReason,
+    markJobAwaitingUserInput,
     markJobCompleted,
     markJobFailed,
     markJobPausedForMemory,
@@ -73,6 +95,7 @@ function createPersonaOrchestrator(dependencies = {}) {
     requireDependency('createAssistantJob', createAssistantJob);
     requireDependency('getSelectedAiProvider', getSelectedAiProvider);
     requireDependency('isAiRetryableReason', isAiRetryableReason);
+    requireDependency('markJobAwaitingUserInput', markJobAwaitingUserInput);
     requireDependency('markJobCompleted', markJobCompleted);
     requireDependency('markJobFailed', markJobFailed);
     requireDependency('markJobPausedForMemory', markJobPausedForMemory);
@@ -682,6 +705,10 @@ function createPersonaOrchestrator(dependencies = {}) {
       }
     }
 
+    // Planner/model hints never grant execution authority. The main-process
+    // coordinator owns job identity and every action remains confirmation-bound.
+    plan = stripPlannerExecutionAuthority(plan);
+
     if (jobId) {
       setJobCheckpoint(jobId, 'last_plan', {
         ok: plan.ok,
@@ -694,7 +721,6 @@ function createPersonaOrchestrator(dependencies = {}) {
 
       const plannerName = plan.meta && plan.meta.planner ? plan.meta.planner : null;
       const planReason = plan.meta && plan.meta.reason ? plan.meta.reason : null;
-      const autoExecute = Boolean(plan.meta && plan.meta.autoExecute);
       if (planReason === 'paused_memory_pressure') {
         markJobPausedForMemory(jobId, {
           runtime: plan.meta && plan.meta.runtime ? plan.meta.runtime : runtimeVersion,
@@ -710,9 +736,8 @@ function createPersonaOrchestrator(dependencies = {}) {
         }
       } else if (plannerName === 'cortex_runtime' || plannerName === 'agentic_tool_loop') {
         if (plan.action) {
-          markJobPhase(jobId, autoExecute ? 'execute_pending' : 'awaiting_user_confirmation', {
+          markJobPhase(jobId, 'awaiting_user_confirmation', {
             planner: plannerName,
-            autoExecute,
           });
         } else {
           const reasonText = String(planReason || '');
@@ -726,7 +751,7 @@ function createPersonaOrchestrator(dependencies = {}) {
           const isConversationOnly = reasonText === 'conversation_only' || reasonText === 'edit_needs_target';
 
           if (isBriefingClarification) {
-            markJobPhase(jobId, 'awaiting_user_input', {
+            markJobAwaitingUserInput(jobId, {
               reason: 'briefing_clarification_needed',
               questions: plan.meta && Array.isArray(plan.meta.clarificationQuestions)
                 ? plan.meta.clarificationQuestions.slice(0, 5)
@@ -738,7 +763,7 @@ function createPersonaOrchestrator(dependencies = {}) {
               noFileChanges: true,
             });
           } else if (hasAutomataContractSuggestion) {
-            markJobPhase(jobId, 'awaiting_user_input', {
+            markJobAwaitingUserInput(jobId, {
               reason: 'automata_contract_review',
               ledgerId: plan.automataContractSuggestion.id,
             });
@@ -757,7 +782,7 @@ function createPersonaOrchestrator(dependencies = {}) {
           }
         }
       } else if (plannerName === 'persona_orchestrator') {
-        markJobPhase(jobId, plan.action ? (autoExecute ? 'execute_pending' : 'awaiting_user_confirmation') : 'persona_done');
+        markJobPhase(jobId, plan.action ? 'awaiting_user_confirmation' : 'persona_done');
       } else {
         appendJobEvent(jobId, 'job.plan_non_persona_route', {
           planner: plannerName || 'unknown',
@@ -775,10 +800,9 @@ function createPersonaOrchestrator(dependencies = {}) {
             markJobFailed(jobId, nonPersonaReason, 'persona_non_actionable_route');
           }
         } else {
-          markJobPhase(jobId, autoExecute ? 'execute_pending' : 'awaiting_user_confirmation', {
+          markJobPhase(jobId, 'awaiting_user_confirmation', {
             route: 'non_persona_with_action',
             planner: plannerName || 'unknown',
-            autoExecute,
           });
         }
       }
@@ -786,9 +810,6 @@ function createPersonaOrchestrator(dependencies = {}) {
 
     if (jobId) {
       plan.jobId = jobId;
-      if (plan.action && typeof plan.action === 'object') {
-        plan.action.jobId = jobId;
-      }
     }
 
     plan.routeDecision = routeDecision;

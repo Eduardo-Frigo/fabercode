@@ -1,3 +1,32 @@
+const { randomUUID: defaultRandomUUID } = require('crypto');
+
+const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const AUTHORITY_CONTEXT_SCHEMA_VERSION = 'assistant-job-authority.v1';
+const AUTHORITY_CONTEXT_KEYS = [
+  'schemaVersion',
+  'projectId',
+  'canonicalRootPath',
+  'realRootPath',
+  'sessionId',
+  'kernelId',
+  'submissionDigest',
+  'actionDigest',
+];
+const SHA256_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
+const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SAFE_JOB_ID_PATTERN = /^job-[A-Za-z0-9._-]{1,180}$/;
+const MAX_JOB_ID_ATTEMPTS = 3;
+const UNSAFE_RECORD_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+const PUBLIC_JOB_REDACTED_KEYS = new Set([
+  'authorityContext',
+  'canonicalRootPath',
+  'realRootPath',
+  'sessionId',
+  'kernelId',
+  'submissionDigest',
+  'actionDigest',
+]);
+
 function createJobStateStore(dependencies = {}) {
   const {
     CORTEX_BRIEFING_MAX_RETRIES = 8,
@@ -14,9 +43,297 @@ function createJobStateStore(dependencies = {}) {
     appendAuditEvent,
     computeRetryBackoffMs,
     isNonRetriableProviderReason,
+    onJobTerminal,
+    randomUUID = defaultRandomUUID,
     readJobsState,
     writeJobsState,
   } = dependencies;
+
+  function isTerminalJob(job) {
+    return Boolean(
+      job &&
+        (TERMINAL_JOB_STATUSES.has(job.status) || job.phase === 'runtime_interrupted')
+    );
+  }
+
+  function cloneJsonSnapshot(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function snapshotAuthorityContext(authorityContext, options = {}) {
+    if (authorityContext === undefined || authorityContext === null) {
+      return { ok: true, authorityContext: null, authorityContextStatus: 'legacy_missing' };
+    }
+
+    if (typeof authorityContext !== 'object' || Array.isArray(authorityContext)) {
+      return { ok: false, message: 'authorityContext interno inválido.' };
+    }
+
+    let prototype;
+    let keys;
+    let descriptors;
+    try {
+      prototype = Object.getPrototypeOf(authorityContext);
+      keys = Reflect.ownKeys(authorityContext);
+      descriptors = Object.getOwnPropertyDescriptors(authorityContext);
+    } catch {
+      return { ok: false, message: 'authorityContext interno inválido.' };
+    }
+    if (prototype !== Object.prototype && prototype !== null) {
+      return { ok: false, message: 'authorityContext interno inválido.' };
+    }
+    if (keys.some((key) => typeof key !== 'string')) {
+      return { ok: false, message: 'authorityContext interno inválido.' };
+    }
+
+    keys.sort();
+    const expectedKeys = [...AUTHORITY_CONTEXT_KEYS].sort();
+    if (
+      keys.length !== expectedKeys.length ||
+      keys.some((key, index) => key !== expectedKeys[index])
+    ) {
+      return { ok: false, message: 'authorityContext interno inválido.' };
+    }
+
+    if (
+      AUTHORITY_CONTEXT_KEYS.some((key) => {
+        const descriptor = descriptors[key];
+        return (
+          !descriptor ||
+          descriptor.enumerable !== true ||
+          !Object.prototype.hasOwnProperty.call(descriptor, 'value') ||
+          descriptor.value === undefined
+        );
+      })
+    ) {
+      return { ok: false, message: 'authorityContext interno inválido.' };
+    }
+
+    const snapshot = {};
+    AUTHORITY_CONTEXT_KEYS.forEach((key) => {
+      snapshot[key] = descriptors[key].value;
+    });
+
+    const requiredStringFields = AUTHORITY_CONTEXT_KEYS.filter(
+      (key) => key !== 'actionDigest'
+    );
+    if (
+      requiredStringFields.some(
+        (key) => typeof snapshot[key] !== 'string' || !snapshot[key]
+      ) ||
+      snapshot.schemaVersion !== AUTHORITY_CONTEXT_SCHEMA_VERSION ||
+      !SHA256_DIGEST_PATTERN.test(snapshot.submissionDigest) ||
+      (snapshot.actionDigest !== null &&
+        (!options.allowBoundActionDigest || !SHA256_DIGEST_PATTERN.test(snapshot.actionDigest)))
+    ) {
+      return { ok: false, message: 'authorityContext interno inválido.' };
+    }
+
+    return { ok: true, authorityContext: snapshot, authorityContextStatus: 'bound' };
+  }
+
+  function notifyJobTerminalBestEffort(job) {
+    if (typeof onJobTerminal !== 'function') return;
+    try {
+      const result = onJobTerminal(cloneJsonSnapshot(job));
+      if (result && typeof result.catch === 'function') {
+        result.catch(() => {});
+      }
+    } catch {
+      // Terminal persistence is authoritative; lifecycle observers are best-effort.
+    }
+  }
+
+  function appendJobAuditBestEffort(type, payload) {
+    if (typeof appendAuditEvent !== 'function') return;
+    try {
+      const result = appendAuditEvent(type, payload);
+      if (result && typeof result.catch === 'function') {
+        result.catch(() => {});
+      }
+    } catch {
+      // Job events are the durable lifecycle record; the secondary audit is best-effort.
+    }
+  }
+
+  function isSafeJobId(jobId) {
+    return Boolean(
+      typeof jobId === 'string' &&
+        !jobId.includes('\0') &&
+        SAFE_JOB_ID_PATTERN.test(jobId) &&
+        !UNSAFE_RECORD_KEYS.has(jobId) &&
+        !UNSAFE_RECORD_KEYS.has(jobId.slice(4))
+    );
+  }
+
+  function invalidJobIdResult(jobId) {
+    if (!jobId) return { ok: false, code: 'job_id_required', message: 'jobId é obrigatório.' };
+    return { ok: false, code: 'invalid_job_id', message: 'jobId inválido.' };
+  }
+
+  function projectPublicJobValue(value, seen = new WeakSet()) {
+    if (!value || typeof value !== 'object') return value;
+    if (seen.has(value)) return null;
+    seen.add(value);
+
+    let descriptors;
+    try {
+      descriptors = Object.getOwnPropertyDescriptors(value);
+    } catch {
+      return null;
+    }
+    if (Array.isArray(value)) {
+      const lengthDescriptor = descriptors.length;
+      const length =
+        lengthDescriptor &&
+        Object.prototype.hasOwnProperty.call(lengthDescriptor, 'value') &&
+        Number.isSafeInteger(lengthDescriptor.value) &&
+        lengthDescriptor.value >= 0
+          ? lengthDescriptor.value
+          : 0;
+      const projectedArray = [];
+      for (let index = 0; index < length; index += 1) {
+        const descriptor = descriptors[String(index)];
+        projectedArray.push(
+          descriptor &&
+            descriptor.enumerable === true &&
+            Object.prototype.hasOwnProperty.call(descriptor, 'value')
+            ? projectPublicJobValue(descriptor.value, seen)
+            : null
+        );
+      }
+      return projectedArray;
+    }
+
+    const projected = {};
+    for (const key of Object.keys(descriptors)) {
+      if (PUBLIC_JOB_REDACTED_KEYS.has(key) || UNSAFE_RECORD_KEYS.has(key)) continue;
+      const descriptor = descriptors[key];
+      if (
+        !descriptor ||
+        descriptor.enumerable !== true ||
+        !Object.prototype.hasOwnProperty.call(descriptor, 'value')
+      ) {
+        continue;
+      }
+      Object.defineProperty(projected, key, {
+        configurable: true,
+        enumerable: true,
+        value: projectPublicJobValue(descriptor.value, seen),
+        writable: true,
+      });
+    }
+    return projected;
+  }
+
+  function validateStoredAuthorityJob(job) {
+    if (!job || typeof job !== 'object' || Array.isArray(job)) {
+      return { ok: false, code: 'authority_job_invalid', message: 'Job autoritativo inválido.' };
+    }
+
+    let prototype;
+    let descriptors;
+    try {
+      prototype = Object.getPrototypeOf(job);
+      descriptors = Object.getOwnPropertyDescriptors(job);
+    } catch {
+      return { ok: false, code: 'authority_job_invalid', message: 'Job autoritativo inválido.' };
+    }
+    if (prototype !== Object.prototype && prototype !== null) {
+      return { ok: false, code: 'authority_job_invalid', message: 'Job autoritativo inválido.' };
+    }
+
+    const authorityDescriptor = descriptors.authorityContext;
+    if (
+      authorityDescriptor &&
+      (authorityDescriptor.enumerable !== true ||
+        !Object.prototype.hasOwnProperty.call(authorityDescriptor, 'value'))
+    ) {
+      return { ok: false, code: 'authority_context_invalid', message: 'Contexto de autoridade persistido inválido.' };
+    }
+    const authorityContext = authorityDescriptor ? authorityDescriptor.value : undefined;
+
+    const validation = snapshotAuthorityContext(authorityContext, {
+      allowBoundActionDigest: true,
+    });
+    if (!validation.ok) {
+      return { ok: false, code: 'authority_context_invalid', message: 'Contexto de autoridade persistido inválido.' };
+    }
+
+    const derivedStatus = validation.authorityContext ? 'bound' : 'legacy_missing';
+    const statusDescriptor = descriptors.authorityContextStatus;
+    if (
+      statusDescriptor &&
+      (statusDescriptor.enumerable !== true ||
+        !Object.prototype.hasOwnProperty.call(statusDescriptor, 'value'))
+    ) {
+      return { ok: false, code: 'authority_status_invalid', message: 'Status de autoridade persistido inválido.' };
+    }
+    const persistedStatus = statusDescriptor ? statusDescriptor.value : undefined;
+    if (
+      (persistedStatus !== undefined && persistedStatus !== derivedStatus) ||
+      (derivedStatus === 'bound' && persistedStatus !== 'bound')
+    ) {
+      return { ok: false, code: 'authority_status_invalid', message: 'Status de autoridade persistido inválido.' };
+    }
+
+    if (!validation.authorityContext) {
+      return {
+        ok: true,
+        authorityContext: null,
+        authorityContextStatus: 'legacy_missing',
+      };
+    }
+    const projectDescriptor = descriptors.projectId;
+    const rootDescriptor = descriptors.rootPath;
+    if (
+      !projectDescriptor ||
+      !rootDescriptor ||
+      projectDescriptor.enumerable !== true ||
+      rootDescriptor.enumerable !== true ||
+      !Object.prototype.hasOwnProperty.call(projectDescriptor, 'value') ||
+      !Object.prototype.hasOwnProperty.call(rootDescriptor, 'value')
+    ) {
+      return { ok: false, code: 'authority_binding_invalid', message: 'Binding autoritativo persistido inválido.' };
+    }
+    if (
+      projectDescriptor.value !== validation.authorityContext.projectId ||
+      rootDescriptor.value !== validation.authorityContext.canonicalRootPath
+    ) {
+      return { ok: false, code: 'authority_binding_invalid', message: 'Binding autoritativo persistido inválido.' };
+    }
+    return {
+      ok: true,
+      authorityContext: validation.authorityContext,
+      authorityContextStatus: 'bound',
+    };
+  }
+
+  function generateUniqueJobIdentity() {
+    if (typeof randomUUID !== 'function') return null;
+    for (let attempt = 0; attempt < MAX_JOB_ID_ATTEMPTS; attempt += 1) {
+      let candidate;
+      try {
+        candidate = randomUUID();
+      } catch {
+        continue;
+      }
+      if (
+        typeof candidate !== 'string' ||
+        candidate.includes('\0') ||
+        !UUID_V4_PATTERN.test(candidate)
+      ) {
+        continue;
+      }
+
+      const id = `job-${candidate.toLowerCase()}`;
+      const current = readJobsState();
+      if (!Object.hasOwn(current.jobsById, id)) {
+        return { id, current };
+      }
+    }
+    return null;
+  }
 
   function buildJobEvent(type, payload = {}) {
     return {
@@ -37,6 +354,7 @@ function createJobStateStore(dependencies = {}) {
     paused_memory_pressure: 52,
     persona_done: 42,
     awaiting_user_confirmation: 58,
+    awaiting_user_input: 100,
     execute_pending: 76,
     done: 100,
     failed: 100,
@@ -152,10 +470,19 @@ function createJobStateStore(dependencies = {}) {
     return { progress, delta, nowIso };
   }
 
-  function mutateJobState(jobId, mutator) {
+  function mutateJobState(jobId, mutator, options = {}) {
+    if (!isSafeJobId(jobId)) return invalidJobIdResult(jobId);
     const current = readJobsState();
+    if (!Object.hasOwn(current.jobsById, jobId)) {
+      return { ok: false, code: 'job_not_found', message: 'Job não encontrado.' };
+    }
     const previousJob = current.jobsById[jobId];
-    if (!previousJob) return { ok: false, message: 'Job não encontrado.' };
+    if (!previousJob || typeof previousJob !== 'object' || Array.isArray(previousJob)) {
+      return { ok: false, code: 'job_invalid', message: 'Job persistido inválido.' };
+    }
+    if (options.rejectTerminal && isTerminalJob(previousJob)) {
+      return { ok: false, code: 'job_terminal', message: 'Job já está em estado terminal.' };
+    }
 
     const nextJob = mutator({ ...previousJob });
     if (!nextJob || typeof nextJob !== 'object') {
@@ -171,28 +498,75 @@ function createJobStateStore(dependencies = {}) {
       ...current,
       jobsById,
     });
+    if (options.notifyTerminal && !isTerminalJob(previousJob) && isTerminalJob(nextJob)) {
+      notifyJobTerminalBestEffort(nextJob);
+    }
     return { ok: true, job: nextJob };
   }
 
-  function createAssistantJob({
-    projectId = null,
-    rootPath = null,
-    userMessage = '',
-    attachments = [],
-    mode = 'default',
-  }) {
-    const current = readJobsState();
+  function createAssistantJob(input = {}, internalOptions = {}) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      return { ok: false, code: 'job_input_invalid', message: 'Entrada de job inválida.' };
+    }
+    const {
+      projectId = null,
+      rootPath = null,
+      userMessage = '',
+      attachments = [],
+      mode = 'default',
+      authorityContext,
+    } = input;
     const now = new Date().toISOString();
-    const id = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const authoritySnapshot = snapshotAuthorityContext(authorityContext);
+    if (!authoritySnapshot.ok) return authoritySnapshot;
+    const requireAuthorityContext =
+      internalOptions.requireAuthorityContext === true || input.requireAuthorityContext === true;
+    if (requireAuthorityContext && !authoritySnapshot.authorityContext) {
+      return {
+        ok: false,
+        code: 'authority_context_required',
+        message: 'authorityContext é obrigatório para jobs autoritativos.',
+      };
+    }
+
+    if (authoritySnapshot.authorityContext) {
+      if (
+        (Object.hasOwn(input, 'projectId') &&
+          projectId !== authoritySnapshot.authorityContext.projectId) ||
+        (Object.hasOwn(input, 'rootPath') &&
+          rootPath !== authoritySnapshot.authorityContext.canonicalRootPath)
+      ) {
+        return {
+          ok: false,
+          code: 'authority_binding_mismatch',
+          message: 'projectId/rootPath divergem do contexto autoritativo.',
+        };
+      }
+    }
+
+    const identity = generateUniqueJobIdentity();
+    if (!identity) {
+      return { ok: false, message: 'Não foi possível gerar um identificador único para o job.' };
+    }
+    const { id, current } = identity;
+    const boundAuthorityContext = authoritySnapshot.authorityContext;
+    const authoritativeProjectId = boundAuthorityContext
+      ? boundAuthorityContext.projectId
+      : projectId;
+    const authoritativeRootPath = boundAuthorityContext
+      ? boundAuthorityContext.canonicalRootPath
+      : rootPath;
     const job = {
       id,
       status: 'running',
       phase: 'created',
       createdAt: now,
       updatedAt: now,
-      projectId,
-      rootPath,
+      projectId: authoritativeProjectId,
+      rootPath: authoritativeRootPath,
       mode,
+      authorityContext: authoritySnapshot.authorityContext,
+      authorityContextStatus: authoritySnapshot.authorityContextStatus,
       request: {
         userMessage: String(userMessage || ''),
         attachments: Array.isArray(attachments) ? attachments : [],
@@ -216,18 +590,23 @@ function createJobStateStore(dependencies = {}) {
       lastError: null,
       events: [
         buildJobEvent('job.created', {
-          projectId,
-          rootPath,
+          projectId: authoritativeProjectId,
+          rootPath: authoritativeRootPath,
           userMessagePreview: String(userMessage || '').slice(0, 220),
           attachmentsCount: Array.isArray(attachments) ? attachments.length : 0,
         }),
       ],
     };
 
-    const nextOrder = [id, ...current.jobOrder.filter((entry) => current.jobsById[entry])].slice(0, MAX_JOBS_STORED);
-    const jobsById = {};
+    const nextOrder = [
+      id,
+      ...current.jobOrder.filter(
+        (entry) => isSafeJobId(entry) && Object.hasOwn(current.jobsById, entry)
+      ),
+    ].slice(0, MAX_JOBS_STORED);
+    const jobsById = Object.create(null);
     for (const key of nextOrder) {
-      if (current.jobsById[key]) jobsById[key] = current.jobsById[key];
+      if (Object.hasOwn(current.jobsById, key)) jobsById[key] = current.jobsById[key];
     }
     jobsById[id] = job;
 
@@ -236,16 +615,25 @@ function createJobStateStore(dependencies = {}) {
       jobOrder: nextOrder,
     });
 
-    appendAuditEvent('job.created', { jobId: id, projectId, rootPath, mode });
+    appendJobAuditBestEffort('job.created', {
+      jobId: id,
+      projectId: authoritativeProjectId,
+      rootPath: authoritativeRootPath,
+      mode,
+    });
 
     return { ok: true, job };
+  }
+
+  function createAuthorizedAssistantJob(input = {}) {
+    return createAssistantJob(input, { requireAuthorityContext: true });
   }
 
   function appendJobEvent(jobId, type, payload = {}) {
     return mutateJobState(jobId, (job) => {
       job.events = [buildJobEvent(type, payload), ...(Array.isArray(job.events) ? job.events : [])].slice(0, MAX_JOB_EVENTS);
       return job;
-    });
+    }, { rejectTerminal: true });
   }
 
   function markJobPhase(jobId, phase, payload = {}) {
@@ -280,9 +668,9 @@ function createJobStateStore(dependencies = {}) {
         ...(Array.isArray(job.events) ? job.events : []),
       ].slice(0, MAX_JOB_EVENTS);
       return job;
-    });
+    }, { rejectTerminal: true });
     if (next.ok) {
-      appendAuditEvent('job.phase_changed', { jobId, phase });
+      appendJobAuditBestEffort('job.phase_changed', { jobId, phase });
     }
     return next;
   }
@@ -301,7 +689,7 @@ function createJobStateStore(dependencies = {}) {
         ...(Array.isArray(job.events) ? job.events : []),
       ].slice(0, MAX_JOB_EVENTS);
       return job;
-    });
+    }, { rejectTerminal: true });
   }
 
   function markJobRetryPending(jobId, reason, phase = 'persona_plan', meta = {}) {
@@ -411,11 +799,11 @@ function createJobStateStore(dependencies = {}) {
       ].slice(0, MAX_JOB_EVENTS);
 
       return job;
-    });
+    }, { rejectTerminal: true });
 
     if (next.ok) {
       const rs = next.job && next.job.retryState ? next.job.retryState : {};
-      appendAuditEvent('job.retry_pending', {
+      appendJobAuditBestEffort('job.retry_pending', {
         jobId,
         phase,
         reason: String(reason || ''),
@@ -448,9 +836,38 @@ function createJobStateStore(dependencies = {}) {
         ...(Array.isArray(job.events) ? job.events : []),
       ].slice(0, MAX_JOB_EVENTS);
       return job;
-    });
+    }, { rejectTerminal: true, notifyTerminal: true });
     if (next.ok) {
-      appendAuditEvent('job.completed', { jobId });
+      appendJobAuditBestEffort('job.completed', { jobId });
+    }
+    return next;
+  }
+
+  function markJobAwaitingUserInput(jobId, payload = {}) {
+    const next = mutateJobState(jobId, (job) => {
+      const retryState = ensureJobRetryState(job);
+      const progressResult = applyProgressUpdate(job, 100, 'awaiting_user_input');
+
+      retryState.retryable = false;
+      retryState.stagnationCount = 0;
+      retryState.softTimeoutExceeded = false;
+      retryState.lastRetryAt = retryState.lastRetryAt || progressResult.nowIso;
+      retryState.nextRetryAt = null;
+
+      job.status = 'completed';
+      job.phase = 'awaiting_user_input';
+      job.lastError = null;
+      job.events = [
+        buildJobEvent('job.awaiting_user_input', {
+          progressPct: progressResult.progress.pct,
+          ...payload,
+        }),
+        ...(Array.isArray(job.events) ? job.events : []),
+      ].slice(0, MAX_JOB_EVENTS);
+      return job;
+    }, { rejectTerminal: true, notifyTerminal: true });
+    if (next.ok) {
+      appendJobAuditBestEffort('job.awaiting_user_input', { jobId });
     }
     return next;
   }
@@ -476,9 +893,9 @@ function createJobStateStore(dependencies = {}) {
         ...(Array.isArray(job.events) ? job.events : []),
       ].slice(0, MAX_JOB_EVENTS);
       return job;
-    });
+    }, { rejectTerminal: true, notifyTerminal: true });
     if (next.ok) {
-      appendAuditEvent('job.failed', { jobId, phase, reason: String(reason || '') });
+      appendJobAuditBestEffort('job.failed', { jobId, phase, reason: String(reason || '') });
     }
     return next;
   }
@@ -503,24 +920,95 @@ function createJobStateStore(dependencies = {}) {
         ...(Array.isArray(job.events) ? job.events : []),
       ].slice(0, MAX_JOB_EVENTS);
       return job;
-    });
+    }, { rejectTerminal: true, notifyTerminal: true });
     if (next.ok) {
-      appendAuditEvent('job.cancelled', { jobId, reason: String(reason || 'cancelled_by_user') });
+      appendJobAuditBestEffort('job.cancelled', { jobId, reason: String(reason || 'cancelled_by_user') });
     }
     return next;
   }
 
-  function getJobById(jobId) {
-    if (!jobId) return { ok: false, message: 'jobId é obrigatório.' };
+  function getAuthorizedJobById(jobId) {
+    if (!isSafeJobId(jobId)) return invalidJobIdResult(jobId);
     const current = readJobsState();
+    if (!Object.hasOwn(current.jobsById, jobId)) {
+      return { ok: false, code: 'job_not_found', message: 'Job não encontrado.' };
+    }
     const job = current.jobsById[jobId];
-    if (!job) return { ok: false, message: 'Job não encontrado.' };
+    if (!job || typeof job !== 'object' || Array.isArray(job)) {
+      return { ok: false, code: 'job_invalid', message: 'Job persistido inválido.' };
+    }
     return { ok: true, job };
+  }
+
+  function getJobById(jobId) {
+    const found = getAuthorizedJobById(jobId);
+    if (!found.ok) return found;
+    return { ok: true, job: projectPublicJobValue(found.job) };
+  }
+
+  function bindJobActionDigest(jobId, digest) {
+    if (!isSafeJobId(jobId)) return invalidJobIdResult(jobId);
+    if (typeof digest !== 'string' || !SHA256_DIGEST_PATTERN.test(digest)) {
+      return { ok: false, code: 'invalid_action_digest', message: 'actionDigest SHA-256 inválido.' };
+    }
+
+    const current = readJobsState();
+    if (!Object.hasOwn(current.jobsById, jobId)) {
+      return { ok: false, code: 'job_not_found', message: 'Job não encontrado.' };
+    }
+    const previousJob = current.jobsById[jobId];
+    const authority = validateStoredAuthorityJob(previousJob);
+    if (!authority.ok) return authority;
+    if (isTerminalJob(previousJob)) {
+      return { ok: false, code: 'job_terminal', message: 'Job já está em estado terminal.' };
+    }
+    if (authority.authorityContextStatus !== 'bound') {
+      return {
+        ok: false,
+        code: 'authority_context_missing',
+        message: 'Job legado não possui contexto de autoridade.',
+      };
+    }
+
+    const currentDigest = authority.authorityContext.actionDigest;
+    if (currentDigest === digest) {
+      return { ok: true, job: previousJob, idempotent: true };
+    }
+    if (currentDigest !== null) {
+      return {
+        ok: false,
+        code: 'action_digest_conflict',
+        message: 'actionDigest já vinculado a outra ação.',
+      };
+    }
+
+    const nextJob = {
+      ...previousJob,
+      updatedAt: new Date().toISOString(),
+      authorityContext: {
+        ...authority.authorityContext,
+        actionDigest: digest,
+      },
+      authorityContextStatus: authority.authorityContextStatus,
+      events: [
+        buildJobEvent('job.action_digest_bound'),
+        ...(Array.isArray(previousJob.events) ? previousJob.events : []),
+      ].slice(0, MAX_JOB_EVENTS),
+    };
+    writeJobsState({
+      ...current,
+      jobsById: {
+        ...current.jobsById,
+        [jobId]: nextJob,
+      },
+    });
+    appendJobAuditBestEffort('job.action_digest_bound', { jobId });
+    return { ok: true, job: nextJob, idempotent: false };
   }
 
   function isJobCancelled(jobId) {
     if (!jobId) return false;
-    const found = getJobById(jobId);
+    const found = getAuthorizedJobById(jobId);
     return Boolean(found.ok && found.job && found.job.status === 'cancelled');
   }
 
@@ -540,7 +1028,7 @@ function createJobStateStore(dependencies = {}) {
         ...(Array.isArray(job.events) ? job.events : []),
       ].slice(0, MAX_JOB_EVENTS);
       return job;
-    });
+    }, { rejectTerminal: true });
   }
 
   function recoverInterruptedJobs(reason = 'runtime_restarted_before_job_completed') {
@@ -549,10 +1037,30 @@ function createJobStateStore(dependencies = {}) {
     const nowIso = new Date().toISOString();
     const recoveredJobIds = [];
     const jobsById = { ...current.jobsById };
+    const ownJobIds = Object.keys(current.jobsById);
+    const reconciledOrder = [];
+    const seenJobIds = new Set();
 
     for (const jobId of current.jobOrder || []) {
+      if (
+        typeof jobId !== 'string' ||
+        seenJobIds.has(jobId) ||
+        !Object.hasOwn(current.jobsById, jobId)
+      ) {
+        continue;
+      }
+      seenJobIds.add(jobId);
+      reconciledOrder.push(jobId);
+    }
+    for (const jobId of ownJobIds) {
+      if (seenJobIds.has(jobId)) continue;
+      seenJobIds.add(jobId);
+      reconciledOrder.push(jobId);
+    }
+
+    for (const jobId of ownJobIds) {
       const job = jobsById[jobId];
-      if (!job || !interruptedStatuses.has(job.status)) continue;
+      if (!job || typeof job !== 'object' || Array.isArray(job) || !interruptedStatuses.has(job.status)) continue;
 
       const nextJob = { ...job };
       const retryState = ensureJobRetryState(nextJob);
@@ -580,17 +1088,25 @@ function createJobStateStore(dependencies = {}) {
       recoveredJobIds.push(jobId);
     }
 
-    if (!recoveredJobIds.length) {
+    const orderChanged =
+      reconciledOrder.length !== current.jobOrder.length ||
+      reconciledOrder.some((jobId, index) => jobId !== current.jobOrder[index]);
+    if (!recoveredJobIds.length && !orderChanged) {
       return { ok: true, recovered: 0, jobIds: [] };
     }
 
     writeJobsState({
       ...current,
       jobsById,
+      jobOrder: reconciledOrder,
     });
 
     recoveredJobIds.forEach((jobId) => {
-      appendAuditEvent('job.interrupted', {
+      notifyJobTerminalBestEffort(jobsById[jobId]);
+    });
+
+    recoveredJobIds.forEach((jobId) => {
+      appendJobAuditBestEffort('job.interrupted', {
         jobId,
         phase: 'runtime_interrupted',
         reason: String(reason || 'runtime_interrupted'),
@@ -605,10 +1121,11 @@ function createJobStateStore(dependencies = {}) {
     const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Number(limit))) : 30;
     const items = [];
     for (const id of current.jobOrder) {
+      if (!isSafeJobId(id) || !Object.hasOwn(current.jobsById, id)) continue;
       const job = current.jobsById[id];
-      if (!job) continue;
+      if (!job || typeof job !== 'object' || Array.isArray(job)) continue;
       if (projectId && job.projectId !== projectId) continue;
-      items.push(job);
+      items.push(projectPublicJobValue(job));
       if (items.length >= safeLimit) break;
     }
     return { ok: true, jobs: items };
@@ -616,10 +1133,14 @@ function createJobStateStore(dependencies = {}) {
 
   return {
     appendJobEvent,
+    bindJobActionDigest,
+    createAuthorizedAssistantJob,
     createAssistantJob,
+    getAuthorizedJobById,
     getJobById,
     isJobCancelled,
     listJobs,
+    markJobAwaitingUserInput,
     markJobCancelled,
     markJobCompleted,
     markJobFailed,

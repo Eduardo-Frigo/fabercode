@@ -40,7 +40,7 @@
       processingSuccess: 'Processing completed successfully.',
       processingObservations: 'Processing completed with notes.',
       cannotCompleteRound: 'I could not complete this round.',
-      cancelledNoChanges: 'Action cancelled. No files were changed.',
+      cancelledNoChanges: 'Task cancelled. No new operations will be started.',
       waitingApi: 'Waiting for the API window before trying again.',
       waitingRetry: 'Waiting for the retry window.',
       personaAuthorized: 'The Persona authorized the technical analysis.',
@@ -572,7 +572,7 @@
         ? uxText('processingObservations', 'Processamento concluído com observações.')
         : uxText('cannotCompleteRound', 'Não consegui concluir esta rodada.');
     }
-    if (job.status === 'cancelled') return uxText('cancelledNoChanges', 'Ação cancelada. Nenhum arquivo foi alterado.');
+    if (job.status === 'cancelled') return uxText('cancelledNoChanges', 'Tarefa cancelada. Nenhuma nova operação será iniciada.');
     if (job.status === 'retry_pending') {
       const reason = normalizeText(job.lastError || '');
       if (/429|rate.?limit|quota/.test(reason)) return uxText('waitingApi', 'Aguardando janela de API para nova tentativa.');

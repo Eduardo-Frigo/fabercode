@@ -39,6 +39,58 @@
     } = callbacks;
 
     let selectProjectSequence = 0;
+    let contextChangeCancellation = null;
+
+    function normalizeAssistantJobId(value) {
+      return typeof value === 'string' && value.trim() ? value.trim() : null;
+    }
+
+    function currentAssistantJobId() {
+      if (state.pendingAction) return normalizeAssistantJobId(state.pendingActionJobId);
+      return normalizeAssistantJobId(state.activeJobId);
+    }
+
+    async function cancelAssistantJobBeforeProjectSwitch() {
+      const jobId = currentAssistantJobId();
+      if (!jobId) return true;
+      if (!api || typeof api.cancelJob !== 'function') {
+        appendMessage(
+          'assistant',
+          t('projectSwitchCancellationFailed', 'Não troquei de projeto porque a tarefa ativa não pôde ser cancelada.'),
+          { persistToConversation: false },
+        );
+        updateStatus(t('actionCancellationFailedStatus', 'Falha ao cancelar tarefa'));
+        return false;
+      }
+
+      if (!contextChangeCancellation || contextChangeCancellation.jobId !== jobId) {
+        const promise = Promise.resolve()
+          .then(() => api.cancelJob({ jobId }))
+          .catch((error) => ({
+            ok: false,
+            message: error && error.message ? error.message : '',
+          }));
+        contextChangeCancellation = { jobId, promise };
+        promise.finally(() => {
+          if (contextChangeCancellation && contextChangeCancellation.promise === promise) {
+            contextChangeCancellation = null;
+          }
+        });
+      }
+
+      const result = await contextChangeCancellation.promise;
+      if (!result || result.ok !== true) {
+        appendMessage(
+          'assistant',
+          (result && result.message)
+            || t('projectSwitchCancellationFailed', 'Não troquei de projeto porque a tarefa ativa não pôde ser cancelada.'),
+          { persistToConversation: false },
+        );
+        updateStatus(t('actionCancellationFailedStatus', 'Falha ao cancelar tarefa'));
+        return false;
+      }
+      return true;
+    }
 
     function summarizeProject(info) {
       if (!info) return t('noProjectSelected', 'Nenhum projeto selecionado.');
@@ -75,6 +127,7 @@
       state.nextSteps = [];
       state.lastAssistantMeta = null;
       state.pendingAction = null;
+      state.pendingActionJobId = null;
       state.automataContractSummary = null;
       state.automataContractLedger = [];
       renderNextSteps();
@@ -371,7 +424,10 @@
 
       const previousProjectId = state.selectedProjectId;
       if (previousProjectId && previousProjectId !== projectId) {
+        const cancelled = await cancelAssistantJobBeforeProjectSwitch();
+        if (selectProjectSequence !== currentSequence || !cancelled) return;
         state.pendingAction = null;
+        state.pendingActionJobId = null;
         state.activeJobId = null;
         clearPending();
       }

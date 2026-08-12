@@ -53,7 +53,38 @@ assert.deepStrictEqual(executeRequest, {
 });
 assert.strictEqual(executeRequest.action, action, 'execute action reference must be preserved');
 assert.strictEqual(executeRequest.projectInfo, projectInfo, 'execute project reference must be preserved');
+assert.strictEqual(Object.hasOwn(executeRequest, 'executionContext'), false);
 assert.strictEqual(isHarnessRequest(executeRequest), true);
+
+const abortController = new AbortController();
+const executionContext = {
+  jobId: 'job-1',
+  signal: abortController.signal,
+};
+const contextualExecuteRequest = createExecuteRequest(action, projectInfo, {
+  requestId: 'request-execute-context-1',
+  executionContext,
+});
+assert.deepStrictEqual(contextualExecuteRequest, {
+  schemaVersion: HARNESS_REQUEST_SCHEMA_VERSION,
+  requestId: 'request-execute-context-1',
+  operation: 'execute',
+  action,
+  projectInfo,
+  executionContext,
+});
+assert.strictEqual(contextualExecuteRequest.executionContext, executionContext);
+assert.strictEqual(contextualExecuteRequest.executionContext.signal, abortController.signal);
+assert.strictEqual(Object.isFrozen(executionContext), false, 'execution context must not be cloned or frozen');
+assert.strictEqual(isHarnessRequest(contextualExecuteRequest), true);
+
+const explicitUndefinedContextRequest = createExecuteRequest(action, projectInfo, {
+  requestId: 'request-execute-undefined-context',
+  executionContext: undefined,
+});
+assert.strictEqual(Object.hasOwn(explicitUndefinedContextRequest, 'executionContext'), true);
+assert.strictEqual(explicitUndefinedContextRequest.executionContext, undefined);
+assert.strictEqual(isHarnessRequest(explicitUndefinedContextRequest), true);
 
 const legacyOutput = { ok: true, response: 'feito', action };
 const diagnostics = { elapsedMs: 4 };
@@ -74,6 +105,7 @@ assert.deepStrictEqual(result, {
 });
 assert.strictEqual(result.output, legacyOutput, 'kernel output reference must be preserved');
 assert.strictEqual(result.diagnostics, diagnostics, 'diagnostics reference must be preserved');
+assert.strictEqual(Object.hasOwn(result, 'executionContext'), false);
 assert.strictEqual(Object.isFrozen(result), true);
 
 assert.throws(() => createPlanRequest({}, {}), /requestId/);
@@ -93,6 +125,11 @@ assert.throws(() => createHarnessResult({
 assert.strictEqual(isHarnessRequest(null), false);
 assert.strictEqual(isHarnessRequest({ ...planRequest, schemaVersion: 'future.v2' }), false);
 assert.strictEqual(isHarnessRequest({ ...executeRequest, projectInfo: undefined }), true);
+const inheritedContextRequest = Object.assign(
+  Object.create({ executionContext }),
+  executeRequest
+);
+assert.strictEqual(isHarnessRequest(inheritedContextRequest), false);
 assert.strictEqual(isHarnessRequest({
   schemaVersion: HARNESS_REQUEST_SCHEMA_VERSION,
   requestId: 'request-1',

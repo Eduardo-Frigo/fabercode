@@ -105,8 +105,12 @@ function createHarnessRouter({
     return dispatch(createMessageRequest(payload, { requestId: nextRequestId() }));
   }
 
-  function execute(action, projectInfo) {
-    return dispatch(createExecuteRequest(action, projectInfo, { requestId: nextRequestId() }));
+  function execute(action, projectInfo, executionContext) {
+    const options = { requestId: nextRequestId() };
+    if (arguments.length >= 3) {
+      options.executionContext = executionContext;
+    }
+    return dispatch(createExecuteRequest(action, projectInfo, options));
   }
 
   function getStatus() {

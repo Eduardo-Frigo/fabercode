@@ -31,6 +31,10 @@ function createHarness(overrides = {}) {
     })),
     getSelectedAiProvider: () => 'openai',
     isAiRetryableReason: (reason) => /retry|timeout|429/i.test(String(reason || '')),
+    markJobAwaitingUserInput: (jobId, payload) => {
+      calls.phases.push({ jobId, phase: 'awaiting_user_input', payload });
+      return { ok: true, job: { status: 'completed', phase: 'awaiting_user_input' } };
+    },
     markJobCompleted: (jobId, payload) => calls.phases.push({ jobId, phase: 'completed', payload }),
     markJobFailed: (jobId, reason, phase) => calls.phases.push({ jobId, phase: phase || 'failed', reason }),
     markJobPausedForMemory: (jobId, payload) => calls.phases.push({ jobId, phase: 'paused_memory_pressure', payload }),
@@ -121,7 +125,22 @@ async function run() {
   assert.strictEqual(routerGreetingCalled, true);
   assert.strictEqual(directGreetingCalled, true);
 
-  const executeHarness = createHarness();
+  const executeHarness = createHarness({
+    buildPlanWithCortexRuntime: async () => ({
+      ok: true,
+      response: 'Plano técnico pronto.',
+      action: {
+        type: 'execute_operation_batch',
+        operations: [],
+        jobId: 'job-forged-by-model',
+      },
+      meta: {
+        planner: 'cortex_runtime',
+        reason: 'operation_batch_ready',
+        autoExecute: true,
+      },
+    }),
+  });
   const executePlan = await executeHarness.flow.handleAssistantMessage({
     projectInfo: { id: 'project-1', rootPath: '/tmp/project' },
     userMessage: 'pode gerar o site',
@@ -131,10 +150,38 @@ async function run() {
   assert.strictEqual(executePlan.ok, true);
   assert.strictEqual(executePlan.response, 'Plano técnico pronto.');
   assert.strictEqual(executePlan.jobId, 'job-1');
-  assert.strictEqual(executePlan.action.jobId, 'job-1');
+  assert.strictEqual(Object.hasOwn(executePlan.action, 'jobId'), false);
+  assert.strictEqual(Object.hasOwn(executePlan.meta, 'autoExecute'), false);
   assert.strictEqual(executePlan.routeDecision.decision, 'execute');
   assert.ok(executeHarness.calls.phases.some((entry) => entry.phase === 'persona_plan'));
   assert.ok(executeHarness.calls.phases.some((entry) => entry.phase === 'awaiting_user_confirmation'));
+  assert.ok(!executeHarness.calls.phases.some((entry) => entry.phase === 'execute_pending'));
+
+  const clarificationHarness = createHarness({
+    buildPlanWithCortexRuntime: async () => ({
+      ok: true,
+      response: 'Qual plataforma devo usar?',
+      action: null,
+      meta: {
+        planner: 'cortex_runtime',
+        reason: 'cortex_briefing_clarification_needed',
+        clarificationQuestions: ['Qual plataforma?'],
+      },
+    }),
+  });
+  const clarificationPlan = await clarificationHarness.flow.handleAssistantMessage({
+    projectInfo: { id: 'project-1', rootPath: '/tmp/project' },
+    userMessage: 'crie a aplicação',
+  });
+  assert.strictEqual(clarificationPlan.ok, true);
+  assert.strictEqual(clarificationPlan.action, null);
+  assert.strictEqual(clarificationPlan.response, 'Qual plataforma devo usar?');
+  assert.ok(clarificationHarness.calls.phases.some(
+    (entry) => entry.phase === 'awaiting_user_input'
+      && entry.payload.reason === 'briefing_clarification_needed'
+      && entry.payload.questions[0] === 'Qual plataforma?'
+  ));
+  assert.ok(!clarificationHarness.calls.phases.some((entry) => entry.phase === 'completed'));
 
   const agenticHarness = createHarness({
     flowFactory: createPersonaOrchestrator,
@@ -154,9 +201,59 @@ async function run() {
     userMessage: 'corrija o projeto',
   });
   assert.strictEqual(agenticPlan.ok, true);
+  assert.strictEqual(agenticPlan.jobId, 'job-1');
   assert.strictEqual(agenticPlan.action.type, 'agentic_tool_loop');
-  assert.ok(agenticHarness.calls.phases.some((entry) => entry.phase === 'execute_pending'));
-  assert.ok(!agenticHarness.calls.phases.some((entry) => entry.phase === 'awaiting_user_confirmation'));
+  assert.strictEqual(Object.hasOwn(agenticPlan.action, 'jobId'), false);
+  assert.strictEqual(Object.hasOwn(agenticPlan.meta, 'autoExecute'), false);
+  assert.ok(!agenticHarness.calls.phases.some((entry) => entry.phase === 'execute_pending'));
+  assert.ok(agenticHarness.calls.phases.some((entry) => entry.phase === 'awaiting_user_confirmation'));
+
+  let retryCreateCalls = 0;
+  const retryHarness = createHarness({
+    createAssistantJob: () => {
+      retryCreateCalls += 1;
+      return { ok: true, job: { id: 'job-new-unexpected' } };
+    },
+    buildPlanWithCortexRuntime: async () => ({
+      ok: true,
+      response: 'Retry pronto.',
+      action: { type: 'execute_operation_batch', operations: [], jobId: 'job-forged' },
+      meta: { planner: 'cortex_runtime', reason: 'operation_batch_ready', autoExecute: true },
+    }),
+  });
+  const retriedPlan = await retryHarness.flow.buildAssistantPlanResponse({
+    projectInfo: { id: 'project-1', rootPath: '/tmp/project' },
+    userMessage: 'request persisted',
+    attachments: [],
+    jobId: 'job-existing',
+  });
+  assert.strictEqual(retryCreateCalls, 0);
+  assert.strictEqual(retriedPlan.jobId, 'job-existing');
+  assert.strictEqual(Object.hasOwn(retriedPlan.action, 'jobId'), false);
+  assert.strictEqual(Object.hasOwn(retriedPlan.meta, 'autoExecute'), false);
+  assert.ok(retryHarness.calls.phases.some(
+    (entry) => entry.jobId === 'job-existing' && entry.phase === 'awaiting_user_confirmation'
+  ));
+
+  for (const planner of ['persona_orchestrator', 'custom_non_persona']) {
+    const plannerHarness = createHarness({
+      buildPlanWithCortexRuntime: async () => ({
+        ok: true,
+        response: `Plano ${planner}.`,
+        action: { type: 'execute_operation_batch', operations: [], jobId: 'job-forged' },
+        meta: { planner, reason: 'action_ready', autoExecute: true },
+      }),
+    });
+    const plannerPlan = await plannerHarness.flow.handleAssistantMessage({
+      projectInfo: { id: 'project-1', rootPath: '/tmp/project' },
+      userMessage: `execute com ${planner}`,
+    });
+    assert.strictEqual(plannerPlan.jobId, 'job-1');
+    assert.strictEqual(Object.hasOwn(plannerPlan.action, 'jobId'), false);
+    assert.strictEqual(Object.hasOwn(plannerPlan.meta, 'autoExecute'), false);
+    assert.ok(plannerHarness.calls.phases.some((entry) => entry.phase === 'awaiting_user_confirmation'));
+    assert.ok(!plannerHarness.calls.phases.some((entry) => entry.phase === 'execute_pending'));
+  }
 
   const activeMemory = {
     schemaVersion: 'active-memory-v1',

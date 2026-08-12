@@ -18,9 +18,7 @@
     const {
       appendMessage = () => {},
       buildJobContextForPersona = () => null,
-      buildPersonaRequestContextHint = () => ({}),
       buildTerminalJobMessage = () => null,
-      getRecentConversationMessagesForPersona = () => [],
       hidePersonaThinkingIndicator = () => {},
       shouldSuppressInterimAssistantPlanMessage = () => false,
       showPending = () => {},
@@ -46,6 +44,8 @@
     
     async function maybeAutoRetryPendingJob(job) {
       if (!job || job.status !== 'retry_pending') return;
+      const jobId = typeof job.id === 'string' && job.id.trim() ? job.id.trim() : null;
+      if (!jobId || !api || typeof api.retryJob !== 'function') return;
       const retryState = job.retryState || {};
       if (retryState.retryable === false) return;
     
@@ -54,40 +54,18 @@
     
       if (!state.selectedProjectInfo || state.selectedProjectInfo.rootPath !== job.rootPath) return;
     
-      const lastRun = Number(state.autoRetryLastRunByJob[job.id] || 0);
+      const lastRun = Number(state.autoRetryLastRunByJob[jobId] || 0);
       if (Date.now() - lastRun < 2500) return;
     
-      if (state.autoRetryInFlightByJob[job.id]) return;
+      if (state.autoRetryInFlightByJob[jobId]) return;
     
-      const request = job.request || {};
-      const userMessage = String(request.userMessage || '').trim();
-      const attachments = Array.isArray(request.attachments) ? request.attachments : [];
-      if (!userMessage) return;
-    
-      state.autoRetryInFlightByJob[job.id] = true;
-      state.autoRetryLastRunByJob[job.id] = Date.now();
+      state.autoRetryInFlightByJob[jobId] = true;
+      state.autoRetryLastRunByJob[jobId] = Date.now();
       updateStatus(uiText('personaAutomaticRetry', 'Retentativa automática da Persona...'));
       showPersonaThinkingIndicator();
     
       try {
-        const plan = await api.buildPlan({
-          projectInfo: state.selectedProjectInfo,
-          userMessage,
-          attachments,
-          jobId: job.id,
-          contextHint: buildPersonaRequestContextHint({
-            personaApprovedExecution: true,
-            personaRouteDecision: {
-              ok: true,
-              decision: 'execute',
-              response: '',
-              executionMessage: userMessage,
-              meta: { planner: 'persona_router', reason: 'retry_existing_job' },
-            },
-            lastJobContext: buildJobContextForPersona(job),
-          }),
-          conversationMessages: getRecentConversationMessagesForPersona(),
-        });
+        const plan = await api.retryJob({ jobId });
     
         if (plan && plan.meta) {
           state.lastAssistantMeta = { ...plan.meta, lastHadAction: Boolean(plan.action) };
@@ -101,21 +79,23 @@
     
         if (shouldPublishInterim) {
           const signature = `${planReason}|${String(plan.response).trim()}`;
-          if (state.lastInterimPlanSignatureByJob[job.id] !== signature) {
-            state.lastInterimPlanSignatureByJob[job.id] = signature;
+          if (state.lastInterimPlanSignatureByJob[jobId] !== signature) {
+            state.lastInterimPlanSignatureByJob[jobId] = signature;
             appendMessage('assistant', plan.response, { persistToConversation: false });
           }
         }
     
-        if (plan && plan.jobId) {
-          startJobPolling(plan.jobId);
+        const planJobId = plan && typeof plan.jobId === 'string' ? plan.jobId.trim() : '';
+        if (planJobId === jobId) {
+          startJobPolling(planJobId);
         }
     
         if (plan && plan.automataContractSuggestion && automataContractsController) {
           automataContractsController.appendContractPreview(plan.automataContractSuggestion);
         }
     
-        if (plan && plan.ok && plan.action) {
+        if (plan && plan.ok && plan.action && planJobId === jobId) {
+          state.pendingActionJobId = planJobId;
           showPending(
             uiText(
               'safeTemporaryExecution',
@@ -128,7 +108,7 @@
         // silêncio para não poluir chat; o watchdog seguirá tentando.
       } finally {
         hidePersonaThinkingIndicator();
-        state.autoRetryInFlightByJob[job.id] = false;
+        state.autoRetryInFlightByJob[jobId] = false;
       }
     }
     

@@ -17,6 +17,142 @@ function actionRequiresFileChanges(action = {}) {
   );
 }
 
+const AGENTIC_EXECUTION_CANCELLED_CODE = 'AGENTIC_EXECUTION_CANCELLED';
+
+class AgenticExecutionCancelledError extends Error {
+  constructor(phase = 'agentic_execution') {
+    super('A execução agentic foi cancelada antes de concluir a operação atual.');
+    this.name = 'AgenticExecutionCancelledError';
+    this.code = AGENTIC_EXECUTION_CANCELLED_CODE;
+    this.status = 'cancelled';
+    this.cancelled = true;
+    this.phase = String(phase || 'agentic_execution');
+  }
+}
+
+function isSignalAborted(signal = null) {
+  return Boolean(signal && signal.aborted);
+}
+
+function throwIfExecutionCancelled(signal = null, phase = 'agentic_execution') {
+  if (isSignalAborted(signal)) {
+    throw new AgenticExecutionCancelledError(phase);
+  }
+}
+
+function isAgenticExecutionCancelledError(error = null) {
+  return Boolean(
+    error
+      && (
+        error instanceof AgenticExecutionCancelledError
+        || error.code === AGENTIC_EXECUTION_CANCELLED_CODE
+      )
+  );
+}
+
+function invokeModelTurnWithCancellation(signal, phase, invoke) {
+  throwIfExecutionCancelled(signal, `${phase}:before`);
+
+  if (!signal || typeof signal.addEventListener !== 'function') {
+    let operation;
+    try {
+      operation = invoke();
+    } catch (error) {
+      if (isSignalAborted(signal)) throw new AgenticExecutionCancelledError(`${phase}:after`);
+      throw error;
+    }
+    return Promise.resolve(operation).then(
+      (value) => {
+        throwIfExecutionCancelled(signal, `${phase}:after`);
+        return value;
+      },
+      (error) => {
+        if (isSignalAborted(signal)) throw new AgenticExecutionCancelledError(`${phase}:after`);
+        throw error;
+      }
+    );
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const cleanup = () => {
+      signal.removeEventListener('abort', onAbort);
+    };
+    const settle = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback(value);
+    };
+    const rejectCancelled = (suffix) => {
+      settle(reject, new AgenticExecutionCancelledError(`${phase}:${suffix}`));
+    };
+    const onAbort = () => rejectCancelled('aborted');
+
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (isSignalAborted(signal)) {
+      rejectCancelled('before');
+      return;
+    }
+
+    let operation;
+    try {
+      operation = invoke();
+    } catch (error) {
+      if (isSignalAborted(signal)) {
+        rejectCancelled('after');
+      } else {
+        settle(reject, error);
+      }
+      return;
+    }
+
+    Promise.resolve(operation).then(
+      (value) => {
+        if (isSignalAborted(signal)) {
+          rejectCancelled('after');
+          return;
+        }
+        settle(resolve, value);
+      },
+      (error) => {
+        if (isSignalAborted(signal)) {
+          rejectCancelled('after');
+          return;
+        }
+        settle(reject, error);
+      }
+    );
+  });
+}
+
+async function invokeEffectWithCancellation(signal, phase, invoke) {
+  throwIfExecutionCancelled(signal, `${phase}:before`);
+
+  let operation;
+  try {
+    operation = invoke();
+  } catch (error) {
+    if (isSignalAborted(signal)) {
+      throw new AgenticExecutionCancelledError(`${phase}:after`);
+    }
+    throw error;
+  }
+
+  try {
+    const value = await operation;
+    throwIfExecutionCancelled(signal, `${phase}:after`);
+    return value;
+  } catch (error) {
+    if (isAgenticExecutionCancelledError(error)) throw error;
+    if (isSignalAborted(signal)) {
+      throw new AgenticExecutionCancelledError(`${phase}:after`);
+    }
+    throw error;
+  }
+}
+
 function createAgenticToolLoopService(dependencies = {}) {
   const {
     appendAuditEvent = () => {},
@@ -82,17 +218,28 @@ function createAgenticToolLoopService(dependencies = {}) {
     ].join('\n');
   }
 
-  function buildBoundTools(projectInfo = {}) {
+  function buildBoundTools(projectInfo = {}, executionContext = {}) {
     const projectSession = buildProjectSession(projectInfo);
     const rootPath = projectSession.rootPath;
-    const capability = (capabilityId, action, payload = {}) =>
-      executeCapability({
+    const signal = executionContext && executionContext.signal ? executionContext.signal : null;
+    const invocationOptions = signal ? Object.freeze({ signal }) : null;
+    const capability = (capabilityId, action, payload = {}) => {
+      const request = {
         capability: capabilityId,
         action,
         payload,
         projectSession,
-      });
-    const runTool = (name, input = {}) => executeTool(name, input);
+        ...(signal ? { signal } : {}),
+      };
+      return signal
+        ? executeCapability(request, invocationOptions)
+        : executeCapability(request);
+    };
+    const runTool = (name, input = {}) => (
+      signal
+        ? executeTool(name, input, invocationOptions)
+        : executeTool(name, input)
+    );
 
     return [
       {
@@ -521,7 +668,9 @@ function createAgenticToolLoopService(dependencies = {}) {
     }
 
     const jobId = options && options.jobId ? String(options.jobId) : String(action && action.jobId ? action.jobId : '');
-    const tools = buildBoundTools(projectInfo);
+    const signal = options && options.signal ? options.signal : null;
+    throwIfExecutionCancelled(signal, 'agentic_execution:start');
+    const tools = buildBoundTools(projectInfo, { signal });
     const toolDefinitions = buildToolDefinitions(tools);
     const toolIndex = makeToolIndex(tools);
     const conversationMessages = buildConversationMessages(
@@ -553,6 +702,7 @@ function createAgenticToolLoopService(dependencies = {}) {
     }
 
     for (let step = 0; step < maxSteps; step += 1) {
+      throwIfExecutionCancelled(signal, `model_turn:${step + 1}:before`);
       if (jobId) {
         appendJobEvent(jobId, 'job.agentic_turn_started', {
           step: step + 1,
@@ -560,14 +710,20 @@ function createAgenticToolLoopService(dependencies = {}) {
         });
       }
 
-      const turn = await requestModelTurn({
-        previousResponseId,
-        systemPrompt,
-        conversationMessages,
-        toolResults: pendingToolResults,
-        tools: toolDefinitions,
-        timeoutMs,
-      });
+      const turn = await invokeModelTurnWithCancellation(
+        signal,
+        `model_turn:${step + 1}`,
+        () => requestModelTurn({
+          previousResponseId,
+          systemPrompt,
+          conversationMessages,
+          toolResults: pendingToolResults,
+          tools: toolDefinitions,
+          timeoutMs,
+          ...(signal ? { signal } : {}),
+        })
+      );
+      throwIfExecutionCancelled(signal, `model_turn:${step + 1}:after`);
 
       previousResponseId = turn && turn.responseId ? String(turn.responseId) : previousResponseId;
       if (turn && turn.text) {
@@ -633,6 +789,7 @@ function createAgenticToolLoopService(dependencies = {}) {
       consecutiveEmptyTurns = 0;
       pendingToolResults = [];
       for (const call of toolCalls) {
+        throwIfExecutionCancelled(signal, `tool_call:${step + 1}:before_resolution`);
         const tool = toolIndex.get(String(call && call.name ? call.name : ''));
         if (!tool) {
           const output = JSON.stringify({ ok: false, message: `Tool desconhecida: ${call && call.name ? call.name : ''}` });
@@ -663,7 +820,12 @@ function createAgenticToolLoopService(dependencies = {}) {
 
         let result = null;
         try {
-          result = await tool.execute(call.input || {});
+          result = await invokeEffectWithCancellation(
+            signal,
+            `tool_call:${step + 1}:${tool.name}`,
+            () => tool.execute(call.input || {})
+          );
+          throwIfExecutionCancelled(signal, `tool_call:${step + 1}:${tool.name}:after`);
           if (result && result._isFinishTask) {
             isFinished = true;
             finishReason = result.message;
@@ -672,6 +834,11 @@ function createAgenticToolLoopService(dependencies = {}) {
             result.finishTaskStatus = result.status;
           }
         } catch (error) {
+          if (isAgenticExecutionCancelledError(error) || isSignalAborted(signal)) {
+            throw isAgenticExecutionCancelledError(error)
+              ? error
+              : new AgenticExecutionCancelledError(`tool_call:${step + 1}:${tool.name}:after`);
+          }
           result = {
             ok: false,
             status: 'failed',
@@ -753,5 +920,8 @@ function createAgenticToolLoopService(dependencies = {}) {
 }
 
 module.exports = {
+  AGENTIC_EXECUTION_CANCELLED_CODE,
+  AgenticExecutionCancelledError,
   createAgenticToolLoopService,
+  isAgenticExecutionCancelledError,
 };

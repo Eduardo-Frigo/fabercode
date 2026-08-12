@@ -25,7 +25,7 @@ async function run() {
   };
   const { handlers, registerIpcHandler } = createHandlerMap();
 
-  registerOrchestrationHandlers({
+  const dependencies = {
     MAX_CONVERSATION_MESSAGES: 3,
     addConversationEntry: (projectId, title, meta) => {
       calls.push(['addConversationEntry', projectId, title, meta]);
@@ -39,30 +39,44 @@ async function run() {
       calls.push(['appendAuditEvent', type, payload]);
       return { id: 'audit-new', type, payload };
     },
-    appendJobEvent: (jobId, type, payload) => {
-      calls.push(['appendJobEvent', jobId, type, payload]);
-      return { ok: true };
+    cancelAssistantJob: async (input) => {
+      calls.push(['cancelAssistantJob', input]);
+      return {
+        ok: true,
+        job: {
+          id: input.jobId,
+          status: 'cancelled',
+          authorityContext: { sessionId: 'cancel-session-secret' },
+          realRootPath: '/private/cancel-root',
+        },
+      };
     },
-    abortActiveJobExecution: (jobId, reason) => {
-      calls.push(['abortActiveJobExecution', jobId, reason]);
-      return { ok: true, aborted: true, reason };
-    },
-    getJobById: (jobId) => ({ ok: true, job: { id: jobId } }),
+    getJobById: (jobId) => ({
+      ok: true,
+      job: {
+        id: jobId,
+        authorityContext: {
+          sessionId: 'session-secret',
+          kernelId: 'kernel-secret',
+          submissionDigest: `sha256:${'a'.repeat(64)}`,
+        },
+      },
+    }),
     listConversationMessages: (conversationId, limit) => {
       calls.push(['listConversationMessages', conversationId, limit]);
       return { ok: true, messages: [{ id: 'message-1' }] };
     },
     listJobs: ({ projectId, limit }) => {
       calls.push(['listJobs', projectId, limit]);
-      return { ok: true, jobs: [{ id: 'job-1', projectId }] };
-    },
-    markJobCancelled: (jobId, reason) => {
-      calls.push(['markJobCancelled', jobId, reason]);
-      return { ok: true, job: { id: jobId, status: 'cancelled' } };
-    },
-    markJobPhase: (jobId, phase, payload) => {
-      calls.push(['markJobPhase', jobId, phase, payload]);
-      return { ok: true, job: { id: jobId, phase } };
+      return {
+        ok: true,
+        jobs: [{
+          id: 'job-1',
+          projectId,
+          authorityContext: { sessionId: 'session-secret' },
+          realRootPath: '/private/real-root',
+        }],
+      };
     },
     readOrchestrationState: () => state,
     registerIpcHandler,
@@ -74,7 +88,29 @@ async function run() {
       calls.push(['deleteConversationEntry', projectId, conversationId]);
       return { ok: true, conversations: [] };
     },
-  });
+    retryAssistantJob: async (input) => {
+      calls.push(['retryAssistantJob', input]);
+      return {
+        ok: true,
+        job: {
+          id: input.jobId,
+          phase: 'persona_plan',
+          actionDigest: `sha256:${'b'.repeat(64)}`,
+          canonicalRootPath: '/private/retry-root',
+        },
+      };
+    },
+  };
+
+  assert.throws(
+    () => registerOrchestrationHandlers({ ...dependencies, cancelAssistantJob: null }),
+    /cancelAssistantJob/
+  );
+  assert.throws(
+    () => registerOrchestrationHandlers({ ...dependencies, retryAssistantJob: 'not-a-function' }),
+    /retryAssistantJob/
+  );
+  registerOrchestrationHandlers(dependencies);
 
   assert.deepStrictEqual(Object.keys(handlers).sort(), [
     'orchestration:audit:append',
@@ -103,6 +139,15 @@ async function run() {
 
   assert.strictEqual(handlers['orchestration:audit:append'](null, '', {}).ok, false);
   assert.strictEqual(handlers['orchestration:audit:append'](null, 'manual', { a: 1 }).event.type, 'manual');
+
+  const publicJob = handlers['orchestration:jobs:get'](null, { jobId: 'job-1' }).job;
+  assert.deepStrictEqual(publicJob, { id: 'job-1' });
+  const publicJobs = handlers['orchestration:jobs:list'](null, {
+    projectId: 'project-1',
+    limit: 2,
+  }).jobs;
+  assert.deepStrictEqual(publicJobs, [{ id: 'job-1', projectId: 'project-1' }]);
+  assert.strictEqual(JSON.stringify({ publicJob, publicJobs }).includes('session-secret'), false);
 
   assert.strictEqual(handlers['orchestration:conversation:add'](null, {
     projectId: 'project-1',
@@ -135,13 +180,86 @@ async function run() {
 
   assert.strictEqual(handlers['orchestration:jobs:list'](null, { projectId: 'project-1', limit: 5 }).jobs.length, 1);
   assert.strictEqual(handlers['orchestration:jobs:get'](null, { jobId: 'job-1' }).job.id, 'job-1');
-  const cancelResult = handlers['orchestration:jobs:cancel'](null, { jobId: 'job-1' });
-  assert.strictEqual(cancelResult.job.status, 'cancelled');
-  assert.strictEqual(cancelResult.job.executionAbort.aborted, true);
-  assert.ok(calls.some((call) => call[0] === 'abortActiveJobExecution' && call[1] === 'job-1'));
-  assert.strictEqual(handlers['orchestration:jobs:cancel'](null, {}).ok, false);
-  assert.strictEqual(handlers['orchestration:jobs:retry'](null, { jobId: 'job-1', phase: 'execute_pending' }).job.phase, 'execute_pending');
-  assert.ok(calls.some((call) => call[0] === 'appendJobEvent' && call[2] === 'job.retry_requested'));
+  const cancelPayload = { jobId: 'job-1' };
+  const cancelResult = await handlers['orchestration:jobs:cancel'](null, cancelPayload);
+  assert.deepStrictEqual(cancelResult, {
+    ok: true,
+    job: { id: 'job-1', status: 'cancelled' },
+  });
+  const cancelCalls = calls.filter((call) => call[0] === 'cancelAssistantJob');
+  assert.strictEqual(cancelCalls.length, 1);
+  assert.deepStrictEqual(cancelCalls[0][1], { jobId: 'job-1' });
+  assert.notStrictEqual(cancelCalls[0][1], cancelPayload);
+
+  const retryPayload = { jobId: 'job-1' };
+  const retryResult = await handlers['orchestration:jobs:retry'](null, retryPayload);
+  assert.deepStrictEqual(retryResult, {
+    ok: true,
+    job: { id: 'job-1', phase: 'persona_plan' },
+  });
+  const retryCalls = calls.filter((call) => call[0] === 'retryAssistantJob');
+  assert.strictEqual(retryCalls.length, 1);
+  assert.deepStrictEqual(retryCalls[0][1], { jobId: 'job-1' });
+  assert.notStrictEqual(retryCalls[0][1], retryPayload);
+  assert.strictEqual(JSON.stringify({ cancelResult, retryResult }).includes('/private/'), false);
+
+  const invalidInput = { ok: false, code: 'orchestration_ipc_invalid_input' };
+  const coordinatedCallsBeforeInvalid = calls.filter(
+    (call) => call[0] === 'cancelAssistantJob' || call[0] === 'retryAssistantJob'
+  ).length;
+  for (const channel of ['orchestration:jobs:cancel', 'orchestration:jobs:retry']) {
+    assert.deepStrictEqual(await handlers[channel](null), invalidInput);
+    assert.deepStrictEqual(await handlers[channel](null, { jobId: 'job-1' }, {}), invalidInput);
+    assert.deepStrictEqual(await handlers[channel](null, null), invalidInput);
+    assert.deepStrictEqual(await handlers[channel](null, []), invalidInput);
+    assert.deepStrictEqual(await handlers[channel](null, {}), invalidInput);
+    assert.deepStrictEqual(
+      await handlers[channel](null, { jobId: 'job-1', phase: 'execute_pending' }),
+      invalidInput
+    );
+    assert.deepStrictEqual(
+      await handlers[channel](null, Object.create({ jobId: 'job-1' })),
+      invalidInput
+    );
+
+    let getterReads = 0;
+    const accessorPayload = {};
+    Object.defineProperty(accessorPayload, 'jobId', {
+      enumerable: true,
+      get() {
+        getterReads += 1;
+        return 'job-1';
+      },
+    });
+    assert.deepStrictEqual(await handlers[channel](null, accessorPayload), invalidInput);
+    assert.strictEqual(getterReads, 0);
+
+    const symbolPayload = { jobId: 'job-1' };
+    symbolPayload[Symbol('hostile')] = true;
+    assert.deepStrictEqual(await handlers[channel](null, symbolPayload), invalidInput);
+  }
+  assert.strictEqual(
+    calls.filter((call) => call[0] === 'cancelAssistantJob' || call[0] === 'retryAssistantJob').length,
+    coordinatedCallsBeforeInvalid
+  );
+
+  const cancelFailure = new Error('cancel authority unavailable');
+  const retryFailure = new Error('retry authority unavailable');
+  const rejectedMap = createHandlerMap();
+  registerOrchestrationHandlers({
+    ...dependencies,
+    cancelAssistantJob: () => { throw cancelFailure; },
+    registerIpcHandler: rejectedMap.registerIpcHandler,
+    retryAssistantJob: async () => { throw retryFailure; },
+  });
+  await assert.rejects(
+    rejectedMap.handlers['orchestration:jobs:cancel'](null, { jobId: 'job-1' }),
+    (error) => error === cancelFailure
+  );
+  await assert.rejects(
+    rejectedMap.handlers['orchestration:jobs:retry'](null, { jobId: 'job-1' }),
+    (error) => error === retryFailure
+  );
 
   console.log('orchestration-handlers.test.js: ok');
 }

@@ -57,6 +57,8 @@
       isManualRetryMessage = () => false,
       shouldSuppressInterimAssistantPlanMessage = () => false,
     } = formatters;
+    let executionInFlight = false;
+    let sendInFlight = false;
 
     function uiText(key, fallback, variables = {}) {
       const translated = typeof t === 'function' ? t(key, fallback) : fallback;
@@ -104,39 +106,41 @@
       return actionRoot === projectRoot;
     }
 
+    function normalizePendingJobId(value) {
+      return typeof value === 'string' && value.trim() ? value.trim() : null;
+    }
+
+    function clearPendingExecution() {
+      state.pendingActionJobId = null;
+      clearPending();
+    }
+
+    function clearPendingExecutionIfCurrent(action, jobId) {
+      if (state.pendingAction !== action || state.pendingActionJobId !== jobId) return;
+      clearPendingExecution();
+    }
+
     async function executePendingAction() {
-      if (!state.pendingAction || !state.selectedProjectInfo) return;
-
-      updateStatus(uiText('workingOnProject', 'Estou trabalhando no projeto.'));
-      const pendingJobId =
-        (state.pendingAction && state.pendingAction.jobId ? state.pendingAction.jobId : null) ||
-        state.activeJobId ||
-        null;
-      if (pendingJobId) {
-        state.activeJobId = pendingJobId;
-        renderJobProgress({
-          id: pendingJobId,
-          status: 'running',
-          phase: 'execute_pending',
-          progress: { pct: 76 },
-          events: [],
-          attemptsByPhase: {},
-        });
-      }
-
-      const selectedProjectReady = await ensureSelectedProjectInfoReady({ forceRefresh: true });
-      if (!selectedProjectReady || !state.selectedProjectInfo) {
+      const pendingAction = state.pendingAction;
+      const pendingJobId = normalizePendingJobId(state.pendingActionJobId);
+      const selectedProjectInfo = state.selectedProjectInfo;
+      if (!pendingAction) return;
+      if (executionInFlight) return;
+      if (!pendingJobId) {
         appendMessage(
           'assistant',
           uiText(
-            'projectContextExecutionFailed',
-            'Não consegui atualizar o contexto desse projeto no disco antes de executar.'
-          )
+            'pendingActionWithoutJob',
+            'Não executei essa confirmação porque ela não possui uma tarefa autorizada. Gere o plano novamente.'
+          ),
+          { persistToConversation: false }
         );
-        updateStatus(uiText('projectUnavailableExecution', 'Projeto indisponível para execução'));
+        clearPendingExecutionIfCurrent(pendingAction, state.pendingActionJobId);
+        updateStatus(uiText('oldConfirmationDiscarded', 'Confirmação antiga descartada'));
         return;
       }
-      if (!pendingActionMatchesSelectedProject(state.pendingAction, state.selectedProjectInfo)) {
+      if (!selectedProjectInfo) return;
+      if (!pendingActionMatchesSelectedProject(pendingAction, selectedProjectInfo)) {
         appendMessage(
           'assistant',
           uiText(
@@ -146,83 +150,105 @@
           { persistToConversation: false }
         );
         stopJobPolling();
-        state.activeJobId = null;
-        clearPending();
+        if (state.activeJobId === pendingJobId) state.activeJobId = null;
+        clearPendingExecutionIfCurrent(pendingAction, pendingJobId);
         hideJobProgress();
         updateStatus(uiText('oldConfirmationDiscarded', 'Confirmação antiga descartada'));
         return;
       }
 
-      const result = await api.executePlan(state.pendingAction, state.selectedProjectInfo);
-      if (state.activeJobId) {
-        pollJob(state.activeJobId);
-      }
-      if (!result.ok) {
-        if (result && result.projectInfo && result.projectInfo.rootPath) {
+      executionInFlight = true;
+      updateStatus(uiText('workingOnProject', 'Estou trabalhando no projeto.'));
+      state.activeJobId = pendingJobId;
+      renderJobProgress({
+        id: pendingJobId,
+        status: 'running',
+        phase: 'execute_pending',
+        progress: { pct: 76 },
+        events: [],
+        attemptsByPhase: {},
+      });
+
+      try {
+        let result;
+        try {
+          result = await api.executePlan({ jobId: pendingJobId });
+        } catch (error) {
+          result = {
+            ok: false,
+            message: error && error.message ? error.message : uiText('actionExecutionFailed', 'Falha ao executar ação.'),
+          };
+        }
+        pollJob(pendingJobId);
+        if (!result || !result.ok) {
+          if (result && result.projectInfo && result.projectInfo.rootPath) {
+            state.selectedProjectInfo = result.projectInfo;
+          }
+          state.lastQualityReport = result && result.qualityReport ? result.qualityReport : state.lastQualityReport;
+          if (projectFileTreeController) await projectFileTreeController.refresh();
+          const finalMessage = buildExecutionOutcomeAssistantMessage(result, pendingAction, state.lastQualityReport);
+          appendMessage(
+            'assistant',
+            finalMessage || (result && result.message) || uiText('actionExecutionFailed', 'Falha ao executar ação.')
+          );
+
+          if (result && Array.isArray(result.modifiedFiles) && result.modifiedFiles.length) {
+            appendChangeCard(pendingAction, result);
+            showChangeSummary(pendingAction, result);
+            showModificationAlert(
+              uiText('fileModified', 'Arquivo modificado: {files}', { files: result.modifiedFiles.join(', ') })
+            );
+          }
+
+          if (result && result.blockedByPostExecutionValidation) {
+            updateStatus(
+              uiText(
+                'validationWarningsStatus',
+                'A validação técnica encontrou observações; uma correção incremental é recomendada'
+              )
+            );
+          } else {
+            updateStatus(uiText('executionFailedStatus', 'Falha na execução'));
+          }
+          clearPendingExecutionIfCurrent(pendingAction, pendingJobId);
+          return;
+        }
+
+        if (result.projectInfo && result.projectInfo.rootPath) {
           state.selectedProjectInfo = result.projectInfo;
         }
-        state.lastQualityReport = result && result.qualityReport ? result.qualityReport : state.lastQualityReport;
+        state.nextSteps = result.nextSteps || state.nextSteps;
+        state.lastQualityReport = result.qualityReport || null;
+        renderNextSteps();
         if (projectFileTreeController) await projectFileTreeController.refresh();
-        const finalMessage = buildExecutionOutcomeAssistantMessage(result, state.pendingAction, state.lastQualityReport);
-        appendMessage(
-          'assistant',
-          finalMessage || result.message || uiText('actionExecutionFailed', 'Falha ao executar ação.')
-        );
+
+        const finalMessage = buildExecutionOutcomeAssistantMessage(result, pendingAction, state.lastQualityReport);
 
         if (Array.isArray(result.modifiedFiles) && result.modifiedFiles.length) {
-          appendChangeCard(state.pendingAction, result);
-          showChangeSummary(state.pendingAction, result);
+          appendMessage(
+            'assistant',
+            finalMessage || result.message || uiText('executionCompleted', 'Concluído.')
+          );
+          appendChangeCard(pendingAction, result);
+          showChangeSummary(pendingAction, result);
           showModificationAlert(
             uiText('fileModified', 'Arquivo modificado: {files}', { files: result.modifiedFiles.join(', ') })
           );
-        }
-
-        if (result && result.blockedByPostExecutionValidation) {
-          updateStatus(
-            uiText(
-              'validationWarningsStatus',
-              'A validação técnica encontrou observações; uma correção incremental é recomendada'
-            )
-          );
+          updateStatus(uiText('changeApplied', 'Alteração aplicada com sucesso'));
         } else {
-          updateStatus(uiText('executionFailedStatus', 'Falha na execução'));
+          appendMessage(
+            'assistant',
+            finalMessage || result.message || uiText('executionCompleted', 'Concluído.')
+          );
+          updateStatus(uiText('actionCompleted', 'Ação concluída'));
         }
-        clearPending();
-        return;
+        clearPendingExecutionIfCurrent(pendingAction, pendingJobId);
+      } finally {
+        executionInFlight = false;
       }
-
-      if (result && result.projectInfo && result.projectInfo.rootPath) {
-        state.selectedProjectInfo = result.projectInfo;
-      }
-      state.nextSteps = result.nextSteps || state.nextSteps;
-      state.lastQualityReport = result && result.qualityReport ? result.qualityReport : null;
-      renderNextSteps();
-      if (projectFileTreeController) await projectFileTreeController.refresh();
-
-      const finalMessage = buildExecutionOutcomeAssistantMessage(result, state.pendingAction, state.lastQualityReport);
-
-      if (Array.isArray(result.modifiedFiles) && result.modifiedFiles.length) {
-        appendMessage(
-          'assistant',
-          finalMessage || result.message || uiText('executionCompleted', 'Concluído.')
-        );
-        appendChangeCard(state.pendingAction, result);
-        showChangeSummary(state.pendingAction, result);
-        showModificationAlert(
-          uiText('fileModified', 'Arquivo modificado: {files}', { files: result.modifiedFiles.join(', ') })
-        );
-        updateStatus(uiText('changeApplied', 'Alteração aplicada com sucesso'));
-      } else {
-        appendMessage(
-          'assistant',
-          finalMessage || result.message || uiText('executionCompleted', 'Concluído.')
-        );
-        updateStatus(uiText('actionCompleted', 'Ação concluída'));
-      }
-      clearPending();
     }
     
-    async function onSend() {
+    async function performSend() {
       const userMessage = inputEl.value.trim();
       if (!userMessage && !state.attachments.length) return;
       if (!(await ensureAccountUnlockedForProductUse())) return;
@@ -377,11 +403,6 @@
       const suppressInterim = shouldSuppressInterimAssistantPlanMessage(plan);
       if (!suppressInterim && plan && plan.response) {
         appendMessage('assistant', plan.response);
-      } else if (plan && plan.ok && plan.action && plan.meta && plan.meta.autoExecute) {
-        appendMessage(
-          'assistant',
-          plan.executionMessage || plan.response || uiText('startProjectAdjustment', 'Certo, vou começar o ajuste do projeto!')
-        );
       }
       if (plan && plan.automataContractSuggestion && automataContractsController) {
         automataContractsController.appendContractPreview(plan.automataContractSuggestion);
@@ -420,11 +441,21 @@
       }
     
       if (plan && plan.ok && plan.action) {
-        if (plan.meta && plan.meta.autoExecute) {
-          state.pendingAction = plan.action;
-          await executePendingAction();
+        const pendingJobId = normalizePendingJobId(plan.jobId);
+        if (!pendingJobId) {
+          appendMessage(
+            'assistant',
+            uiText(
+              'pendingActionWithoutJob',
+              'Não preparei a confirmação porque o plano não possui uma tarefa autorizada. Tente novamente.'
+            ),
+            { persistToConversation: false }
+          );
+          clearPendingExecution();
+          updateStatus(uiText('oldConfirmationDiscarded', 'Confirmação antiga descartada'));
           return;
         }
+        state.pendingActionJobId = pendingJobId;
         showPending(
           uiText(
             'safeTemporaryExecution',
@@ -433,54 +464,121 @@
           plan.action
         );
       } else {
-        clearPending();
+        clearPendingExecution();
       }
     }
     
+    async function onSend() {
+      if (sendInFlight) return;
+      sendInFlight = true;
+      try {
+        return await performSend();
+      } finally {
+        sendInFlight = false;
+      }
+    }
+
     async function onConfirm() {
       await executePendingAction();
     }
     
     async function onCancel() {
-      const jobId =
-        (state.pendingAction && state.pendingAction.jobId ? state.pendingAction.jobId : null) ||
-        state.activeJobId ||
-        null;
+      const pendingAction = state.pendingAction;
+      const pendingActionJobId = pendingAction
+        ? normalizePendingJobId(state.pendingActionJobId)
+        : null;
+      const jobId = pendingAction ? pendingActionJobId : normalizePendingJobId(state.activeJobId);
+      const selectedProjectInfo = state.selectedProjectInfo;
       let cancelledJob = null;
-    
-      if (jobId && api.cancelJob) {
+
+      if (jobId) {
+        if (!api || typeof api.cancelJob !== 'function') {
+          appendMessage(
+            'assistant',
+            uiText(
+              'actionCancellationFailed',
+              'Não consegui cancelar a tarefa. A confirmação foi preservada para você tentar novamente.'
+            ),
+            { persistToConversation: false }
+          );
+          updateStatus(uiText('actionCancellationFailedStatus', 'Falha ao cancelar tarefa'));
+          return;
+        }
         try {
           const cancelResult = await api.cancelJob({ jobId });
-          if (cancelResult && cancelResult.ok && cancelResult.job) {
-            cancelledJob = cancelResult.job;
+          if (!cancelResult || !cancelResult.ok) {
+            appendMessage(
+              'assistant',
+              (cancelResult && cancelResult.message) ||
+                uiText(
+                  'actionCancellationFailed',
+                  'Não consegui cancelar a tarefa. A confirmação foi preservada para você tentar novamente.'
+                ),
+              { persistToConversation: false }
+            );
+            updateStatus(uiText('actionCancellationFailedStatus', 'Falha ao cancelar tarefa'));
+            return;
           }
-        } catch {
-          // O cancelamento local ainda deve limpar a tela mesmo se o registro do job falhar.
+          cancelledJob = cancelResult.job || null;
+        } catch (error) {
+          appendMessage(
+            'assistant',
+            (error && error.message) ||
+              uiText(
+                'actionCancellationFailed',
+                'Não consegui cancelar a tarefa. A confirmação foi preservada para você tentar novamente.'
+              ),
+            { persistToConversation: false }
+          );
+          updateStatus(uiText('actionCancellationFailedStatus', 'Falha ao cancelar tarefa'));
+          return;
         }
+      } else if (pendingAction) {
+        appendMessage(
+          'assistant',
+          uiText(
+            'pendingActionWithoutJob',
+            'Descartei essa confirmação porque ela não possui uma tarefa autorizada.'
+          ),
+          { persistToConversation: false }
+        );
+        clearPendingExecutionIfCurrent(pendingAction, pendingActionJobId);
+        updateStatus(uiText('oldConfirmationDiscarded', 'Confirmação antiga descartada'));
+        return;
       }
     
-      appendMessage('assistant', uiText('actionCancelled', 'Ação cancelada. Nenhum arquivo foi alterado.'));
+      appendMessage(
+        'assistant',
+        uiText('actionCancelled', 'Tarefa cancelada. Nenhuma nova operação será iniciada.'),
+      );
       api
         .appendAuditEvent('assistant.execute_cancelled', {
-          rootPath: state.selectedProjectInfo ? state.selectedProjectInfo.rootPath : null,
-          targetFile: state.pendingAction ? state.pendingAction.targetFile : null,
+          rootPath: selectedProjectInfo ? selectedProjectInfo.rootPath : null,
+          targetFile: pendingAction ? pendingAction.targetFile : null,
           jobId,
         })
         .catch(() => {});
-      stopJobPolling();
+      if (state.activeJobId === jobId) {
+        stopJobPolling();
+        state.activeJobId = null;
+      }
       if (cancelledJob) {
         renderJobProgress(cancelledJob);
       } else {
         hideJobProgress();
       }
-      state.activeJobId = null;
-      clearPending();
+      if (pendingAction) clearPendingExecutionIfCurrent(pendingAction, pendingActionJobId);
     }
     
     async function onNewConversation() {
       if (!state.selectedProjectId) {
         openWelcomeProjectModal();
         return;
+      }
+
+      if (state.pendingAction || normalizePendingJobId(state.activeJobId)) {
+        await onCancel();
+        if (state.pendingAction || normalizePendingJobId(state.activeJobId)) return;
       }
     
       await prepareNewConversationForProject(state.selectedProjectId);

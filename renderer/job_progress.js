@@ -67,7 +67,7 @@
       if (!job || !job.status) return '';
       if (job.status === 'completed') return 'Processamento concluído com sucesso.';
       if (job.status === 'failed') return 'Não consegui concluir esta rodada.';
-      if (job.status === 'cancelled') return 'Ação cancelada. Nenhum arquivo foi alterado.';
+      if (job.status === 'cancelled') return 'Tarefa cancelada. Nenhuma nova operação será iniciada.';
       if (job.status === 'retry_pending') {
         const reason = String(job.lastError || '').toLowerCase();
         if (/429|rate.?limit|quota/.test(reason)) return 'Aguardando janela de API para nova tentativa...';

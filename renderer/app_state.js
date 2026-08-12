@@ -11,6 +11,7 @@
       selectedProjectInfo: null,
       nextSteps: [],
       pendingAction: null,
+      pendingActionJobId: null,
       attachments: [],
       projectSearchQuery: '',
       expandedProjects: {},
