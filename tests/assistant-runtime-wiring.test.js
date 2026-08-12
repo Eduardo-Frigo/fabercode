@@ -152,6 +152,10 @@ assert.ok(
   mainSource.includes("clearAssistantRuntimeAuthority('account_signed_out')"),
   'account sign-out must revoke process-local assistant authority'
 );
+assert.ok(
+  mainSource.includes("clearAssistantRuntimeAuthority('account_signed_in')"),
+  'account sign-in or identity replacement must revoke prior assistant authority'
+);
 assertInOrder(
   mainSource,
   [

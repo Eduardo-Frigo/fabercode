@@ -220,7 +220,7 @@ function planningInput(projectInfo, invoke, overrides = {}) {
       projectInfo,
       userMessage: 'Crie a aplicação',
       attachments: [],
-      requestedMode: 'ask_each',
+      approvalMode: 'ask_each',
       ...overrides,
     },
     kernelId: 'kernel-a',
@@ -239,7 +239,12 @@ function createJob(coordinator, suffix = '') {
 async function createRetryWaitingJob(
   harness,
   suffix = 'retry',
-  { status = 'retry_pending', phase = 'persona_plan', nextRetryAt = null } = {},
+  {
+    status = 'retry_pending',
+    phase = 'persona_plan',
+    nextRetryAt = null,
+    approvalMode = 'ask_each',
+  } = {},
 ) {
   let jobId;
   const result = await harness.coordinator.coordinatePlanning(planningInput(
@@ -260,6 +265,7 @@ async function createRetryWaitingJob(
         nested: { actionDigest: `sha256:${'f'.repeat(64)}`, safe: 'visible' },
       };
     },
+    { approvalMode },
   ));
   assert.strictEqual(result.ok, true);
   assert.strictEqual(result.jobId, jobId);
@@ -318,6 +324,8 @@ async function run() {
         authorityContext: { forged: true },
         meta: {
           autoExecute: true,
+          approvalMode: 'ask_each',
+          requestedMode: 'ask_each',
           planner: 'test',
           nested: {
             consentHandle: 'secret-consent',
@@ -331,7 +339,6 @@ async function run() {
       };
     },
     {
-      requestedMode: 'delegate_task',
       approvalMode: 'delegate_task',
       jobId: 'job-input-forged',
       submissionId: 'submission-input-forged',
@@ -342,6 +349,8 @@ async function run() {
   assert.strictEqual(Object.hasOwn(plan, 'submissionId'), false);
   assert.strictEqual(Object.hasOwn(plan, 'authorityContext'), false);
   assert.strictEqual(Object.hasOwn(plan.meta, 'autoExecute'), false);
+  assert.strictEqual(Object.hasOwn(plan.meta, 'approvalMode'), false);
+  assert.strictEqual(Object.hasOwn(plan.meta, 'requestedMode'), false);
   assert.strictEqual(plan.meta.planner, 'test');
   assert.deepStrictEqual(plan.meta.nested, { safe: 'visible' });
   for (const field of ['approvalMode', 'jobId', 'requestedMode', 'submissionId']) {
@@ -461,11 +470,13 @@ async function run() {
   // manufacture a job or return an executable action.
   const map = createHarness();
   let mapCreateResult;
+  let mapPlanningPayload;
   const mapMessage = await map.coordinator.coordinatePlanning({
     operation: 'map_message',
-    payload: { isMapChat: true },
+    payload: { isMapChat: true, approvalMode: 'not_a_public_mode' },
     kernelId: 'kernel-map',
-    invoke: async () => {
+    invoke: async (payload) => {
+      mapPlanningPayload = payload;
       mapCreateResult = createJob(map.coordinator, 'map');
       return { ok: true, jobId: 'job-forged', response: 'Mapa analisado.' };
     },
@@ -474,6 +485,8 @@ async function run() {
   assert.strictEqual(mapMessage.ok, true);
   assert.strictEqual(mapMessage.response, 'Mapa analisado.');
   assert.strictEqual(Object.hasOwn(mapMessage, 'jobId'), false);
+  assert.strictEqual(Object.hasOwn(mapPlanningPayload, 'approvalMode'), false);
+  assert.strictEqual(Object.hasOwn(mapPlanningPayload, 'requestedMode'), false);
   assert.strictEqual(map.coordinator.diagnostics().activeJobs, 0);
   assert.strictEqual(map.authorityService.diagnostics().activeSubmissions, 0);
   const mapAction = await map.coordinator.coordinatePlanning({
@@ -483,6 +496,12 @@ async function run() {
     invoke: async () => ({ ok: true, action: { type: 'write_files' } }),
   });
   assert.strictEqual(mapAction.code, ASSISTANT_EXECUTION_COORDINATOR_REASONS.MAP_ACTION_FORBIDDEN);
+  assert.strictEqual((await map.coordinator.coordinatePlanning({
+    operation: 'map_message',
+    payload: { isMapChat: true, requestedMode: 'ask_each' },
+    kernelId: 'kernel-map',
+    invoke: async () => ({ ok: true }),
+  })).code, ASSISTANT_EXECUTION_COORDINATOR_REASONS.INVALID_INPUT);
 
   // A second execute cannot enter while the first is in flight. Revocation
   // during that flight blocks the stale output and every replay.
@@ -755,12 +774,70 @@ async function run() {
   );
   assert.strictEqual(throwingAuthorizeEffects, 0);
 
-  const conflictingMode = await basic.coordinator.coordinatePlanning(planningInput(
+  const legacyMode = await basic.coordinator.coordinatePlanning(planningInput(
     project('project-a'),
     async () => ({ ok: true }),
-    { requestedMode: 'ask_each', approvalMode: 'delegate_task' },
+    { requestedMode: 'delegate_task', approvalMode: 'delegate_task' },
   ));
-  assert.strictEqual(conflictingMode.code, ASSISTANT_EXECUTION_COORDINATOR_REASONS.INVALID_INPUT);
+  assert.strictEqual(legacyMode.code, ASSISTANT_EXECUTION_COORDINATOR_REASONS.INVALID_INPUT);
+
+  for (const approvalMode of ['', 'ask_each ', 'always', true, null, Symbol('mode')]) {
+    const invalidMode = await basic.coordinator.coordinatePlanning(planningInput(
+      project('project-a'),
+      async () => ({ ok: true }),
+      { approvalMode },
+    ));
+    assert.strictEqual(invalidMode.code, ASSISTANT_EXECUTION_COORDINATOR_REASONS.INVALID_INPUT);
+  }
+
+  let modeGetterReads = 0;
+  const accessorModePayload = {
+    projectInfo: project('project-a'),
+    userMessage: 'hostile mode',
+    attachments: [],
+  };
+  Object.defineProperty(accessorModePayload, 'approvalMode', {
+    enumerable: true,
+    get() { modeGetterReads += 1; return 'delegate_task'; },
+  });
+  assert.strictEqual((await basic.coordinator.coordinatePlanning({
+    operation: 'plan',
+    payload: accessorModePayload,
+    kernelId: 'kernel-a',
+    invoke: async () => ({ ok: true }),
+  })).code, ASSISTANT_EXECUTION_COORDINATOR_REASONS.INVALID_INPUT);
+  assert.strictEqual(modeGetterReads, 0);
+
+  const symbolModeInput = planningInput(
+    project('project-a'),
+    async () => ({ ok: true }),
+  );
+  symbolModeInput.payload[Symbol('mode')] = 'delegate_task';
+  assert.strictEqual(
+    (await basic.coordinator.coordinatePlanning(symbolModeInput)).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.INVALID_INPUT,
+  );
+
+  const defaultMode = createHarness();
+  let defaultModeJobId;
+  const defaultModePlan = await defaultMode.coordinator.coordinatePlanning({
+    operation: 'plan',
+    payload: {
+      projectInfo: project('project-a'),
+      userMessage: 'default mode',
+      attachments: [],
+    },
+    kernelId: 'kernel-a',
+    invoke: async () => {
+      const created = createJob(defaultMode.coordinator, 'default-mode');
+      defaultModeJobId = created.job.id;
+      defaultMode.jobs.get(defaultModeJobId).phase = 'awaiting_user_confirmation';
+      return { ok: true, action: { type: 'write_files', files: [] } };
+    },
+  });
+  assert.strictEqual(defaultModePlan.ok, true);
+  assert.strictEqual((await defaultMode.coordinator.execute({ jobId: defaultModeJobId })).ok, true);
+  assert.strictEqual(defaultMode.calls.executions[0].context.requestedMode, 'ask_each');
 
   // A created planning job without an action is terminally cleaned instead of
   // consuming coordinator capacity forever.
@@ -916,7 +993,11 @@ async function run() {
   // the persisted authority request. A no-action retry remains retained only
   // while the durable job is still explicitly retryable.
   const retryHarness = createHarness();
-  const retryJobId = await createRetryWaitingJob(retryHarness, 'retry-authoritative');
+  const retryJobId = await createRetryWaitingJob(
+    retryHarness,
+    'retry-authoritative',
+    { approvalMode: 'delegate_task' },
+  );
   const persistedRetryRequest = retryHarness.jobs.get(retryJobId).request;
   assert.strictEqual(
     (await retryHarness.coordinator.retry({
@@ -968,9 +1049,10 @@ async function run() {
     },
     userMessage: persistedRetryRequest.userMessage,
     attachments: persistedRetryRequest.attachments,
-    requestedMode: 'ask_each',
     jobId: retryJobId,
   });
+  assert.strictEqual(Object.hasOwn(retryPayload, 'approvalMode'), false);
+  assert.strictEqual(Object.hasOwn(retryPayload, 'requestedMode'), false);
   assert.strictEqual(projectedRetryJob.ok, true);
   assert.strictEqual(projectedRetryJob.reused, true);
   assert.strictEqual(projectedRetryJob.idempotent, true);
@@ -994,6 +1076,9 @@ async function run() {
       return {
         ok: true,
         jobId: 'job-attacker',
+        approvalMode: 'ask_each',
+        requestedMode: 'ask_each',
+        meta: { approvalMode: 'ask_each', requestedMode: 'ask_each' },
         response: 'ready',
         action: {
           type: 'write_files',
@@ -1014,6 +1099,9 @@ async function run() {
   assert.strictEqual(finalRetry.ok, true);
   assert.strictEqual(finalRetry.jobId, retryJobId);
   assert.strictEqual(Object.hasOwn(finalRetry, 'binding'), false);
+  assert.strictEqual(Object.hasOwn(finalRetry, 'approvalMode'), false);
+  assert.strictEqual(Object.hasOwn(finalRetry, 'requestedMode'), false);
+  assert.deepStrictEqual(finalRetry.meta, {});
   assert.strictEqual(finalRetry.action.rootPath, '/workspace/project-a');
   assert.strictEqual(finalRetry.action.executionCommand.root_path, '/workspace/project-a');
   assert.strictEqual(Object.hasOwn(finalRetry.action, 'jobId'), false);
@@ -1022,6 +1110,7 @@ async function run() {
   assert.strictEqual(finalExecution.ok, true);
   assert.strictEqual(retryHarness.calls.executions.length, 1);
   assert.strictEqual(retryHarness.calls.executions[0].action.files[0].path, 'src/retry.js');
+  assert.strictEqual(retryHarness.calls.executions[0].context.requestedMode, 'delegate_task');
 
   const pausedRetry = createHarness();
   const pausedRetryJobId = await createRetryWaitingJob(

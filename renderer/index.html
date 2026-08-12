@@ -403,17 +403,35 @@
                     id="user-input"
                     placeholder="Descreva a tarefa para este projeto."
                   ></textarea>
-                  <button id="btn-attach" class="icon-btn attach-btn" title="Anexar imagem" aria-label="Anexar imagem">+</button>
-                  <select id="composer-provider" class="composer-provider" title="Selecionar IA do projeto" aria-label="Selecionar IA do projeto">
-                    <option value="mock">Mock Local</option>
-                    <option value="rwkv">RWKV Local</option>
-                    <option value="openai">OpenAI API</option>
-                    <option value="gemini">Gemini API</option>
-                    <option value="sambanova">SambaNova API</option>
-                  </select>
-                  <button id="btn-send" class="icon-btn send-btn" title="Enviar prompt" aria-label="Enviar prompt">
-                    <span>&uarr;</span>
-                  </button>
+                  <div class="composer-toolbar">
+                    <button id="btn-attach" class="icon-btn attach-btn" title="Anexar imagem" aria-label="Anexar imagem">+</button>
+                    <select id="composer-provider" class="composer-provider" title="Selecionar IA do projeto" aria-label="Selecionar IA do projeto">
+                      <option value="mock">Mock Local</option>
+                      <option value="rwkv">RWKV Local</option>
+                      <option value="openai">OpenAI API</option>
+                      <option value="gemini">Gemini API</option>
+                      <option value="sambanova">SambaNova API</option>
+                    </select>
+                    <div id="composer-approval-mode" class="composer-approval-mode" data-approval-mode="ask_each">
+                      <label class="composer-approval-mode__label" for="composer-approval-mode-select">
+                        <span class="sr-only" data-i18n="approvalModeLabel">Aprovação</span>
+                        <select
+                          id="composer-approval-mode-select"
+                          class="composer-approval-mode__select"
+                          aria-describedby="composer-approval-mode-help"
+                        >
+                          <option value="ask_each" data-i18n="approvalModeAskEach">Perguntar antes</option>
+                          <option value="delegate_task" data-i18n="approvalModeDelegateTask">IA decide nesta tarefa</option>
+                        </select>
+                      </label>
+                      <span id="composer-approval-mode-help" class="composer-approval-mode__help" data-i18n="approvalModeHelp">
+                        A delegação vale somente para a tarefa enviada.
+                      </span>
+                    </div>
+                    <button id="btn-send" class="icon-btn send-btn" title="Enviar prompt" aria-label="Enviar prompt">
+                      <span>&uarr;</span>
+                    </button>
+                  </div>
                 </div>
                 <div id="attachment-list" class="attachment-list hidden"></div>
                 <input id="image-input" type="file" accept=".pdf,.txt,.md,.markdown,image/*" multiple hidden />
@@ -1345,6 +1363,7 @@
     <script src="./ai_settings_controller.js"></script>
     <script src="./ai_settings.js"></script>
     <script src="./chat_composer.js"></script>
+    <script src="./composer_approval_mode.js"></script>
     <script src="./cortex_controller.js"></script>
     <script src="./inline_input_dialog.js"></script>
     <script src="./ux_state_model.js"></script>

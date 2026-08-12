@@ -19,12 +19,67 @@
       appendMessage = () => {},
       buildJobContextForPersona = () => null,
       buildTerminalJobMessage = () => null,
+      getActiveConversationId = () => null,
+      getSubmissionEpoch = () => 0,
       hidePersonaThinkingIndicator = () => {},
       shouldSuppressInterimAssistantPlanMessage = () => false,
       showPending = () => {},
       showPersonaThinkingIndicator = () => null,
       updateStatus = () => {},
     } = callbacks;
+    const staleJobCancellations = new Set();
+
+    function normalizeJobId(value) {
+      return typeof value === 'string' && value.trim() ? value.trim() : null;
+    }
+
+    function captureJobUiContext() {
+      const projectId = state.selectedProjectId || null;
+      return Object.freeze({
+        projectId,
+        rootPath: String(state.selectedProjectInfo && state.selectedProjectInfo.rootPath || '').trim(),
+        conversationId: getActiveConversationId(projectId) || null,
+        activeJobId: normalizeJobId(state.activeJobId),
+      });
+    }
+
+    function jobUiContextIsCurrent(context) {
+      if (!context) return false;
+      const current = captureJobUiContext();
+      return context.projectId === current.projectId
+        && context.rootPath === current.rootPath
+        && context.conversationId === current.conversationId
+        && context.activeJobId === current.activeJobId;
+    }
+
+    function readSubmissionEpoch() {
+      try {
+        const value = getSubmissionEpoch();
+        return Number.isSafeInteger(value) && value >= 0 ? value : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function cancelStaleJobOnce(jobId) {
+      const normalizedJobId = normalizeJobId(jobId);
+      if (!normalizedJobId || !api || typeof api.cancelJob !== 'function') return false;
+      if (staleJobCancellations.has(normalizedJobId)) return false;
+      staleJobCancellations.add(normalizedJobId);
+      if (staleJobCancellations.size > 256) {
+        staleJobCancellations.delete(staleJobCancellations.values().next().value);
+      }
+      try {
+        const cancellation = api.cancelJob({ jobId: normalizedJobId });
+        if (cancellation && typeof cancellation.catch === 'function') cancellation.catch(() => {});
+      } catch {}
+      return true;
+    }
+
+    function discardStaleJob(jobId) {
+      const normalizedJobId = normalizeJobId(jobId);
+      return cancelStaleJobOnce(normalizedJobId);
+    }
 
     function stopJobPolling() {
       if (state.jobPollingTimer) {
@@ -42,7 +97,7 @@
     }
     
     
-    async function maybeAutoRetryPendingJob(job) {
+    async function maybeAutoRetryPendingJob(job, expectedContext = captureJobUiContext()) {
       if (!job || job.status !== 'retry_pending') return;
       const jobId = typeof job.id === 'string' && job.id.trim() ? job.id.trim() : null;
       if (!jobId || !api || typeof api.retryJob !== 'function') return;
@@ -66,6 +121,18 @@
     
       try {
         const plan = await api.retryJob({ jobId });
+        if (!jobUiContextIsCurrent(expectedContext)) {
+          discardStaleJob(jobId);
+          if (plan && plan.jobId && normalizeJobId(plan.jobId) !== jobId) {
+            cancelStaleJobOnce(plan.jobId);
+          }
+          return;
+        }
+        const planJobId = normalizeJobId(plan && plan.jobId);
+        if (planJobId !== jobId) {
+          if (planJobId) cancelStaleJobOnce(planJobId);
+          return;
+        }
     
         if (plan && plan.meta) {
           state.lastAssistantMeta = { ...plan.meta, lastHadAction: Boolean(plan.action) };
@@ -85,10 +152,7 @@
           }
         }
     
-        const planJobId = plan && typeof plan.jobId === 'string' ? plan.jobId.trim() : '';
-        if (planJobId === jobId) {
-          startJobPolling(planJobId);
-        }
+        startJobPolling(planJobId);
     
         if (plan && plan.automataContractSuggestion && automataContractsController) {
           automataContractsController.appendContractPreview(plan.automataContractSuggestion);
@@ -107,20 +171,36 @@
       } catch {
         // silêncio para não poluir chat; o watchdog seguirá tentando.
       } finally {
-        hidePersonaThinkingIndicator();
+        if (jobUiContextIsCurrent(expectedContext) || state.activeJobId === jobId) {
+          hidePersonaThinkingIndicator();
+        }
         state.autoRetryInFlightByJob[jobId] = false;
       }
     }
     
     
-    async function pollJob(jobId) {
+    async function pollJob(jobId, expectedContext = captureJobUiContext()) {
       if (!jobId) return null;
       try {
         const response = await api.getJob({ jobId });
+        if (!jobUiContextIsCurrent(expectedContext)) {
+          discardStaleJob(jobId);
+          return null;
+        }
         if (!response || !response.ok || !response.job) return null;
+        const responseJobId = normalizeJobId(response.job.id);
+        const responseProjectId = response.job.projectId == null ? null : String(response.job.projectId).trim();
+        const responseRootPath = response.job.rootPath == null ? '' : String(response.job.rootPath).trim();
+        if (responseJobId !== normalizeJobId(jobId)
+          || (expectedContext.projectId && responseProjectId !== expectedContext.projectId)
+          || (expectedContext.rootPath && responseRootPath !== expectedContext.rootPath)) {
+          if (responseJobId && responseJobId !== normalizeJobId(jobId)) cancelStaleJobOnce(responseJobId);
+          return null;
+        }
         renderJobProgress(response.job);
         state.lastJobContext = buildJobContextForPersona(response.job);
-        await maybeAutoRetryPendingJob(response.job);
+        await maybeAutoRetryPendingJob(response.job, expectedContext);
+        if (!jobUiContextIsCurrent(expectedContext)) return null;
     
         if (['completed', 'failed', 'cancelled'].includes(response.job.status)) {
           const alreadyNotified = Boolean(state.jobTerminalNoticeById[jobId]);
@@ -143,8 +223,9 @@
     
     function startJobPolling(jobId) {
       if (!jobId) return;
-      state.activeJobId = jobId;
       stopJobPolling();
+      state.activeJobId = jobId;
+      const expectedContext = captureJobUiContext();
       renderJobProgress({
         id: jobId,
         status: 'running',
@@ -152,9 +233,9 @@
         events: [],
         attemptsByPhase: {},
       });
-      pollJob(jobId);
+      pollJob(jobId, expectedContext);
       state.jobPollingTimer = setInterval(() => {
-        pollJob(jobId);
+        pollJob(jobId, expectedContext);
       }, 1200);
     }
 
@@ -164,18 +245,31 @@
       const userMessage = String(request.userMessage || '').trim();
       const jobRootPath = String(job.rootPath || '').trim();
       const jobMessage = String(job.request && job.request.userMessage ? job.request.userMessage : '').trim();
-      if (rootPath && jobRootPath && rootPath !== jobRootPath) return false;
-      if (userMessage && jobMessage && userMessage !== jobMessage) return false;
+      if (rootPath && rootPath !== jobRootPath) return false;
+      if (userMessage && userMessage !== jobMessage) return false;
       return true;
     }
 
     function watchLatestProjectJob(request = {}) {
       if (!api || typeof api.listJobs !== 'function') return () => {};
-      const projectId = request.projectId || null;
+      const expectedContext = captureJobUiContext();
+      const expectedSubmissionEpoch = readSubmissionEpoch();
+      if (expectedSubmissionEpoch === null) return () => {};
+      const normalizedRequest = Object.freeze({
+        projectId: request.projectId || null,
+        rootPath: String(request.rootPath || '').trim(),
+        userMessage: String(request.userMessage || '').trim(),
+      });
+      const projectId = normalizedRequest.projectId;
       const startedAt = Date.now();
       let stopped = false;
       let timer = null;
       let interval = null;
+
+      function watcherContextIsCurrent() {
+        return readSubmissionEpoch() === expectedSubmissionEpoch
+          && jobUiContextIsCurrent(expectedContext);
+      }
 
       function stop() {
         stopped = true;
@@ -187,15 +281,49 @@
 
       async function tick() {
         if (stopped || state.activeJobId) return;
+        if (!watcherContextIsCurrent()) {
+          stop();
+          return;
+        }
         if (Date.now() - startedAt > 15000) {
           stop();
           return;
         }
         try {
           const response = await api.listJobs({ projectId, limit: 6 });
+          if (stopped) return;
+          if (!watcherContextIsCurrent()) {
+            const staleJobs = response && response.ok && Array.isArray(response.jobs) ? response.jobs : [];
+            staleJobs
+              .filter((job) => {
+                const status = String(job && job.status ? job.status : '').toLowerCase();
+                return ['running', 'retry_pending'].includes(status)
+                  && (!projectId || job.projectId === projectId)
+                  && jobMatchesRequest(job, normalizedRequest);
+              })
+              .forEach((job) => cancelStaleJobOnce(job.id));
+            stop();
+            return;
+          }
           let jobs = response && response.ok && Array.isArray(response.jobs) ? response.jobs : [];
-          if (!jobs.length && request.rootPath) {
+          if (!jobs.length && normalizedRequest.rootPath) {
             const fallbackResponse = await api.listJobs({ limit: 8 });
+            if (stopped) return;
+            if (!watcherContextIsCurrent()) {
+              const staleJobs = fallbackResponse && fallbackResponse.ok && Array.isArray(fallbackResponse.jobs)
+                ? fallbackResponse.jobs
+                : [];
+              staleJobs
+                .filter((job) => {
+                  const status = String(job && job.status ? job.status : '').toLowerCase();
+                  return ['running', 'retry_pending'].includes(status)
+                    && (!projectId || job.projectId === projectId)
+                    && jobMatchesRequest(job, normalizedRequest);
+                })
+                .forEach((job) => cancelStaleJobOnce(job.id));
+              stop();
+              return;
+            }
             jobs =
               fallbackResponse && fallbackResponse.ok && Array.isArray(fallbackResponse.jobs)
                 ? fallbackResponse.jobs
@@ -203,7 +331,9 @@
           }
           const activeJob = jobs.find((job) => {
             const status = String(job && job.status ? job.status : '').toLowerCase();
-            return ['running', 'retry_pending'].includes(status) && jobMatchesRequest(job, request);
+            return ['running', 'retry_pending'].includes(status)
+              && (!projectId || job.projectId === projectId)
+              && jobMatchesRequest(job, normalizedRequest);
           });
           if (activeJob && activeJob.id) {
             startJobPolling(activeJob.id);

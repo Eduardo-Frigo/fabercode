@@ -18,6 +18,9 @@ const tutorialRenderSource = applicationMapSource.slice(tutorialRenderStart, tut
 const tutorialDevelopmentStart = appSource.indexOf('async function simulateTutorialDevelopmentConversation');
 const tutorialDevelopmentEnd = appSource.indexOf('function appendChangeCard', tutorialDevelopmentStart);
 const tutorialDevelopmentSource = appSource.slice(tutorialDevelopmentStart, tutorialDevelopmentEnd);
+const conversationSelectionStart = appSource.indexOf('onSelectConversation: async');
+const conversationSelectionEnd = appSource.indexOf('onRenameProject:', conversationSelectionStart);
+const conversationSelectionSource = appSource.slice(conversationSelectionStart, conversationSelectionEnd);
 
 const rendererScripts = [...indexHtml.matchAll(/<script\s+src="(\.\/[^"]+\.js)"><\/script>/g)].map(
   (match) => match[1]
@@ -28,6 +31,19 @@ const lightThemeIcons = [
   'bin-light.svg',
   'settings-light.svg',
 ];
+
+assert.ok(conversationSelectionStart >= 0 && conversationSelectionEnd > conversationSelectionStart);
+assert.ok(
+  conversationSelectionSource.indexOf("resetApprovalMode('conversation_switch')")
+    < conversationSelectionSource.indexOf('await loadConversationMessages(conversation.id)'),
+  'conversation switches must reset the task approval preference before awaiting message loading',
+);
+const accountStatusStart = appSource.indexOf('onStatusChange: (status, unlocked) =>');
+const accountStatusEnd = appSource.indexOf('    })\n  : null;', accountStatusStart);
+const accountStatusSource = appSource.slice(accountStatusStart, accountStatusEnd);
+assert.ok(accountStatusStart >= 0 && accountStatusEnd > accountStatusStart);
+assert.match(accountStatusSource, /previousIdentity\s*!==\s*nextIdentity/);
+assert.match(accountStatusSource, /resetForAccountContextChange\('account_context_change'\)/);
 
 const expectedModules = [
   {
@@ -169,6 +185,11 @@ const expectedModules = [
     ],
   },
   { script: './chat_composer.js', globalName: 'FaberChatComposer', methods: ['createChatComposerController'] },
+  {
+    script: './composer_approval_mode.js',
+    globalName: 'FaberComposerApprovalMode',
+    methods: ['normalizeApprovalMode', 'createComposerApprovalModeController'],
+  },
   { script: './cortex_controller.js', globalName: 'FaberCortex', methods: ['createCortexController', 'normalizeCortexTopic'] },
   { script: './inline_input_dialog.js', globalName: 'FaberInlineInputDialog', methods: ['createInlineInputDialogController'] },
   {

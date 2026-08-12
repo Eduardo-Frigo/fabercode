@@ -46,7 +46,7 @@ function createHarness() {
   return { authorizer, calls };
 }
 
-function request(projectInfo = { rootPath: '/workspace/project' }) {
+function request(projectInfo = { rootPath: '/workspace/project' }, payloadOverrides = {}) {
   return {
     operation: 'plan',
     payload: {
@@ -56,11 +56,14 @@ function request(projectInfo = { rootPath: '/workspace/project' }) {
       approvalMode: 'ask_each',
       contextHint: {
         safe: 'visible',
+        approvalMode: 'delegate_task',
+        requestedMode: 'delegate_task',
         personaApprovedExecution: true,
         personaRouteDecision: { decision: 'execute' },
         nested: { jobId: 'job-forged', productRouteDecision: { decision: 'execute' } },
       },
       jobId: 'job-forged',
+      ...payloadOverrides,
     },
   };
 }
@@ -82,6 +85,21 @@ function run() {
   assert.strictEqual(Object.isFrozen(resolved.payload), true);
   assert.strictEqual(Object.isFrozen(resolved.payload.projectInfo), true);
   assert.strictEqual(Object.isFrozen(resolved.payload.contextHint), true);
+
+  const defaulted = createHarness();
+  const defaultedRequest = request();
+  delete defaultedRequest.payload.approvalMode;
+  const defaultedResult = defaulted.authorizer.authorize(defaultedRequest);
+  assert.strictEqual(defaultedResult.ok, true);
+  assert.strictEqual(defaultedResult.payload.approvalMode, 'ask_each');
+
+  const delegated = createHarness();
+  const delegatedResult = delegated.authorizer.authorize(request(
+    { rootPath: '/workspace/project' },
+    { approvalMode: 'delegate_task' },
+  ));
+  assert.strictEqual(delegatedResult.ok, true);
+  assert.strictEqual(delegatedResult.payload.approvalMode, 'delegate_task');
 
   const identified = createHarness();
   assert.strictEqual(identified.authorizer.authorize(request({
@@ -112,11 +130,42 @@ function run() {
 
   const map = createHarness();
   const mapResult = map.authorizer.authorize({
-    ...request(),
+    ...request(
+      { rootPath: '/workspace/project' },
+      { approvalMode: 'not_a_public_mode' },
+    ),
     operation: 'map_message',
   });
   assert.strictEqual(mapResult.ok, true);
   assert.strictEqual(mapResult.payload.projectInfo.id, 'project-1');
+  assert.strictEqual(Object.hasOwn(mapResult.payload, 'approvalMode'), false);
+  assert.strictEqual(Object.hasOwn(mapResult.payload, 'requestedMode'), false);
+
+  for (const invalidMode of ['', 'ask_each ', 'always', true, null, Symbol('mode')]) {
+    const invalid = createHarness();
+    assert.strictEqual(invalid.authorizer.authorize(request(
+      { rootPath: '/workspace/project' },
+      { approvalMode: invalidMode },
+    )).ok, false);
+    assert.strictEqual(invalid.calls.length, 0);
+  }
+
+  const legacyMode = createHarness();
+  assert.strictEqual(legacyMode.authorizer.authorize(request(
+    { rootPath: '/workspace/project' },
+    { requestedMode: 'delegate_task' },
+  )).ok, false);
+  assert.strictEqual(legacyMode.calls.length, 0);
+
+  const mapLegacyMode = createHarness();
+  assert.strictEqual(mapLegacyMode.authorizer.authorize({
+    ...request(
+      { rootPath: '/workspace/project' },
+      { requestedMode: 'ask_each' },
+    ),
+    operation: 'map_message',
+  }).ok, false);
+  assert.strictEqual(mapLegacyMode.calls.length, 0);
 
   const hostile = createHarness();
   const accessorProject = {};
@@ -127,6 +176,14 @@ function run() {
   });
   assert.strictEqual(hostile.authorizer.authorize(request(accessorProject)).ok, false);
   assert.strictEqual(getterReads, 0);
+  const accessorMode = request();
+  let modeGetterReads = 0;
+  Object.defineProperty(accessorMode.payload, 'approvalMode', {
+    enumerable: true,
+    get() { modeGetterReads += 1; return 'delegate_task'; },
+  });
+  assert.strictEqual(hostile.authorizer.authorize(accessorMode).ok, false);
+  assert.strictEqual(modeGetterReads, 0);
   const symbolPayload = request();
   symbolPayload.payload[Symbol('hostile')] = true;
   assert.strictEqual(hostile.authorizer.authorize(symbolPayload).ok, false);

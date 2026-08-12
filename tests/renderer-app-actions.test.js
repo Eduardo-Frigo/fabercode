@@ -15,6 +15,14 @@ function deferred() {
   return { promise, reject, resolve };
 }
 
+async function waitFor(predicate, message) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (predicate()) return;
+    await Promise.resolve();
+  }
+  throw new Error(message || 'condition was not reached');
+}
+
 function loadModule() {
   const sandbox = {
     console,
@@ -28,7 +36,15 @@ function loadModule() {
   return sandbox.window.FaberAppActions;
 }
 
-function createHarness({ cancelJob, executePlan, plan } = {}) {
+function createHarness({
+  approvalController = null,
+  cancelJob,
+  ensureActiveConversationForSend,
+  executePlan,
+  getActiveConversationId,
+  plan,
+  sendAssistantMessage,
+} = {}) {
   const moduleApi = loadModule();
   const calls = {
     appendMessage: [],
@@ -39,7 +55,13 @@ function createHarness({ cancelJob, executePlan, plan } = {}) {
     sendAssistantMessage: [],
     showPending: [],
     startJobPolling: [],
+    stopJobPolling: 0,
+    hideJobProgress: 0,
     prepareNewConversation: 0,
+    pollJob: [],
+    approvalCapture: [],
+    approvalFinish: [],
+    approvalReset: [],
   };
   const state = {
     activeJobId: null,
@@ -55,6 +77,7 @@ function createHarness({ cancelJob, executePlan, plan } = {}) {
     selectedProjectId: 'project-1',
     selectedProjectInfo: { id: 'project-1', rootPath: '/workspace/project' },
     uiMode: 'default',
+    composerApprovalMode: 'ask_each',
   };
   const inputEl = { value: 'Implemente a mudança' };
   const api = {
@@ -75,7 +98,21 @@ function createHarness({ cancelJob, executePlan, plan } = {}) {
     },
     sendAssistantMessage: async (payload) => {
       calls.sendAssistantMessage.push(payload);
-      return plan;
+      return sendAssistantMessage ? sendAssistantMessage(payload) : plan;
+    },
+  };
+  const composerApprovalModeController = approvalController || {
+    captureSubmission: ({ uiMode }) => {
+      calls.approvalCapture.push({ uiMode });
+      return Object.freeze({ token: Object.freeze({}), approvalMode: state.composerApprovalMode });
+    },
+    finishSubmission: (snapshot, outcome) => {
+      calls.approvalFinish.push({ snapshot, outcome });
+      return true;
+    },
+    reset: (reason) => {
+      calls.approvalReset.push(reason);
+      state.composerApprovalMode = 'ask_each';
     },
   };
   const controller = moduleApi.createAppActionsController({
@@ -86,11 +123,12 @@ function createHarness({ cancelJob, executePlan, plan } = {}) {
         calls.clearPending += 1;
         state.pendingAction = null;
       },
-      ensureActiveConversationForSend: async () => null,
+      ensureActiveConversationForSend: ensureActiveConversationForSend || (async () => null),
       ensureSelectedProjectInfoReady: async () => true,
+      getActiveConversationId: getActiveConversationId || (() => null),
       getRecentConversationMessagesForPersona: () => [],
       hidePersonaThinkingIndicator: () => {},
-      pollJob: async () => null,
+      pollJob: async (jobId) => { calls.pollJob.push(jobId); },
       prepareNewConversationForProject: async () => {
         calls.prepareNewConversation += 1;
       },
@@ -103,10 +141,12 @@ function createHarness({ cancelJob, executePlan, plan } = {}) {
       },
       showPersonaThinkingIndicator: () => null,
       startJobPolling: (jobId) => calls.startJobPolling.push(jobId),
-      stopJobPolling: () => {},
+      stopJobPolling: () => { calls.stopJobPolling += 1; },
+      hideJobProgress: () => { calls.hideJobProgress += 1; },
       updateStatus: () => {},
       watchLatestProjectJob: () => () => {},
     },
+    controllers: { composerApprovalModeController },
     elements: { inputEl },
     formatters: {
       buildExecutionOutcomeAssistantMessage: () => '',
@@ -176,6 +216,33 @@ async function run() {
   assert.strictEqual(JSON.stringify(harness.calls.executePlan[1]), JSON.stringify({ jobId: 'job-authorized-2' }));
   assert.strictEqual(harness.state.pendingAction, null);
   assert.strictEqual(harness.state.pendingActionJobId, null);
+
+  {
+    const staleExecutionGate = deferred();
+    const staleExecution = createHarness({
+      executePlan: () => staleExecutionGate.promise,
+    });
+    staleExecution.state.pendingAction = {
+      rootPath: '/workspace/project',
+      targetFile: 'src/old-account.js',
+    };
+    staleExecution.state.pendingActionJobId = 'job-old-account-execution';
+    const executionPromise = staleExecution.controller.onConfirm();
+    await waitFor(() => staleExecution.calls.executePlan.length === 1, 'execution did not start');
+    staleExecution.controller.resetForAccountContextChange('account_context_change');
+    staleExecutionGate.resolve({
+      ok: true,
+      message: 'Resultado da conta anterior.',
+      modifiedFiles: ['src/old-account.js'],
+    });
+    await executionPromise;
+    assert.strictEqual(staleExecution.calls.pollJob.length, 0);
+    assert.strictEqual(
+      staleExecution.calls.appendMessage.some((entry) => entry[1] === 'Resultado da conta anterior.'),
+      false,
+      'an execution completion from a revoked account context must not render',
+    );
+  }
 
   const missingJob = createHarness({
     plan: {
@@ -253,9 +320,193 @@ async function run() {
   await cortex.controller.onSend();
   assert.strictEqual(cortex.calls.learnWithCortex.length, 1);
   assert.strictEqual(cortex.calls.executePlan.length, 0);
+  assert.strictEqual(
+    Object.prototype.hasOwnProperty.call(cortex.calls.learnWithCortex[0], 'approvalMode'),
+    false,
+    'Cortex must never receive execution approval mode',
+  );
+
+  {
+    const cortexGate = deferred();
+    const staleCortex = createHarness();
+    staleCortex.state.uiMode = 'cortex';
+    staleCortex.api.learnWithCortex = async (payload) => {
+      staleCortex.calls.learnWithCortex.push(payload);
+      return cortexGate.promise;
+    };
+    const oldLearning = staleCortex.controller.onSend();
+    await waitFor(() => staleCortex.calls.learnWithCortex.length === 1, 'Cortex learning did not start');
+    staleCortex.controller.invalidateSubmission('cortex_context_change');
+    cortexGate.resolve({ ok: true, learning: {}, message: 'Memória obsoleta.' });
+    await oldLearning;
+    assert.strictEqual(
+      staleCortex.calls.appendMessage.some((entry) => entry[0] === 'assistant' && entry[1] === 'Memória obsoleta.'),
+      false,
+      'stale Cortex responses must not render in a new context',
+    );
+  }
+
+  {
+    const accountChange = createHarness();
+    accountChange.state.activeJobId = 'job-old-account';
+    accountChange.state.pendingAction = { targetFile: 'src/private.js' };
+    accountChange.state.pendingActionJobId = 'job-old-account';
+    accountChange.state.composerApprovalMode = 'delegate_task';
+    accountChange.controller.resetForAccountContextChange('account_context_change');
+    assert.strictEqual(accountChange.state.activeJobId, null);
+    assert.strictEqual(accountChange.state.pendingAction, null);
+    assert.strictEqual(accountChange.state.pendingActionJobId, null);
+    assert.strictEqual(accountChange.state.composerApprovalMode, 'ask_each');
+    assert.strictEqual(accountChange.calls.stopJobPolling, 1);
+    assert.strictEqual(accountChange.calls.hideJobProgress, 1);
+    assert.deepStrictEqual(accountChange.calls.approvalReset, ['account_context_change']);
+  }
+
+  {
+    const delegated = createHarness({ plan: { ok: true, response: 'Tarefa aceita.' } });
+    delegated.state.composerApprovalMode = 'delegate_task';
+    await delegated.controller.onSend();
+    assert.strictEqual(delegated.calls.sendAssistantMessage[0].approvalMode, 'delegate_task');
+    assert.strictEqual(
+      Object.prototype.hasOwnProperty.call(delegated.calls.sendAssistantMessage[0], 'requestedMode'),
+      false,
+    );
+    assert.deepStrictEqual(
+      JSON.parse(JSON.stringify(delegated.calls.approvalFinish.map((entry) => entry.outcome))),
+      [{ accepted: true }],
+    );
+  }
+
+  {
+    const order = [];
+    const finishOutcomes = [];
+    const failedPreflight = createHarness({
+      approvalController: {
+        captureSubmission: () => {
+          order.push('capture');
+          return Object.freeze({ token: Object.freeze({}), approvalMode: 'delegate_task' });
+        },
+        finishSubmission: (_snapshot, outcome) => {
+          finishOutcomes.push(outcome);
+        },
+        reset: () => order.push('reset'),
+      },
+      cancelJob: async () => {
+        order.push('cancel');
+        return { ok: false, message: 'Cancel denied.' };
+      },
+      plan: { ok: true, response: 'must not run' },
+    });
+    failedPreflight.state.pendingAction = { targetFile: 'src/preserved.js' };
+    failedPreflight.state.pendingActionJobId = 'job-preflight';
+    const originalInput = failedPreflight.inputEl.value;
+    await failedPreflight.controller.onSend();
+    assert.deepStrictEqual(order, ['capture', 'cancel'], 'mode snapshot must precede the first await');
+    assert.strictEqual(failedPreflight.inputEl.value, originalInput);
+    assert.strictEqual(failedPreflight.state.pendingActionJobId, 'job-preflight');
+    assert.strictEqual(failedPreflight.calls.sendAssistantMessage.length, 0);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(finishOutcomes)), [{ accepted: false }]);
+  }
+
+  {
+    let conversationId = null;
+    const firstConversation = createHarness({
+      ensureActiveConversationForSend: async () => {
+        conversationId = 'conversation-created';
+        return conversationId;
+      },
+      getActiveConversationId: () => conversationId,
+      plan: {
+        ok: true,
+        jobId: 'job-first-conversation',
+        action: { rootPath: '/workspace/project', targetFile: 'src/created.js' },
+      },
+    });
+    await firstConversation.controller.onSend();
+    assert.strictEqual(firstConversation.calls.cancelJob.length, 0, 'new conversation is part of the valid snapshot');
+    assert.strictEqual(firstConversation.calls.showPending.length, 1);
+    assert.strictEqual(firstConversation.state.pendingActionJobId, 'job-first-conversation');
+  }
+
+  {
+    const firstPlan = deferred();
+    const secondPlan = deferred();
+    let requestCount = 0;
+    const stale = createHarness({
+      getActiveConversationId: () => 'conversation-1',
+      sendAssistantMessage: () => {
+        requestCount += 1;
+        return requestCount === 1 ? firstPlan.promise : secondPlan.promise;
+      },
+    });
+
+    const firstRequest = stale.controller.onSend();
+    await waitFor(() => stale.calls.sendAssistantMessage.length === 1, 'first plan did not start');
+    stale.controller.invalidateSubmission('test_context_change');
+    stale.inputEl.value = 'Novo envio após mudar o contexto';
+    const secondRequest = stale.controller.onSend();
+    await waitFor(() => stale.calls.sendAssistantMessage.length === 2, 'second plan did not start');
+
+    firstPlan.resolve({
+      ok: true,
+      jobId: 'job-stale',
+      response: 'Resposta obsoleta.',
+      action: { rootPath: '/workspace/project', targetFile: 'src/stale.js' },
+    });
+    await firstRequest;
+    assert.deepStrictEqual(
+      JSON.parse(JSON.stringify(stale.calls.cancelJob)),
+      [{ jobId: 'job-stale' }],
+      'stale authoritative job must be cancelled exactly once',
+    );
+    assert.strictEqual(stale.calls.showPending.length, 0);
+    assert.strictEqual(stale.calls.startJobPolling.length, 0);
+    assert.strictEqual(
+      stale.calls.appendMessage.some((entry) => entry[0] === 'assistant' && entry[1] === 'Resposta obsoleta.'),
+      false,
+    );
+
+    stale.inputEl.value = 'Terceiro envio concorrente';
+    await stale.controller.onSend();
+    assert.strictEqual(
+      stale.calls.sendAssistantMessage.length,
+      2,
+      'old finally must not unlock the newer in-flight send',
+    );
+    secondPlan.resolve({ ok: true, response: 'Resposta atual.' });
+    await secondRequest;
+    assert.strictEqual(
+      stale.calls.appendMessage.some((entry) => entry[0] === 'assistant' && entry[1] === 'Resposta atual.'),
+      true,
+    );
+  }
+
+  {
+    const planGate = deferred();
+    const conversationChange = createHarness({ plan: planGate.promise });
+    conversationChange.state.composerApprovalMode = 'delegate_task';
+    const oldRequest = conversationChange.controller.onSend();
+    await waitFor(() => conversationChange.calls.sendAssistantMessage.length === 1, 'conversation plan did not start');
+    await conversationChange.controller.onNewConversation();
+    assert.strictEqual(conversationChange.calls.prepareNewConversation, 1);
+    assert.deepStrictEqual(conversationChange.calls.approvalReset, ['new_conversation']);
+    planGate.resolve({
+      ok: true,
+      jobId: 'job-old-conversation',
+      response: 'Não renderizar.',
+      action: { rootPath: '/workspace/project', targetFile: 'src/old.js' },
+    });
+    await oldRequest;
+    assert.deepStrictEqual(
+      JSON.parse(JSON.stringify(conversationChange.calls.cancelJob)),
+      [{ jobId: 'job-old-conversation' }],
+    );
+    assert.strictEqual(conversationChange.calls.showPending.length, 0);
+  }
 
   assert.strictEqual(source.includes('meta.autoExecute'), false);
   assert.strictEqual(source.includes('pendingAction.jobId'), false);
+  assert.strictEqual(source.includes('requestedMode'), false);
   assert.strictEqual(source.includes('Ação cancelada. Nenhum arquivo foi alterado.'), false);
   console.log('renderer-app-actions.test.js: ok');
 }

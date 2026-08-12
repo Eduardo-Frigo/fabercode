@@ -173,6 +173,10 @@ const UI_TRANSLATIONS = {
     attachImage: 'Anexar imagem',
     selectProjectAi: 'Selecionar IA do projeto',
     sendPrompt: 'Enviar prompt',
+    approvalModeLabel: 'Aprovação',
+    approvalModeAskEach: 'Perguntar antes',
+    approvalModeDelegateTask: 'IA decide nesta tarefa',
+    approvalModeHelp: 'A delegação vale somente para a tarefa enviada.',
     files: 'Arquivos',
     contextConversation: 'Contexto e Conversa',
     rename: 'Renomear',
@@ -1170,6 +1174,10 @@ const UI_TRANSLATIONS = {
     attachImage: 'Attach image',
     selectProjectAi: 'Select project AI',
     sendPrompt: 'Send prompt',
+    approvalModeLabel: 'Approval',
+    approvalModeAskEach: 'Ask first',
+    approvalModeDelegateTask: 'AI decides for this task',
+    approvalModeHelp: 'Delegation applies only to the submitted task.',
     files: 'Files',
     contextConversation: 'Context and Conversation',
     rename: 'Rename',
@@ -2167,6 +2175,10 @@ const UI_TRANSLATIONS = {
     attachImage: 'Adjuntar imagen',
     selectProjectAi: 'Seleccionar IA del proyecto',
     sendPrompt: 'Enviar prompt',
+    approvalModeLabel: 'Aprobación',
+    approvalModeAskEach: 'Preguntar antes',
+    approvalModeDelegateTask: 'La IA decide en esta tarea',
+    approvalModeHelp: 'La delegación se aplica solo a la tarea enviada.',
     files: 'Archivos',
     contextConversation: 'Contexto y conversación',
     rename: 'Renombrar',
@@ -3088,6 +3100,10 @@ function applyStaticTranslations() {
   setNodeAttribute('#composer-provider', 'aria-label', 'selectProjectAi');
   setNodeAttribute('#btn-send', 'title', 'sendPrompt');
   setNodeAttribute('#btn-send', 'aria-label', 'sendPrompt');
+  setNodeText('.composer-approval-mode__label span', 'approvalModeLabel');
+  setNodeText('#composer-approval-mode-select option[value="ask_each"]', 'approvalModeAskEach');
+  setNodeText('#composer-approval-mode-select option[value="delegate_task"]', 'approvalModeDelegateTask');
+  setNodeText('#composer-approval-mode-help', 'approvalModeHelp');
   setNodeText('#project-context-menu button[data-action="rename"]', 'rename');
   setNodeText('#project-context-menu button[data-action="archive"]', 'archive');
   setNodeText('#project-context-menu button[data-action="trash"]', 'delete');

@@ -4,6 +4,7 @@ const ASSISTANT_PLANNING_AUTHORIZER_VERSION = 'assistant-planning-authorizer.v1'
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const INTERNAL_HINT_KEYS = new Set([
   'actionDigest',
+  'approvalMode',
   'approvalId',
   'approvalProof',
   'authorityContext',
@@ -21,10 +22,12 @@ const INTERNAL_HINT_KEYS = new Set([
   'productRouteDecision',
   'realRootPath',
   'requestDigest',
+  'requestedMode',
   'sessionId',
   'submissionDigest',
   'submissionId',
 ]);
+const APPROVAL_MODES = new Set(['ask_each', 'delegate_task']);
 const PROJECT_PRIVATE_KEYS = new Set([
   'authorized',
   'canonicalRootPath',
@@ -136,6 +139,20 @@ function normalizeIdentifier(value, fieldName) {
   return value;
 }
 
+function normalizeApprovalMode(payloadFields, operation) {
+  if (payloadFields.has('requestedMode')) {
+    throw new TypeError('requestedMode is not part of the public planning contract');
+  }
+  if (operation === 'map_message') return null;
+  const approvalMode = payloadFields.has('approvalMode')
+    ? payloadFields.get('approvalMode')
+    : 'ask_each';
+  if (typeof approvalMode !== 'string' || !APPROVAL_MODES.has(approvalMode)) {
+    throw new TypeError('approvalMode must be ask_each or delegate_task');
+  }
+  return approvalMode;
+}
+
 function deny(message = 'Projeto não autorizado para o assistente.') {
   return Object.freeze({ ok: false, code: 'assistant_project_not_authorized', message });
 }
@@ -165,6 +182,7 @@ function createAssistantPlanningAuthorizer(options = {}) {
       }
       const rawPayload = snapshotJson(inputFields.get('payload'));
       const payloadFields = dataFields(rawPayload, 'planning payload');
+      const approvalMode = normalizeApprovalMode(payloadFields, operation);
       const rawProject = payloadFields.get('projectInfo');
       const projectFields = dataFields(rawProject, 'planning projectInfo');
       const rootPath = normalizeIdentifier(projectFields.get('rootPath'), 'projectInfo.rootPath');
@@ -212,6 +230,7 @@ function createAssistantPlanningAuthorizer(options = {}) {
 
       const safePayload = clonePlain(snapshotJson(rawPayload, { stripKeys: INTERNAL_HINT_KEYS }));
       safePayload.projectInfo = clonePlain(normalizedProject);
+      if (approvalMode !== null) safePayload.approvalMode = approvalMode;
       return Object.freeze({ ok: true, payload: freezeJsonSnapshot(safePayload) });
     } catch {
       return deny();

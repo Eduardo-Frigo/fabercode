@@ -113,6 +113,7 @@ let actionController = null;
 let eventsController = null;
 let preferencesController = null;
 let progressiveDisclosureController = null;
+let composerApprovalModeController = null;
 let welcomePanelWasVisible = false;
 let welcomePanelAnimationFrame = null;
 
@@ -127,6 +128,8 @@ const welcomePanelEl = document.getElementById('welcome-panel');
 const pendingActionEl = document.getElementById('pending-action');
 const pendingTextEl = document.getElementById('pending-text');
 const inputEl = document.getElementById('user-input');
+const composerApprovalModeEl = document.getElementById('composer-approval-mode');
+const composerApprovalModeSelectEl = document.getElementById('composer-approval-mode-select');
 const statusPillEl = document.getElementById('status-pill');
 const nextStepsListEl = document.getElementById('next-steps-list');
 const projectsSearchEl = document.getElementById('projects-search');
@@ -161,6 +164,7 @@ const REQUIRED_RENDERER_MODULES = [
   { globalName: 'FaberAccountGate', methods: ['createAccountGateController', 'hasPlatformMedia', 'isSignedIn'] },
   { globalName: 'FaberAiSettings', methods: ['buildComposerProviderOptionsFromSettings', 'buildModelPresetOptions', 'createAiSettingsController', 'normalizeKnownProvider', 'providerStatusLabel', 'normalizeInterfaceLanguage', 'normalizeInterfaceTheme', 'normalizePanelFontScale'] },
   { globalName: 'FaberChatComposer', methods: ['createChatComposerController'] },
+  { globalName: 'FaberComposerApprovalMode', methods: ['createComposerApprovalModeController'] },
   { globalName: 'FaberCortex', methods: ['createCortexController', 'normalizeCortexTopic'] },
   { globalName: 'FaberInlineInputDialog', methods: ['createInlineInputDialogController'] },
   { globalName: 'FaberUxStateModel', methods: ['buildJobProgressPresentation', 'buildStatusPresentation', 'inferUxToneFromText', 'mapJobPhaseLabel', 'normalizeUxTone'] },
@@ -203,6 +207,18 @@ const {
 } = window.FaberAppFormatters;
 
 state = window.FaberAppState.createInitialRendererState();
+
+composerApprovalModeController = window.FaberComposerApprovalMode
+  ? window.FaberComposerApprovalMode.createComposerApprovalModeController({
+      document,
+      elements: {
+        container: composerApprovalModeEl,
+        select: composerApprovalModeSelectEl,
+      },
+      state,
+    })
+  : null;
+if (composerApprovalModeController) composerApprovalModeController.bindEvents();
 
 const panelLayoutController = window.FaberPanelLayout
   ? window.FaberPanelLayout.createPanelLayoutController({ appShell: appShellEl })
@@ -293,6 +309,10 @@ jobController = window.FaberAppJobs
         buildJobContextForPersona,
         buildPersonaRequestContextHint,
         buildTerminalJobMessage,
+        getActiveConversationId,
+        getSubmissionEpoch: () => actionController && typeof actionController.getSubmissionEpoch === 'function'
+          ? actionController.getSubmissionEpoch()
+          : 0,
         getRecentConversationMessagesForPersona,
         hidePersonaThinkingIndicator,
         shouldSuppressInterimAssistantPlanMessage,
@@ -410,6 +430,17 @@ const accountGateController = window.FaberAccountGate
         }
       },
       onStatusChange: (status, unlocked) => {
+        const previousUser = state.accountStatus && state.accountStatus.user;
+        const nextUser = status && status.user;
+        const previousIdentity = previousUser
+          ? String(previousUser.id || previousUser.email || '').trim().toLowerCase()
+          : '';
+        const nextIdentity = nextUser
+          ? String(nextUser.id || nextUser.email || '').trim().toLowerCase()
+          : '';
+        if ((!unlocked || previousIdentity !== nextIdentity) && actionController) {
+          actionController.resetForAccountContextChange('account_context_change');
+        }
         state.accountStatus = status || null;
         state.accountUnlocked = Boolean(unlocked);
         applyAccountPreferences(status && status.user ? status.user : null);
@@ -523,8 +554,19 @@ const projectSidebarController = window.FaberProjectSidebar
       onPrepareNewConversation: prepareNewConversationForProject,
       onSelectConversation: async (projectId, conversation) => {
         if (!conversation || !conversation.id) return;
-        if (state.selectedProjectId !== projectId) await selectProject(projectId);
+        const previousConversationId = getActiveConversationId(projectId);
+        if (state.selectedProjectId === projectId && previousConversationId === conversation.id) return;
+        if (actionController) actionController.invalidateSubmission('conversation_switch');
+        if (state.pendingAction || state.activeJobId) {
+          await onCancel();
+          if (state.pendingAction || state.activeJobId) return;
+        }
+        if (state.selectedProjectId !== projectId) {
+          await selectProject(projectId);
+          if (state.selectedProjectId !== projectId) return;
+        }
         setActiveConversation(projectId, conversation.id);
+        if (actionController) actionController.resetApprovalMode('conversation_switch');
         await loadConversationMessages(conversation.id);
         state.lastAssistantMeta = null;
         clearPending();
@@ -621,6 +663,9 @@ projectController = window.FaberAppProjects
         ensureConversationStateForProject,
         getActiveConversationId,
         hideJobProgress,
+        invalidateSubmission: (reason) => {
+          if (actionController) actionController.invalidateSubmission(reason);
+        },
         loadConversationMessages,
         refreshCortexLearningPanel,
         renderChatForActiveConversation,
@@ -628,6 +673,9 @@ projectController = window.FaberAppProjects
         renderSystemNotice,
         renderWelcomePanel,
         stopJobPolling,
+        resetApprovalMode: (reason) => {
+          if (actionController) actionController.resetApprovalMode(reason);
+        },
         updateStatus,
       },
       controllers: {
@@ -659,6 +707,7 @@ actionController = window.FaberAppActions
         clearTransientChatNotices,
         ensureActiveConversationForSend,
         ensureSelectedProjectInfoReady,
+        getActiveConversationId,
         getRecentConversationMessagesForPersona,
         hideJobProgress,
         hidePersonaThinkingIndicator,
@@ -694,6 +743,7 @@ actionController = window.FaberAppActions
       controllers: {
         accountGateController,
         aiSettingsController,
+        composerApprovalModeController,
         cortexController,
         projectFileTreeController,
         projectToolsController,
@@ -1268,7 +1318,11 @@ function renderNextSteps() {
 }
 
 function setUiMode(mode) {
-  state.uiMode = mode === 'cortex' ? 'cortex' : 'default';
+  const nextUiMode = mode === 'cortex' ? 'cortex' : 'default';
+  const uiModeChanged = state.uiMode !== nextUiMode;
+  state.uiMode = nextUiMode;
+  if (uiModeChanged && actionController) actionController.invalidateSubmission('ui_mode_change');
+  if (composerApprovalModeController) composerApprovalModeController.setContext(state.uiMode);
   const cortexActive = state.uiMode === 'cortex';
   if (cortexModeBtnEl) {
     cortexModeBtnEl.classList.toggle('active', cortexActive);
@@ -1357,12 +1411,12 @@ function normalizeProjectItems(rawProjects) {
   return projectController ? projectController.normalizeProjectItems(rawProjects) : [];
 }
 
-function clearSelectionState() {
-  if (projectController) projectController.clearSelectionState();
+async function clearSelectionState() {
+  return projectController ? projectController.clearSelectionState() : false;
 }
 
-function reconcileSelectionAfterProjectListUpdate() {
-  if (projectController) projectController.reconcileSelectionAfterProjectListUpdate();
+async function reconcileSelectionAfterProjectListUpdate() {
+  return projectController ? projectController.reconcileSelectionAfterProjectListUpdate() : false;
 }
 
 function hideProjectContextMenu() {
@@ -1485,10 +1539,11 @@ async function ensureSelectedProjectInfoReady(options = {}) {
 }
 
 async function selectProject(projectId, options = {}) {
-  if (projectController) await projectController.selectProject(projectId, options);
+  const selected = projectController ? await projectController.selectProject(projectId, options) : false;
   if (progressiveDisclosureController && typeof progressiveDisclosureController.notifyStateChanged === 'function') {
     progressiveDisclosureController.notifyStateChanged();
   }
+  return selected;
 }
 
 function clearPending() {

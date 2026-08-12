@@ -2,6 +2,7 @@
   function createInitialRendererState() {
     return {
       uiMode: 'default',
+      composerApprovalMode: 'ask_each',
       aiRuntimeStatus: null,
       selectedAiProvider: 'rwkv',
       mempalaceStatus: null,

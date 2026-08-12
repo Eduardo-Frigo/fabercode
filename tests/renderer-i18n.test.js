@@ -40,6 +40,10 @@ const selectors = [
   '#btn-project-terminal span',
   '#btn-project-milestones span',
   '#btn-project-deploy span',
+  '.composer-approval-mode__label span',
+  '#composer-approval-mode-select option[value="ask_each"]',
+  '#composer-approval-mode-select option[value="delegate_task"]',
+  '#composer-approval-mode-help',
 ];
 const nodes = new Map(selectors.map((selector) => [selector, createNode()]));
 const document = {
@@ -74,6 +78,10 @@ assert.strictEqual(nodes.get('#btn-tab-map').textContent, 'Application Map');
 assert.strictEqual(nodes.get('#btn-map-tool-hand').attributes.title, 'Pan map');
 assert.strictEqual(nodes.get('#btn-project-files').attributes['aria-label'], 'Project files');
 assert.strictEqual(nodes.get('#btn-project-deploy').attributes.title, 'Run project locally');
+assert.strictEqual(nodes.get('.composer-approval-mode__label span').textContent, 'Approval');
+assert.strictEqual(nodes.get('#composer-approval-mode-select option[value="ask_each"]').textContent, 'Ask first');
+assert.strictEqual(nodes.get('#composer-approval-mode-select option[value="delegate_task"]').textContent, 'AI decides for this task');
+assert.strictEqual(nodes.get('#composer-approval-mode-help').textContent, 'Delegation applies only to the submitted task.');
 
 locale = 'es-ES';
 controller.applyStaticTranslations();
@@ -81,5 +89,8 @@ assert.strictEqual(nodes.get('#btn-tab-map').textContent, 'Mapa de la aplicació
 assert.strictEqual(nodes.get('#workspace-collapse-right').attributes.title, 'Contraer panel derecho');
 assert.strictEqual(nodes.get('#btn-map-tool-add-image').attributes['aria-label'], 'Subir imagen');
 assert.strictEqual(nodes.get('#btn-project-milestones span').textContent, 'Hitos');
+assert.strictEqual(nodes.get('.composer-approval-mode__label span').textContent, 'Aprobación');
+assert.strictEqual(nodes.get('#composer-approval-mode-select option[value="ask_each"]').textContent, 'Preguntar antes');
+assert.strictEqual(nodes.get('#composer-approval-mode-select option[value="delegate_task"]').textContent, 'La IA decide en esta tarea');
 
 console.log('renderer-i18n.test.js: ok');

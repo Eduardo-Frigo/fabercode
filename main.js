@@ -5182,6 +5182,8 @@ app.whenReady().then(async () => {
     emitAccountEvent: (payload) => {
       if (payload && payload.type === 'signed-out') {
         clearAssistantRuntimeAuthority('account_signed_out');
+      } else if (payload && payload.type === 'signed-in') {
+        clearAssistantRuntimeAuthority('account_signed_in');
       }
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('account:event', payload);

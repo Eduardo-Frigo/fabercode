@@ -80,7 +80,7 @@
         zone.addEventListener('click', (event) => {
           if (event.target !== zone) return;
           if (document.body.classList.contains('progressive-tutorial-active')) return;
-          onClearProjectSelection();
+          Promise.resolve(onClearProjectSelection()).catch(() => {});
         });
       });
     

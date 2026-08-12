@@ -27,6 +27,7 @@
       clearPending = () => {},
       getActiveConversationId = () => null,
       hideJobProgress = () => {},
+      invalidateSubmission = () => {},
       loadConversationMessages = async () => [],
       refreshCortexLearningPanel = async () => {},
       renderChatForActiveConversation = () => {},
@@ -35,6 +36,7 @@
       renderWelcomePanel = () => {},
       stopJobPolling = () => {},
       updateStatus = () => {},
+      resetApprovalMode = () => {},
       ensureConversationStateForProject = () => {},
     } = callbacks;
 
@@ -46,12 +48,14 @@
     }
 
     function currentAssistantJobId() {
-      if (state.pendingAction) return normalizeAssistantJobId(state.pendingActionJobId);
-      return normalizeAssistantJobId(state.activeJobId);
+      const pendingJobId = state.pendingAction
+        ? normalizeAssistantJobId(state.pendingActionJobId)
+        : null;
+      return pendingJobId || normalizeAssistantJobId(state.activeJobId);
     }
 
-    async function cancelAssistantJobBeforeProjectSwitch() {
-      const jobId = currentAssistantJobId();
+    async function cancelAssistantJobBeforeProjectSwitch(expectedJobId = currentAssistantJobId()) {
+      const jobId = normalizeAssistantJobId(expectedJobId);
       if (!jobId) return true;
       if (!api || typeof api.cancelJob !== 'function') {
         appendMessage(
@@ -92,6 +96,35 @@
       return true;
     }
 
+    async function drainAssistantJobsBeforeContextChange() {
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        if (state.pendingAction && !normalizeAssistantJobId(state.pendingActionJobId)) {
+          state.pendingAction = null;
+          state.pendingActionJobId = null;
+          clearPending();
+        }
+        const jobId = currentAssistantJobId();
+        if (!jobId) return true;
+        if (!(await cancelAssistantJobBeforeProjectSwitch(jobId))) return false;
+
+        if (state.pendingAction && normalizeAssistantJobId(state.pendingActionJobId) === jobId) {
+          state.pendingAction = null;
+          state.pendingActionJobId = null;
+          clearPending();
+        }
+        if (normalizeAssistantJobId(state.activeJobId) === jobId) state.activeJobId = null;
+      }
+
+      if (!currentAssistantJobId()) return true;
+      appendMessage(
+        'assistant',
+        t('projectSwitchCancellationFailed', 'Não troquei de projeto porque a tarefa ativa não pôde ser cancelada.'),
+        { persistToConversation: false },
+      );
+      updateStatus(t('actionCancellationFailedStatus', 'Falha ao cancelar tarefa'));
+      return false;
+    }
+
     function summarizeProject(info) {
       if (!info) return t('noProjectSelected', 'Nenhum projeto selecionado.');
     
@@ -119,7 +152,9 @@
         : [];
     }
     
-    function clearSelectionState() {
+    async function clearSelectionState() {
+      invalidateSubmission('selection_cleared');
+      if (!(await drainAssistantJobsBeforeContextChange())) return false;
       stopJobPolling();
       hideJobProgress();
       state.selectedProjectId = null;
@@ -141,14 +176,17 @@
       if (chatController) chatController.clearMessages();
       updateStatus(t('waitingProject', 'Aguardando projeto'));
       renderWelcomePanel();
+      resetApprovalMode('selection_cleared');
+      return true;
     }
     
-    function reconcileSelectionAfterProjectListUpdate() {
-      if (!state.selectedProjectId) return;
+    async function reconcileSelectionAfterProjectListUpdate() {
+      if (!state.selectedProjectId) return true;
       const exists = state.projects.some((project) => project.id === state.selectedProjectId);
       if (!exists) {
-        clearSelectionState();
+        return clearSelectionState();
       }
+      return true;
     }
     
     function hideProjectContextMenu() {
@@ -282,26 +320,36 @@
       }
     
       if (action === 'archive') {
+        if (state.selectedProjectId === projectId) {
+          invalidateSubmission('project_archive');
+          if (!(await drainAssistantJobsBeforeContextChange())) return;
+          resetApprovalMode('project_archive');
+        }
         const result = await api.archiveProject({ id: projectId });
         if (!result || !result.ok) {
           appendMessage('assistant', (result && result.message) || t('archiveProjectFailed', 'Falha ao arquivar projeto.'), { persistToConversation: false });
           return;
         }
         state.projects = normalizeProjectItems(result.projects);
-        reconcileSelectionAfterProjectListUpdate();
+        await reconcileSelectionAfterProjectListUpdate();
         renderProjects();
         appendMessage('assistant', t('projectArchivedSuccess', 'Projeto arquivado com sucesso.'), { persistToConversation: false });
         return;
       }
     
       if (action === 'trash') {
+        if (state.selectedProjectId === projectId) {
+          invalidateSubmission('project_trash');
+          if (!(await drainAssistantJobsBeforeContextChange())) return;
+          resetApprovalMode('project_trash');
+        }
         const result = await api.trashProject({ id: projectId });
         if (!result || !result.ok) {
           appendMessage('assistant', (result && result.message) || t('trashProjectFailed', 'Falha ao mover projeto para a lixeira.'), { persistToConversation: false });
           return;
         }
         state.projects = normalizeProjectItems(result.projects);
-        reconcileSelectionAfterProjectListUpdate();
+        await reconcileSelectionAfterProjectListUpdate();
         renderProjects();
         appendMessage('assistant', t('projectTrashedSuccess', 'Projeto movido para a lixeira.'), { persistToConversation: false });
       }
@@ -345,7 +393,7 @@
     
       console.info('[loadProjects] state.projects =', state.projects);
       state.projects.forEach((project) => ensureConversationStateForProject(project.id));
-      reconcileSelectionAfterProjectListUpdate();
+      await reconcileSelectionAfterProjectListUpdate();
       renderProjects();
       renderWelcomePanel();
     }
@@ -423,19 +471,18 @@
       const currentSequence = ++selectProjectSequence;
 
       const previousProjectId = state.selectedProjectId;
+      const projectChanged = previousProjectId !== projectId;
+      const project = state.projects.find((p) => p.id === projectId);
+      if (!project) return false;
       if (previousProjectId && previousProjectId !== projectId) {
-        const cancelled = await cancelAssistantJobBeforeProjectSwitch();
-        if (selectProjectSequence !== currentSequence || !cancelled) return;
-        state.pendingAction = null;
-        state.pendingActionJobId = null;
-        state.activeJobId = null;
-        clearPending();
+        invalidateSubmission('project_switch');
+        const cancelled = await drainAssistantJobsBeforeContextChange();
+        if (selectProjectSequence !== currentSequence || !cancelled) return false;
+        resetApprovalMode('project_switch');
       }
+
       stopJobPolling();
       hideJobProgress();
-      state.selectedProjectId = projectId;
-      const project = state.projects.find((p) => p.id === projectId);
-      if (!project) return;
     
       if (options && options.initialTab === 'map') {
         if (applicationMapController) {
@@ -449,15 +496,23 @@
       const scan = await api.scanProject(project.rootPath);
 
       // Abortar caso o usuário tenha clicado novamente no mapa ou outro projeto
-      if (selectProjectSequence !== currentSequence) return;
+      if (selectProjectSequence !== currentSequence) return false;
 
       if (!scan.ok) {
         appendMessage('assistant', scan.message || t('projectScanFailed', 'Não consegui analisar essa pasta.'));
         updateStatus(t('projectAnalysisError', 'Erro na análise'));
-        return;
+        return false;
+      }
+
+      if (projectChanged) {
+        invalidateSubmission('project_switch_commit');
+        const cancelled = await drainAssistantJobsBeforeContextChange();
+        if (selectProjectSequence !== currentSequence || !cancelled) return false;
       }
     
+      state.selectedProjectId = projectId;
       state.selectedProjectInfo = scan.info;
+      if (projectChanged && !previousProjectId) resetApprovalMode('project_switch');
       state.nextSteps = scan.nextSteps || [];
       state.expandedProjects[project.id] = true;
       ensureConversationStateForProject(project.id);
@@ -497,6 +552,7 @@
       if (options && options.initialTab === 'map') {
         await ensureMapTabVisible();
       }
+      return true;
     }
 
     return {

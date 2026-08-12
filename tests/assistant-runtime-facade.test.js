@@ -48,16 +48,28 @@ async function run() {
     if (!payload.projectInfo || payload.projectInfo.rootPath !== '/project') {
       return { ok: false, message: 'Projeto não autorizado.' };
     }
+    if (Object.hasOwn(payload, 'requestedMode')) {
+      return { ok: false, message: 'requestedMode não pertence ao contrato público.' };
+    }
+    const approvalMode = Object.hasOwn(payload, 'approvalMode')
+      ? payload.approvalMode
+      : 'ask_each';
+    if (operation !== 'map_message' && !['ask_each', 'delegate_task'].includes(approvalMode)) {
+      return { ok: false, message: 'approvalMode inválido.' };
+    }
+    const authorizedPayload = {
+      ...payload,
+      projectInfo: {
+        ...payload.projectInfo,
+        id: 'project-1',
+        projectId: 'project-1',
+      },
+    };
+    if (operation === 'map_message') delete authorizedPayload.approvalMode;
+    else authorizedPayload.approvalMode = approvalMode;
     return {
       ok: true,
-      payload: {
-        ...payload,
-        projectInfo: {
-          ...payload.projectInfo,
-          id: 'project-1',
-          projectId: 'project-1',
-        },
-      },
+      payload: authorizedPayload,
     };
   };
 
@@ -76,8 +88,10 @@ async function run() {
   assert.strictEqual(plan.ok, true);
   assert.strictEqual(plan.channel, 'plan');
   assert.strictEqual(plan.payload.projectInfo.id, 'project-1');
+  assert.strictEqual(plan.payload.approvalMode, 'ask_each');
   assert.strictEqual(calls[0][0], 'authorize');
   assert.strictEqual(calls[1][0], 'coordinate');
+  assert.strictEqual(calls[1][1].payload.approvalMode, 'ask_each');
   assert.strictEqual(calls[2][0], 'plan');
 
   calls.length = 0;
@@ -93,9 +107,11 @@ async function run() {
     projectInfo: { rootPath: '/project' },
     userMessage: 'map',
     isMapChat: true,
+    approvalMode: 'delegate_task',
   });
   assert.strictEqual(map.channel, 'message');
   assert.strictEqual(calls[1][1].operation, 'map_message');
+  assert.strictEqual(Object.hasOwn(calls[1][1].payload, 'approvalMode'), false);
 
   calls.length = 0;
   const execution = await facade.execute({ jobId: 'job-1' });
@@ -108,6 +124,8 @@ async function run() {
   assert.strictEqual(retry.ok, true);
   assert.strictEqual(retry.channel, 'plan');
   assert.strictEqual(retry.payload.userMessage, 'persisted request');
+  assert.strictEqual(Object.hasOwn(retry.payload, 'approvalMode'), false);
+  assert.strictEqual(Object.hasOwn(retry.payload, 'requestedMode'), false);
   assert.strictEqual(calls[0][0], 'retry');
   assert.strictEqual(calls[1][0], 'plan');
 
@@ -122,6 +140,22 @@ async function run() {
   assert.strictEqual(
     (await facade.retry({ jobId: 'job-1', phase: 'execute_pending' })).code,
     ASSISTANT_RUNTIME_FACADE_REASONS.INVALID_INPUT,
+  );
+  assert.strictEqual(
+    (await facade.plan({
+      projectInfo: { rootPath: '/project' },
+      userMessage: 'legacy mode',
+      requestedMode: 'delegate_task',
+    })).code,
+    ASSISTANT_RUNTIME_FACADE_REASONS.PROJECT_NOT_AUTHORIZED,
+  );
+  assert.strictEqual(
+    (await facade.plan({
+      projectInfo: { rootPath: '/project' },
+      userMessage: 'invalid mode',
+      approvalMode: 'always',
+    })).code,
+    ASSISTANT_RUNTIME_FACADE_REASONS.PROJECT_NOT_AUTHORIZED,
   );
   assert.strictEqual(
     (await facade.plan({ projectInfo: { rootPath: '/outside' }, userMessage: 'bad' })).code,

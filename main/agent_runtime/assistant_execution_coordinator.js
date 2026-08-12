@@ -8,6 +8,7 @@ const HARD_MAX_ACTIVE_JOBS = 10_000;
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const SAFE_JOB_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/;
 const SUPPORTED_PLANNING_OPERATIONS = new Set(['plan', 'message', 'map_message']);
+const APPROVAL_MODES = new Set(['ask_each', 'delegate_task']);
 const TERMINAL_RECORD_STATES = new Set(['executed', 'failed', 'revoked']);
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'runtime_interrupted']);
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -69,7 +70,9 @@ const PLANNING_PAYLOAD_PRIVATE_KEYS = new Set([
 ]);
 const PLANNING_OUTPUT_PRIVATE_KEYS = new Set([
   ...PRIVATE_OUTPUT_KEYS,
+  'approvalMode',
   'autoExecute',
+  'requestedMode',
 ]);
 
 const ASSISTANT_EXECUTION_COORDINATOR_REASONS = Object.freeze({
@@ -234,18 +237,18 @@ function callBestEffort(callback, ...args) {
   }
 }
 
-function readRequestedMode(payloadFields) {
-  const suppliedModes = ['requestedMode', 'approvalMode']
-    .filter((key) => payloadFields.has(key))
-    .map((key) => payloadFields.get(key));
-  if (suppliedModes.length > 1 && suppliedModes.some((mode) => mode !== suppliedModes[0])) {
-    throw new TypeError('requestedMode and approvalMode must not conflict');
+function readApprovalMode(payloadFields, { mapOnly = false } = {}) {
+  if (payloadFields.has('requestedMode')) {
+    throw new TypeError('requestedMode is not part of the public planning contract');
   }
-  const requestedMode = suppliedModes.length > 0 ? suppliedModes[0] : 'ask_each';
-  if (!['ask_each', 'delegate_task'].includes(requestedMode)) {
-    throw new TypeError('requestedMode must be ask_each or delegate_task');
+  if (mapOnly) return null;
+  const approvalMode = payloadFields.has('approvalMode')
+    ? payloadFields.get('approvalMode')
+    : 'ask_each';
+  if (typeof approvalMode !== 'string' || !APPROVAL_MODES.has(approvalMode)) {
+    throw new TypeError('approvalMode must be ask_each or delegate_task');
   }
-  return requestedMode;
+  return approvalMode;
 }
 
 function readProjectIdentity(projectInfo) {
@@ -1015,7 +1018,6 @@ function createAssistantExecutionCoordinator(options = {}) {
       projectInfo: cloneForOutput(record.project),
       userMessage: authorized.request.userMessage,
       attachments: cloneForOutput(authorized.request.attachments),
-      requestedMode: record.requestedMode,
       jobId: record.jobId,
     });
     record.authorityRequest = authorized.request;
@@ -1103,11 +1105,11 @@ function createAssistantExecutionCoordinator(options = {}) {
     }
     let project = null;
     let projectIdentity = null;
-    let requestedMode = 'ask_each';
+    let requestedMode = null;
     let authorityRequest = null;
     let invocationPayload;
     try {
-      requestedMode = readRequestedMode(payloadFields);
+      requestedMode = readApprovalMode(payloadFields, { mapOnly });
       if (!mapOnly) {
         project = immutableJsonSnapshot(payloadFields.get('projectInfo'));
         projectIdentity = readProjectIdentity(project);

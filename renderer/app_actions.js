@@ -15,6 +15,7 @@
     const {
       accountGateController = null,
       aiSettingsController = null,
+      composerApprovalModeController = null,
       cortexController = null,
       projectFileTreeController = null,
       projectToolsController = null,
@@ -28,6 +29,7 @@
       ensureActiveConversationForSend = async () => null,
       ensureSelectedProjectInfoReady = async () => false,
       getRecentConversationMessagesForPersona = () => [],
+      getActiveConversationId = () => null,
       hideJobProgress = () => {},
       hidePersonaThinkingIndicator = () => {},
       openWelcomeProjectModal = () => {},
@@ -58,7 +60,74 @@
       shouldSuppressInterimAssistantPlanMessage = () => false,
     } = formatters;
     let executionInFlight = false;
-    let sendInFlight = false;
+    let activeSendToken = null;
+    let submissionEpoch = 0;
+    const staleJobCancellations = new Set();
+
+    function captureSubmissionContext() {
+      return Object.freeze({
+        epoch: submissionEpoch,
+        projectId: state.selectedProjectId || null,
+        rootPath: normalizeActionRootPath(state.selectedProjectInfo && state.selectedProjectInfo.rootPath),
+        conversationId: getActiveConversationId(state.selectedProjectId) || null,
+        uiMode: state.uiMode === 'cortex' ? 'cortex' : 'default',
+      });
+    }
+
+    function submissionContextIsCurrent(context) {
+      return Boolean(
+        context
+        && context.epoch === submissionEpoch
+        && context.projectId === (state.selectedProjectId || null)
+        && context.rootPath === normalizeActionRootPath(state.selectedProjectInfo && state.selectedProjectInfo.rootPath)
+        && context.conversationId === (getActiveConversationId(state.selectedProjectId) || null)
+        && context.uiMode === (state.uiMode === 'cortex' ? 'cortex' : 'default')
+      );
+    }
+
+    function invalidateSubmission(_reason = 'context_changed') {
+      submissionEpoch += 1;
+      activeSendToken = null;
+      hidePersonaThinkingIndicator();
+      return submissionEpoch;
+    }
+
+    function getSubmissionEpoch() {
+      return submissionEpoch;
+    }
+
+    function resetApprovalMode(reason = 'context_changed') {
+      if (composerApprovalModeController && typeof composerApprovalModeController.reset === 'function') {
+        composerApprovalModeController.reset(reason);
+      } else {
+        state.composerApprovalMode = 'ask_each';
+      }
+    }
+
+    function resetForAccountContextChange(reason = 'account_context_change') {
+      invalidateSubmission(reason);
+      stopJobPolling();
+      state.activeJobId = null;
+      state.lastAssistantMeta = null;
+      clearPendingExecution();
+      hideJobProgress();
+      resetApprovalMode(reason);
+    }
+
+    async function cancelStaleJobOnce(jobId) {
+      const normalizedJobId = normalizePendingJobId(jobId);
+      if (!normalizedJobId || !api || typeof api.cancelJob !== 'function') return null;
+      if (staleJobCancellations.has(normalizedJobId)) return null;
+      staleJobCancellations.add(normalizedJobId);
+      if (staleJobCancellations.size > 256) {
+        staleJobCancellations.delete(staleJobCancellations.values().next().value);
+      }
+      try {
+        return await api.cancelJob({ jobId: normalizedJobId });
+      } catch {
+        return null;
+      }
+    }
 
     function uiText(key, fallback, variables = {}) {
       const translated = typeof t === 'function' ? t(key, fallback) : fallback;
@@ -158,6 +227,7 @@
       }
 
       executionInFlight = true;
+      const executionEpoch = submissionEpoch;
       updateStatus(uiText('workingOnProject', 'Estou trabalhando no projeto.'));
       state.activeJobId = pendingJobId;
       renderJobProgress({
@@ -179,6 +249,7 @@
             message: error && error.message ? error.message : uiText('actionExecutionFailed', 'Falha ao executar ação.'),
           };
         }
+        if (executionEpoch !== submissionEpoch) return;
         pollJob(pendingJobId);
         if (!result || !result.ok) {
           if (result && result.projectInfo && result.projectInfo.rootPath) {
@@ -251,20 +322,39 @@
     async function performSend() {
       const userMessage = inputEl.value.trim();
       if (!userMessage && !state.attachments.length) return;
-      if (!(await ensureAccountUnlockedForProductUse())) return;
-      await applyComposerProviderBeforeSend();
-    
-      const attachmentSummary = state.attachments.map((file) => file.name);
-      const visibleUserMessage = userMessage || uiText('attachmentsOnly', '[Somente anexos]');
-      const composedUserMessage = attachmentSummary.length
-        ? `${visibleUserMessage}\n\nAnexos: ${attachmentSummary.join(', ')}`
-        : visibleUserMessage;
-      const attachmentsPayload = state.attachments.map((file) => ({
+
+      const preservedInput = inputEl.value;
+      const attachmentsPayload = Object.freeze(state.attachments.map((file) => Object.freeze({
         name: file.name,
         type: file.type,
         size: file.size,
         path: file.path || '',
-      }));
+      })));
+      const attachmentSummary = attachmentsPayload.map((file) => file.name);
+      const visibleUserMessage = userMessage || uiText('attachmentsOnly', '[Somente anexos]');
+      const composedUserMessage = attachmentSummary.length
+        ? `${visibleUserMessage}\n\nAnexos: ${attachmentSummary.join(', ')}`
+        : visibleUserMessage;
+      const approvalSnapshot = composerApprovalModeController
+        && typeof composerApprovalModeController.captureSubmission === 'function'
+        ? composerApprovalModeController.captureSubmission({ uiMode: state.uiMode })
+        : Object.freeze({ token: null, approvalMode: 'ask_each' });
+      let submissionContext = captureSubmissionContext();
+      let acceptedSubmission = false;
+
+      try {
+      if (state.pendingAction || normalizePendingJobId(state.activeJobId)) {
+        await onCancel();
+        if (state.pendingAction || normalizePendingJobId(state.activeJobId)) {
+          inputEl.value = preservedInput;
+          return;
+        }
+      }
+
+      if (!(await ensureAccountUnlockedForProductUse())) return;
+      if (!submissionContextIsCurrent(submissionContext)) return;
+      await applyComposerProviderBeforeSend();
+      if (!submissionContextIsCurrent(submissionContext)) return;
     
       const retryTechnicalMessage =
         isManualRetryMessage(visibleUserMessage) &&
@@ -287,6 +377,7 @@
         return;
       }
       const selectedProjectReady = await ensureSelectedProjectInfoReady({ forceRefresh: true });
+      if (!submissionContextIsCurrent(submissionContext)) return;
       if (!selectedProjectReady || !state.selectedProjectInfo) {
         appendMessage(
           'assistant',
@@ -300,6 +391,11 @@
       }
     
       await ensureActiveConversationForSend(visibleUserMessage);
+      submissionContext = Object.freeze({
+        ...submissionContext,
+        conversationId: getActiveConversationId(state.selectedProjectId) || null,
+      });
+      if (!submissionContextIsCurrent(submissionContext)) return;
       clearTransientChatNotices();
       appendMessage('user', composedUserMessage, attachmentsPayload);
       inputEl.value = '';
@@ -317,7 +413,9 @@
         const learningResult = cortexController
           ? await cortexController.learnFromComposer(cortexLearningPayload)
           : await api.learnWithCortex(cortexLearningPayload);
-    
+
+        if (!submissionContextIsCurrent(submissionContext)) return;
+
         state.attachments = [];
         renderAttachments();
     
@@ -375,10 +473,12 @@
           attachments: attachmentsPayload,
           contextHint: buildPersonaRequestContextHint(personaContextExtra),
           conversationMessages: getRecentConversationMessagesForPersona(),
+          approvalMode: approvalSnapshot.approvalMode,
         });
       } catch (error) {
         stopLatestJobWatch();
         hidePersonaThinkingIndicator();
+        if (!submissionContextIsCurrent(submissionContext)) return;
         state.attachments = [];
         renderAttachments();
         appendMessage(
@@ -393,9 +493,15 @@
         updateStatus(uiText('aiDisconnected', 'IA desconectada ou indisponível.'));
         return;
       }
-    
+
       hidePersonaThinkingIndicator();
       stopLatestJobWatch();
+      if (!submissionContextIsCurrent(submissionContext)) {
+        await cancelStaleJobOnce(plan && plan.jobId);
+        return;
+      }
+
+      acceptedSubmission = Boolean(plan && plan.ok === true);
     
       state.attachments = [];
       renderAttachments();
@@ -466,15 +572,21 @@
       } else {
         clearPendingExecution();
       }
+      } finally {
+        if (composerApprovalModeController && typeof composerApprovalModeController.finishSubmission === 'function') {
+          composerApprovalModeController.finishSubmission(approvalSnapshot, { accepted: acceptedSubmission });
+        }
+      }
     }
     
     async function onSend() {
-      if (sendInFlight) return;
-      sendInFlight = true;
+      if (activeSendToken) return;
+      const sendToken = Object.freeze({});
+      activeSendToken = sendToken;
       try {
         return await performSend();
       } finally {
-        sendInFlight = false;
+        if (activeSendToken === sendToken) activeSendToken = null;
       }
     }
 
@@ -576,12 +688,14 @@
         return;
       }
 
+      invalidateSubmission('new_conversation');
       if (state.pendingAction || normalizePendingJobId(state.activeJobId)) {
         await onCancel();
         if (state.pendingAction || normalizePendingJobId(state.activeJobId)) return;
       }
     
       await prepareNewConversationForProject(state.selectedProjectId);
+      resetApprovalMode('new_conversation');
       renderProjects();
     }
     
@@ -635,10 +749,14 @@
       onAddProject,
       onCancel,
       onConfirm,
+      invalidateSubmission,
+      getSubmissionEpoch,
       onNewConversation,
       onProjectGitClick,
       onProjectPreviewClick,
+      resetForAccountContextChange,
       onSend,
+      resetApprovalMode,
     };
   }
 

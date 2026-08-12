@@ -17,6 +17,7 @@ const expectedStyleModules = [
   './styles/cortex.css',
   './styles/automata-contracts.css',
   './styles/system-shell.css',
+  './styles/composer-approval-mode.css',
 ];
 
 function readRendererFile(relativePath) {
