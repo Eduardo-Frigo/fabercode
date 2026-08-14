@@ -87,6 +87,8 @@ async function run() {
     getSelectedAiProvider: () => 'openai',
     requestModelTurn: async (request) => {
       assert.strictEqual(Object.hasOwn(request, 'signal'), false);
+      assert.match(request.systemPrompt, /`\.faber\/\*\*` é um namespace privado/);
+      assert.doesNotMatch(request.systemPrompt, /modificar.*`\.faber/i);
       const { previousResponseId, toolResults } = request;
       if (!previousResponseId) {
         return {
@@ -353,6 +355,346 @@ async function run() {
   await assert.rejects(capabilityRaceExecution, assertCancelledError);
   assert.strictEqual(capabilityRaceCalls, 1);
   assert.strictEqual(capabilityRaceToolCalls, 0);
+
+  // The destructive tool is capability-shaped by main: without the private
+  // callback it must not be advertised to the model at all.
+  let absentDeleteDefinitions = null;
+  const absentDeleteService = buildCancellationService({
+    requestModelTurn: async ({ tools }) => {
+      absentDeleteDefinitions = tools;
+      return {
+        responseId: 'delete-absent',
+        text: '',
+        toolCalls: [{
+          callId: 'finish-without-delete',
+          name: 'finish_task',
+          input: { status: 'success', summary: 'inspeção concluída' },
+        }],
+      };
+    },
+  });
+  const absentDeleteResult = await absentDeleteService.executeAction(
+    buildAction('job-delete-absent', 'verifique o estado atual'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    { jobId: 'job-delete-absent' }
+  );
+  assert.strictEqual(absentDeleteResult.ok, true);
+  assert(Array.isArray(absentDeleteDefinitions));
+  assert.strictEqual(
+    absentDeleteDefinitions.filter((definition) => definition.name === 'delete_paths').length,
+    0
+  );
+
+  // When main provides the callback, only exact public paths plus the same
+  // AbortSignal cross the boundary. `reason` remains non-authoritative and is
+  // deliberately not forwarded.
+  const deleteSignalController = new AbortController();
+  const deleteCallbackRequests = [];
+  const callbackSecret = '/private/root/session-token/request-digest';
+  let presentDeleteDefinitions = null;
+  let sanitizedDeleteOutput = '';
+  const deletePathsCallback = async (request) => {
+    deleteCallbackRequests.push(request);
+    assert.strictEqual(Object.isFrozen(request), true);
+    assert.strictEqual(Object.isFrozen(request.paths), true);
+    assert.deepStrictEqual(Object.keys(request), ['paths', 'signal']);
+    assert.deepStrictEqual(request.paths, ['tmp/a.txt', 'tmp/b.txt']);
+    assert.strictEqual(request.signal, deleteSignalController.signal);
+    assert.strictEqual(Object.hasOwn(request, 'reason'), false);
+    assert.strictEqual(Object.hasOwn(request, 'binding'), false);
+    assert.strictEqual(Object.hasOwn(request, 'requestedMode'), false);
+    assert.strictEqual(Object.hasOwn(request, 'requestDigest'), false);
+    assert.strictEqual(Object.hasOwn(request, 'transactionHandle'), false);
+    await Promise.resolve();
+    return Object.freeze({
+      schemaVersion: 'agentic-delete-result.v1',
+      ok: true,
+      status: 'completed',
+      mode: 'ask_each',
+      state: 'COMMITTED',
+      impact: Object.freeze({ files: 2, bytes: 17, directories: 0 }),
+      errorCode: null,
+      message: callbackSecret,
+      binding: callbackSecret,
+      requestDigest: callbackSecret,
+      transactionHandle: Object.freeze({ secret: callbackSecret }),
+    });
+  };
+  let presentDeleteTurn = 0;
+  const presentDeleteService = buildCancellationService({
+    maxSteps: 3,
+    requestModelTurn: async ({ tools, toolResults }) => {
+      presentDeleteTurn += 1;
+      if (presentDeleteTurn === 1) {
+        presentDeleteDefinitions = tools;
+        return {
+          responseId: 'delete-present-1',
+          text: '',
+          toolCalls: [{
+            callId: 'delete-exact-paths',
+            name: 'delete_paths',
+            input: {
+              paths: ['tmp/a.txt', 'tmp/b.txt'],
+              reason: 'remover artefatos temporários',
+            },
+          }],
+        };
+      }
+      sanitizedDeleteOutput = toolResults[0].output;
+      return {
+        responseId: 'delete-present-2',
+        text: '',
+        toolCalls: [{
+          callId: 'finish-after-delete',
+          name: 'finish_task',
+          input: { status: 'success', summary: 'arquivos removidos' },
+        }],
+      };
+    },
+  });
+  const presentDeleteResult = await presentDeleteService.executeAction(
+    buildAction('job-delete-present', 'remova os arquivos temporários'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    {
+      jobId: 'job-delete-present',
+      signal: deleteSignalController.signal,
+      deletePaths: deletePathsCallback,
+    }
+  );
+  assert.strictEqual(presentDeleteResult.ok, true);
+  assert.deepStrictEqual(presentDeleteResult.modifiedFiles, ['tmp/a.txt', 'tmp/b.txt']);
+  assert.strictEqual(deleteCallbackRequests.length, 1);
+  const deleteDefinition = presentDeleteDefinitions.find((definition) => definition.name === 'delete_paths');
+  assert(deleteDefinition);
+  assert.strictEqual(deleteDefinition.strict, true);
+  assert.strictEqual(deleteDefinition.parameters.additionalProperties, false);
+  assert.strictEqual(deleteDefinition.parameters.properties.paths.type, 'array');
+  assert.strictEqual(deleteDefinition.parameters.properties.paths.minItems, 1);
+  assert.strictEqual(deleteDefinition.parameters.properties.paths.maxItems, 32);
+  assert.strictEqual(deleteDefinition.parameters.properties.paths.items.type, 'string');
+  assert.deepStrictEqual(deleteDefinition.parameters.properties.reason.type, ['string', 'null']);
+  assert.strictEqual(JSON.stringify(deleteDefinition).includes('binding'), false);
+  assert.strictEqual(JSON.stringify(deleteDefinition).includes('requestDigest'), false);
+  assert.strictEqual(sanitizedDeleteOutput.includes(callbackSecret), false);
+  assert.strictEqual(sanitizedDeleteOutput.includes('requestDigest'), false);
+  assert.strictEqual(sanitizedDeleteOutput.includes('transactionHandle'), false);
+  assert.strictEqual(sanitizedDeleteOutput.includes('COMMITTED'), true);
+
+  // Rejected callback promises are reduced to a stable public error; their
+  // exception text never reaches the model, job events, or final result.
+  const callbackErrorSecret = 'authority-binding:private-root:digest-secret';
+  let callbackErrorTurn = 0;
+  let sanitizedCallbackErrorOutput = '';
+  const callbackErrorService = buildCancellationService({
+    requestModelTurn: async ({ toolResults }) => {
+      callbackErrorTurn += 1;
+      if (callbackErrorTurn === 1) {
+        return {
+          responseId: 'delete-error-1',
+          text: '',
+          toolCalls: [{
+            callId: 'delete-error-call',
+            name: 'delete_paths',
+            input: { paths: ['tmp/error.txt'], reason: null },
+          }],
+        };
+      }
+      sanitizedCallbackErrorOutput = toolResults[0].output;
+      return {
+        responseId: 'delete-error-2',
+        text: '',
+        toolCalls: [{
+          callId: 'delete-error-finish',
+          name: 'finish_task',
+          input: { status: 'failure', summary: 'exclusão recusada' },
+        }],
+      };
+    },
+  });
+  const callbackErrorResult = await callbackErrorService.executeAction(
+    buildAction('job-delete-error'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    {
+      jobId: 'job-delete-error',
+      deletePaths: async () => {
+        await Promise.resolve();
+        throw new Error(callbackErrorSecret);
+      },
+    }
+  );
+  assert.strictEqual(callbackErrorResult.ok, true);
+  assert.strictEqual(sanitizedCallbackErrorOutput.includes(callbackErrorSecret), false);
+  assert.strictEqual(sanitizedCallbackErrorOutput.includes('DELETE_PATHS_OPERATION_FAILED'), true);
+  assert.strictEqual(JSON.stringify(callbackErrorResult).includes(callbackErrorSecret), false);
+
+  // Hostile accessors and sparse arrays fail before the private callback. No
+  // accessor is evaluated while validating or fingerprinting the tool call.
+  let hostilePathGetterCalls = 0;
+  let hostileDeleteCallbackCalls = 0;
+  const hostileInput = {};
+  Object.defineProperty(hostileInput, 'paths', {
+    enumerable: true,
+    get() {
+      hostilePathGetterCalls += 1;
+      return ['must-not-run'];
+    },
+  });
+  const sparsePaths = new Array(2);
+  sparsePaths[1] = 'tmp/sparse.txt';
+  let hostileTurn = 0;
+  const hostileDeleteOutputs = [];
+  const hostileDeleteService = buildCancellationService({
+    maxSteps: 4,
+    requestModelTurn: async ({ toolResults }) => {
+      hostileTurn += 1;
+      if (toolResults.length) hostileDeleteOutputs.push(toolResults[0].output);
+      if (hostileTurn === 1) {
+        return {
+          responseId: 'delete-hostile-1',
+          text: '',
+          toolCalls: [{ callId: 'delete-hostile-accessor', name: 'delete_paths', input: hostileInput }],
+        };
+      }
+      if (hostileTurn === 2) {
+        return {
+          responseId: 'delete-hostile-2',
+          text: '',
+          toolCalls: [{
+            callId: 'delete-hostile-sparse',
+            name: 'delete_paths',
+            input: { paths: sparsePaths },
+          }],
+        };
+      }
+      return {
+        responseId: 'delete-hostile-finish',
+        text: '',
+        toolCalls: [{
+          callId: 'delete-hostile-finish-call',
+          name: 'finish_task',
+          input: { status: 'failure', summary: 'entrada inválida recusada' },
+        }],
+      };
+    },
+  });
+  const hostileDeleteResult = await hostileDeleteService.executeAction(
+    buildAction('job-delete-hostile'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    {
+      jobId: 'job-delete-hostile',
+      deletePaths: async () => {
+        hostileDeleteCallbackCalls += 1;
+        return { ok: true, status: 'completed' };
+      },
+    }
+  );
+  assert.strictEqual(hostileDeleteResult.ok, true);
+  assert.strictEqual(hostilePathGetterCalls, 0);
+  assert.strictEqual(hostileDeleteCallbackCalls, 0);
+  assert.strictEqual(hostileDeleteOutputs.length, 2);
+  assert(hostileDeleteOutputs.every((output) => output.includes('DELETE_PATHS_INVALID_INPUT')));
+
+  // A custom array prototype cannot smuggle executable iteration behavior.
+  let poisonedMapCalls = 0;
+  const poisonedPaths = ['tmp/poisoned.txt'];
+  Object.setPrototypeOf(poisonedPaths, {
+    map() {
+      poisonedMapCalls += 1;
+      return ['tmp/changed.txt'];
+    },
+  });
+  let poisonedTurn = 0;
+  let poisonedCallbackCalls = 0;
+  const poisonedDeleteService = buildCancellationService({
+    requestModelTurn: async () => {
+      poisonedTurn += 1;
+      if (poisonedTurn === 1) {
+        return {
+          responseId: 'delete-poisoned-1',
+          text: '',
+          toolCalls: [{
+            callId: 'delete-poisoned-array',
+            name: 'delete_paths',
+            input: { paths: poisonedPaths },
+          }],
+        };
+      }
+      return {
+        responseId: 'delete-poisoned-2',
+        text: '',
+        toolCalls: [{
+          callId: 'delete-poisoned-finish',
+          name: 'finish_task',
+          input: { status: 'failure', summary: 'array hostil recusado' },
+        }],
+      };
+    },
+  });
+  await poisonedDeleteService.executeAction(
+    buildAction('job-delete-poisoned'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    {
+      jobId: 'job-delete-poisoned',
+      deletePaths: async () => {
+        poisonedCallbackCalls += 1;
+        return { ok: true, status: 'completed' };
+      },
+    }
+  );
+  assert.strictEqual(poisonedMapCalls, 0);
+  assert.strictEqual(poisonedCallbackCalls, 0);
+
+  // Cancellation during the async delete callback waits for that callback to
+  // settle, then fences its late result and every subsequent model turn.
+  const pendingDeleteController = new AbortController();
+  const pendingDeleteStarted = createDeferred();
+  const pendingDeleteResult = createDeferred();
+  let pendingDeleteCalls = 0;
+  let pendingDeleteExecutionSettled = false;
+  const pendingDeleteService = buildCancellationService({
+    requestModelTurn: async () => ({
+      responseId: 'delete-cancel-race',
+      text: '',
+      toolCalls: [{
+        callId: 'delete-cancel-race-call',
+        name: 'delete_paths',
+        input: { paths: ['tmp/late.txt'] },
+      }],
+    }),
+  });
+  const pendingDeleteExecution = pendingDeleteService.executeAction(
+    buildAction('job-delete-cancel-race'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    {
+      jobId: 'job-delete-cancel-race',
+      signal: pendingDeleteController.signal,
+      deletePaths: ({ paths, signal }) => {
+        pendingDeleteCalls += 1;
+        assert.deepStrictEqual(paths, ['tmp/late.txt']);
+        assert.strictEqual(signal, pendingDeleteController.signal);
+        pendingDeleteStarted.resolve();
+        return pendingDeleteResult.promise;
+      },
+    }
+  );
+  pendingDeleteExecution.then(
+    () => { pendingDeleteExecutionSettled = true; },
+    () => { pendingDeleteExecutionSettled = true; }
+  );
+  await pendingDeleteStarted.promise;
+  pendingDeleteController.abort();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.strictEqual(pendingDeleteExecutionSettled, false);
+  assert.strictEqual(pendingDeleteCalls, 1);
+  pendingDeleteResult.resolve({
+    ok: true,
+    status: 'completed',
+    state: 'COMMITTED',
+    impact: { files: 1, bytes: 1, directories: 0 },
+  });
+  await assert.rejects(pendingDeleteExecution, assertCancelledError);
+  assert.strictEqual(pendingDeleteCalls, 1);
 
   console.log('agentic-tool-loop-service.test.js: ok');
 }

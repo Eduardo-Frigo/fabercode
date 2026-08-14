@@ -82,6 +82,38 @@ async function run() {
     assert.match(sensitiveBatch.message, /caminho sensível/);
     assert.strictEqual(fs.existsSync(path.join(projectRoot, '.env')), false);
 
+    const runtimeMetadataBatch = executor.executeOperationBatchAction({
+      rootPath: projectRoot,
+      operations: [
+        { op: 'write_file', path: '.faber/transactions/forged.json', content: '{}' },
+      ],
+    });
+    assert.strictEqual(runtimeMetadataBatch.ok, false);
+    assert.match(runtimeMetadataBatch.message, /caminho sensível/);
+    assert.strictEqual(
+      fs.existsSync(path.join(projectRoot, '.faber', 'transactions', 'forged.json')),
+      false
+    );
+
+    fs.mkdirSync(path.join(projectRoot, '.faber', 'transactions'), { recursive: true });
+    fs.symlinkSync(
+      path.join(projectRoot, '.faber', 'transactions'),
+      path.join(projectRoot, 'runtime-metadata-alias'),
+      'dir'
+    );
+    const aliasedRuntimeMetadataBatch = executor.executeOperationBatchAction({
+      rootPath: projectRoot,
+      operations: [
+        { op: 'write_file', path: 'runtime-metadata-alias/forged.json', content: '{}' },
+      ],
+    });
+    assert.strictEqual(aliasedRuntimeMetadataBatch.ok, false);
+    assert.match(aliasedRuntimeMetadataBatch.message, /caminho sensível/);
+    assert.strictEqual(
+      fs.existsSync(path.join(projectRoot, '.faber', 'transactions', 'forged.json')),
+      false
+    );
+
     const sensitivePatch = executor.executePatchAction({
       type: 'apply_file_patch',
       rootPath: projectRoot,
@@ -238,7 +270,8 @@ async function run() {
     fs.mkdirSync(testDir, { recursive: true });
     fs.writeFileSync(path.join(testDir, 'file1.txt'), 'content1', 'utf8');
 
-    // Test successful deletion batch
+    // Legacy deletion batches fail closed before any mutation. The dedicated
+    // transactional delete capability owns deletion and rollback now.
     const deleteBatch = executor.executeOperationBatchAction({
       rootPath: projectRoot,
       operations: [
@@ -246,30 +279,26 @@ async function run() {
         { op: 'delete_dir', path: 'folder_to_delete' },
       ],
     });
-    assert.strictEqual(deleteBatch.ok, true);
-    assert.ok(deleteBatch.modifiedFiles.includes('to_be_deleted.txt'));
-    assert.ok(deleteBatch.modifiedFiles.includes('folder_to_delete'));
-    assert.strictEqual(fs.existsSync(testFile), false);
-    assert.strictEqual(fs.existsSync(testDir), false);
+    assert.strictEqual(deleteBatch.ok, false);
+    assert.strictEqual(deleteBatch.status, 'blocked');
+    assert.strictEqual(deleteBatch.code, 'TRANSACTIONAL_DELETE_REQUIRED');
+    assert.strictEqual(fs.existsSync(testFile), true);
+    assert.strictEqual(fs.existsSync(testDir), true);
 
-    // Test rollback of deletion batch
-    fs.writeFileSync(testFile, 'hello delete rollback', 'utf8');
-    fs.mkdirSync(testDir, { recursive: true });
-    fs.writeFileSync(path.join(testDir, 'file1.txt'), 'content1 rollback', 'utf8');
-
-    const failingDeleteBatch = executor.executeOperationBatchAction({
+    const mixedDeleteBatch = executor.executeOperationBatchAction({
       rootPath: projectRoot,
       operations: [
+        { op: 'write_file', path: 'must_not_be_written.txt', content: 'blocked' },
         { op: 'delete_file', path: 'to_be_deleted.txt' },
-        { op: 'delete_dir', path: 'folder_to_delete' },
-        { op: 'unsupported_op', path: 'fail.txt' },
       ],
     });
-    assert.strictEqual(failingDeleteBatch.ok, false);
+    assert.strictEqual(mixedDeleteBatch.ok, false);
+    assert.strictEqual(mixedDeleteBatch.code, 'TRANSACTIONAL_DELETE_REQUIRED');
+    assert.strictEqual(fs.existsSync(path.join(projectRoot, 'must_not_be_written.txt')), false);
     assert.strictEqual(fs.existsSync(testFile), true);
-    assert.strictEqual(fs.readFileSync(testFile, 'utf8'), 'hello delete rollback');
+    assert.strictEqual(fs.readFileSync(testFile, 'utf8'), 'hello delete');
     assert.strictEqual(fs.existsSync(path.join(testDir, 'file1.txt')), true);
-    assert.strictEqual(fs.readFileSync(path.join(testDir, 'file1.txt'), 'utf8'), 'content1 rollback');
+    assert.strictEqual(fs.readFileSync(path.join(testDir, 'file1.txt'), 'utf8'), 'content1');
 
     console.log('automata-executor.test.js: ok');
   } finally {

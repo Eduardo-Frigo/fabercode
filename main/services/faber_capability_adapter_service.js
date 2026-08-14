@@ -25,6 +25,14 @@ function normalizeCapabilityPrompt(payload = {}) {
   return String(payload.userMessage || payload.prompt || payload.request || payload.message || '').trim();
 }
 
+function isReservedFaberRuntimePath(relativePath = '') {
+  const normalized = String(relativePath || '')
+    .replace(/\\/g, '/')
+    .replace(/^\.\/+/, '')
+    .toLowerCase();
+  return normalized === '.faber' || normalized.startsWith('.faber/');
+}
+
 function safeCall(fn, ...args) {
   if (typeof fn !== 'function') return null;
   try {
@@ -75,6 +83,10 @@ function createFaberCapabilityAdapterService(dependencies = {}) {
     if (!isInsideRoot(root, target)) {
       return { ok: false, message: 'Arquivo fora da raiz do projeto.' };
     }
+    const normalizedRelativePath = path.relative(root, target).split(path.sep).join('/');
+    if (isReservedFaberRuntimePath(normalizedRelativePath)) {
+      return { ok: false, message: 'Arquivo reservado ao runtime interno.' };
+    }
     if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
       return { ok: false, message: 'Raiz do projeto não encontrada.' };
     }
@@ -88,9 +100,13 @@ function createFaberCapabilityAdapterService(dependencies = {}) {
     if (!isInsideRoot(realRoot, realTarget)) {
       return { ok: false, message: 'Arquivo fora da raiz real do projeto.' };
     }
+    const physicalRelativePath = path.relative(realRoot, realTarget).split(path.sep).join('/');
+    if (isReservedFaberRuntimePath(physicalRelativePath)) {
+      return { ok: false, message: 'Arquivo reservado ao runtime interno.' };
+    }
     return {
       ok: true,
-      relativePath: path.relative(root, target).split(path.sep).join('/'),
+      relativePath: normalizedRelativePath,
       content: fs.readFileSync(target, 'utf8'),
     };
   }
@@ -102,6 +118,14 @@ function createFaberCapabilityAdapterService(dependencies = {}) {
     const root = path.resolve(projectSession.rootPath);
     if (!isInsideRoot(root, target)) {
       return { ok: false, message: 'Arquivo fora da raiz do projeto.', path: relativePath };
+    }
+    const normalizedRelativePath = path.relative(root, target).split(path.sep).join('/');
+    if (isReservedFaberRuntimePath(normalizedRelativePath)) {
+      return {
+        ok: false,
+        message: 'Arquivo reservado ao runtime interno.',
+        path: relativePath,
+      };
     }
     if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
       return { ok: false, message: 'Raiz do projeto não encontrada.', path: relativePath };
@@ -116,10 +140,18 @@ function createFaberCapabilityAdapterService(dependencies = {}) {
     if (!isInsideRoot(realRoot, realTarget)) {
       return { ok: false, message: 'Arquivo fora da raiz real do projeto.', path: relativePath };
     }
+    const physicalRelativePath = path.relative(realRoot, realTarget).split(path.sep).join('/');
+    if (isReservedFaberRuntimePath(physicalRelativePath)) {
+      return {
+        ok: false,
+        message: 'Arquivo reservado ao runtime interno.',
+        path: relativePath,
+      };
+    }
     fs.writeFileSync(target, String(content || ''), 'utf8');
     return {
       ok: true,
-      path: path.relative(root, target).split(path.sep).join('/'),
+      path: normalizedRelativePath,
     };
   }
 

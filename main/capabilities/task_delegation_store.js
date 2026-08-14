@@ -218,7 +218,8 @@ function createTaskDelegationStore(options = {}) {
       return null;
     }
     if (!isRecord(safeAuthorization)
-      || (safeAuthorization.authorized !== true && safeAuthorization.ok !== true)) return null;
+      || safeAuthorization.authorized !== true
+      || (Object.hasOwn(safeAuthorization, 'ok') && safeAuthorization.ok !== true)) return null;
     if (safeAuthorization.projectId !== undefined
       && safeAuthorization.projectId !== binding.projectId) return null;
     const canonicalRootPath = String(

@@ -169,6 +169,19 @@ assert.throws(() => classifyCapabilityEffect({
   request: { action: 'file', payload: { values: sparseValues } },
   descriptor,
 }), /arrays must be dense/);
+let hostileArrayMapCalls = 0;
+const hostileArray = ['outside'];
+Object.setPrototypeOf(hostileArray, {
+  map() {
+    hostileArrayMapCalls += 1;
+    return [];
+  },
+});
+assert.throws(() => classifyCapabilityEffect({
+  request: { action: 'file', payload: { values: hostileArray } },
+  descriptor,
+}), /standard array prototype/);
+assert.strictEqual(hostileArrayMapCalls, 0);
 assert.throws(() => classifyCapabilityEffect({
   request: { action: 'file', payload: { offset: -0 } },
   descriptor,

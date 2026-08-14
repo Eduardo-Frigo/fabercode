@@ -81,6 +81,19 @@ function run() {
     ]);
     const authorizeRoot = createRootAuthorizer(projectRoots);
     assert.throws(() => createCapabilityGrantStore(), /authorizeRoot/);
+    const contradictoryRootStore = createCapabilityGrantStore({
+      authorizeRoot: ({ projectId, rootPath }) => ({
+        ok: true,
+        authorized: false,
+        projectId,
+        canonicalRootPath: rootPath,
+        realRootPath: rootPath,
+      }),
+    });
+    assert.throws(() => contradictoryRootStore.createGrant({
+      ...query(projectA),
+      scope: GRANT_SCOPES.ONCE,
+    }), /authorized project root/);
     const store = createCapabilityGrantStore({
       now: clock.now,
       idFactory: () => `grant-${++sequence}`,
@@ -288,6 +301,19 @@ function run() {
       ...query(projectA),
       selector: symbolSelector,
     }), /symbol keys/);
+    let hostileArrayMapCalls = 0;
+    const hostileArray = ['outside'];
+    Object.setPrototypeOf(hostileArray, {
+      map() {
+        hostileArrayMapCalls += 1;
+        return [];
+      },
+    });
+    assert.throws(() => store.createGrant({
+      ...query(projectA),
+      selector: { capability: 'x', paths: hostileArray },
+    }), /standard array prototype/);
+    assert.strictEqual(hostileArrayMapCalls, 0);
     const nonEnumerableSelector = selector();
     Object.defineProperty(nonEnumerableSelector, 'hiddenScope', {
       enumerable: false,

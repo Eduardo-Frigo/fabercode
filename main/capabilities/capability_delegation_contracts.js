@@ -122,11 +122,18 @@ function canonicalizeJsonSafe(value, ancestors = new WeakSet()) {
   ancestors.add(value);
 
   if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) {
+      throw new TypeError('Delegation arrays must use the standard array prototype');
+    }
     const keys = ownEnumerableDataKeys(value);
     if (keys.length !== value.length || keys.some((key, index) => key !== String(index))) {
       throw new TypeError('Delegation arrays must be dense and contain only indexed values');
     }
-    const result = value.map((entry) => canonicalizeJsonSafe(entry, ancestors));
+    const result = [];
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      result.push(canonicalizeJsonSafe(descriptor.value, ancestors));
+    }
     ancestors.delete(value);
     return result;
   }

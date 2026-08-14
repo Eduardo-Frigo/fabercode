@@ -42,9 +42,13 @@ function createHarness({
   const jobs = new Map();
   const calls = {
     actionDigests: [],
+    authorityClears: [],
+    authorityRevocations: [],
     boundActions: [],
     executions: [],
     failures: [],
+    lifecycleReleases: [],
+    releaseOrder: [],
     retryEligibilityInspections: [],
     retryAuthorizations: [],
     revocations: [],
@@ -170,12 +174,16 @@ function createHarness({
       return baseAuthorityService.inspectRetryEligibility(input);
     },
     revokeExact(input) {
+      calls.authorityRevocations.push(input);
+      calls.releaseOrder.push({ type: 'authority_revoke', binding: input });
       if (typeof hooks.revokeExact === 'function') {
         return hooks.revokeExact({ baseAuthorityService, coordinator, input });
       }
       return baseAuthorityService.revokeExact(input);
     },
     clear() {
+      calls.authorityClears.push(true);
+      calls.releaseOrder.push({ type: 'authority_clear' });
       if (typeof hooks.clearAuthority === 'function') {
         return hooks.clearAuthority({ baseAuthorityService, coordinator });
       }
@@ -190,6 +198,7 @@ function createHarness({
       modifiedFiles: ['src/app.js'],
       rootPath: '/private/project-root',
       nested: { root_path: '/private/nested-root', safe: 'visible' },
+      authorityBinding: context.authorityBinding,
       authorityContext: { mustNotLeak: true },
     };
   };
@@ -202,8 +211,26 @@ function createHarness({
     createAuthorizedAssistantJob,
     executeAction: executeOverride || defaultExecute,
     maxActiveJobs,
+    ...(hooks.omitBeforeAuthorityRelease === true
+      ? {}
+      : {
+        beforeAuthorityRelease(input) {
+          calls.lifecycleReleases.push(input);
+          calls.releaseOrder.push({ type: 'release_barrier', input });
+          if (typeof hooks.beforeAuthorityRelease === 'function') {
+            return hooks.beforeAuthorityRelease({
+              baseAuthorityService,
+              coordinator,
+              input,
+              jobs,
+            });
+          }
+          return { ok: true };
+        },
+      }),
     onAuthorityRevoked(jobId, reason) {
       calls.revocations.push({ jobId, reason });
+      calls.releaseOrder.push({ type: 'legacy_callback', jobId, reason });
     },
     onPlanningFailure(jobId, reason) {
       calls.failures.push({ jobId, reason });
@@ -234,6 +261,22 @@ function createJob(coordinator, suffix = '') {
     attachments: [{ name: 'internal.txt', type: 'text/plain', size: 8, path: '/tmp/internal.txt' }],
     mode: 'build',
   });
+}
+
+async function createReadyJob(harness, suffix = 'ready') {
+  let jobId;
+  const planned = await harness.coordinator.coordinatePlanning(planningInput(
+    project('project-a'),
+    async () => {
+      const created = createJob(harness.coordinator, suffix);
+      assert.strictEqual(created.ok, true);
+      jobId = created.job.id;
+      harness.jobs.get(jobId).phase = 'awaiting_user_confirmation';
+      return { ok: true, action: { type: 'write_files', files: [] } };
+    },
+  ));
+  assert.strictEqual(planned.ok, true);
+  return jobId;
 }
 
 async function createRetryWaitingJob(
@@ -404,6 +447,26 @@ async function run() {
   assert.strictEqual(basic.calls.executions[0].context.requestedMode, 'delegate_task');
   assert.strictEqual(basic.calls.executions[0].context.signal instanceof AbortSignal, true);
   assert.strictEqual(basic.calls.executions[0].context.signal.aborted, false);
+  assert.strictEqual(Object.isFrozen(basic.calls.executions[0].context), true);
+  assert.strictEqual(Object.isFrozen(basic.calls.executions[0].context.authorityBinding), true);
+  assert.strictEqual(
+    basic.calls.executions[0].context.authorityBinding,
+    basic.calls.lifecycleReleases[0].binding,
+  );
+  assert.deepStrictEqual(
+    Object.keys(basic.calls.executions[0].context).sort(),
+    ['jobId', 'requestedMode', 'signal'],
+  );
+  assert.strictEqual(Object.hasOwn(executed, 'authorityBinding'), false);
+  assert.deepStrictEqual(basic.calls.lifecycleReleases.map((release) => ({
+    reason: release.reason,
+    terminalStatus: release.terminalStatus,
+  })), [{ reason: 'job_terminal', terminalStatus: 'completed' }]);
+  assert.deepStrictEqual(basic.calls.releaseOrder.map((entry) => entry.type), [
+    'release_barrier',
+    'legacy_callback',
+    'authority_revoke',
+  ]);
   assert.strictEqual(basic.coordinator.diagnostics().activeJobs, 0);
   assert.strictEqual(
     (await basic.coordinator.execute({ jobId: createdJobId })).code,
@@ -509,6 +572,7 @@ async function run() {
   let executionStarted = 0;
   let executionEffects = 0;
   let racedSignal = null;
+  let releaseObservedAbortedSignal = false;
   const raced = createHarness({
     async executeAction(action, projectInfo, context) {
       executionStarted += 1;
@@ -517,6 +581,12 @@ async function run() {
       if (context.signal.aborted) throw new Error('aborted before effect');
       executionEffects += 1;
       return { ok: true, stale: true };
+    },
+    hooks: {
+      beforeAuthorityRelease() {
+        releaseObservedAbortedSignal = racedSignal.aborted;
+        return { ok: true };
+      },
     },
   });
   let racedJobId;
@@ -535,6 +605,7 @@ async function run() {
   );
   assert.strictEqual(raced.coordinator.revokeJob({ jobId: racedJobId }).revoked, true);
   assert.strictEqual(racedSignal.aborted, true);
+  assert.strictEqual(releaseObservedAbortedSignal, true);
   executionGate.resolve();
   assert.strictEqual(
     (await firstExecution).code,
@@ -640,6 +711,8 @@ async function run() {
   });
   assert.strictEqual(terminalExecution.ok, true);
   assert.strictEqual(terminalExecution.completedDuringExecute, true);
+  assert.strictEqual(terminalHarness.calls.lifecycleReleases.length, 1);
+  assert.strictEqual(terminalHarness.calls.lifecycleReleases[0].terminalStatus, 'completed');
   assert.strictEqual(terminalHarness.coordinator.diagnostics().activeJobs, 0);
 
   // A durable failure emitted by the executor is also deferred until its
@@ -676,6 +749,8 @@ async function run() {
   assert.strictEqual(failedTerminalExecution.ok, false);
   assert.strictEqual(failedTerminalExecution.code, 'project_authorization_failed');
   assert.strictEqual(failedTerminalExecution.message, 'Projeto revogado.');
+  assert.strictEqual(failedTerminalHarness.calls.lifecycleReleases.length, 1);
+  assert.strictEqual(failedTerminalHarness.calls.lifecycleReleases[0].terminalStatus, 'failed');
   assert.strictEqual(failedTerminalHarness.coordinator.diagnostics().activeJobs, 0);
 
   // A trusted durable completion may be observed reentrantly while planning is
@@ -716,6 +791,7 @@ async function run() {
   assert.strictEqual(awaitingInputResult.jobId, awaitingInputJobId);
   assert.strictEqual(awaitingInput.coordinator.diagnostics().activeJobs, 0);
   assert.strictEqual(awaitingInput.authorityService.diagnostics().activeSubmissions, 0);
+  assert.strictEqual(awaitingInput.calls.lifecycleReleases[0].terminalStatus, 'completed');
   assert.deepStrictEqual(awaitingInput.calls.failures, []);
   assert.deepStrictEqual(awaitingInput.calls.revocations, [{
     jobId: awaitingInputJobId,
@@ -989,6 +1065,162 @@ async function run() {
     ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY,
   );
 
+  // The main-owned release barrier is a strict synchronous transaction
+  // boundary. A throw, thenable, denial, or over-broad response preserves both
+  // the local record and remote authority while poisoning future work.
+  const invalidReleaseResults = [
+    () => { throw new Error('injected release failure'); },
+    () => Promise.resolve({ ok: true }),
+    () => ({ ok: false }),
+    () => ({ ok: true, extra: 'not allowed' }),
+  ];
+  for (const [index, invalidRelease] of invalidReleaseResults.entries()) {
+    let observedBinding = null;
+    const releaseFault = createHarness({
+      hooks: {
+        beforeAuthorityRelease({ baseAuthorityService, coordinator, input }) {
+          assert.deepStrictEqual(Object.keys(input).sort(), [
+            'binding',
+            'reason',
+            'terminalStatus',
+          ]);
+          assert.strictEqual(Object.isFrozen(input), true);
+          assert.strictEqual(Object.isFrozen(input.binding), true);
+          assert.strictEqual(coordinator.diagnostics().activeJobs, 1);
+          assert.strictEqual(baseAuthorityService.diagnostics().activeSubmissions, 1);
+          observedBinding = input.binding;
+          return invalidRelease();
+        },
+      },
+    });
+    const releaseFaultJobId = await createReadyJob(releaseFault, `release-fault-${index}`);
+    const releaseFaultResult = releaseFault.coordinator.onJobTerminal({
+      jobId: releaseFaultJobId,
+      status: 'cancelled',
+    });
+    assert.strictEqual(
+      releaseFaultResult.code,
+      ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED,
+    );
+    assert.strictEqual(releaseFault.calls.lifecycleReleases.length, 1);
+    assert.strictEqual(releaseFault.calls.lifecycleReleases[0].terminalStatus, 'cancelled');
+    assert.strictEqual(releaseFault.calls.lifecycleReleases[0].reason, 'job_terminal');
+    assert.strictEqual(releaseFault.calls.authorityRevocations.length, 0);
+    assert.strictEqual(releaseFault.calls.revocations.length, 0);
+    assert.strictEqual(releaseFault.coordinator.diagnostics().activeJobs, 1);
+    assert.strictEqual(releaseFault.coordinator.diagnostics().authorityHealthy, false);
+    assert.strictEqual(releaseFault.authorityService.diagnostics().activeSubmissions, 1);
+    assert.strictEqual(
+      releaseFault.authorityService.authorizeLifecycle(observedBinding).authorized,
+      true,
+    );
+    assert.strictEqual(
+      releaseFault.coordinator.onJobTerminal({
+        jobId: releaseFaultJobId,
+        status: 'cancelled',
+      }).code,
+      ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY,
+    );
+  }
+
+  // Clear prepares every record through the release barrier before deleting
+  // local state or invoking the authority service. A later preparation failure
+  // leaves the complete record set and authority map intact.
+  let clearReleaseCount = 0;
+  const clearReleaseFault = createHarness({
+    hooks: {
+      beforeAuthorityRelease() {
+        clearReleaseCount += 1;
+        return clearReleaseCount === 1 ? { ok: true } : { ok: false };
+      },
+    },
+  });
+  await createReadyJob(clearReleaseFault, 'clear-release-fault-a');
+  await createReadyJob(clearReleaseFault, 'clear-release-fault-b');
+  assert.strictEqual(clearReleaseFault.coordinator.diagnostics().activeJobs, 2);
+  assert.strictEqual(
+    clearReleaseFault.coordinator.clear().code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED,
+  );
+  assert.strictEqual(clearReleaseCount, 2);
+  assert.strictEqual(clearReleaseFault.coordinator.diagnostics().activeJobs, 2);
+  assert.strictEqual(clearReleaseFault.coordinator.diagnostics().authorityHealthy, false);
+  assert.strictEqual(clearReleaseFault.authorityService.diagnostics().activeSubmissions, 2);
+  assert.strictEqual(clearReleaseFault.calls.authorityClears.length, 0);
+  assert.strictEqual(clearReleaseFault.calls.authorityRevocations.length, 0);
+  assert.strictEqual(clearReleaseFault.calls.revocations.length, 0);
+
+  const clearReleaseSuccess = createHarness();
+  await createReadyJob(clearReleaseSuccess, 'clear-release-success-a');
+  await createReadyJob(clearReleaseSuccess, 'clear-release-success-b');
+  assert.deepStrictEqual(clearReleaseSuccess.coordinator.clear(), { ok: true, cleared: 2 });
+  assert.deepStrictEqual(
+    clearReleaseSuccess.calls.lifecycleReleases.map((release) => release.terminalStatus),
+    [null, null],
+  );
+  assert.deepStrictEqual(clearReleaseSuccess.calls.releaseOrder.map((entry) => entry.type), [
+    'release_barrier',
+    'release_barrier',
+    'legacy_callback',
+    'legacy_callback',
+    'authority_clear',
+  ]);
+  assert.strictEqual(clearReleaseSuccess.coordinator.diagnostics().activeJobs, 0);
+
+  const interruptedRelease = createHarness();
+  const interruptedReleaseJobId = await createReadyJob(
+    interruptedRelease,
+    'runtime-interrupted-release',
+  );
+  assert.strictEqual(interruptedRelease.coordinator.onJobTerminal({
+    jobId: interruptedReleaseJobId,
+    status: 'runtime_interrupted',
+  }).revoked, true);
+  assert.strictEqual(
+    interruptedRelease.calls.lifecycleReleases[0].terminalStatus,
+    'runtime_interrupted',
+  );
+
+  // Lifecycle callbacks cannot recursively consume the same or another
+  // authority record while a release barrier is open.
+  let reentrantReleaseJobId;
+  const reentrantRelease = createHarness({
+    hooks: {
+      beforeAuthorityRelease({ coordinator }) {
+        const nested = coordinator.revokeJob({ jobId: reentrantReleaseJobId });
+        assert.strictEqual(
+          nested.code,
+          ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED,
+        );
+        return { ok: true };
+      },
+    },
+  });
+  reentrantReleaseJobId = await createReadyJob(reentrantRelease, 'reentrant-release');
+  assert.strictEqual(
+    reentrantRelease.coordinator.revokeJob({ jobId: reentrantReleaseJobId }).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED,
+  );
+  assert.strictEqual(reentrantRelease.coordinator.diagnostics().activeJobs, 1);
+  assert.strictEqual(reentrantRelease.coordinator.diagnostics().authorityHealthy, false);
+  assert.strictEqual(reentrantRelease.calls.authorityRevocations.length, 0);
+
+  // The barrier remains optional for isolated legacy callers; production can
+  // require it at composition time without breaking the coordinator API.
+  const legacyReleaseCompatibility = createHarness({
+    hooks: { omitBeforeAuthorityRelease: true },
+  });
+  const legacyReleaseJobId = await createReadyJob(
+    legacyReleaseCompatibility,
+    'legacy-release-compatibility',
+  );
+  assert.strictEqual(
+    legacyReleaseCompatibility.coordinator.revokeJob({ jobId: legacyReleaseJobId }).revoked,
+    true,
+  );
+  assert.strictEqual(legacyReleaseCompatibility.calls.lifecycleReleases.length, 0);
+  assert.strictEqual(legacyReleaseCompatibility.calls.authorityRevocations.length, 1);
+
   // Retry is main-only and reconstructs the planner payload exclusively from
   // the persisted authority request. A no-action retry remains retained only
   // while the durable job is still explicitly retryable.
@@ -1255,6 +1487,12 @@ async function run() {
   );
   assert.strictEqual(deniedRetryInvocations, 0);
   assert.strictEqual(deniedRetry.coordinator.diagnostics().activeJobs, 0);
+  assert.strictEqual(deniedRetry.calls.lifecycleReleases.length, 1);
+  assert.strictEqual(deniedRetry.calls.lifecycleReleases[0].terminalStatus, null);
+  assert.strictEqual(
+    deniedRetry.calls.lifecycleReleases[0].reason,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.RETRY_NOT_AUTHORIZED,
+  );
 
   console.log('assistant-execution-coordinator.test.js: all checks passed');
 }

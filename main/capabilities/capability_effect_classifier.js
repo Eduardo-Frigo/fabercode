@@ -50,12 +50,19 @@ function snapshotJsonSafe(value, seen = new Set()) {
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) throw new TypeError('Capability payload must not contain cycles');
+    if (Object.getPrototypeOf(value) !== Array.prototype) {
+      throw new TypeError('Capability payload arrays must use the standard array prototype');
+    }
     const keys = ownEnumerableDataKeys(value);
     if (keys.length !== value.length || keys.some((key, index) => key !== String(index))) {
       throw new TypeError('Capability payload arrays must be dense and contain only indexed values');
     }
     seen.add(value);
-    const snapshot = value.map((entry) => snapshotJsonSafe(entry, seen));
+    const snapshot = [];
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      snapshot.push(snapshotJsonSafe(descriptor.value, seen));
+    }
     seen.delete(value);
     return Object.freeze(snapshot);
   }

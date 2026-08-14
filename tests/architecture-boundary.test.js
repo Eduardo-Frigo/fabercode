@@ -236,6 +236,37 @@ function assertProjectCapabilityBoundary() {
   assertDoesNotMatch(nativeConsentSource, /require\(['"][^'"]*cortex[^'"]*['"]\)/, 'Native task consent must not import Cortex internals');
   assertDoesNotMatch(nativeConsentSource, /\bipc(?:Main|Renderer)\b/, 'Native task consent must not own IPC transport');
 
+  const nativeEffectApprovalSource = read('main/services/native_effect_approval_service.js');
+  const transactionalDeleteSource = read('main/services/transactional_filesystem_delete_service.js');
+  const deleteOrchestratorSource = read('main/services/agentic_delete_orchestrator.js');
+  const deleteRuntimeSource = read('main/services/agentic_delete_runtime_service.js');
+  for (const [label, source] of [
+    ['Native effect approval', nativeEffectApprovalSource],
+    ['Transactional delete service', transactionalDeleteSource],
+    ['Agentic delete orchestrator', deleteOrchestratorSource],
+    ['Agentic delete runtime', deleteRuntimeSource],
+  ]) {
+    assertDoesNotMatch(source, /require\(['"]electron['"]\)/, `${label} must receive Electron adapters through injection`);
+    assertDoesNotMatch(source, /require\(['"][^'"]*renderer[^'"]*['"]\)/, `${label} must not import renderer modules`);
+    assertDoesNotMatch(source, /\bipc(?:Main|Renderer)\b/, `${label} must not own IPC transport`);
+  }
+  assert.ok(
+    transactionalDeleteSource.includes('createUnsupportedAnchoredFilesystemMutationBackend'),
+    'Transactional delete must default to an unavailable anchored mutation backend'
+  );
+  assert.ok(
+    transactionalDeleteSource.includes('authorizeFinalFrontier(transaction.binding);')
+      && transactionalDeleteSource.includes('transaction.mutationSession.moveToQuarantine('),
+    'Transactional delete must enter the combined frontier immediately before the anchored mutation session'
+  );
+  assertDoesNotMatch(
+    [...publicConsentBoundarySources, ['cortex/tools/automata_tools.js', read('cortex/tools/automata_tools.js')]]
+      .map(([, source]) => source)
+      .join('\n'),
+    /\bauthorityBinding\b|\bcheckpointDigest\b|\bdelegationId\b|\bnativeEffectApprovalService\b/,
+    'Renderer, IPC and Cortex tools must not expose transactional delete authority internals'
+  );
+
   for (const [label, source] of publicConsentBoundarySources) {
     assertDoesNotMatch(
       source,

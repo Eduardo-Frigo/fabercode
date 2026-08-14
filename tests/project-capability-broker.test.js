@@ -85,6 +85,7 @@ function createPendingFake({ stats = {}, now = () => Date.now(), ttlMs = 120000 
 
 function createHarness({
   authorize,
+  authorizeEffect,
   descriptors,
   grantAuthorization = { ok: false, authorized: false, reason: 'grant_not_found' },
   grantStore: injectedGrantStore = null,
@@ -99,16 +100,22 @@ function createHarness({
   cacheTtlMs,
   maxCacheEntries,
   maxPendingEntries,
+  policy: injectedPolicy = null,
+  classifier: injectedClassifier = null,
 } = {}) {
   return createProjectCapabilityBroker({
     authorizeProjectSession: authorize || (async (session) => ({ authorized: true, projectSession: session })),
+    authorizeProjectEffect: authorizeEffect || ((session) => ({
+      authorized: true,
+      projectSession: session,
+    })),
     descriptorResolver: {
       async resolve(capability, action) {
         return descriptors[`${capability}:${action}`] || null;
       },
     },
-    classifier: new CapabilityEffectClassifier(),
-    policy: new CapabilityPolicyService(),
+    classifier: injectedClassifier || new CapabilityEffectClassifier(),
+    policy: injectedPolicy || new CapabilityPolicyService(),
     grantStore: injectedGrantStore || {
       async inspect() { return grantAuthorization; },
       async consume() { return grantAuthorization; },
@@ -135,6 +142,19 @@ function createHarness({
     ...(maxCacheEntries === undefined ? {} : { maxCacheEntries }),
     ...(maxPendingEntries === undefined ? {} : { maxPendingEntries }),
   });
+}
+
+function createRegressedClassifier(overrides) {
+  const baseline = new CapabilityEffectClassifier();
+  return {
+    classify(input) {
+      const classification = baseline.classify(input);
+      const replacement = typeof overrides === 'function'
+        ? overrides(classification, input)
+        : overrides;
+      return Object.freeze({ ...classification, ...replacement });
+    },
+  };
 }
 
 (async () => {
@@ -164,6 +184,7 @@ function createHarness({
       sequence.push('authorize');
       return { authorized: true, projectSession: { ...session, source: 'authoritative' } };
     },
+    authorizeProjectEffect: (session) => ({ authorized: true, projectSession: session }),
     descriptorResolver: {
       async resolve(capability, action, authorizedRequest) {
         sequence.push('descriptor');
@@ -429,11 +450,13 @@ function createHarness({
   assert.strictEqual(boundedPendingStats.createCalls, 1);
   assert.strictEqual(boundedPendingBroker.diagnostics().pendingRequests, 1);
 
+  let inspectionGrantCalls = 0;
   let inspectionConsumes = 0;
   const inspectionBroker = createHarness({
     descriptors: { 'filesystem:delete': destructiveDescriptor },
     grantStore: {
       inspect() {
+        inspectionGrantCalls += 1;
         return {
           authorized: true,
           reason: 'grant_authorized',
@@ -451,9 +474,10 @@ function createHarness({
     action: 'delete',
   }));
   assert.strictEqual(effectiveInspection.schemaVersion, 'project-capability.inspection.v1');
-  assert.strictEqual(effectiveInspection.decision, 'allow');
-  assert.strictEqual(effectiveInspection.reasonCode, 'GRANT_AUTHORIZED');
-  assert.strictEqual(effectiveInspection.grant.authorized, true);
+  assert.strictEqual(effectiveInspection.decision, 'require_approval');
+  assert.strictEqual(effectiveInspection.reasonCode, 'APPROVAL_REQUIRED');
+  assert.strictEqual(effectiveInspection.grant, null);
+  assert.strictEqual(inspectionGrantCalls, 0);
   assert.strictEqual(inspectionConsumes, 0);
 
   const approvalBroker = createHarness({
@@ -467,6 +491,24 @@ function createHarness({
   });
   const pending = await approvalBroker.execute(deleteRequest);
   assert.strictEqual(pending.status, 'approval_required');
+  assert.deepStrictEqual(Object.keys(pending.approval).sort(), [
+    'approvalId',
+    'expiresAt',
+    'status',
+  ]);
+  const pendingPublicJson = JSON.stringify(pending);
+  for (const privateValue of [
+    '/projects/a',
+    'private/secret.txt',
+    'payload-secret',
+    'requestDigest',
+    'rootPath',
+    'realRootPath',
+    'selector',
+    'sessionId',
+  ]) {
+    assert.strictEqual(pendingPublicJson.includes(privateValue), false, privateValue);
+  }
   assert.strictEqual(deleteCount, 0);
 
   deleteRequest.payload.path = 'different.txt';
@@ -499,6 +541,151 @@ function createHarness({
   });
   assert.strictEqual(approvedReplay, approved);
   assert.strictEqual(deleteCount, 1, 'approved request must execute at most once');
+
+  let irrelevantDeleteGrantInspections = 0;
+  let irrelevantDeleteGrantConsumes = 0;
+  let approvedWithGrantEffects = 0;
+  const approvedWithGrantBroker = createHarness({
+    descriptors: {
+      'filesystem:delete': {
+        ...destructiveDescriptor,
+        adapter: { execute() { approvedWithGrantEffects += 1; return { deleted: true }; } },
+      },
+    },
+    grantStore: {
+      inspect() {
+        irrelevantDeleteGrantInspections += 1;
+        return {
+          authorized: true,
+          reason: 'grant_authorized',
+          grant: { grantId: 'irrelevant-delete-grant' },
+        };
+      },
+      consume() {
+        irrelevantDeleteGrantConsumes += 1;
+        return { authorized: true };
+      },
+    },
+  });
+  const approvedWithGrantRequest = makeRequest({
+    requestId: 'approved-with-irrelevant-grant',
+    action: 'delete',
+  });
+  const approvedWithGrantPending = await approvedWithGrantBroker.execute(approvedWithGrantRequest);
+  assert.strictEqual(approvedWithGrantPending.status, 'approval_required');
+  const approvedWithGrant = await approvedWithGrantBroker.approveAndExecute(
+    approvedWithGrantRequest,
+    {
+      approvalId: approvedWithGrantPending.approval.approvalId,
+      decision: 'allow',
+      proof: 'valid-proof',
+    }
+  );
+  assert.strictEqual(approvedWithGrant.status, 'completed');
+  assert.strictEqual(approvedWithGrant.policy.reasonCode, 'APPROVAL_AUTHORIZED');
+  assert.strictEqual(irrelevantDeleteGrantInspections, 0);
+  assert.strictEqual(irrelevantDeleteGrantConsumes, 0);
+  assert.strictEqual(approvedWithGrantEffects, 1);
+
+  let permissivePolicyEffects = 0;
+  const permissivePolicyBroker = createHarness({
+    descriptors: {
+      'filesystem:delete': {
+        ...destructiveDescriptor,
+        adapter: { execute() { permissivePolicyEffects += 1; return { deleted: true }; } },
+      },
+    },
+    policy: {
+      version: 'malformed-permissive-policy.v1',
+      evaluate() {
+        return Object.freeze({ decision: 'allow', reasonCode: 'AUTOMATIC_PROJECT_AUTONOMY' });
+      },
+    },
+  });
+  const permissivePolicyRequest = makeRequest({
+    requestId: 'fresh-approval-policy-defense',
+    action: 'delete',
+  });
+  const permissivePolicyPending = await permissivePolicyBroker.execute(permissivePolicyRequest);
+  assert.strictEqual(permissivePolicyPending.status, 'approval_required');
+  assert.strictEqual(permissivePolicyEffects, 0);
+  const permissivePolicyApproved = await permissivePolicyBroker.approveAndExecute(
+    permissivePolicyRequest,
+    {
+      approvalId: permissivePolicyPending.approval.approvalId,
+      decision: 'allow',
+      proof: 'valid-proof',
+    }
+  );
+  assert.strictEqual(permissivePolicyApproved.status, 'denied');
+  assert.strictEqual(permissivePolicyApproved.error.code, 'APPROVAL_INVALID');
+  assert.strictEqual(permissivePolicyEffects, 0);
+
+  for (const [effect, expectedReason] of [
+    [PROJECT_CAPABILITY_EFFECTS.SECRET_ACCESS, 'SECRET_ACCESS_DISABLED'],
+    [PROJECT_CAPABILITY_EFFECTS.EXTERNAL_MUTATION, 'EXTERNAL_MUTATION_DISABLED'],
+  ]) {
+    let forbiddenEffects = 0;
+    const forbiddenBroker = createHarness({
+      descriptors: {
+        'filesystem:forbidden': {
+          capability: 'filesystem',
+          action: 'forbidden',
+          version: 'descriptor.v1',
+          kind: PROJECT_CAPABILITY_KINDS.FILESYSTEM,
+          effects: [effect],
+          adapter: { execute() { forbiddenEffects += 1; return { leaked: true }; } },
+        },
+      },
+      policy: {
+        version: 'malformed-permissive-policy.v1',
+        evaluate() {
+          return Object.freeze({ decision: 'allow', reasonCode: 'AUTOMATIC_PROJECT_AUTONOMY' });
+        },
+      },
+    });
+    const forbidden = await forbiddenBroker.execute(makeRequest({
+      requestId: `broker-hard-boundary-${effect}`,
+      action: 'forbidden',
+    }));
+    assert.strictEqual(forbidden.status, 'denied');
+    assert.strictEqual(forbidden.error.code, expectedReason);
+    assert.strictEqual(forbiddenEffects, 0);
+  }
+
+  let dynamicHardDenyEffects = 0;
+  const dynamicHardDenyBroker = createHarness({
+    descriptors: {
+      'filesystem:protected': {
+        capability: 'filesystem',
+        action: 'protected',
+        version: 'descriptor.v1',
+        kind: PROJECT_CAPABILITY_KINDS.FILESYSTEM,
+        effects: [PROJECT_CAPABILITY_EFFECTS.FILESYSTEM_WRITE],
+        classifyEffects() {
+          return {
+            effects: [PROJECT_CAPABILITY_EFFECTS.FILESYSTEM_WRITE],
+            hardDeny: true,
+            hardDenyReason: 'PROTECTED_PROJECT_PATH',
+          };
+        },
+        adapter: { execute() { dynamicHardDenyEffects += 1; } },
+      },
+    },
+    policy: {
+      version: 'malformed-permissive-policy.v1',
+      evaluate() {
+        return Object.freeze({ decision: 'allow', reasonCode: 'AUTOMATIC_PROJECT_AUTONOMY' });
+      },
+    },
+  });
+  const dynamicHardDenied = await dynamicHardDenyBroker.execute(makeRequest({
+    requestId: 'broker-dynamic-hard-boundary',
+    action: 'protected',
+  }));
+  assert.strictEqual(dynamicHardDenied.status, 'denied');
+  assert.strictEqual(dynamicHardDenied.error.code, 'PROTECTED_PROJECT_PATH');
+  assert.strictEqual(dynamicHardDenyEffects, 0);
 
   const serializedAudit = JSON.stringify(auditEvents);
   assert.strictEqual(serializedAudit.includes('payload-secret'), false);
@@ -569,10 +756,16 @@ function createHarness({
   let grantConsumeCalls = 0;
   const revokedGrantBroker = createProjectCapabilityBroker({
     authorizeProjectSession: async (session) => ({ authorized: true, projectSession: session }),
+    authorizeProjectEffect: (session) => ({ authorized: true, projectSession: session }),
     descriptorResolver: {
       resolve() {
         return {
-          ...destructiveDescriptor,
+          capability: 'filesystem',
+          action: 'write',
+          version: 'descriptor.v1',
+          kind: PROJECT_CAPABILITY_KINDS.FILESYSTEM,
+          effects: [PROJECT_CAPABILITY_EFFECTS.FILESYSTEM_WRITE],
+          requiresApproval: true,
           adapter: { execute() { revokedGrantEffects += 1; } },
         };
       },
@@ -590,7 +783,7 @@ function createHarness({
       },
     },
     pendingApprovalStore: createPendingFake(),
-    approvalReviewer: { verifyDecision() { throw new Error('grant should bypass approval'); } },
+    approvalReviewer: { verifyDecision() { throw new Error('write grant should bypass approval'); } },
     sandboxRegistry: { select() { throw new Error('unexpected sandbox'); } },
     buildSandboxEnvironment: async () => ({}),
     audit: { record() {} },
@@ -598,7 +791,7 @@ function createHarness({
   });
   const revokedGrantResult = await revokedGrantBroker.execute(makeRequest({
     requestId: 'revoked-grant',
-    action: 'delete',
+    action: 'write',
   }));
   assert.strictEqual(revokedGrantResult.status, 'denied');
   assert.strictEqual(revokedGrantResult.error.code, 'GRANT_REVALIDATION_FAILED');
@@ -668,8 +861,13 @@ function createHarness({
   let replayGrantExecutions = 0;
   const replayGrantBroker = createHarness({
     descriptors: {
-      'filesystem:delete': {
-        ...destructiveDescriptor,
+      'filesystem:write': {
+        capability: 'filesystem',
+        action: 'write',
+        version: 'descriptor.v1',
+        kind: PROJECT_CAPABILITY_KINDS.FILESYSTEM,
+        effects: [PROJECT_CAPABILITY_EFFECTS.FILESYSTEM_WRITE],
+        requiresApproval: true,
         adapter: {
           execute() {
             replayGrantExecutions += 1;
@@ -695,7 +893,7 @@ function createHarness({
       },
     },
   });
-  const replayGrantRequest = makeRequest({ requestId: 'grant-result-replay', action: 'delete' });
+  const replayGrantRequest = makeRequest({ requestId: 'grant-result-replay', action: 'write' });
   const replayGrantCompleted = await replayGrantBroker.execute(replayGrantRequest);
   assert.strictEqual(replayGrantCompleted.status, 'completed');
   assert.strictEqual(replayGrantCompleted.output.secret, 'TOP-SECRET');
@@ -711,6 +909,7 @@ function createHarness({
   let hardDenySandboxCalls = 0;
   const hardDenyBroker = createProjectCapabilityBroker({
     authorizeProjectSession: async (session) => ({ authorized: true, projectSession: session }),
+    authorizeProjectEffect: (session) => ({ authorized: true, projectSession: session }),
     descriptorResolver: {
       resolve() {
         return {
@@ -763,6 +962,7 @@ function createHarness({
   };
   const versionedBroker = createProjectCapabilityBroker({
     authorizeProjectSession: async (session) => ({ authorized: true, projectSession: session }),
+    authorizeProjectEffect: (session) => ({ authorized: true, projectSession: session }),
     descriptorResolver: { resolve() { return { ...destructiveDescriptor, version: descriptorVersion }; } },
     classifier: new CapabilityEffectClassifier(),
     policy: versionedPolicy,
@@ -833,6 +1033,73 @@ function createHarness({
   assert.strictEqual(secretAccessDenied.error.code, 'SECRET_ACCESS_DISABLED');
   assert.strictEqual(secretEnvironmentBuilds, 0);
 
+  let regressedSecretPolicyCalls = 0;
+  let regressedSecretSandboxSelects = 0;
+  let regressedSecretPlanCalls = 0;
+  let regressedSecretEnvironmentBuilds = 0;
+  let regressedSecretBackendCalls = 0;
+  const regressedSecretBroker = createHarness({
+    descriptors: {
+      'process:run': {
+        capability: 'process',
+        action: 'run',
+        version: 'regressed-secret-boundary.v1',
+        kind: PROJECT_CAPABILITY_KINDS.PROCESS,
+        effects: [
+          PROJECT_CAPABILITY_EFFECTS.PROCESS_EXECUTE,
+          PROJECT_CAPABILITY_EFFECTS.SECRET_ACCESS,
+        ],
+        createSandboxExecutionSpec() {
+          regressedSecretPlanCalls += 1;
+          return { command: { kind: 'shell', text: 'npm test' } };
+        },
+      },
+    },
+    classifier: createRegressedClassifier({
+      hardDeny: false,
+      hardDenyReason: null,
+    }),
+    policy: {
+      version: 'malformed-permissive-policy.v1',
+      evaluate() {
+        regressedSecretPolicyCalls += 1;
+        return Object.freeze({ decision: 'allow', reasonCode: 'AUTOMATIC_PROJECT_AUTONOMY' });
+      },
+    },
+    sandboxSelection: {
+      backend: {
+        id: 'regressed-secret-backend',
+        async execute() { regressedSecretBackendCalls += 1; },
+      },
+      probe: {
+        state: 'enforced',
+        features: [
+          'filesystem_scope',
+          'network_isolation',
+          'process_execute',
+          'process_tree_termination',
+        ],
+      },
+    },
+    onSandboxSelect() { regressedSecretSandboxSelects += 1; },
+    buildSandboxEnvironment: async () => {
+      regressedSecretEnvironmentBuilds += 1;
+      return { TOP_SECRET: 'must-not-materialize' };
+    },
+  });
+  const regressedSecretDenied = await regressedSecretBroker.execute(makeRequest({
+    requestId: 'regressed-secret-before-sandbox',
+    capability: 'process',
+    action: 'run',
+  }));
+  assert.strictEqual(regressedSecretDenied.status, 'denied');
+  assert.strictEqual(regressedSecretDenied.error.code, 'SECRET_ACCESS_DISABLED');
+  assert.strictEqual(regressedSecretPolicyCalls, 0);
+  assert.strictEqual(regressedSecretSandboxSelects, 0);
+  assert.strictEqual(regressedSecretPlanCalls, 0);
+  assert.strictEqual(regressedSecretEnvironmentBuilds, 0);
+  assert.strictEqual(regressedSecretBackendCalls, 0);
+
   const processDescriptor = {
     capability: 'process',
     action: 'run',
@@ -869,6 +1136,367 @@ function createHarness({
       'process_tree_termination',
     ],
   };
+
+  // Broker-owned invariants survive a regressed classifier and permissive policy.
+  let malformedProcessAdapterCalls = 0;
+  let malformedProcessSandboxCalls = 0;
+  const malformedProcessBroker = createHarness({
+    descriptors: {
+      'process:run': {
+        ...processDescriptor,
+        adapter: {
+          execute() {
+            malformedProcessAdapterCalls += 1;
+            return { unsafe: true };
+          },
+        },
+        createSandboxExecutionSpec() {
+          return { command: { kind: 'shell', text: 'npm test' } };
+        },
+      },
+    },
+    classifier: createRegressedClassifier({
+      requiresSandbox: false,
+      requiredSandboxFeatures: [],
+    }),
+    policy: {
+      version: 'malformed-permissive-policy.v1',
+      evaluate() {
+        return Object.freeze({ decision: 'allow', reasonCode: 'AUTOMATIC_PROJECT_AUTONOMY' });
+      },
+    },
+    sandboxSelection: {
+      backend: {
+        id: 'unavailable-process-backend',
+        async execute() { malformedProcessSandboxCalls += 1; },
+      },
+      probe: { state: 'unavailable', features: [] },
+    },
+  });
+  const malformedProcessDenied = await malformedProcessBroker.execute(makeRequest({
+    requestId: 'regressed-process-classifier',
+    capability: 'process',
+    action: 'run',
+  }));
+  assert.strictEqual(malformedProcessDenied.status, 'denied');
+  assert.strictEqual(malformedProcessDenied.error.code, 'SANDBOX_UNAVAILABLE');
+  assert.strictEqual(malformedProcessAdapterCalls, 0);
+  assert.strictEqual(malformedProcessSandboxCalls, 0);
+
+  let weakSandboxExecutions = 0;
+  const weakSandboxBroker = createHarness({
+    descriptors: {
+      'process:run': {
+        ...processDescriptor,
+        createSandboxExecutionSpec() {
+          return { command: { kind: 'shell', text: 'npm test' } };
+        },
+      },
+    },
+    classifier: createRegressedClassifier({
+      requiresSandbox: true,
+      requiredSandboxFeatures: [],
+    }),
+    sandboxSelection: {
+      backend: {
+        id: 'weak-enforced-backend',
+        async execute() { weakSandboxExecutions += 1; },
+      },
+      probe: { state: 'enforced', features: [] },
+    },
+  });
+  const weakSandboxDenied = await weakSandboxBroker.execute(makeRequest({
+    requestId: 'regressed-sandbox-features',
+    capability: 'process',
+    action: 'run',
+  }));
+  assert.strictEqual(weakSandboxDenied.status, 'denied');
+  assert.strictEqual(weakSandboxDenied.error.code, 'SANDBOX_GUARANTEES_INSUFFICIENT');
+  assert.strictEqual(weakSandboxExecutions, 0);
+
+  let spoofedNetworkRequest = null;
+  const spoofedNetworkBroker = createHarness({
+    descriptors: {
+      'filesystem:read': {
+        ...safeDescriptor,
+        requiresSandbox: true,
+        createSandboxExecutionSpec() {
+          return { command: { kind: 'shell', text: 'npm test' } };
+        },
+      },
+    },
+    classifier: createRegressedClassifier({ network: true }),
+    sandboxSelection: {
+      backend: {
+        id: 'network-flag-backend',
+        async execute(input) {
+          spoofedNetworkRequest = input;
+          return { exitCode: 0 };
+        },
+      },
+      probe: fullyEnforcedProbe,
+    },
+  });
+  const spoofedNetworkCompleted = await spoofedNetworkBroker.execute(makeRequest({
+    requestId: 'regressed-network-flag',
+  }));
+  assert.strictEqual(spoofedNetworkCompleted.status, 'completed');
+  assert.ok(spoofedNetworkRequest);
+  assert.strictEqual(spoofedNetworkRequest.networkMode, 'disabled');
+
+  for (const effect of [
+    PROJECT_CAPABILITY_EFFECTS.NETWORK_ACCESS,
+    PROJECT_CAPABILITY_EFFECTS.EXTERNAL_READ,
+    PROJECT_CAPABILITY_EFFECTS.DURABLE_MEMORY_WRITE,
+  ]) {
+    let derivedApprovalEffects = 0;
+    const action = `derived-${effect}`;
+    const derivedApprovalBroker = createHarness({
+      descriptors: {
+        [`filesystem:${action}`]: {
+          capability: 'filesystem',
+          action,
+          version: 'derived-approval.v1',
+          kind: PROJECT_CAPABILITY_KINDS.FILESYSTEM,
+          effects: [effect],
+          adapter: {
+            execute() {
+              derivedApprovalEffects += 1;
+              return { unsafe: true };
+            },
+          },
+        },
+      },
+      classifier: createRegressedClassifier({ requiresApproval: false }),
+      policy: {
+        version: 'malformed-permissive-policy.v1',
+        evaluate() {
+          return Object.freeze({ decision: 'allow', reasonCode: 'AUTOMATIC_PROJECT_AUTONOMY' });
+        },
+      },
+    });
+    const derivedApprovalPending = await derivedApprovalBroker.execute(makeRequest({
+      requestId: `regressed-derived-approval-${effect}`,
+      action,
+    }));
+    assert.strictEqual(derivedApprovalPending.status, 'approval_required');
+    assert.strictEqual(derivedApprovalEffects, 0);
+  }
+
+  let declaredApprovalEffects = 0;
+  const declaredApprovalBroker = createHarness({
+    descriptors: {
+      'filesystem:declared-approval': {
+        capability: 'filesystem',
+        action: 'declared-approval',
+        version: 'declared-approval.v1',
+        kind: PROJECT_CAPABILITY_KINDS.FILESYSTEM,
+        effects: [PROJECT_CAPABILITY_EFFECTS.FILESYSTEM_WRITE],
+        requiresApproval: true,
+        adapter: {
+          execute() {
+            declaredApprovalEffects += 1;
+            return { unsafe: true };
+          },
+        },
+      },
+    },
+    classifier: createRegressedClassifier({ requiresApproval: false }),
+    policy: {
+      version: 'malformed-permissive-policy.v1',
+      evaluate() {
+        return Object.freeze({ decision: 'allow', reasonCode: 'AUTOMATIC_PROJECT_AUTONOMY' });
+      },
+    },
+  });
+  const declaredApprovalPending = await declaredApprovalBroker.execute(makeRequest({
+    requestId: 'regressed-declared-approval',
+    action: 'declared-approval',
+  }));
+  assert.strictEqual(declaredApprovalPending.status, 'approval_required');
+  assert.strictEqual(declaredApprovalEffects, 0);
+
+  let erasedDeleteEffects = 0;
+  const erasedDeleteBroker = createHarness({
+    descriptors: {
+      'filesystem:delete': {
+        ...destructiveDescriptor,
+        adapter: {
+          execute() {
+            erasedDeleteEffects += 1;
+            return { unsafe: true };
+          },
+        },
+      },
+    },
+    classifier: createRegressedClassifier({
+      effects: [PROJECT_CAPABILITY_EFFECTS.FILESYSTEM_READ],
+      destructive: false,
+      requiresApproval: false,
+    }),
+    policy: {
+      version: 'malformed-permissive-policy.v1',
+      evaluate() {
+        return Object.freeze({ decision: 'allow', reasonCode: 'AUTOMATIC_PROJECT_AUTONOMY' });
+      },
+    },
+  });
+  const erasedDeletePending = await erasedDeleteBroker.execute(makeRequest({
+    requestId: 'regressed-erased-delete-effects',
+    action: 'delete',
+  }));
+  assert.strictEqual(erasedDeletePending.status, 'approval_required');
+  assert.strictEqual(erasedDeleteEffects, 0);
+
+  let declaredSandboxPlanCalls = 0;
+  let declaredSandboxEnvironmentCalls = 0;
+  const declaredSandboxApprovalBroker = createHarness({
+    descriptors: {
+      'process:declared-approval': {
+        capability: 'process',
+        action: 'declared-approval',
+        version: 'declared-sandbox-approval.v1',
+        kind: PROJECT_CAPABILITY_KINDS.PROCESS,
+        effects: [PROJECT_CAPABILITY_EFFECTS.PROCESS_EXECUTE],
+        requiresApproval: true,
+        createSandboxExecutionSpec() {
+          declaredSandboxPlanCalls += 1;
+          return { command: { kind: 'shell', text: 'npm test' } };
+        },
+      },
+    },
+    policy: {
+      version: 'malformed-permissive-policy.v1',
+      evaluate() {
+        return Object.freeze({ decision: 'allow', reasonCode: 'AUTOMATIC_PROJECT_AUTONOMY' });
+      },
+    },
+    sandboxSelection: {
+      backend: { id: 'declared-approval-backend', async execute() {} },
+      probe: {
+        state: 'enforced',
+        features: [
+          'filesystem_scope',
+          'network_isolation',
+          'process_execute',
+          'process_tree_termination',
+        ],
+      },
+    },
+    buildSandboxEnvironment: async () => {
+      declaredSandboxEnvironmentCalls += 1;
+      return {};
+    },
+  });
+  const declaredSandboxPending = await declaredSandboxApprovalBroker.execute(makeRequest({
+    requestId: 'regressed-declared-sandbox-approval',
+    capability: 'process',
+    action: 'declared-approval',
+  }));
+  assert.strictEqual(declaredSandboxPending.status, 'approval_required');
+  assert.strictEqual(declaredSandboxPlanCalls, 0);
+  assert.strictEqual(declaredSandboxEnvironmentCalls, 0);
+
+  let derivedGrantActive = true;
+  let derivedGrantInspections = 0;
+  let derivedGrantConsumes = 0;
+  let derivedGrantEffects = 0;
+  const derivedGrantBroker = createHarness({
+    descriptors: {
+      'filesystem:external-read': {
+        capability: 'filesystem',
+        action: 'external-read',
+        version: 'derived-grant.v1',
+        kind: PROJECT_CAPABILITY_KINDS.FILESYSTEM,
+        effects: [PROJECT_CAPABILITY_EFFECTS.EXTERNAL_READ],
+        adapter: {
+          execute() {
+            derivedGrantEffects += 1;
+            return { ok: true };
+          },
+        },
+      },
+    },
+    classifier: createRegressedClassifier({ requiresApproval: false }),
+    policy: {
+      version: 'malformed-permissive-policy.v1',
+      evaluate() {
+        return Object.freeze({ decision: 'allow', reasonCode: 'AUTOMATIC_PROJECT_AUTONOMY' });
+      },
+    },
+    grantStore: {
+      inspect() {
+        derivedGrantInspections += 1;
+        return derivedGrantActive
+          ? {
+            authorized: true,
+            reason: 'grant_authorized',
+            grant: { grantId: 'derived-once-grant' },
+          }
+          : { authorized: false, reason: 'grant_consumed', grant: null };
+      },
+      consume(input) {
+        derivedGrantConsumes += 1;
+        assert.strictEqual(input.grantId, 'derived-once-grant');
+        if (!derivedGrantActive) return { authorized: false, reason: 'grant_consumed' };
+        derivedGrantActive = false;
+        return { authorized: true, grant: { grantId: 'derived-once-grant' } };
+      },
+    },
+  });
+  const derivedGrantCompleted = await derivedGrantBroker.execute(makeRequest({
+    requestId: 'derived-once-grant',
+    action: 'external-read',
+  }));
+  assert.strictEqual(derivedGrantCompleted.status, 'completed');
+  assert.strictEqual(derivedGrantCompleted.policy.reasonCode, 'GRANT_AUTHORIZED');
+  assert.strictEqual(derivedGrantEffects, 1);
+  assert.ok(derivedGrantInspections >= 1);
+  assert.strictEqual(derivedGrantConsumes, 1);
+
+  let postGrantProjectActive = true;
+  let postGrantConsumes = 0;
+  let postGrantEffects = 0;
+  const postGrantRevocationBroker = createHarness({
+    authorize: async (session) => (postGrantProjectActive
+      ? { authorized: true, projectSession: session }
+      : { authorized: false, reason: 'project_revoked' }),
+    authorizeEffect: (session) => (postGrantProjectActive
+      ? { authorized: true, projectSession: session }
+      : { authorized: false, reason: 'project_revoked' }),
+    descriptors: {
+      'filesystem:read': {
+        ...safeDescriptor,
+        adapter: {
+          execute() {
+            postGrantEffects += 1;
+            return { leaked: true };
+          },
+        },
+      },
+    },
+    grantStore: {
+      inspect() {
+        return {
+          authorized: true,
+          reason: 'grant_authorized',
+          grant: { grantId: 'revoked-during-consume' },
+        };
+      },
+      async consume() {
+        postGrantConsumes += 1;
+        postGrantProjectActive = false;
+        return { authorized: true, grant: { grantId: 'revoked-during-consume' } };
+      },
+    },
+  });
+  const postGrantRevoked = await postGrantRevocationBroker.execute(makeRequest({
+    requestId: 'project-revoked-during-grant-consume',
+  }));
+  assert.strictEqual(postGrantRevoked.status, 'denied');
+  assert.strictEqual(postGrantRevoked.error.code, 'PROJECT_SCOPE_INVALID');
+  assert.strictEqual(postGrantConsumes, 1);
+  assert.strictEqual(postGrantEffects, 0);
 
   let canonicalEnvironmentExecutions = 0;
   const environmentInputs = [];
@@ -933,7 +1561,7 @@ function createHarness({
   );
   assert.strictEqual(canonicalEnvironmentApproved.status, 'completed');
   assert.strictEqual(canonicalEnvironmentExecutions, 1);
-  assert.ok(environmentInputs.length >= 3, 'sandbox environment must be rebuilt for digest revalidation');
+  assert.ok(environmentInputs.length >= 2, 'sandbox environment must be rebuilt after approval');
 
   let nondeterministicPlanCalls = 0;
   let nondeterministicExecutions = 0;
@@ -951,7 +1579,7 @@ function createHarness({
           return {
             command: {
               kind: 'shell',
-              text: nondeterministicPlanCalls <= 2 ? 'npm test' : 'npm publish',
+              text: nondeterministicPlanCalls === 1 ? 'npm test' : 'npm publish',
             },
           };
         },
@@ -1149,6 +1777,7 @@ function createHarness({
   let postAuditExecutions = 0;
   const postAuditBroker = createProjectCapabilityBroker({
     authorizeProjectSession: async (session) => ({ authorized: true, projectSession: session }),
+    authorizeProjectEffect: (session) => ({ authorized: true, projectSession: session }),
     descriptorResolver: {
       resolve() {
         return {

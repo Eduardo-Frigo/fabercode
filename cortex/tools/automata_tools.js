@@ -26,7 +26,7 @@ function createAutomataTools(executor) {
     },
     {
       name: 'automata.execute_operation_batch',
-      description: 'Executa lote pré-validado de criação, escrita, anexo e deleção de arquivos ou pastas. Operações suportadas: mkdir, write_file, append_file, delete_file, delete_dir.',
+      description: 'Executa lote pré-validado de criação, escrita e anexo. Exclusões usam a capability transacional dedicada.',
       permission: 'write',
       inputSchema: {
         type: 'object',
@@ -39,7 +39,7 @@ function createAutomataTools(executor) {
               type: 'object',
               required: ['op', 'path'],
               properties: {
-                op: { type: 'string', enum: ['mkdir', 'write_file', 'append_file', 'delete_file', 'delete_dir'] },
+                op: { type: 'string', enum: ['mkdir', 'write_file', 'append_file'] },
                 path: { type: 'string', description: 'Caminho relativo do arquivo ou pasta.' },
                 content: { type: 'string', description: 'Conteúdo textual (obrigatório apenas para write_file e append_file).' }
               }

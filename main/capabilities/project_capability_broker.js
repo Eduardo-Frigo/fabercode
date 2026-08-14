@@ -14,9 +14,14 @@ const {
 } = require('./project_capability_contracts');
 const {
   CAPABILITY_POLICY_DECISIONS,
+  CAPABILITY_POLICY_REASON_CODES,
   CAPABILITY_POLICY_VERSION,
+  derivesApprovalRequirement,
+  requiresFreshApproval,
+  validateClassificationEffects,
 } = require('./capability_policy_service');
 const {
+  SANDBOX_A1_REQUIRED_FEATURES,
   SANDBOX_NETWORK_MODES,
   areEquivalentPortablePaths,
   assertSandboxExecutionRequest,
@@ -55,6 +60,19 @@ function isRecord(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function ownDataValue(record, key, fieldName) {
+  if (!isRecord(record)) throw new TypeError(`${fieldName} must be a record`);
+  const prototype = Object.getPrototypeOf(record);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(`${fieldName} must be a plain record`);
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  if (!descriptor || !Object.hasOwn(descriptor, 'value') || descriptor.enumerable !== true) {
+    throw new TypeError(`${fieldName}.${key} must be an enumerable data property`);
+  }
+  return descriptor.value;
+}
+
 function requireMethod(target, method, dependencyName) {
   if (!target || typeof target[method] !== 'function') {
     throw new TypeError(`${dependencyName}.${method} must be a function`);
@@ -69,6 +87,221 @@ function safeAuditIdentifier(value) {
 function safeReasonCode(value, fallback = 'INTERNAL_BROKER_ERROR') {
   const normalized = String(value || '').trim();
   return /^[A-Z][A-Z0-9_]{0,79}$/.test(normalized) ? normalized : fallback;
+}
+
+function enforceFreshApprovalDecision(classification, decision, approvalAuthorization = null) {
+  if (!requiresFreshApproval(classification)) return decision;
+  if (decision && decision.decision === CAPABILITY_POLICY_DECISIONS.DENY) return decision;
+  if (!approvalAuthorization || approvalAuthorization.authorized !== true) {
+    return Object.freeze({
+      decision: CAPABILITY_POLICY_DECISIONS.REQUIRE_APPROVAL,
+      reasonCode: CAPABILITY_POLICY_REASON_CODES.APPROVAL_REQUIRED,
+    });
+  }
+  if (decision
+    && decision.decision === CAPABILITY_POLICY_DECISIONS.ALLOW
+    && decision.reasonCode === CAPABILITY_POLICY_REASON_CODES.APPROVAL_AUTHORIZED) {
+    return decision;
+  }
+  return Object.freeze({
+    decision: CAPABILITY_POLICY_DECISIONS.DENY,
+    reasonCode: BROKER_REASON_CODES.APPROVAL_INVALID,
+  });
+}
+
+function enforceDerivedApprovalDecision(
+  classification,
+  decision,
+  { approvalAuthorization = null, grantAuthorization = null } = {}
+) {
+  if (!(classification.requiresApproval === true || derivesApprovalRequirement(classification))
+    || requiresFreshApproval(classification)) return decision;
+  if (decision && decision.decision === CAPABILITY_POLICY_DECISIONS.DENY) return decision;
+  if (approvalAuthorization && approvalAuthorization.authorized === true) {
+    return Object.freeze({
+      decision: CAPABILITY_POLICY_DECISIONS.ALLOW,
+      reasonCode: CAPABILITY_POLICY_REASON_CODES.APPROVAL_AUTHORIZED,
+    });
+  }
+  if (grantAuthorization && grantAuthorization.authorized === true) {
+    return Object.freeze({
+      decision: CAPABILITY_POLICY_DECISIONS.ALLOW,
+      reasonCode: CAPABILITY_POLICY_REASON_CODES.GRANT_AUTHORIZED,
+    });
+  }
+  return Object.freeze({
+    decision: CAPABILITY_POLICY_DECISIONS.REQUIRE_APPROVAL,
+    reasonCode: CAPABILITY_POLICY_REASON_CODES.APPROVAL_REQUIRED,
+  });
+}
+
+function enforceBrokerClassificationBoundary(classification) {
+  const invalidEffectsReason = validateClassificationEffects(classification);
+  if (invalidEffectsReason) {
+    return Object.freeze({
+      decision: CAPABILITY_POLICY_DECISIONS.DENY,
+      reasonCode: invalidEffectsReason,
+    });
+  }
+  if (classification.hardDeny === true) {
+    return Object.freeze({
+      decision: CAPABILITY_POLICY_DECISIONS.DENY,
+      reasonCode: safeReasonCode(
+        classification.hardDenyReason,
+        CAPABILITY_POLICY_REASON_CODES.CAPABILITY_NOT_ALLOWED
+      ),
+    });
+  }
+  if (classification.effects.includes('external_mutation')) {
+    return Object.freeze({
+      decision: CAPABILITY_POLICY_DECISIONS.DENY,
+      reasonCode: CAPABILITY_POLICY_REASON_CODES.EXTERNAL_MUTATION_DISABLED,
+    });
+  }
+  if (classification.effects.includes('secret_access')) {
+    return Object.freeze({
+      decision: CAPABILITY_POLICY_DECISIONS.DENY,
+      reasonCode: CAPABILITY_POLICY_REASON_CODES.SECRET_ACCESS_DISABLED,
+    });
+  }
+  return null;
+}
+
+function enforceBrokerHardBoundary(classification, sandboxProbe = null) {
+  const classificationBoundary = enforceBrokerClassificationBoundary(classification);
+  if (classificationBoundary) return classificationBoundary;
+  if (classification.requiresSandbox === true) {
+    if (!sandboxProbe || sandboxProbe.state === 'unavailable') {
+      return Object.freeze({
+        decision: CAPABILITY_POLICY_DECISIONS.DENY,
+        reasonCode: CAPABILITY_POLICY_REASON_CODES.SANDBOX_UNAVAILABLE,
+      });
+    }
+    if (sandboxProbe.state !== 'enforced') {
+      return Object.freeze({
+        decision: CAPABILITY_POLICY_DECISIONS.DENY,
+        reasonCode: CAPABILITY_POLICY_REASON_CODES.SANDBOX_DEGRADED,
+      });
+    }
+    const availableFeatures = new Set(Array.isArray(sandboxProbe.features)
+      ? sandboxProbe.features
+      : []);
+    if (!classification.requiredSandboxFeatures.every(
+      (feature) => availableFeatures.has(feature)
+    )) {
+      return Object.freeze({
+        decision: CAPABILITY_POLICY_DECISIONS.DENY,
+        reasonCode: CAPABILITY_POLICY_REASON_CODES.SANDBOX_GUARANTEES_INSUFFICIENT,
+      });
+    }
+  }
+  return null;
+}
+
+function inferBrokerRisk(effects) {
+  if (effects.includes('destructive')) return 'critical';
+  if (effects.some((effect) => [
+    'secret_access',
+    'external_mutation',
+    'external_read',
+    'filesystem_delete',
+    'network_access',
+  ].includes(effect))) return 'high';
+  if (effects.some((effect) => [
+    'process_execute',
+    'durable_memory_write',
+  ].includes(effect))) return 'medium';
+  return 'low';
+}
+
+function maxBrokerRisk(classifiedRisk, descriptorRisk, effects) {
+  const order = ['low', 'medium', 'high', 'critical'];
+  const classifiedIndex = order.indexOf(classifiedRisk);
+  const descriptorIndex = descriptorRisk === undefined ? -1 : order.indexOf(descriptorRisk);
+  if (classifiedIndex < 0 || (descriptorRisk !== undefined && descriptorIndex < 0)) {
+    throw new ProjectCapabilityBrokerError(
+      BROKER_REASON_CODES.CAPABILITY_NOT_FOUND,
+      'Capability classification returned an invalid risk level.'
+    );
+  }
+  return order[Math.max(classifiedIndex, descriptorIndex, order.indexOf(inferBrokerRisk(effects)))];
+}
+
+function normalizeBrokerClassification(classification, descriptor) {
+  if (!classification || typeof classification !== 'object') {
+    throw new ProjectCapabilityBrokerError(
+      BROKER_REASON_CODES.CAPABILITY_NOT_FOUND,
+      'Capability classification failed closed.'
+    );
+  }
+  let snapshot;
+  try {
+    snapshot = deepFreezeSnapshot(canonicalizeForDigest(classification));
+  } catch {
+    throw new ProjectCapabilityBrokerError(
+      BROKER_REASON_CODES.CAPABILITY_NOT_FOUND,
+      'Capability classification is not a plain immutable data record.'
+    );
+  }
+  if (!Array.isArray(snapshot.effects)) {
+    throw new ProjectCapabilityBrokerError(
+      BROKER_REASON_CODES.CAPABILITY_NOT_FOUND,
+      'Capability classification must provide effects.'
+    );
+  }
+  if (snapshot.capabilityId !== descriptor.capability
+    || snapshot.action !== descriptor.action
+    || snapshot.descriptorVersion !== descriptor.version) {
+    throw new ProjectCapabilityBrokerError(
+      BROKER_REASON_CODES.CAPABILITY_NOT_FOUND,
+      'Capability classification does not match its trusted descriptor.'
+    );
+  }
+  // A dynamic classifier may add effects but can never erase the trusted
+  // descriptor baseline. Over-classification is deliberately safer than
+  // letting a regressed classifier remove destructive or approval semantics.
+  const effects = Object.freeze([...new Set([
+    ...snapshot.effects,
+    ...descriptor.effects,
+  ])]);
+  const processExecution = Array.isArray(effects) && effects.includes('process_execute');
+  const declaredFeatures = Array.isArray(snapshot.requiredSandboxFeatures)
+    ? snapshot.requiredSandboxFeatures
+    : [];
+  const descriptorFeatures = Array.isArray(descriptor.requiredSandboxFeatures)
+    ? descriptor.requiredSandboxFeatures
+    : [];
+  const requiresSandbox = descriptor.requiresSandbox === true
+    || snapshot.requiresSandbox === true
+    || processExecution;
+  const requiredSandboxFeatures = Object.freeze([...new Set([
+    ...(requiresSandbox ? SANDBOX_A1_REQUIRED_FEATURES : []),
+    ...declaredFeatures,
+    ...descriptorFeatures,
+  ])]);
+  const descriptorDisabled = descriptor.enabled === false;
+  return Object.freeze({
+    ...snapshot,
+    effects,
+    network: Array.isArray(effects) && effects.includes('network_access'),
+    destructive: Array.isArray(effects) && effects.includes('destructive'),
+    hardDeny: descriptorDisabled || snapshot.hardDeny === true,
+    hardDenyReason: descriptorDisabled
+      ? CAPABILITY_POLICY_REASON_CODES.CAPABILITY_DISABLED
+      : snapshot.hardDenyReason,
+    requiresApproval: descriptor.requiresApproval === true
+      || snapshot.requiresApproval === true
+      || (Array.isArray(effects) && (
+        effects.includes('filesystem_delete')
+        || effects.includes('destructive')
+        || effects.includes('network_access')
+        || effects.includes('external_read')
+        || effects.includes('durable_memory_write')
+      )),
+    requiresSandbox,
+    requiredSandboxFeatures,
+    risk: maxBrokerRisk(snapshot.risk, descriptor.risk, effects),
+  });
 }
 
 function ownEnumerableDataKeys(value) {
@@ -101,12 +334,19 @@ function canonicalizeForDigest(value, seen = new Set()) {
   if (value === undefined) throw new TypeError('Capability digest input must not contain undefined');
   if (Array.isArray(value)) {
     if (seen.has(value)) throw new TypeError('Capability payload must not contain cycles');
+    if (Object.getPrototypeOf(value) !== Array.prototype) {
+      throw new TypeError('Capability digest arrays must use the standard array prototype');
+    }
     const keys = ownEnumerableDataKeys(value);
     if (keys.length !== value.length || keys.some((key, index) => key !== String(index))) {
       throw new TypeError('Capability digest arrays must be dense and contain only indexed values');
     }
     seen.add(value);
-    const result = value.map((entry) => canonicalizeForDigest(entry, seen));
+    const result = [];
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      result.push(canonicalizeForDigest(descriptor.value, seen));
+    }
     seen.delete(value);
     return result;
   }
@@ -222,6 +462,7 @@ function normalizeAuthorizedSession(requested, authorization) {
 
 function createProjectCapabilityBroker({
   authorizeProjectSession,
+  authorizeProjectEffect,
   descriptorResolver,
   classifier,
   policy,
@@ -238,6 +479,9 @@ function createProjectCapabilityBroker({
 } = {}) {
   if (typeof authorizeProjectSession !== 'function') {
     throw new TypeError('authorizeProjectSession must be a function');
+  }
+  if (typeof authorizeProjectEffect !== 'function') {
+    throw new TypeError('authorizeProjectEffect must be a synchronous function');
   }
   if (typeof descriptorResolver !== 'function') requireMethod(descriptorResolver, 'resolve', 'descriptorResolver');
   requireMethod(classifier, 'classify', 'classifier');
@@ -285,13 +529,26 @@ function createProjectCapabilityBroker({
 
   function approvalExpiresAt(approval) {
     const current = nowMs();
-    const raw = approval && approval.expiresAt;
+    const raw = ownDataValue(approval, 'expiresAt', 'approval');
     const numeric = Number(raw);
     const parsed = Number.isFinite(numeric) ? numeric : Date.parse(String(raw || ''));
     if (!Number.isFinite(parsed) || parsed <= current) {
       throw new TypeError('Pending approval must provide a future expiresAt timestamp');
     }
     return parsed;
+  }
+
+  function publicApproval(approval) {
+    const approvalId = String(ownDataValue(approval, 'approvalId', 'approval') || '').trim();
+    const status = String(ownDataValue(approval, 'status', 'approval') || '').trim();
+    if (!/^[A-Za-z0-9._:-]{1,256}$/.test(approvalId) || status !== 'pending') {
+      throw new TypeError('Pending approval must provide a safe identifier and pending status');
+    }
+    return Object.freeze({
+      approvalId,
+      status,
+      expiresAt: approvalExpiresAt(approval),
+    });
   }
 
   async function recordAudit(event) {
@@ -327,6 +584,20 @@ function createProjectCapabilityBroker({
     return descriptor;
   }
 
+  function authorizeEffectSynchronously(prepared) {
+    const authorization = authorizeProjectEffect(
+      prepared.projectSession,
+      prepared.authorizedRequest
+    );
+    if (authorization && typeof authorization.then === 'function') {
+      throw new ProjectCapabilityBrokerError(
+        BROKER_REASON_CODES.AUTHORIZATION_FAILED,
+        'The final effect authorization must be synchronous.'
+      );
+    }
+    normalizeAuthorizedSession(prepared.projectSession, authorization);
+  }
+
   async function buildSandboxPlan({
     authorizedRequest,
     projectSession,
@@ -344,9 +615,9 @@ function createProjectCapabilityBroker({
         (feature) => sandboxSelection.probe.features.includes(feature)
       )) return null;
 
-    // Descriptor planning hooks are trusted, side-effect-free canonicalizers.
-    // Their output is snapshotted into the approval digest and recomputed during
-    // final revalidation; execution adapters are never called in this phase.
+    // Descriptor planning hooks are trusted canonicalizers. For a capability
+    // that requires approval this function is called only after that authority
+    // exists, then repeated before execution to detect semantic drift.
     const createExecutionSpec = descriptor.createSandboxExecutionSpec
       || descriptor.createSandboxExecutionRequest;
     if (typeof createExecutionSpec !== 'function') {
@@ -436,6 +707,30 @@ function createProjectCapabilityBroker({
     }));
   }
 
+  async function materializeSandboxPlan(prepared) {
+    if (!prepared.classification.requiresSandbox || prepared.sandboxPlan) return prepared;
+    const sandboxPlan = await buildSandboxPlan({
+      authorizedRequest: prepared.authorizedRequest,
+      projectSession: prepared.projectSession,
+      descriptor: prepared.descriptor,
+      classification: prepared.classification,
+      sandboxSelection: prepared.sandboxSelection,
+    });
+    if (!sandboxPlan) {
+      throw new ProjectCapabilityBrokerError(
+        CAPABILITY_POLICY_REASON_CODES.SANDBOX_GUARANTEES_INSUFFICIENT,
+        'A canonical sandbox plan could not be materialized.'
+      );
+    }
+    return Object.freeze({ ...prepared, sandboxPlan });
+  }
+
+  function sandboxPlansMatch(left, right) {
+    if (!left || !right) return left === right;
+    return JSON.stringify(canonicalizeForDigest(left))
+      === JSON.stringify(canonicalizeForDigest(right));
+  }
+
   async function prepare(request) {
     assertProjectCapabilityRequest(request);
 
@@ -456,18 +751,16 @@ function createProjectCapabilityBroker({
     });
     assertProjectCapabilityRequest(authorizedRequest);
     const descriptor = await resolveDescriptor(authorizedRequest);
-    const classification = await classifier.classify({
-      request: authorizedRequest,
-      descriptor,
-      projectSession,
-    });
-    if (!classification || typeof classification !== 'object') {
-      throw new ProjectCapabilityBrokerError(
-        BROKER_REASON_CODES.CAPABILITY_NOT_FOUND,
-        'Capability classification failed closed.'
-      );
-    }
-    if (!classification.requiresSandbox) {
+    const classification = normalizeBrokerClassification(
+      await classifier.classify({
+        request: authorizedRequest,
+        descriptor,
+        projectSession,
+      }),
+      descriptor
+    );
+    const classificationBoundary = enforceBrokerClassificationBoundary(classification);
+    if (!classification.requiresSandbox && !classificationBoundary) {
       const adapter = descriptor.adapter || descriptor;
       if (!adapter || typeof adapter.execute !== 'function') {
         throw new ProjectCapabilityBrokerError(
@@ -478,7 +771,7 @@ function createProjectCapabilityBroker({
     }
 
     let sandboxSelection = null;
-    if (classification.requiresSandbox && !classification.hardDeny) {
+    if (classification.requiresSandbox && !classificationBoundary) {
       sandboxSelection = await sandboxRegistry.select({
         requiredFeatures: classification.requiredSandboxFeatures || [],
         projectSession,
@@ -490,19 +783,32 @@ function createProjectCapabilityBroker({
       });
     }
 
-    const prePlanPolicyDecision = await policy.evaluate({
+    let prePlanPolicyDecision = classificationBoundary || await policy.evaluate({
       classification,
       sandboxProbe: sandboxSelection && sandboxSelection.probe,
     });
-    const sandboxPlan = prePlanPolicyDecision.decision === CAPABILITY_POLICY_DECISIONS.DENY
-      ? null
-      : await buildSandboxPlan({
+    prePlanPolicyDecision = enforceFreshApprovalDecision(
+      classification,
+      prePlanPolicyDecision
+    );
+    prePlanPolicyDecision = enforceDerivedApprovalDecision(
+      classification,
+      prePlanPolicyDecision
+    );
+    // Planning adapters and environment builders may inspect toolchain state.
+    // Do not call them before an approval-required decision has actually been
+    // authorized. The canonical request/descriptor version remains the
+    // pending-approval identity; the plan is built and compared repeatedly
+    // only after authority exists.
+    const sandboxPlan = prePlanPolicyDecision.decision === CAPABILITY_POLICY_DECISIONS.ALLOW
+      ? await buildSandboxPlan({
         authorizedRequest,
         projectSession,
         descriptor,
         classification,
         sandboxSelection,
-      });
+      })
+      : null;
 
     const prepared = {
       request,
@@ -600,12 +906,17 @@ function createProjectCapabilityBroker({
 
   async function inspect(request) {
     const prepared = await prepare(request);
-    let policyDecision = await policy.evaluate({
+    let policyDecision = enforceBrokerHardBoundary(
+      prepared.classification,
+      prepared.sandboxSelection && prepared.sandboxSelection.probe
+    )
+      || await policy.evaluate({
       classification: prepared.classification,
       sandboxProbe: prepared.sandboxSelection && prepared.sandboxSelection.probe,
-    });
+      });
     let grantAuthorization = null;
-    if (policyDecision.decision !== CAPABILITY_POLICY_DECISIONS.DENY) {
+    if (policyDecision.decision !== CAPABILITY_POLICY_DECISIONS.DENY
+      && !requiresFreshApproval(prepared.classification)) {
       grantAuthorization = await grantStore.inspect(grantQuery(prepared));
       policyDecision = await policy.evaluate({
         classification: prepared.classification,
@@ -613,6 +924,15 @@ function createProjectCapabilityBroker({
         sandboxProbe: prepared.sandboxSelection && prepared.sandboxSelection.probe,
       });
     }
+    policyDecision = enforceFreshApprovalDecision(
+      prepared.classification,
+      policyDecision
+    );
+    policyDecision = enforceDerivedApprovalDecision(
+      prepared.classification,
+      policyDecision,
+      { grantAuthorization }
+    );
     const inspection = Object.freeze({
       schemaVersion: PROJECT_CAPABILITY_INSPECTION_SCHEMA_VERSION,
       requestId: request.requestId,
@@ -643,10 +963,16 @@ function createProjectCapabilityBroker({
 
   async function authorizeTerminalReplay(prepared, result) {
     const sandboxProbe = prepared.sandboxSelection && prepared.sandboxSelection.probe;
-    const baseDecision = await policy.evaluate({
+    let baseDecision = enforceBrokerHardBoundary(
+      prepared.classification,
+      sandboxProbe
+    )
+      || await policy.evaluate({
       classification: prepared.classification,
       sandboxProbe,
-    });
+      });
+    baseDecision = enforceFreshApprovalDecision(prepared.classification, baseDecision);
+    baseDecision = enforceDerivedApprovalDecision(prepared.classification, baseDecision);
     if (baseDecision.decision === CAPABILITY_POLICY_DECISIONS.DENY) return false;
     const reasonCode = result && result.policy && result.policy.reasonCode;
     if (reasonCode === 'APPROVAL_AUTHORIZED') return true;
@@ -740,10 +1066,14 @@ function createProjectCapabilityBroker({
   }
 
   async function executeOnce(request, options = {}, prepared) {
-    const hardBoundaryDecision = await policy.evaluate({
+    const hardBoundaryDecision = enforceBrokerHardBoundary(
+      prepared.classification,
+      prepared.sandboxSelection && prepared.sandboxSelection.probe
+    )
+      || await policy.evaluate({
       classification: prepared.classification,
       sandboxProbe: prepared.sandboxSelection && prepared.sandboxSelection.probe,
-    });
+      });
     if (hardBoundaryDecision.decision === CAPABILITY_POLICY_DECISIONS.DENY) {
       const denied = deniedResult(request, hardBoundaryDecision.reasonCode, hardBoundaryDecision);
       await recordAudit({
@@ -760,13 +1090,25 @@ function createProjectCapabilityBroker({
       return denied;
     }
 
-    const grantAuthorization = await grantStore.inspect(grantQuery(prepared));
+    const grantAuthorization = requiresFreshApproval(prepared.classification)
+      ? null
+      : await grantStore.inspect(grantQuery(prepared));
     let approvalAuthorization = null;
     let policyDecision = await policy.evaluate({
       classification: prepared.classification,
       grantAuthorization,
       sandboxProbe: prepared.sandboxSelection && prepared.sandboxSelection.probe,
     });
+    policyDecision = enforceFreshApprovalDecision(
+      prepared.classification,
+      policyDecision,
+      approvalAuthorization
+    );
+    policyDecision = enforceDerivedApprovalDecision(
+      prepared.classification,
+      policyDecision,
+      { approvalAuthorization, grantAuthorization }
+    );
 
     // A hard denial (including a missing enforced sandbox) cannot be overridden.
     if (policyDecision.decision === CAPABILITY_POLICY_DECISIONS.DENY) {
@@ -819,7 +1161,7 @@ function createProjectCapabilityBroker({
           decision: PROJECT_CAPABILITY_DECISIONS.REQUIRE_APPROVAL,
           status: PROJECT_CAPABILITY_RESULT_STATUSES.APPROVAL_REQUIRED,
           policy: publicPolicy(policyDecision),
-          approval: created.approval,
+          approval: publicApproval(created.approval),
         });
         await recordAudit({
           event: 'capability_approval_required',
@@ -881,6 +1223,16 @@ function createProjectCapabilityBroker({
         approvalAuthorization,
         sandboxProbe: prepared.sandboxSelection && prepared.sandboxSelection.probe,
       });
+      policyDecision = enforceFreshApprovalDecision(
+        prepared.classification,
+        policyDecision,
+        approvalAuthorization
+      );
+      policyDecision = enforceDerivedApprovalDecision(
+        prepared.classification,
+        policyDecision,
+        { approvalAuthorization, grantAuthorization }
+      );
     }
 
     // Re-authorize and re-canonicalize before recording execution intent. A
@@ -894,14 +1246,34 @@ function createProjectCapabilityBroker({
           'Capability request changed after policy evaluation.'
         );
       }
-      const finalDecision = await policy.evaluate({
+      const finalPolicyDecision = enforceFreshApprovalDecision(
+        revalidated.classification,
+        await policy.evaluate({
         classification: revalidated.classification,
         grantAuthorization,
         approvalAuthorization,
         sandboxProbe: revalidated.sandboxSelection && revalidated.sandboxSelection.probe,
-      });
+        }),
+        approvalAuthorization
+      );
+      const finalDecision = enforceDerivedApprovalDecision(
+        revalidated.classification,
+        finalPolicyDecision,
+        { approvalAuthorization, grantAuthorization }
+      );
       if (finalDecision.decision !== CAPABILITY_POLICY_DECISIONS.ALLOW) {
         throw new ProjectCapabilityBrokerError(finalDecision.reasonCode, 'Capability failed revalidation.');
+      }
+      revalidated = await materializeSandboxPlan(revalidated);
+      if (revalidated.classification.requiresSandbox) {
+        const repeatedPlan = await materializeSandboxPlan(await prepare(request));
+        if (repeatedPlan.requestDigest !== revalidated.requestDigest
+          || !sandboxPlansMatch(repeatedPlan.sandboxPlan, revalidated.sandboxPlan)) {
+          throw new ProjectCapabilityBrokerError(
+            BROKER_REASON_CODES.REQUEST_CHANGED,
+            'Capability sandbox plan changed after authorization.'
+          );
+        }
       }
     } catch (error) {
       const code = safeReasonCode(
@@ -1000,7 +1372,9 @@ function createProjectCapabilityBroker({
       return deniedResult(request, code);
     }
 
-    if (grantAuthorization && grantAuthorization.authorized === true) {
+    if (policyDecision.reasonCode === 'GRANT_AUTHORIZED'
+      && grantAuthorization
+      && grantAuthorization.authorized === true) {
       const consumed = await grantStore.consume({
         ...grantQuery(revalidated),
         grantId: grantAuthorization.grant && grantAuthorization.grant.grantId,
@@ -1020,10 +1394,16 @@ function createProjectCapabilityBroker({
         });
         return denied;
       }
+
     }
 
     try {
-      const output = snapshotCapabilityOutput(await effectPlan.execute());
+      // No await or external callback may occur between this main-owned epoch
+      // check and entering the trusted adapter/backend. Destructive adapters
+      // add their own consumeDecision -> first-effect synchronous frontier.
+      authorizeEffectSynchronously(revalidated);
+      const effectPromise = effectPlan.execute();
+      const output = snapshotCapabilityOutput(await effectPromise);
       const completed = resultFor(request, {
         decision: PROJECT_CAPABILITY_DECISIONS.ALLOW,
         status: PROJECT_CAPABILITY_RESULT_STATUSES.COMPLETED,
@@ -1046,7 +1426,26 @@ function createProjectCapabilityBroker({
         auditFailures += 1;
       }
       return completed;
-    } catch {
+    } catch (error) {
+      if (error instanceof ProjectCapabilityBrokerError
+        && error.code === BROKER_REASON_CODES.AUTHORIZATION_FAILED) {
+        try {
+          await recordAudit({
+            event: 'capability_denied',
+            requestId: request.requestId,
+            projectId: revalidated.projectSession.projectId,
+            sessionId: revalidated.projectSession.sessionId,
+            capability: request.capability,
+            action: request.action,
+            decision: 'deny',
+            reasonCode: BROKER_REASON_CODES.AUTHORIZATION_FAILED,
+            effects: revalidated.classification.effects,
+          });
+        } catch {
+          auditFailures += 1;
+        }
+        return deniedResult(request, BROKER_REASON_CODES.AUTHORIZATION_FAILED);
+      }
       const failed = resultFor(request, {
         decision: PROJECT_CAPABILITY_DECISIONS.ALLOW,
         status: PROJECT_CAPABILITY_RESULT_STATUSES.FAILED,

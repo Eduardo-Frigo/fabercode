@@ -2,8 +2,16 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
+const {
+  createCapabilityDelegationBinding,
+} = require('../main/capabilities/capability_delegation_contracts');
+
 const rootDir = path.join(__dirname, '..');
 const mainSource = fs.readFileSync(path.join(rootDir, 'main.js'), 'utf8');
+const coordinatorSource = fs.readFileSync(
+  path.join(rootDir, 'main', 'agent_runtime', 'assistant_execution_coordinator.js'),
+  'utf8'
+);
 
 function assertInOrder(source, fragments, message) {
   let cursor = -1;
@@ -12,6 +20,22 @@ function assertInOrder(source, fragments, message) {
     assert.ok(next > cursor, `${message}: missing or out of order: ${fragment}`);
     cursor = next;
   }
+}
+
+function extractFunctionDeclaration(source, name) {
+  const start = source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `missing function declaration: ${name}`);
+  const openingBrace = source.indexOf('{', start);
+  assert.ok(openingBrace > start, `missing function body: ${name}`);
+  let depth = 0;
+  for (let index = openingBrace; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    if (source[index] === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  throw new Error(`unterminated function declaration: ${name}`);
 }
 
 assertInOrder(
@@ -86,8 +110,15 @@ assertInOrder(
     'const harnessRouter = createHarnessRouter({',
     'runtimeConfig: createHarnessRuntimeConfig({ env: process.env })',
     'const assistantJobAuthorityService = createAssistantJobAuthorityService({',
+    'assistantJobAuthorityServiceInstance = assistantJobAuthorityService;',
+    'const agenticDeleteMutationBackend = createUnsupportedAnchoredFilesystemMutationBackend({',
+    "reasonCode: 'ATOMIC_MUTATION_BACKEND_UNAVAILABLE'",
+    'const agenticDeleteRuntimeService = createAgenticDeleteRuntimeService({',
+    'mutationBackend: agenticDeleteMutationBackend,',
+    'agenticDeleteRuntimeServiceInstance = agenticDeleteRuntimeService;',
     'const assistantPlanningAuthorizer = createAssistantPlanningAuthorizer({',
     'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
+    'beforeAuthorityRelease: beforeAgenticDeleteAuthorityRelease,',
     'harnessRouter.execute(action, projectInfo, executionContext)',
     'assistantExecutionCoordinatorInstance = assistantExecutionCoordinator;',
     'const assistantRuntime = createAssistantRuntimeFacade({',
@@ -159,14 +190,380 @@ assert.ok(
 assertInOrder(
   mainSource,
   [
+    'function clearAssistantRuntimeAuthority(reason = \'runtime_lifecycle_changed\') {',
+    'const windowInvalidation = invalidateAgenticDeleteWindow(reason);',
     'assistantRuntimeLifecycleReason = reason;',
-    'return assistantExecutionCoordinatorInstance.clear();',
+    'assistantExecutionCoordinatorInstance.clear()',
+    'agenticDeleteRuntimeServiceInstance.clear()',
     'assistantRuntimeLifecycleReason = null;',
     'onAuthorityRevoked: (jobId, reason) => {',
     'if (assistantRuntimeLifecycleReason) {',
     'markJobCancelled(jobId, assistantRuntimeLifecycleReason);',
   ],
-  'lifecycle cleanup must persist cancellation while coordinator authority is being cleared'
+  'lifecycle cleanup must invalidate delete authority, clear the coordinator, and persist cancellation in order'
+);
+
+const deleteRuntimeCompositionStart = mainSource.indexOf(
+  'const agenticDeleteRuntimeService = createAgenticDeleteRuntimeService({'
+);
+const deleteRuntimeCompositionEnd = mainSource.indexOf(
+  'agenticDeleteRuntimeServiceInstance = agenticDeleteRuntimeService;',
+  deleteRuntimeCompositionStart
+);
+const deleteRuntimeComposition = mainSource.slice(
+  deleteRuntimeCompositionStart,
+  deleteRuntimeCompositionEnd
+);
+assert.ok(deleteRuntimeCompositionStart >= 0 && deleteRuntimeCompositionEnd > deleteRuntimeCompositionStart);
+for (const dependency of [
+  'authorizeLifecycle: authorizeAgenticDeleteLifecycle,',
+  'authorizeRoot: authorizeAgenticDeleteRoot,',
+  'authorizeEffectFrontier: authorizeAgenticDeleteEffectFrontier,',
+  'getWindowLease: getAgenticDeleteWindowLease,',
+  'getActorId: getAgenticDeleteActorId,',
+  'showNativeDialog: showAgenticDeleteNativeDialog,',
+  'mutationBackend: agenticDeleteMutationBackend,',
+]) {
+  assert.ok(
+    deleteRuntimeComposition.includes(dependency),
+    `main-only delete runtime composition is missing: ${dependency}`
+  );
+}
+assert.strictEqual(
+  deleteRuntimeComposition.includes('journalAuthenticator'),
+  false,
+  'the unavailable production backend must not create a journal key inside a project'
+);
+
+assert.strictEqual(
+  (mainSource.match(/mainWindowDocumentLease = Object\.freeze\(Object\.create\(null\)\)/g) || []).length,
+  1,
+  'a document lease must only be minted at one trusted main-document load boundary'
+);
+assertInOrder(
+  mainSource,
+  [
+    'let mainWindowDocumentLease = null;',
+    'function invalidateAgenticDeleteWindow(reason = \'window_invalidated\') {',
+    'mainWindowDocumentLease = null;',
+    'runtime.invalidateWindow(reason)',
+    "win.webContents.on('did-finish-load', () => {",
+    'mainWindow === win',
+    'trustedMainDocumentIsCurrent(win)',
+    'win.webContents.getURL() === pathToFileURL(mainDocumentPath).href',
+    'mainWindowDocumentLease = Object.freeze(Object.create(null));',
+  ],
+  'the old document lease must be invalidated before a new trusted local document may mint one'
+);
+for (const reason of [
+  'renderer_navigation',
+  'renderer_process_gone',
+  'renderer_destroyed',
+  'window_closed',
+  'app_before_quit',
+  'account_signed_out',
+  'account_signed_in',
+]) {
+  assert.ok(
+    mainSource.includes(`clearAssistantRuntimeAuthority('${reason}')`),
+    `${reason} must invalidate the document and assistant authority`
+  );
+}
+
+assertInOrder(
+  mainSource,
+  [
+    'async function showAgenticDeleteNativeDialog(payload, dialogContext) {',
+    'const capturedWindow = mainWindow;',
+    'const capturedLease = getAgenticDeleteWindowLease();',
+    "const signal = readAgenticDeleteDataProperty(dialogContext, 'signal');",
+    '!trustedMainDocumentIsCurrent(capturedWindow)',
+    'signal.aborted',
+    'result = await dialog.showMessageBox(capturedWindow, {',
+    '...payload,',
+    'signal,',
+    'capturedWindow !== mainWindow',
+    'capturedLease !== getAgenticDeleteWindowLease()',
+    '!trustedMainDocumentIsCurrent(capturedWindow)',
+  ],
+  'the native dialog must bind the signal, window, and opaque lease before and after its await'
+);
+
+const platformAuthCallbackStart = mainSource.indexOf('onAuthCompleted: () => {');
+const platformAuthCallbackEnd = mainSource.indexOf(
+  'port: Number.isFinite(FABER_BACKEND_PORT)',
+  platformAuthCallbackStart
+);
+assertInOrder(
+  mainSource.slice(platformAuthCallbackStart, platformAuthCallbackEnd),
+  [
+    "clearAssistantRuntimeAuthority('account_signed_in')",
+    'rotateAgenticDeleteActorId();',
+    "mainWindow.webContents.send('account:event', { type: 'signed-in' })",
+  ],
+  'backend authentication must clear authority and rotate the main-only actor before notifying the renderer'
+);
+const accountEventStart = mainSource.indexOf('emitAccountEvent: (payload) => {');
+const accountEventEnd = mainSource.indexOf('normalizeExternalUrl,', accountEventStart);
+const accountEventSource = mainSource.slice(accountEventStart, accountEventEnd);
+assertInOrder(
+  accountEventSource,
+  [
+    "clearAssistantRuntimeAuthority('account_signed_out')",
+    'rotateAgenticDeleteActorId();',
+    "clearAssistantRuntimeAuthority('account_signed_in')",
+    'rotateAgenticDeleteActorId();',
+    "mainWindow.webContents.send('account:event', payload)",
+  ],
+  'account identity changes must rotate the actor only after clearing previous authority'
+);
+
+const actorIdSource = extractFunctionDeclaration(mainSource, 'getAgenticDeleteActorId');
+assertInOrder(
+  actorIdSource,
+  [
+    'platformAccountService.getCurrentSession()',
+    "readAgenticDeleteDataProperty(session, 'user')",
+    "readAgenticDeleteDataProperty(user, 'id')",
+    'AGENTIC_DELETE_ACTOR_ID_PATTERN.test(userId)',
+    'return agenticDeleteActorId;',
+  ],
+  'the agent actor must come from a safe main-owned account id or the rotated process fallback'
+);
+assert.strictEqual(
+  /email|name|renderer/i.test(actorIdSource),
+  false,
+  'renderer fields, email, and display names must never become the delete actor id'
+);
+
+const projectLabelSource = extractFunctionDeclaration(
+  mainSource,
+  'getAgenticDeleteProjectLabel'
+);
+assertInOrder(
+  projectLabelSource,
+  [
+    'const binding = normalizeAgenticDeleteBinding(inputBinding);',
+    'snapshot = readProjectsSnapshot();',
+    "readAgenticDeleteDataProperty(project, 'id') === binding.projectId",
+    "readAgenticDeleteDataProperty(project, 'rootPath') === binding.canonicalRootPath",
+    "readAgenticDeleteDataProperty(project, 'state') !== 'deleted'",
+    "readAgenticDeleteDataProperty(matches[0], 'name')",
+    ".slice(0, 80)",
+    "return normalized || 'Projeto atual';",
+  ],
+  'the dialog label must come from one exact main-owned project snapshot record'
+);
+assert.ok(
+  legacyExecuteSource.includes('const projectLabel = getAgenticDeleteProjectLabel(deleteBinding);'),
+  'delete execution must use the main-owned project label resolver'
+);
+assert.strictEqual(
+  legacyExecuteSource.includes('projectInfo.name || projectInfo.title'),
+  false,
+  'renderer-projected labels must not reach the native delete dialog'
+);
+
+assertInOrder(
+  mainSource,
+  [
+    'function currentAgenticDeleteBinding(inputBinding) {',
+    'const lifecycleBefore = authorizeAgenticDeleteLifecycle(binding);',
+    'const rootAuthorization = authorizeAgenticDeleteRoot(binding);',
+    'const lifecycleAfter = authorizeAgenticDeleteLifecycle(binding);',
+    'function authorizeAgenticDeleteEffectFrontier(input) {',
+    'const binding = currentAgenticDeleteBinding(hasWindowLease ? wrappedBinding : input);',
+    'windowLease !== getAgenticDeleteWindowLease()',
+    "for (const digestField of ['requestDigest', 'impactDigest', 'checkpointDigest'])",
+    'const finalBinding = currentAgenticDeleteBinding(binding);',
+    'return Object.freeze({ authorized: true, binding: finalBinding, windowLease });',
+  ],
+  'root, lifecycle, lease, and exact digest checks must surround the final effect frontier'
+);
+
+assertInOrder(
+  legacyExecuteSource,
+  [
+    "readAgenticDeleteDataProperty(\n      executionContext,\n      'authorityBinding'",
+    'const deleteRuntime = agenticDeleteRuntimeServiceInstance;',
+    'const deleteBinding = agenticDeleteRuntimeIsAvailable()',
+    '? currentAgenticDeleteBinding(authorityBinding)',
+    'if (deleteRuntime && deleteBinding) {',
+    'agenticExecutionOptions.deletePaths = (deleteInput) => (',
+    'deleteRuntime.executeDeletePaths(Object.freeze({',
+    'binding: deleteBinding,',
+    'requestedMode,',
+    "paths: readAgenticDeleteDataProperty(deleteInput, 'paths')",
+    "signal: readAgenticDeleteDataProperty(deleteInput, 'signal')",
+    'projectLabel,',
+    'Object.freeze(agenticExecutionOptions)',
+  ],
+  'delete_paths must only be injected for an available runtime with a current exact binding'
+);
+
+const releaseHookSource = extractFunctionDeclaration(
+  mainSource,
+  'beforeAgenticDeleteAuthorityRelease'
+);
+assertInOrder(
+  releaseHookSource,
+  [
+    'if (agenticDeleteReleaseBinding !== null)',
+    'agenticDeleteReleaseBinding = Object.freeze({ binding, terminalStatus });',
+    'runtime.beforeAuthorityRelease(input)',
+    '} finally {',
+    'agenticDeleteReleaseBinding = null;',
+  ],
+  'terminal authority must exist only inside one non-reentrant synchronous release barrier'
+);
+assertInOrder(
+  coordinatorSource,
+  [
+    'result = beforeAuthorityRelease(Object.freeze({',
+    'record.releasePrepared = true;',
+    'function removeRecord(record, reason, terminalStatus = null) {',
+    'releaseBarrierConfirmed(record, reason, terminalStatus)',
+    'removeLocalRecord(record, reason)',
+    'revokeBindingConfirmed(record.binding)',
+  ],
+  'checkpoint release must finish before local removal and exact authority revocation'
+);
+
+const terminalBinding = createCapabilityDelegationBinding({
+  projectId: 'project-a',
+  canonicalRootPath: '/workspace/project-a',
+  realRootPath: '/workspace/project-a',
+  sessionId: 'session-a',
+  jobId: 'job-a',
+  kernelId: 'kernel-a',
+  submissionDigest: `sha256:${'a'.repeat(64)}`,
+});
+let persistedTerminalStatus = 'completed';
+const persistedTerminalJob = () => ({
+  ok: true,
+  job: {
+    id: terminalBinding.jobId,
+    status: persistedTerminalStatus,
+    phase: persistedTerminalStatus,
+    projectId: terminalBinding.projectId,
+    rootPath: terminalBinding.canonicalRootPath,
+    authorityContext: {
+      schemaVersion: 'assistant-job-authority.v1',
+      projectId: terminalBinding.projectId,
+      canonicalRootPath: terminalBinding.canonicalRootPath,
+      realRootPath: terminalBinding.realRootPath,
+      sessionId: terminalBinding.sessionId,
+      kernelId: terminalBinding.kernelId,
+      submissionDigest: terminalBinding.submissionDigest,
+      actionDigest: `sha256:${'b'.repeat(64)}`,
+    },
+  },
+});
+const releaseHarnessFactory = new Function(
+  'createCapabilityDelegationBinding',
+  'getAuthorizedJobById',
+  `
+    const AGENTIC_DELETE_BINDING_FIELDS = ${JSON.stringify([
+    'projectId',
+    'canonicalRootPath',
+    'realRootPath',
+    'sessionId',
+    'jobId',
+    'kernelId',
+    'submissionDigest',
+  ])};
+    const AGENTIC_DELETE_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
+    let agenticDeleteReleaseBinding = null;
+    let authorityCalls = 0;
+    let throwDuringRelease = false;
+    let assistantJobAuthorityServiceInstance = {
+      authorizeLifecycle() {
+        authorityCalls += 1;
+        return Object.freeze({ authorized: false });
+      },
+    };
+    let agenticDeleteRuntimeServiceInstance = null;
+    ${extractFunctionDeclaration(mainSource, 'readAgenticDeleteDataProperty')}
+    ${extractFunctionDeclaration(mainSource, 'normalizeAgenticDeleteBinding')}
+    ${extractFunctionDeclaration(mainSource, 'agenticDeleteBindingsMatch')}
+    ${extractFunctionDeclaration(mainSource, 'confirmedAgenticDeleteResult')}
+    ${extractFunctionDeclaration(mainSource, 'authorizeAgenticDeleteLifecycle')}
+    ${releaseHookSource}
+    agenticDeleteRuntimeServiceInstance = {
+      beforeAuthorityRelease(input) {
+        if (throwDuringRelease) throw new Error('release failed');
+        const during = authorizeAgenticDeleteLifecycle(
+          readAgenticDeleteDataProperty(input, 'binding')
+        );
+        const nested = beforeAgenticDeleteAuthorityRelease(input);
+        return Object.freeze({
+          ok: readAgenticDeleteDataProperty(during, 'authorized') === true
+            && readAgenticDeleteDataProperty(nested, 'ok') === false,
+        });
+      },
+    };
+    return Object.freeze({
+      authorizeAgenticDeleteLifecycle,
+      beforeAgenticDeleteAuthorityRelease,
+      getAuthorityCalls: () => authorityCalls,
+      setThrowDuringRelease: (value) => { throwDuringRelease = value === true; },
+    });
+  `
+);
+const releaseHarness = releaseHarnessFactory(
+  createCapabilityDelegationBinding,
+  () => persistedTerminalJob()
+);
+assert.strictEqual(
+  releaseHarness.authorizeAgenticDeleteLifecycle(terminalBinding).authorized,
+  false,
+  'a persisted terminal job must be denied outside the coordinator release barrier'
+);
+assert.deepStrictEqual(
+  releaseHarness.beforeAgenticDeleteAuthorityRelease({
+    binding: terminalBinding,
+    reason: 'job_terminal',
+    terminalStatus: 'completed',
+  }),
+  { ok: true },
+  'the exact persisted terminal binding must remain usable only while checkpoint release runs'
+);
+assert.strictEqual(
+  releaseHarness.authorizeAgenticDeleteLifecycle(terminalBinding).authorized,
+  false,
+  'terminal authority must disappear immediately after checkpoint release'
+);
+assert.strictEqual(
+  releaseHarness.getAuthorityCalls(),
+  2,
+  'the guarded terminal release must not call the normal lifecycle authorizer'
+);
+persistedTerminalStatus = 'failed';
+assert.deepStrictEqual(
+  releaseHarness.beforeAgenticDeleteAuthorityRelease({
+    binding: terminalBinding,
+    reason: 'job_terminal',
+    terminalStatus: 'completed',
+  }),
+  { ok: false },
+  'the release barrier must reject a persisted terminal status mismatch'
+);
+persistedTerminalStatus = 'completed';
+releaseHarness.setThrowDuringRelease(true);
+assert.throws(
+  () => releaseHarness.beforeAgenticDeleteAuthorityRelease({
+    binding: terminalBinding,
+    reason: 'job_terminal',
+    terminalStatus: 'completed',
+  }),
+  /release failed/,
+  'release failures must propagate to poison coordinator authority'
+);
+releaseHarness.setThrowDuringRelease(false);
+assert.strictEqual(
+  releaseHarness.authorizeAgenticDeleteLifecycle(terminalBinding).authorized,
+  false,
+  'the terminal guard must be cleared in finally even when release throws'
 );
 
 assert.strictEqual(

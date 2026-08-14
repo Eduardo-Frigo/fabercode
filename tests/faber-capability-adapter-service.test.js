@@ -229,6 +229,34 @@ async function run() {
     assert.strictEqual(readResult.evidence.data.path, 'index.html');
     assert.match(readResult.evidence.data.content, /Faber/);
 
+    const privateTransactionPath = path.join(
+      projectRoot,
+      '.faber',
+      'transactions',
+      'private-manifest.json'
+    );
+    fs.mkdirSync(path.dirname(privateTransactionPath), { recursive: true });
+    fs.writeFileSync(privateTransactionPath, '{"private":true}', 'utf8');
+    const privateReadResult = await service.executeCapability({
+      capability: 'filesystem',
+      action: 'read_file',
+      projectSession: { rootPath: projectRoot },
+      payload: { path: '.faber/transactions/private-manifest.json' },
+    });
+    assert.strictEqual(privateReadResult.ok, false);
+    assert.match(privateReadResult.message, /reservado ao runtime interno/);
+
+    const privateAliasPath = path.join(projectRoot, 'runtime-metadata-alias');
+    fs.symlinkSync(path.dirname(privateTransactionPath), privateAliasPath, 'dir');
+    const privateAliasReadResult = await service.executeCapability({
+      capability: 'filesystem',
+      action: 'read_file',
+      projectSession: { rootPath: projectRoot },
+      payload: { path: 'runtime-metadata-alias/private-manifest.json' },
+    });
+    assert.strictEqual(privateAliasReadResult.ok, false);
+    assert.match(privateAliasReadResult.message, /reservado ao runtime interno/);
+
     const structuredPlan = await service.executeCapability({
       capability: 'structured_edit',
       action: 'plan',

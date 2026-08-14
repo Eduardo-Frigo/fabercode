@@ -2,7 +2,7 @@
 
 const { AsyncLocalStorage } = require('async_hooks');
 
-const ASSISTANT_EXECUTION_COORDINATOR_VERSION = 'assistant-execution-coordinator.v1';
+const ASSISTANT_EXECUTION_COORDINATOR_VERSION = 'assistant-execution-coordinator.v2';
 const DEFAULT_MAX_ACTIVE_JOBS = 1_024;
 const HARD_MAX_ACTIVE_JOBS = 10_000;
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
@@ -25,6 +25,7 @@ const PRIVATE_OUTPUT_KEYS = new Set([
   'actionDigest',
   'approvalId',
   'approvalProof',
+  'authorityBinding',
   'authorityContext',
   'binding',
   'canonicalRootPath',
@@ -358,6 +359,56 @@ function authorityBindingsMatch(left, right) {
   }
 }
 
+function immutableAuthorityBinding(value) {
+  const fields = dataFields(value, 'authority binding');
+  if (fields.size !== AUTHORITY_BINDING_KEYS.length
+    || !AUTHORITY_BINDING_KEYS.every((key) => fields.has(key))) {
+    throw new TypeError('authority binding must contain the exact binding fields');
+  }
+  const binding = {
+    projectId: normalizeIdentifier(fields.get('projectId'), 'authority binding.projectId'),
+    canonicalRootPath: normalizeIdentifier(
+      fields.get('canonicalRootPath'),
+      'authority binding.canonicalRootPath',
+      32_768,
+    ),
+    realRootPath: normalizeIdentifier(
+      fields.get('realRootPath'),
+      'authority binding.realRootPath',
+      32_768,
+    ),
+    sessionId: normalizeIdentifier(fields.get('sessionId'), 'authority binding.sessionId'),
+    jobId: normalizeJobId(fields.get('jobId')),
+    kernelId: normalizeIdentifier(fields.get('kernelId'), 'authority binding.kernelId'),
+    submissionDigest: fields.get('submissionDigest'),
+  };
+  if (typeof binding.submissionDigest !== 'string'
+    || !DIGEST_PATTERN.test(binding.submissionDigest)) {
+    throw new TypeError('authority binding.submissionDigest is invalid');
+  }
+  for (const key of AUTHORITY_BINDING_KEYS) {
+    if (binding[key] !== fields.get(key)) {
+      throw new TypeError(`authority binding.${key} must already be canonical`);
+    }
+  }
+  return Object.freeze(binding);
+}
+
+function createPrivateExecutionContext(record) {
+  const context = {
+    jobId: record.jobId,
+    requestedMode: record.requestedMode,
+    signal: record.abortController.signal,
+  };
+  Object.defineProperty(context, 'authorityBinding', {
+    configurable: false,
+    enumerable: false,
+    value: record.binding,
+    writable: false,
+  });
+  return Object.freeze(context);
+}
+
 function jobRequestsMatch(left, right) {
   if (!left || !right || left.userMessage !== right.userMessage) return false;
   if (!Array.isArray(left.attachments)
@@ -382,6 +433,7 @@ function createAssistantExecutionCoordinator(options = {}) {
   const bindActionToProject = fields.get('bindActionToProject');
   const createActionDigest = fields.get('createActionDigest');
   const executeAction = fields.get('executeAction');
+  const beforeAuthorityRelease = fields.get('beforeAuthorityRelease');
   const onPlanningFailure = fields.get('onPlanningFailure');
   const onAuthorityRevoked = fields.get('onAuthorityRevoked');
   const maxActiveJobs = fields.has('maxActiveJobs') ? fields.get('maxActiveJobs') : DEFAULT_MAX_ACTIVE_JOBS;
@@ -414,6 +466,7 @@ function createAssistantExecutionCoordinator(options = {}) {
     if (typeof callback !== 'function') throw new TypeError(`${name} is required`);
   }
   for (const [name, callback] of [
+    ['beforeAuthorityRelease', beforeAuthorityRelease],
     ['onPlanningFailure', onPlanningFailure],
     ['onAuthorityRevoked', onAuthorityRevoked],
   ]) {
@@ -434,6 +487,24 @@ function createAssistantExecutionCoordinator(options = {}) {
   let authorityHealthy = true;
   let authorityFailureReason = null;
   let clearing = false;
+  let releaseBarrierActive = false;
+
+  function markAuthorityUnhealthy(reason) {
+    if (authorityHealthy) {
+      authorityHealthy = false;
+      authorityFailureReason = reason;
+      generation += 1;
+    }
+    for (const record of recordsByJobId.values()) {
+      if (record.abortController && !record.abortController.signal.aborted) {
+        try {
+          record.abortController.abort(reason);
+        } catch {
+          // Generation fencing still prevents stale execution from publishing.
+        }
+      }
+    }
+  }
 
   function cleanupConfirmed(result, { requireRevoked = false } = {}) {
     if (!isSynchronousResult(result) || !isPlainRecord(result)) return false;
@@ -468,14 +539,66 @@ function createAssistantExecutionCoordinator(options = {}) {
   }
 
   function poisonAuthority(reason) {
-    if (authorityHealthy) {
-      authorityHealthy = false;
-      authorityFailureReason = reason;
-      generation += 1;
+    markAuthorityUnhealthy(reason);
+  }
+
+  function releaseBarrierConfirmed(record, reason, terminalStatus = null) {
+    if (typeof beforeAuthorityRelease !== 'function') return true;
+    if (!record
+      || recordsByJobId.get(record.jobId) !== record
+      || releaseBarrierActive
+      || record.releaseInProgress === true
+      || record.releasePrepared === true) {
+      markAuthorityUnhealthy(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
     }
-    for (const record of [...recordsByJobId.values()]) {
-      removeLocalRecord(record, reason);
+    if (terminalStatus !== null && !TERMINAL_JOB_STATUSES.has(terminalStatus)) {
+      markAuthorityUnhealthy(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
     }
+
+    releaseBarrierActive = true;
+    record.releaseInProgress = true;
+    const observedGeneration = generation;
+    let result;
+    try {
+      if (record.abortController && !record.abortController.signal.aborted) {
+        record.abortController.abort(reason);
+      }
+      if (!authorityHealthy
+        || generation !== observedGeneration
+        || recordsByJobId.get(record.jobId) !== record
+        || record.releaseInProgress !== true) {
+        throw new TypeError('release abort re-entered coordinator lifecycle');
+      }
+      result = beforeAuthorityRelease(Object.freeze({
+        binding: record.binding,
+        reason,
+        terminalStatus,
+      }));
+      if (!isSynchronousResult(result)) {
+        throw new TypeError('beforeAuthorityRelease must be synchronous');
+      }
+      const resultFields = dataFields(result, 'beforeAuthorityRelease result');
+      if (resultFields.size !== 1 || resultFields.get('ok') !== true) {
+        throw new TypeError('beforeAuthorityRelease must synchronously return { ok: true }');
+      }
+      if (!authorityHealthy
+        || generation !== observedGeneration
+        || recordsByJobId.get(record.jobId) !== record
+        || record.releaseInProgress !== true) {
+        throw new TypeError('beforeAuthorityRelease re-entered coordinator lifecycle');
+      }
+    } catch {
+      record.releaseInProgress = false;
+      releaseBarrierActive = false;
+      markAuthorityUnhealthy(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
+    }
+    record.releaseInProgress = false;
+    releaseBarrierActive = false;
+    record.releasePrepared = true;
+    return true;
   }
 
   function revokeBindingConfirmed(binding) {
@@ -508,14 +631,16 @@ function createAssistantExecutionCoordinator(options = {}) {
     return true;
   }
 
-  function removeRecord(record, reason) {
+  function removeRecord(record, reason, terminalStatus = null) {
+    if (!authorityHealthy || clearing) return false;
+    if (!releaseBarrierConfirmed(record, reason, terminalStatus)) return false;
     if (!removeLocalRecord(record, reason)) return false;
     return revokeBindingConfirmed(record.binding);
   }
 
-  function failPlanningRecord(record, reason) {
+  function failPlanningRecord(record, reason, terminalStatus = null) {
     if (!record || recordsByJobId.get(record.jobId) !== record) return true;
-    const cleaned = removeRecord(record, reason);
+    const cleaned = removeRecord(record, reason, terminalStatus);
     callBestEffort(onPlanningFailure, record.jobId, reason);
     return cleaned;
   }
@@ -761,7 +886,14 @@ function createAssistantExecutionCoordinator(options = {}) {
         callBestEffort(onPlanningFailure, publicJob.id, ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_BIND_FAILED);
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_BIND_FAILED);
       }
-      const binding = boundFields.get('binding');
+      let binding;
+      try {
+        binding = immutableAuthorityBinding(boundFields.get('binding'));
+      } catch {
+        revokeSubmissionConfirmed(submissionId);
+        callBestEffort(onPlanningFailure, publicJob.id, ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_BIND_FAILED);
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_BIND_FAILED);
+      }
       if (!scopeIsCurrent(scope)) {
         revokeBindingConfirmed(binding);
         callBestEffort(onPlanningFailure, publicJob.id, ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
@@ -786,6 +918,8 @@ function createAssistantExecutionCoordinator(options = {}) {
         terminalObserved: null,
         version: 0,
         abortController: null,
+        releaseInProgress: false,
+        releasePrepared: false,
       };
       if (!scopeIsCurrent(scope)) {
         revokeBindingConfirmed(binding);
@@ -916,7 +1050,7 @@ function createAssistantExecutionCoordinator(options = {}) {
     if (scope.record && scope.record.terminalObserved === 'completed') {
       const terminalRecord = scope.record;
       if (hasAction) {
-        if (!removeRecord(terminalRecord, 'job_terminal_conflict')) {
+        if (!removeRecord(terminalRecord, 'job_terminal_conflict', null)) {
           return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
         }
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
@@ -924,7 +1058,7 @@ function createAssistantExecutionCoordinator(options = {}) {
 
       const terminalResult = cloneForOutput(snapshot);
       terminalResult.jobId = terminalRecord.jobId;
-      if (!removeRecord(terminalRecord, 'job_terminal')) {
+      if (!removeRecord(terminalRecord, 'job_terminal', 'completed')) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
       }
       return Object.freeze(terminalResult);
@@ -1246,11 +1380,7 @@ function createAssistantExecutionCoordinator(options = {}) {
       const output = await executeAction(
         cloneForOutput(record.action),
         cloneForOutput(record.project),
-        Object.freeze({
-          jobId: record.jobId,
-          requestedMode: record.requestedMode,
-          signal: record.abortController.signal,
-        }),
+        createPrivateExecutionContext(record),
       );
       if (generation !== observedGeneration
         || recordsByJobId.get(jobId) !== record
@@ -1272,7 +1402,9 @@ function createAssistantExecutionCoordinator(options = {}) {
       } catch {
         publicOutput = deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.OUTPUT_INVALID);
       }
-      if (!removeRecord(record, 'job_terminal')) {
+      const terminalStatus = record.terminalObserved
+        || (isPlainRecord(publicOutput) && publicOutput.ok === false ? 'failed' : 'completed');
+      if (!removeRecord(record, 'job_terminal', terminalStatus)) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
       }
       return publicOutput;
@@ -1280,7 +1412,11 @@ function createAssistantExecutionCoordinator(options = {}) {
       if (!recordIsCurrent(record, observedGeneration, observedVersion, 'executing')) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
-      if (!failPlanningRecord(record, ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_FAILED)) {
+      if (!failPlanningRecord(
+        record,
+        ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_FAILED,
+        'failed',
+      )) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
       }
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_FAILED);
@@ -1324,12 +1460,15 @@ function createAssistantExecutionCoordinator(options = {}) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.INVALID_INPUT);
     }
     const record = recordsByJobId.get(jobId);
+    if (!authorityHealthy || clearing) {
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY);
+    }
     if (!record) return Object.freeze({ ok: true, revoked: false, idempotent: true });
     const deferTerminal = (record.state === 'planning' && status === 'completed')
       || (record.state === 'executing' && ['completed', 'failed', 'cancelled'].includes(status));
     if (deferTerminal) {
       if (record.terminalObserved && record.terminalObserved !== status) {
-        if (!removeRecord(record, 'job_terminal_conflict')) {
+        if (!removeRecord(record, 'job_terminal_conflict', null)) {
           return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
         }
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
@@ -1338,7 +1477,7 @@ function createAssistantExecutionCoordinator(options = {}) {
       record.terminalObserved = status;
       return Object.freeze({ ok: true, revoked: false, deferred: true, idempotent });
     }
-    if (!removeRecord(record, 'job_terminal')) {
+    if (!removeRecord(record, 'job_terminal', status)) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
     }
     return Object.freeze({ ok: true, revoked: true, idempotent: false });
@@ -1350,6 +1489,16 @@ function createAssistantExecutionCoordinator(options = {}) {
     clearing = true;
     generation += 1;
     const records = [...recordsByJobId.values()];
+    for (const record of records) {
+      if (!releaseBarrierConfirmed(
+        record,
+        ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+        null,
+      )) {
+        clearing = false;
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      }
+    }
     for (const record of records) {
       removeLocalRecord(record, ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
     }

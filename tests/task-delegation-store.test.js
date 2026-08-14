@@ -286,6 +286,25 @@ function createHarness({
   });
   assert.strictEqual((await invalidHarness.store.issueFromTrustedConsent(handleGetter)).issued, false);
 
+  const contradictoryRootHarness = createHarness({
+    roots: {
+      authorize({ projectId }) {
+        return {
+          ok: true,
+          authorized: false,
+          projectId,
+          canonicalRootPath: binding().canonicalRootPath,
+          realRootPath: binding().realRootPath,
+        };
+      },
+    },
+  });
+  contradictoryRootHarness.authority.add('contradictory-root', consent());
+  const contradictoryRoot = await contradictoryRootHarness.store.issueFromTrustedConsent({
+    consentHandle: 'contradictory-root',
+  });
+  assert.strictEqual(contradictoryRoot.issued, false);
+
   invalidHarness.authority.add('ask', { mode: 'ask_each' });
   const ask = await invalidHarness.store.issueFromTrustedConsent({ consentHandle: 'ask' });
   assert.strictEqual(ask.ok, true);

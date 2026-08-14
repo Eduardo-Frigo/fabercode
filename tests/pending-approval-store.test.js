@@ -75,6 +75,16 @@ function run() {
     ]);
     const authorizeRoot = createRootAuthorizer(projectRoots);
     assert.throws(() => createPendingApprovalStore(), /authorizeRoot/);
+    const contradictoryRootStore = createPendingApprovalStore({
+      authorizeRoot: ({ projectId, rootPath }) => ({
+        ok: true,
+        authorized: false,
+        projectId,
+        canonicalRootPath: rootPath,
+        realRootPath: rootPath,
+      }),
+    });
+    assert.throws(() => contradictoryRootStore.create(request(projectA)), /authorized project root/);
     const store = createPendingApprovalStore({
       now: clock.now,
       idFactory: () => `approval-${++sequence}`,
@@ -246,6 +256,19 @@ function run() {
       requestDigest: 'sha256:request-symbol',
       selector: symbolSelector,
     })), /symbol keys/);
+    let hostileArrayMapCalls = 0;
+    const hostileArray = ['outside'];
+    Object.setPrototypeOf(hostileArray, {
+      map() {
+        hostileArrayMapCalls += 1;
+        return [];
+      },
+    });
+    assert.throws(() => store.create(request(projectA, {
+      requestDigest: 'sha256:request-hostile-array',
+      selector: { capability: 'x', paths: hostileArray },
+    })), /standard array prototype/);
+    assert.strictEqual(hostileArrayMapCalls, 0);
 
     let winSequence = 0;
     const winStore = createPendingApprovalStore({

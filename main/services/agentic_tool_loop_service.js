@@ -50,6 +50,186 @@ function isAgenticExecutionCancelledError(error = null) {
   );
 }
 
+const DELETE_PATHS_TOOL_MAX_PATHS = 32;
+const DELETE_PATHS_TOOL_MAX_REASON_LENGTH = 1000;
+const DELETE_PATHS_TOOL_MAX_PATH_LENGTH = 4096;
+const DELETE_PATHS_SAFE_STATES = new Set([
+  'PREPARING',
+  'PREPARED',
+  'APPLYING',
+  'COMMITTED',
+  'ROLLING_BACK',
+  'ROLLED_BACK',
+  'PURGING',
+  'PURGED',
+  'RECOVERY_PRE_COMMIT',
+  'RECOVERY_POST_COMMIT',
+]);
+const DELETE_PATHS_SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,79}$/;
+
+function ownDataValue(record, key) {
+  if (!record || (typeof record !== 'object' && typeof record !== 'function')) return undefined;
+  let descriptor;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(record, key);
+  } catch {
+    return undefined;
+  }
+  return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined;
+}
+
+function optionalExecutionCallback(executionContext, key) {
+  const callback = ownDataValue(executionContext, key);
+  return typeof callback === 'function' ? callback : null;
+}
+
+function normalizeDeletePathsToolInput(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new TypeError('delete_paths input must be a plain data record');
+  }
+  const prototype = Object.getPrototypeOf(input);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError('delete_paths input must be a plain data record');
+  }
+
+  const keys = Reflect.ownKeys(input);
+  if (!keys.includes('paths') || keys.some((key) => (
+    typeof key !== 'string' || (key !== 'paths' && key !== 'reason')
+  ))) {
+    throw new TypeError('delete_paths input contains unsupported fields');
+  }
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (!descriptor || descriptor.enumerable !== true || !Object.hasOwn(descriptor, 'value')) {
+      throw new TypeError('delete_paths input must contain enumerable data properties only');
+    }
+  }
+
+  const paths = ownDataValue(input, 'paths');
+  if (!Array.isArray(paths) || Object.getPrototypeOf(paths) !== Array.prototype) {
+    throw new TypeError('delete_paths paths must be a plain array');
+  }
+  if (paths.length < 1 || paths.length > DELETE_PATHS_TOOL_MAX_PATHS) {
+    throw new TypeError('delete_paths paths are outside the supported bounds');
+  }
+  const pathKeys = Reflect.ownKeys(paths);
+  if (pathKeys.length !== paths.length + 1 || !pathKeys.includes('length')) {
+    throw new TypeError('delete_paths paths must be a dense array');
+  }
+
+  const normalizedPaths = [];
+  for (let index = 0; index < paths.length; index += 1) {
+    const key = String(index);
+    const descriptor = Object.getOwnPropertyDescriptor(paths, key);
+    if (!descriptor || descriptor.enumerable !== true || !Object.hasOwn(descriptor, 'value')) {
+      throw new TypeError('delete_paths paths must be a dense data array');
+    }
+    const value = descriptor.value;
+    if (typeof value !== 'string'
+      || value.length < 1
+      || value.length > DELETE_PATHS_TOOL_MAX_PATH_LENGTH
+      || value.trim().length < 1) {
+      throw new TypeError('delete_paths paths must contain non-empty strings');
+    }
+    normalizedPaths.push(value);
+  }
+  if (pathKeys.some((key) => key !== 'length' && !/^(0|[1-9][0-9]*)$/.test(String(key)))) {
+    throw new TypeError('delete_paths paths must contain indexed values only');
+  }
+
+  if (keys.includes('reason')) {
+    const reason = ownDataValue(input, 'reason');
+    if (reason !== null && (typeof reason !== 'string'
+      || reason.trim().length < 1
+      || reason.length > DELETE_PATHS_TOOL_MAX_REASON_LENGTH)) {
+      throw new TypeError('delete_paths reason must be a non-empty bounded string');
+    }
+  }
+
+  return Object.freeze({ paths: Object.freeze(normalizedPaths) });
+}
+
+function failedDeletePathsToolResult(errorCode) {
+  return Object.freeze({
+    ok: false,
+    status: 'failed',
+    message: 'A exclusão dedicada não pôde ser concluída.',
+    errors: Object.freeze([errorCode]),
+    modifiedFiles: Object.freeze([]),
+  });
+}
+
+function sanitizeDeletePathsToolResult(raw, paths) {
+  try {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return failedDeletePathsToolResult('DELETE_PATHS_INVALID_RESULT');
+    }
+    const prototype = Object.getPrototypeOf(raw);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return failedDeletePathsToolResult('DELETE_PATHS_INVALID_RESULT');
+    }
+
+    const statusValue = ownDataValue(raw, 'status');
+    const status = ['completed', 'denied', 'failed'].includes(statusValue)
+      ? statusValue
+      : 'failed';
+    const completed = status === 'completed' && ownDataValue(raw, 'ok') === true;
+    const stateValue = ownDataValue(raw, 'state');
+    const state = DELETE_PATHS_SAFE_STATES.has(stateValue) ? stateValue : null;
+    const errorValue = ownDataValue(raw, 'errorCode');
+    const errorCode = completed
+      ? null
+      : (typeof errorValue === 'string' && DELETE_PATHS_SAFE_ERROR_CODE.test(errorValue)
+        ? errorValue
+        : 'DELETE_PATHS_OPERATION_FAILED');
+
+    let impact = null;
+    const rawImpact = ownDataValue(raw, 'impact');
+    if (rawImpact && typeof rawImpact === 'object' && !Array.isArray(rawImpact)) {
+      const values = {};
+      let valid = true;
+      for (const field of ['files', 'bytes', 'directories']) {
+        const value = ownDataValue(rawImpact, field);
+        if (!Number.isSafeInteger(value) || value < 0 || Object.is(value, -0)) {
+          valid = false;
+          break;
+        }
+        values[field] = value;
+      }
+      if (valid) impact = Object.freeze(values);
+    }
+
+    return Object.freeze({
+      ok: completed,
+      status: completed ? 'completed' : status,
+      message: completed
+        ? 'Exclusão dedicada concluída e mantida no checkpoint transacional.'
+        : 'A exclusão dedicada foi negada ou não pôde ser concluída.',
+      errors: Object.freeze(completed ? [] : [errorCode]),
+      modifiedFiles: Object.freeze(completed ? [...paths] : []),
+      data: Object.freeze({ state, impact, errorCode }),
+    });
+  } catch {
+    return failedDeletePathsToolResult('DELETE_PATHS_INVALID_RESULT');
+  }
+}
+
+function safeToolCallKey(toolName, input) {
+  if (toolName === 'delete_paths') {
+    try {
+      const normalized = normalizeDeletePathsToolInput(input);
+      return `${toolName}:${JSON.stringify(normalized.paths)}`;
+    } catch {
+      return `${toolName}:invalid_input`;
+    }
+  }
+  try {
+    return `${toolName}:${JSON.stringify(input || {})}`;
+  } catch {
+    return `${toolName}:unserializable_input`;
+  }
+}
+
 function invokeModelTurnWithCancellation(signal, phase, invoke) {
   throwIfExecutionCancelled(signal, `${phase}:before`);
 
@@ -211,7 +391,7 @@ function createAgenticToolLoopService(dependencies = {}) {
       '3. NUNCA DEIXE CÓDIGO QUEBRADO: Se você criar ou modificar arquivos de código (TS, JS, etc), use `run_command` para rodar linters (`npm run lint`), checagem de tipos (`npx tsc --noEmit`) ou testes ANTES de concluir a tarefa.',
       '4. AUTO-CORREÇÃO: Se um comando de terminal falhar com erros de sintaxe ou lint, analise a saída de erro e chame a ferramenta de edição para corrigir o arquivo.',
       '5. COMANDOS NÃO-INTERATIVOS: Qualquer comando no `run_command` deve ter flags como -y ou --yes. Não use comandos que exigem input do usuário.',
-      '6. MAPA DA APLICAÇÃO E MILESTONES: O projeto utiliza um Mapa da Aplicação (JSON em `.faber/application-map.json`, Markdowns em `docs/application-map/`) e Milestones (JSON em `.faber/milestones.json`, Markdowns em `docs/milestones/`). Ao criar, modificar ou remover componentes/arquivos ou concluir etapas, certifique-se de manter esses arquivos de documentação e planejamento sincronizados e atualizados.',
+      '6. MAPA DA APLICAÇÃO E MILESTONES: `.faber/**` é um namespace privado do runtime — nunca leia, crie ou edite arquivos nele. Ao alterar o produto, mantenha atualizados somente os documentos públicos aplicáveis em `docs/application-map/` e `docs/milestones/`; os espelhos internos são responsabilidade de serviços main-only.',
       '## Conclusão',
       'Sempre chame a ferramenta `finish_task` para indicar que você terminou, não importa se foi um sucesso ou se você encontrou um bloqueio instransponível.',
       `Projeto ativo: ${rootPath || 'indisponível'}.`,
@@ -222,6 +402,10 @@ function createAgenticToolLoopService(dependencies = {}) {
     const projectSession = buildProjectSession(projectInfo);
     const rootPath = projectSession.rootPath;
     const signal = executionContext && executionContext.signal ? executionContext.signal : null;
+    const deletePathsSignal = typeof AbortSignal === 'function' && signal instanceof AbortSignal
+      ? signal
+      : null;
+    const deletePaths = optionalExecutionCallback(executionContext, 'deletePaths');
     const invocationOptions = signal ? Object.freeze({ signal }) : null;
     const capability = (capabilityId, action, payload = {}) => {
       const request = {
@@ -366,6 +550,56 @@ function createAgenticToolLoopService(dependencies = {}) {
             replacementContent: String(input.replacementContent || ''),
           }),
       },
+      ...(deletePaths ? [{
+        name: 'delete_paths',
+        description: 'Exclui caminhos exatos do projeto pelo fluxo dedicado, aprovado e transacional. `reason` é apenas uma explicação e nunca concede autoridade.',
+        inputSchema: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['paths'],
+          properties: {
+            paths: {
+              type: 'array',
+              minItems: 1,
+              maxItems: DELETE_PATHS_TOOL_MAX_PATHS,
+              items: { type: 'string', minLength: 1, maxLength: DELETE_PATHS_TOOL_MAX_PATH_LENGTH },
+            },
+            reason: {
+              // OpenAI strict schemas require every property in `required`.
+              // Nullable keeps the public explanation optional there, while
+              // non-strict providers may omit it entirely.
+              type: ['string', 'null'],
+              minLength: 1,
+              maxLength: DELETE_PATHS_TOOL_MAX_REASON_LENGTH,
+              description: 'Explicação não autoritativa da exclusão solicitada.',
+            },
+          },
+        },
+        execute: async (input = {}) => {
+          throwIfExecutionCancelled(signal, 'delete_paths:before_validation');
+          let normalized;
+          try {
+            normalized = normalizeDeletePathsToolInput(input);
+          } catch {
+            return failedDeletePathsToolResult('DELETE_PATHS_INVALID_INPUT');
+          }
+          throwIfExecutionCancelled(signal, 'delete_paths:before_callback');
+
+          let rawResult;
+          try {
+            rawResult = await deletePaths(Object.freeze({
+              paths: normalized.paths,
+              signal: deletePathsSignal,
+            }));
+          } catch (error) {
+            if (error instanceof AgenticExecutionCancelledError) throw error;
+            throwIfExecutionCancelled(signal, 'delete_paths:after_callback');
+            return failedDeletePathsToolResult('DELETE_PATHS_OPERATION_FAILED');
+          }
+          throwIfExecutionCancelled(signal, 'delete_paths:after_callback');
+          return sanitizeDeletePathsToolResult(rawResult, normalized.paths);
+        },
+      }] : []),
       {
         name: 'finish_task',
         description: 'Encerra a execução do agente. Chame esta ferramenta quando terminar tudo ou não puder prosseguir.',
@@ -670,7 +904,8 @@ function createAgenticToolLoopService(dependencies = {}) {
     const jobId = options && options.jobId ? String(options.jobId) : String(action && action.jobId ? action.jobId : '');
     const signal = options && options.signal ? options.signal : null;
     throwIfExecutionCancelled(signal, 'agentic_execution:start');
-    const tools = buildBoundTools(projectInfo, { signal });
+    const deletePaths = optionalExecutionCallback(options, 'deletePaths');
+    const tools = buildBoundTools(projectInfo, { signal, deletePaths });
     const toolDefinitions = buildToolDefinitions(tools);
     const toolIndex = makeToolIndex(tools);
     const conversationMessages = buildConversationMessages(
@@ -801,7 +1036,7 @@ function createAgenticToolLoopService(dependencies = {}) {
         }
 
         // Doom Loop Check
-        const currentCallKey = `${tool.name}:${JSON.stringify(call.input || {})}`;
+        const currentCallKey = safeToolCallKey(tool.name, call.input || {});
         const identicalFails = recentFailedToolCalls.filter(k => k === currentCallKey).length;
         if (identicalFails >= 2) {
           pendingToolResults.push({

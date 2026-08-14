@@ -25,7 +25,12 @@ function isSensitiveAutomataPath(value = '') {
   if (!normalized || SAFE_SECRET_TEMPLATE_FILES.has(normalized)) return false;
   if (normalized === '.env' || /^\.env\./.test(normalized)) return true;
   const parts = normalized.split('/').filter(Boolean);
-  if (parts.some((part) => part === '.git' || part === '.ssh' || part === 'private_context')) return true;
+  if (parts.some((part) => (
+    part === '.git'
+    || part === '.ssh'
+    || part === '.faber'
+    || part === 'private_context'
+  ))) return true;
   const fileName = parts[parts.length - 1] || normalized;
   if (SENSITIVE_FILE_NAMES.has(fileName)) return true;
   if (/\.(pem|key|p12|pfx)$/i.test(fileName)) return true;
@@ -125,6 +130,10 @@ function createAutomataExecutor(dependencies = {}) {
       return { ok: false, message: 'Operação bloqueada: caminho físico fora da raiz do projeto.' };
     }
 
+    const physicalRelativePath = path.relative(rootRealPath, physicalPath);
+    const sensitivePhysicalPath = blockSensitiveAutomataPath(physicalRelativePath);
+    if (sensitivePhysicalPath) return sensitivePhysicalPath;
+
     return { ok: true, physicalPath, rootRealPath };
   }
 
@@ -199,62 +208,6 @@ function createAutomataExecutor(dependencies = {}) {
             return { ok: false, message: `Caminho de pasta bloqueado por arquivo existente: ${rel}` };
           }
           rememberDirectorySnapshot(directorySnapshots, directoryPath);
-        }
-        preparedOperations.push({ ...operation, absolutePath });
-        continue;
-      }
-
-      if (operation.op === 'delete_file') {
-        const targetKind = getPathKind(absolutePath);
-        if (targetKind === 'directory' || targetKind === 'other') {
-          return { ok: false, message: `Não foi possível deletar pasta usando delete_file: ${normalizedPath}` };
-        }
-        if (!fileSnapshots.has(absolutePath)) {
-          let snapshotContent = '';
-          if (targetKind === 'file') {
-            try {
-              snapshotContent = fs.readFileSync(absolutePath, 'utf8');
-            } catch {
-              return { ok: false, message: `Não foi possível preparar rollback para arquivo: ${normalizedPath}` };
-            }
-          }
-          fileSnapshots.set(absolutePath, {
-            absolutePath,
-            existed: targetKind === 'file',
-            content: snapshotContent,
-          });
-        }
-        preparedOperations.push({ ...operation, absolutePath });
-        continue;
-      }
-
-      if (operation.op === 'delete_dir') {
-        const targetKind = getPathKind(absolutePath);
-        if (targetKind === 'file' || targetKind === 'other') {
-          return { ok: false, message: `Não foi possível deletar arquivo usando delete_dir: ${normalizedPath}` };
-        }
-        if (targetKind === 'directory') {
-          rememberDirectorySnapshot(directorySnapshots, absolutePath);
-          const backupFilesRecursively = (dirPath) => {
-            const items = fs.readdirSync(dirPath);
-            for (const item of items) {
-              const fullPath = path.join(dirPath, item);
-              const stat = fs.statSync(fullPath);
-              if (stat.isFile()) {
-                if (!fileSnapshots.has(fullPath)) {
-                  fileSnapshots.set(fullPath, {
-                    absolutePath: fullPath,
-                    existed: true,
-                    content: fs.readFileSync(fullPath, 'utf8'),
-                  });
-                }
-              } else if (stat.isDirectory()) {
-                rememberDirectorySnapshot(directorySnapshots, fullPath);
-                backupFilesRecursively(fullPath);
-              }
-            }
-          };
-          backupFilesRecursively(absolutePath);
         }
         preparedOperations.push({ ...operation, absolutePath });
         continue;
@@ -429,7 +382,22 @@ function createAutomataExecutor(dependencies = {}) {
 
   function executeOperationBatchAction(action) {
     assertReady();
-    const rootPath = action.rootPath;
+    const requestedOperations = Array.isArray(action && action.operations)
+      ? action.operations
+      : [];
+    if (requestedOperations.some((operation) => (
+      operation
+      && (operation.op === 'delete_file' || operation.op === 'delete_dir')
+    ))) {
+      return {
+        ok: false,
+        status: 'blocked',
+        code: 'TRANSACTIONAL_DELETE_REQUIRED',
+        errors: ['transactional_delete_required'],
+        message: 'Exclusões devem usar o checkpoint transacional dedicado.',
+      };
+    }
+    const rootPath = action && action.rootPath;
     if (!rootPath || !fs.existsSync(rootPath)) {
       return { ok: false, message: 'A pasta do projeto não está acessível para executar o lote.' };
     }
@@ -442,7 +410,7 @@ function createAutomataExecutor(dependencies = {}) {
       if (!operation || typeof operation !== 'object') {
         return { ok: false, message: 'Operação inválida no lote.' };
       }
-      if (!['mkdir', 'write_file', 'append_file', 'delete_file', 'delete_dir'].includes(operation.op)) {
+      if (!['mkdir', 'write_file', 'append_file'].includes(operation.op)) {
         return { ok: false, message: `Operação de lote não suportada: ${operation.op}` };
       }
       const normalizedPath = normalizeRequestedRelativePath(operation.path);
@@ -469,26 +437,6 @@ function createAutomataExecutor(dependencies = {}) {
 
         if (operation.op === 'mkdir') {
           fs.mkdirSync(absolutePath, { recursive: true });
-          continue;
-        }
-
-        if (operation.op === 'delete_file') {
-          if (fs.existsSync(absolutePath)) {
-            fs.rmSync(absolutePath, { force: true });
-            const rel = normalizeRelativePathForDiff(normalizedPath);
-            modifiedFiles.push(rel);
-            mergeDiffStatsEntry(diffStats, rel, { added: 0, deleted: 1 });
-          }
-          continue;
-        }
-
-        if (operation.op === 'delete_dir') {
-          if (fs.existsSync(absolutePath)) {
-            fs.rmSync(absolutePath, { recursive: true, force: true });
-            const rel = normalizeRelativePathForDiff(normalizedPath);
-            modifiedFiles.push(rel);
-            mergeDiffStatsEntry(diffStats, rel, { added: 0, deleted: 1 });
-          }
           continue;
         }
 

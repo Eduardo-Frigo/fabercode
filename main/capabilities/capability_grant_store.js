@@ -91,11 +91,18 @@ function canonicalize(value, ancestors = new WeakSet()) {
   if (ancestors.has(value)) throw new TypeError('Values must not contain cycles');
   ancestors.add(value);
   if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) {
+      throw new TypeError('Arrays must use the standard array prototype');
+    }
     const keys = ownEnumerableDataKeys(value);
     if (keys.length !== value.length || keys.some((key, index) => key !== String(index))) {
       throw new TypeError('Arrays must be dense and contain only indexed values');
     }
-    const result = value.map((entry) => canonicalize(entry, ancestors));
+    const result = [];
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      result.push(canonicalize(descriptor.value, ancestors));
+    }
     ancestors.delete(value);
     return result;
   }
@@ -197,7 +204,9 @@ function createCapabilityGrantStore(options = {}) {
     if (authorization && typeof authorization.then === 'function') {
       throw new TypeError('authorizeRoot must be synchronous');
     }
-    if (!authorization || (authorization.authorized !== true && authorization.ok !== true)) {
+    if (!authorization
+      || authorization.authorized !== true
+      || (Object.hasOwn(authorization, 'ok') && authorization.ok !== true)) {
       throw new TypeError('rootPath must be an authorized project root');
     }
     if (authorization.projectId !== undefined && authorization.projectId !== normalizedProjectId) {
