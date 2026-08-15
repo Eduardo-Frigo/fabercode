@@ -56,6 +56,16 @@ assert.throws(() => assertAnchoredFilesystemMutationProbe(
     reasonCode: 'ENFORCED',
   })
 ), /omitted required guarantees/);
+assert.throws(() => assertAnchoredFilesystemMutationProbe(
+  createAnchoredFilesystemMutationProbe({
+    backendId: 'unanchored-private-namespace',
+    state: 'enforced',
+    guarantees: ANCHORED_FILESYSTEM_MUTATION_REQUIRED_GUARANTEES.filter(
+      (guarantee) => guarantee !== 'private_namespace_anchored'
+    ),
+    reasonCode: 'ENFORCED',
+  })
+), /omitted required guarantees/);
 
 let hostileMapCalls = 0;
 const hostileGuarantees = ['physical_root_pinned'];

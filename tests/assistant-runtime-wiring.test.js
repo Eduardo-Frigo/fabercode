@@ -102,6 +102,46 @@ assert.ok(
   legacyExecuteSource.includes('markJobFailed(jobId, reason, `${phase}_fresh_approval_required`)'),
   'a failed coordinated action must require a new approval instead of retaining a stale digest for retry'
 );
+assert.ok(
+  mainSource.includes('const ASSISTANT_PROCESS_EXECUTION_POLICY = PROCESS_EXECUTION_POLICIES.SUSPENDED;'),
+  'assistant-originated project processes must stay suspended until the portable sandbox exists'
+);
+assert.ok(
+  legacyExecuteSource.includes('processExecutionPolicy: ASSISTANT_PROCESS_EXECUTION_POLICY'),
+  'staged assistant execution must receive the non-forgeable suspended process policy'
+);
+assert.ok(
+  legacyExecuteSource.includes('processExecutionAllowed: false'),
+  'post-execution quality must retain only its process-free checks for assistant jobs'
+);
+assert.ok(
+  legacyExecuteSource.includes('const visualValidationReport = buildAssistantVisualValidationPending();'),
+  'assistant execution must report preview validation as pending without starting an app'
+);
+assert.strictEqual(
+  legacyExecuteSource.includes('runProjectVisualValidation(refreshed'),
+  false,
+  'assistant execution must not start preview or visual capture after file promotion'
+);
+assert.strictEqual(
+  legacyExecuteSource.includes("requiredNodeScripts: ['build', 'test']"),
+  false,
+  'assistant execution must not schedule project build or test scripts'
+);
+assert.ok(
+  legacyExecuteSource.includes('buildAssistantProcessValidationPendingMessage(agenticModifiedFiles)'),
+  'agentic success output must replace model validation claims with a trusted pending notice'
+);
+assert.ok(
+  mainSource.includes('registerPreviewHandlers({')
+    && mainSource.includes('registerTerminalHandlers({')
+    && mainSource.includes('runProjectVerification,'),
+  'direct user Preview, Terminal and project verification paths must remain registered'
+);
+assert.ok(
+  mainSource.includes('automaticGitDiffCollectionAllowed: false'),
+  'automatic files-tree refresh must not execute repository-controlled Git diff callbacks'
+);
 
 assertInOrder(
   mainSource,

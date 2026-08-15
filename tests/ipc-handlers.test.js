@@ -53,6 +53,8 @@ async function runProjectHandlersTest(tempRoot) {
   const removedConversations = [];
   const committedPayloads = [];
   const openDialogCalls = [];
+  let automaticGitDiffFirstLinesCalls = 0;
+  let automaticGitDiffStatsCalls = 0;
   const previewRuntime = {
     status: null,
   };
@@ -60,6 +62,7 @@ async function runProjectHandlersTest(tempRoot) {
   const { handlers, registerIpcHandler } = createHandlerMap();
 
   registerProjectHandlers({
+    automaticGitDiffCollectionAllowed: false,
     appendAuditEvent: (type, payload) => audit.push({ type, payload }),
     authorizeProjectRoot: (rootPath) =>
       path.resolve(String(rootPath || '')) === projectRoot
@@ -72,8 +75,14 @@ async function runProjectHandlersTest(tempRoot) {
       committedPayloads.push({ rootPath, message, files });
       return { ok: true, committed: true };
     },
-    collectGitDiffFirstLines: async () => ({ 'git.js': 4 }),
-    collectGitDiffStats: async () => ({ 'git.js': { added: 1, removed: 0 } }),
+    collectGitDiffFirstLines: async () => {
+      automaticGitDiffFirstLinesCalls += 1;
+      return { 'git.js': 4 };
+    },
+    collectGitDiffStats: async () => {
+      automaticGitDiffStatsCalls += 1;
+      return { 'git.js': { added: 1, removed: 0 } };
+    },
     collectProjectFilesTree: () => [{ path: 'src/index.js' }],
     dialog: {
       showOpenDialog: async (options) => {
@@ -260,10 +269,14 @@ async function runProjectHandlersTest(tempRoot) {
   assert.strictEqual(githubPublishResult.ok, true);
   assert.strictEqual(githubPublishResult.report.repoUrl, 'https://github.com/example/repo');
 
-  const treeResult = await handlers['project:files-tree'](null, { rootPath: projectRoot });
+  const treeResult = await handlers['project:files-tree'](null, {
+    rootPath: projectRoot,
+    automaticGitDiffCollectionAllowed: true,
+  });
   assert.strictEqual(treeResult.ok, true);
-  assert.deepStrictEqual(Object.keys(treeResult.diffStats).sort(), ['git.js', 'runtime.js']);
-  assert.strictEqual(treeResult.diffStats['git.js'].firstLine, 4);
+  assert.deepStrictEqual(Object.keys(treeResult.diffStats), ['runtime.js']);
+  assert.strictEqual(automaticGitDiffStatsCalls, 0);
+  assert.strictEqual(automaticGitDiffFirstLinesCalls, 0);
 
   const worktreeResult = await handlers['project:git:worktree'](null, { rootPath: projectRoot });
   assert.strictEqual(worktreeResult.ok, true);

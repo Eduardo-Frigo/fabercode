@@ -37,7 +37,11 @@ async function run() {
     calls.push({ bin, args, options });
     const key = args
       .slice(2)
-      .filter((arg) => arg !== '-c' && arg !== 'core.quotepath=false')
+      .filter((arg) => (
+        arg !== '-c'
+        && arg !== 'core.quotepath=false'
+        && arg !== 'core.fsmonitor=false'
+      ))
       .join(' ');
     if (key === 'rev-parse --is-inside-work-tree') return { ok: true, stdout: 'true\n' };
     if (key === 'remote get-url origin') return { ok: true, stdout: 'git@github.com:owner/repo.git\n' };
@@ -45,15 +49,15 @@ async function run() {
     if (key === 'log -1 --pretty=format:%H%n%s%n%cr') {
       return { ok: true, stdout: 'abc123\nInitial commit\n2 hours ago' };
     }
-    if (key === 'diff --numstat --') return { ok: true, stdout: '3\t1\tsrc/app.js\n2\t0\tfile with space.txt\n1\t0\tação-🌿.txt\n-\t-\timage.bin\n' };
-    if (key === 'diff --cached --numstat --') return { ok: true, stdout: '1\t4\tsrc/app.js\n' };
-    if (key === 'diff --unified=0 --') {
+    if (key === 'diff --no-ext-diff --no-textconv --numstat --') return { ok: true, stdout: '3\t1\tsrc/app.js\n2\t0\tfile with space.txt\n1\t0\tação-🌿.txt\n-\t-\timage.bin\n' };
+    if (key === 'diff --no-ext-diff --no-textconv --cached --numstat --') return { ok: true, stdout: '1\t4\tsrc/app.js\n' };
+    if (key === 'diff --no-ext-diff --no-textconv --unified=0 --') {
       return { ok: true, stdout: 'diff --git a/src/app.js b/src/app.js\n+++ b/src/app.js\n@@ -11,0 +12,2 @@\n+ok\n' };
     }
-    if (key === 'diff --cached --unified=0 --') {
+    if (key === 'diff --no-ext-diff --no-textconv --cached --unified=0 --') {
       return { ok: true, stdout: 'diff --git a/staged.css b/staged.css\n+++ b/staged.css\n@@ -2,0 +3,1 @@\n+ok\n' };
     }
-    if (key === 'diff --unified=3 --') {
+    if (key === 'diff --no-ext-diff --no-textconv --unified=3 --') {
       return {
         ok: true,
         stdout: [
@@ -76,7 +80,7 @@ async function run() {
         ].join('\n'),
       };
     }
-    if (key === 'diff --cached --unified=3 --') {
+    if (key === 'diff --no-ext-diff --no-textconv --cached --unified=3 --') {
       return {
         ok: true,
         stdout: [
@@ -95,7 +99,7 @@ async function run() {
     if (key === 'init') return { ok: true, stdout: 'Initialized empty Git repository\n' };
     if (key === 'add -- src/app.js new.txt') return { ok: true, stdout: '' };
     if (key === 'add -- --weird.js') return { ok: true, stdout: '' };
-    if (key === 'diff --cached --name-only --') return { ok: true, stdout: 'staged.css\nextra.css\n' };
+    if (key === 'diff --no-ext-diff --no-textconv --cached --name-only --') return { ok: true, stdout: 'staged.css\nextra.css\n' };
     if (key === 'reset -- extra.css') return { ok: true, stdout: '' };
     if (key === 'commit -m Ajusta UI') return { ok: true, stdout: '[main abc123] Ajusta UI\n' };
     if (key === 'commit -m Ajusta UI parcial') return { ok: true, stdout: '[main abc124] Ajusta UI parcial\n' };
@@ -174,6 +178,33 @@ async function run() {
       { path: 'new-image.bin', status: 'untracked', staged: false, unstaged: true, binary: true, firstLine: 1, summary: 'Arquivo binário: diff textual indisponível.' },
     ]
   );
+
+  const automaticReadCalls = calls.filter((call) => (
+    call.args.includes('diff')
+    || call.args.includes('status')
+    || call.args.includes('ls-files')
+  ));
+  assert.ok(automaticReadCalls.length > 0);
+  for (const call of automaticReadCalls) {
+    const fsmonitorConfigIndex = call.args.indexOf('core.fsmonitor=false');
+    const subcommandIndex = call.args.findIndex((arg) => (
+      arg === 'diff' || arg === 'status' || arg === 'ls-files'
+    ));
+    assert.ok(fsmonitorConfigIndex > 0);
+    assert.strictEqual(call.args[fsmonitorConfigIndex - 1], '-c');
+    assert.ok(fsmonitorConfigIndex < subcommandIndex);
+  }
+  const diffReadCalls = automaticReadCalls.filter((call) => call.args.includes('diff'));
+  assert.ok(diffReadCalls.length > 0);
+  for (const call of diffReadCalls) {
+    const diffIndex = call.args.indexOf('diff');
+    const pathspecSeparatorIndex = call.args.lastIndexOf('--');
+    assert.deepStrictEqual(
+      call.args.slice(diffIndex + 1, diffIndex + 3),
+      ['--no-ext-diff', '--no-textconv']
+    );
+    assert.ok(pathspecSeparatorIndex > diffIndex + 2);
+  }
 
   const init = await service.initProjectGitRepository('/tmp/project');
   assert.strictEqual(init.ok, true);

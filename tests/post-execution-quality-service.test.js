@@ -61,6 +61,130 @@ async function run() {
     assert.ok(report.issues.some((issue) => issue.source === 'node_check'));
     assert.ok(report.issues.some((issue) => issue.source === 'html_asset_missing'));
     assert.strictEqual(commandCalls.length, 1);
+    assert.deepStrictEqual(report.processValidation, {
+      status: 'completed',
+      reason: null,
+    });
+
+    const suspendedAiderRoot = path.join(tempRoot, 'aider-present');
+    fs.mkdirSync(suspendedAiderRoot, { recursive: true });
+    writeFile(path.join(tempRoot, 'include-missing.php'), '<?php require "missing.php"; ?>');
+    let suspendedCommandCalls = 0;
+    let suspendedArtifactChecks = 0;
+    let suspendedArtifactPaths = [];
+    const suspendedService = createPostExecutionQualityService({
+      AIDER_MAIN_ROOT: suspendedAiderRoot,
+      POST_EXEC_QUALITY_ENABLED: true,
+      POST_EXEC_QUALITY_ENFORCE_ERRORS: true,
+      POST_EXEC_QUALITY_ENFORCE_WARNINGS: false,
+      fs,
+      path,
+      evaluateOperationBatchArtifactQuality: ({ operations = [] } = {}) => {
+        suspendedArtifactChecks += 1;
+        suspendedArtifactPaths = operations.map((operation) => operation.path);
+        return {
+          enabled: true,
+          score: 100,
+          minScore: 70,
+          passesMinimum: true,
+          issues: [],
+        };
+      },
+      runCommand: async () => {
+        suspendedCommandCalls += 1;
+        return { ok: true, stdout: '{"ok":true,"issues":[]}', stderr: '' };
+      },
+    });
+
+    const suspendedReport = await suspendedService.runPostExecutionQualityReport(
+      {
+        rootPath: tempRoot,
+        files: ['index.html', 'style.css', 'bad.js', 'include-missing.php'],
+      },
+      {
+        modifiedFiles: ['style.css', 'bad.js', 'include-missing.php'],
+        userMessage: 'corrigir layout sem executar processos',
+        processExecutionAllowed: false,
+      }
+    );
+
+    assert.strictEqual(suspendedCommandCalls, 0);
+    assert.strictEqual(suspendedArtifactChecks, 1);
+    assert.ok(suspendedArtifactPaths.includes('style.css'));
+    assert.ok(suspendedReport.issues.some((issue) => issue.source === 'css_balance'));
+    assert.ok(suspendedReport.issues.some((issue) => issue.source === 'html_asset_missing'));
+    assert.ok(suspendedReport.issues.some((issue) => issue.source === 'php_include_missing'));
+    assert.ok(!suspendedReport.issues.some((issue) => issue.source === 'node_check'));
+    assert.ok(!suspendedReport.issues.some((issue) => issue.source === 'php_lint'));
+    assert.ok(!suspendedReport.issues.some((issue) => issue.source === 'aider_lint'));
+    assert.deepStrictEqual(suspendedReport.processValidation, {
+      status: 'pending',
+      reason: 'portable_sandbox_required',
+    });
+    assert.ok(suspendedReport.message.includes('portable_sandbox_required'));
+    assert.ok(suspendedReport.message.includes('Validação por processos pendente'));
+
+    const suspendedOutcome = suspendedService.buildExecutionOutcomeReport(
+      {
+        modifiedFiles: ['style.css'],
+        diffStats: { 'style.css': { add: 1, del: 0 } },
+      },
+      suspendedReport
+    );
+    assert.ok(suspendedOutcome.text.includes('Verificações estruturais pós-execução'));
+    assert.ok(suspendedOutcome.text.includes('lint, testes e builds não foram executados'));
+    assert.ok(suspendedOutcome.text.includes('portable_sandbox_required'));
+    assert.ok(!suspendedOutcome.text.includes('- Validação pós-execução:'));
+
+    let hostileProcessGetterReads = 0;
+    const ownAccessorOptions = {
+      modifiedFiles: ['bad.js'],
+    };
+    Object.defineProperty(ownAccessorOptions, 'processExecutionAllowed', {
+      enumerable: true,
+      get() {
+        hostileProcessGetterReads += 1;
+        return true;
+      },
+    });
+    const ownAccessorReport = await suspendedService.runPostExecutionQualityReport(
+      { rootPath: tempRoot, files: ['bad.js'] },
+      ownAccessorOptions
+    );
+    assert.strictEqual(hostileProcessGetterReads, 0);
+    assert.strictEqual(suspendedCommandCalls, 0);
+    assert.strictEqual(ownAccessorReport.processValidation.status, 'pending');
+
+    let inheritedProcessGetterReads = 0;
+    const hostilePrototype = {};
+    Object.defineProperty(hostilePrototype, 'processExecutionAllowed', {
+      get() {
+        inheritedProcessGetterReads += 1;
+        return true;
+      },
+    });
+    const inheritedOptions = Object.create(hostilePrototype);
+    Object.defineProperty(inheritedOptions, 'modifiedFiles', {
+      enumerable: true,
+      value: ['bad.js'],
+    });
+    const inheritedReport = await suspendedService.runPostExecutionQualityReport(
+      { rootPath: tempRoot, files: ['bad.js'] },
+      inheritedOptions
+    );
+    assert.strictEqual(inheritedProcessGetterReads, 0);
+    assert.strictEqual(suspendedCommandCalls, 0);
+    assert.strictEqual(inheritedReport.processValidation.status, 'pending');
+
+    const invalidPolicyReport = await suspendedService.runPostExecutionQualityReport(
+      { rootPath: tempRoot, files: ['bad.js'] },
+      {
+        modifiedFiles: ['bad.js'],
+        processExecutionAllowed: 'true',
+      }
+    );
+    assert.strictEqual(suspendedCommandCalls, 0);
+    assert.strictEqual(invalidPolicyReport.processValidation.status, 'pending');
 
     writeFile(
       path.join(tempRoot, 'late-import.css'),

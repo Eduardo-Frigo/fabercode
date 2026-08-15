@@ -57,6 +57,31 @@
     const del = Math.max(0, Number(totals.del || 0));
     const totalDelta = add + del;
     const effectOk = !blockedByEffect && (modifiedFiles.length > 0 || totalDelta > 0 || !blockedByValidation);
+    const resultProcessValidation = result && result.processValidation && typeof result.processValidation === 'object'
+      ? result.processValidation
+      : null;
+    const qualityProcessValidation = qualityReport && qualityReport.processValidation && typeof qualityReport.processValidation === 'object'
+      ? qualityReport.processValidation
+      : null;
+    const validationPending = Boolean(
+      result && result.validationPending === true
+    ) || Boolean(
+      resultProcessValidation && resultProcessValidation.status === 'pending'
+    ) || Boolean(
+      qualityProcessValidation && qualityProcessValidation.status === 'pending'
+    );
+
+    if (isOk && validationPending && effectOk && errors === 0) {
+      return modifiedFiles.length
+        ? uiText(
+            'executionValidationPendingApplied',
+            'Concluído: apliquei a alteração. Lint, testes, build e preview não foram executados; a validação ficou pendente até existir um sandbox portátil.'
+          )
+        : uiText(
+            'executionValidationPendingNoChanges',
+            'Concluído sem alterar arquivos. Lint, testes, build e preview não foram executados; a validação ficou pendente até existir um sandbox portátil.'
+          );
+    }
 
     if (isAgentic) {
       if (isOk) {

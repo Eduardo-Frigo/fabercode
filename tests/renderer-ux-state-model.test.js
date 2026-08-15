@@ -235,6 +235,66 @@ assert.strictEqual(completed.progressPct, 100);
 assert.ok(completed.finalSummaryLines.some((line) => /Resultado: execução concluída/.test(line)));
 assert.ok(Array.isArray(completed.finalDetailLines));
 
+const executePendingWithoutProcesses = model.buildJobProgressPresentation({
+  status: 'running',
+  phase: 'execute_pending',
+  events: [],
+});
+assert.match(executePendingWithoutProcesses.detailText, /lint, testes, build e preview permanecem pendentes/i);
+assert.doesNotMatch(executePendingWithoutProcesses.detailText, /comandos reais passarem/i);
+
+const executeValidationWithoutProcesses = model.buildJobProgressPresentation({
+  status: 'running',
+  phase: 'execute_validation',
+  events: [],
+});
+assert.match(executeValidationWithoutProcesses.detailText, /sem iniciar processos do projeto/i);
+assert.doesNotMatch(executeValidationWithoutProcesses.detailText, /rodando build|smoke visual/i);
+
+const completedWithProcessValidationPending = model.buildJobProgressPresentation({
+  status: 'completed',
+  phase: 'done',
+  checkpoints: {
+    execute_result: {
+      data: {
+        validationPending: true,
+        validationPendingReason: 'portable_sandbox_required',
+      },
+    },
+  },
+  events: [{
+    type: 'job.completed',
+    payload: {
+      validationPending: true,
+      validationPendingReason: 'portable_sandbox_required',
+    },
+  }],
+});
+assert.match(
+  completedWithProcessValidationPending.detailText,
+  /lint, testes, build e preview não foram executados e permanecem pendentes/i
+);
+assert.doesNotMatch(completedWithProcessValidationPending.detailText, /validação real passou/i);
+assert.match(
+  completedWithProcessValidationPending.transientStatus,
+  /lint, testes, build e preview permanecem pendentes/i
+);
+
+const completedWithCheckpointOnlyPending = model.buildJobProgressPresentation({
+  status: 'completed',
+  phase: 'done',
+  checkpoints: {
+    execute_result: {
+      data: {
+        processValidation: { status: 'pending', reason: 'portable_sandbox_required' },
+      },
+    },
+  },
+  events: [{ type: 'job.completed', payload: {} }],
+});
+assert.doesNotMatch(completedWithCheckpointOnlyPending.detailText, /validação real passou/i);
+assert.match(completedWithCheckpointOnlyPending.transientStatus, /permanecem pendentes/i);
+
 const completedWithoutExecution = model.buildJobProgressPresentation({
   status: 'completed',
   phase: 'done',

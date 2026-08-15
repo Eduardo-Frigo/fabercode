@@ -183,6 +183,9 @@ const { createProjectVerificationService } = require('./main/services/project_ve
 const {
   buildDiagnosticsHintFromVerifiedExecution,
   createProjectVerifiedExecutionService,
+  PROCESS_EXECUTION_PENDING_CHECKS,
+  PROCESS_EXECUTION_POLICIES,
+  PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
   shouldVerifyAction: shouldVerifyProjectAction,
 } = require('./main/services/project_verified_execution_service');
 const { createAgenticDeleteRuntimeService } = require('./main/services/agentic_delete_runtime_service');
@@ -4947,6 +4950,58 @@ function getProjectVerifiedExecutionService() {
   return projectVerifiedExecutionServiceInstance;
 }
 
+// Temporary option B: assistant-originated arbitrary commands, project code
+// execution and preview stay disabled until a portable sandbox can enforce
+// filesystem, process and network limits. Fixed read-only domain operations
+// such as Git status remain governed capabilities. User-originated Terminal,
+// Preview and project verification IPCs keep their existing services.
+const ASSISTANT_PROCESS_EXECUTION_POLICY = PROCESS_EXECUTION_POLICIES.SUSPENDED;
+
+function buildAssistantProcessValidationPendingFields(fileMutationApplied = false) {
+  return {
+    verified: false,
+    validationPending: true,
+    validationPendingReason: PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
+    validationPendingChecks: [...PROCESS_EXECUTION_PENDING_CHECKS],
+    processExecutionPolicy: ASSISTANT_PROCESS_EXECUTION_POLICY,
+    processExecutionPerformed: false,
+    fileMutationApplied: fileMutationApplied === true,
+  };
+}
+
+function buildAssistantProcessValidationPendingMessage(modifiedFiles = []) {
+  const count = Array.isArray(modifiedFiles) ? modifiedFiles.length : 0;
+  const mutationSummary = count === 0
+    ? 'A execução da IA terminou sem alteração de arquivo.'
+    : count === 1
+      ? 'A IA concluiu uma alteração de arquivo.'
+      : `A IA concluiu alterações em ${count} arquivo(s).`;
+  return `${mutationSummary} Lint, testes e build não foram executados e o preview não foi capturado; essas validações permanecem pendentes até existir um sandbox portátil.`;
+}
+
+function buildAssistantVisualValidationPending() {
+  return {
+    required: false,
+    status: 'pending',
+    validationPending: true,
+    validationPendingReason: PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
+    processExecutionPerformed: false,
+    summary: 'Preview não capturado: validação pendente até existir um sandbox portátil.',
+  };
+}
+
+function sanitizeAssistantToolRunsForPendingValidation(toolRuns = []) {
+  if (!Array.isArray(toolRuns)) return [];
+  return toolRuns.slice(0, 100).map((entry) => {
+    if (!entry || typeof entry !== 'object') return entry;
+    if (entry.toolName !== 'finish_task') return entry;
+    return {
+      ...entry,
+      message: 'Tarefa encerrada; lint, testes, build e preview permanecem pendentes.',
+    };
+  });
+}
+
 const runtimeDiffStatsByRoot = new Map();
 
 function normalizeRelativePathForDiff(value) {
@@ -5615,6 +5670,7 @@ app.whenReady().then(async () => {
   });
 
   registerProjectHandlers({
+    automaticGitDiffCollectionAllowed: false,
     appendAuditEvent,
     authorizeProjectRoot,
     buildNextSteps,
@@ -5892,15 +5948,29 @@ app.whenReady().then(async () => {
           Object.freeze(agenticExecutionOptions)
         );
         const refreshed = scanProject(rootPath);
+        const agenticModifiedFiles = Array.isArray(agenticResult && agenticResult.modifiedFiles)
+          ? agenticResult.modifiedFiles
+          : [];
+        const agenticToolRuns = sanitizeAssistantToolRunsForPendingValidation(
+          agenticResult && agenticResult.toolRuns
+        );
         const finalResult = {
           ...agenticResult,
+          ...buildAssistantProcessValidationPendingFields(agenticModifiedFiles.length > 0),
+          message: agenticResult && agenticResult.ok
+            ? buildAssistantProcessValidationPendingMessage(agenticModifiedFiles)
+            : agenticResult && agenticResult.message
+              ? agenticResult.message
+              : 'A execução da IA não foi concluída.',
+          modifiedFiles: agenticModifiedFiles,
+          toolRuns: agenticToolRuns,
           projectInfo: refreshed,
           nextSteps: buildNextSteps(refreshed),
         };
 
         if (agenticResult && agenticResult.ok) {
           const requiresMaterialChange = actionRequiresMaterialChange(initialAction);
-          const changedFiles = Array.isArray(agenticResult.modifiedFiles) ? agenticResult.modifiedFiles : [];
+          const changedFiles = agenticModifiedFiles;
           if (requiresMaterialChange && changedFiles.length === 0) {
             const blocked = {
               ...finalResult,
@@ -5925,18 +5995,21 @@ app.whenReady().then(async () => {
               ok: true,
               agentic: true,
               modifiedFiles: changedFiles,
-              toolRuns: Array.isArray(agenticResult.toolRuns) ? agenticResult.toolRuns.slice(0, 20) : [],
+              toolRuns: agenticToolRuns.slice(0, 20),
+              ...buildAssistantProcessValidationPendingFields(changedFiles.length > 0),
             });
             markJobCompleted(jobId, {
               agentic: true,
               modifiedFiles: changedFiles,
+              ...buildAssistantProcessValidationPendingFields(changedFiles.length > 0),
             });
           }
           appendAuditEvent('assistant.agentic_execute_success', {
             rootPath,
             jobId,
             modifiedFiles: changedFiles,
-            toolRuns: Array.isArray(agenticResult.toolRuns) ? agenticResult.toolRuns.length : 0,
+            toolRuns: agenticToolRuns.length,
+            validationPendingReason: PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
           });
           return finalResult;
         }
@@ -5971,42 +6044,33 @@ app.whenReady().then(async () => {
         if (jobId && verifiedExecutionRequired) {
           markJobPhase(jobId, 'execute_staging', {
             executionPass: autoRepairAttempt + 1,
-            requiredCommands: ['build', 'test', 'playwright_if_available'],
-            visualSmoke: true,
+            requiredCommands: [],
+            visualSmoke: false,
+            ...buildAssistantProcessValidationPendingFields(false),
           });
-          appendJobEvent(jobId, 'job.verified_execution_started', {
+          appendJobEvent(jobId, 'job.file_mutation_staging_started', {
             executionPass: autoRepairAttempt + 1,
-            requiredCommands: ['npm run build', 'npm test', 'playwright when available'],
-            visualSmoke: true,
+            requiredCommands: [],
+            visualSmoke: false,
+            ...buildAssistantProcessValidationPendingFields(false),
           });
         }
 
         const result = await getProjectVerifiedExecutionService().executeVerified(currentAction, currentProjectInfo, {
+          processExecutionPolicy: ASSISTANT_PROCESS_EXECUTION_POLICY,
           userMessage: originalUserMessage,
           executionIntent: currentAction && currentAction.intent ? currentAction.intent : '',
           artifactContext: currentAction && currentAction.artifactContext ? currentAction.artifactContext : '',
           verificationOptions: {
-            requiredNodeScripts: ['build', 'test'],
-            requirePlaywright: 'if_available',
             signal: executionSignal,
-            userMessage: originalUserMessage,
-            acceptanceContext: currentAction && currentAction.summary ? currentAction.summary : '',
-            requirePersistence: /\b(postgres|postgresql|prisma|banco|database|persist[eê]ncia|persistir|migration|seed)\b/i.test(
-              `${originalUserMessage || ''}\n${currentAction && currentAction.summary ? currentAction.summary : ''}`
-            ),
           },
           visualOptions: {
-            enabled: true,
-            force: true,
-            timeoutMs: 90000,
-            previewOptions: {
-              stopAfterCapture: true,
-            },
+            enabled: false,
           },
         });
         assertJobExecutionNotCancelled(jobId, executionSignal);
         if (jobId && verifiedExecutionRequired) {
-          appendJobEvent(jobId, 'job.verified_execution_finished', {
+          appendJobEvent(jobId, 'job.file_mutation_staging_finished', {
             executionPass: autoRepairAttempt + 1,
             ok: Boolean(result && result.ok),
             promoted: Boolean(result && result.promoted),
@@ -6017,7 +6081,8 @@ app.whenReady().then(async () => {
             visualStatus:
               result && result.visualValidation && result.visualValidation.status
                 ? result.visualValidation.status
-                : 'not_run',
+                : 'pending',
+            ...buildAssistantProcessValidationPendingFields(Boolean(result && result.fileMutationApplied)),
           });
         }
         if (!result.ok) {
@@ -6167,14 +6232,10 @@ app.whenReady().then(async () => {
           attachments: originalAttachments,
           executionIntent: currentAction && currentAction.intent ? currentAction.intent : '',
           artifactContext: currentAction && currentAction.artifactContext ? currentAction.artifactContext : '',
+          processExecutionAllowed: false,
         });
         assertJobExecutionNotCancelled(jobId, executionSignal);
-        const visualValidationReport = await runProjectVisualValidation(refreshed, {
-          action: currentAction,
-          userMessage: originalUserMessage,
-          executionIntent: currentAction && currentAction.intent ? currentAction.intent : '',
-          artifactContext: currentAction && currentAction.artifactContext ? currentAction.artifactContext : '',
-        });
+        const visualValidationReport = buildAssistantVisualValidationPending();
         assertJobExecutionNotCancelled(jobId, executionSignal);
         if (qualityReport && visualValidationReport && visualValidationReport.required) {
           qualityReport.visualValidation = visualValidationReport;
@@ -6221,6 +6282,9 @@ app.whenReady().then(async () => {
               visualValidation: visualValidationReport || null,
               executionReport,
               autoRepairAttempt,
+              ...buildAssistantProcessValidationPendingFields(
+                Array.isArray(result.modifiedFiles) && result.modifiedFiles.length > 0
+              ),
             });
             markJobCompleted(jobId, {
               modifiedFiles: result.modifiedFiles || [],
@@ -6228,6 +6292,9 @@ app.whenReady().then(async () => {
               visualValidation: visualValidationReport || null,
               executionReport,
               autoRepairAttempt,
+              ...buildAssistantProcessValidationPendingFields(
+                Array.isArray(result.modifiedFiles) && result.modifiedFiles.length > 0
+              ),
             });
           }
           appendAuditEvent('assistant.execute_success', {
@@ -6243,9 +6310,13 @@ app.whenReady().then(async () => {
             visualValidationStatus: visualValidationReport && visualValidationReport.status ? visualValidationReport.status : null,
             diffTotals: executionReport && executionReport.totals ? executionReport.totals : null,
             autoRepairAttempt,
+            validationPendingReason: PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
           });
           return {
             ...result,
+            ...buildAssistantProcessValidationPendingFields(
+              Array.isArray(result.modifiedFiles) && result.modifiedFiles.length > 0
+            ),
             projectInfo: refreshed,
             nextSteps: buildNextSteps(refreshed),
             qualityReport,

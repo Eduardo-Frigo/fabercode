@@ -4,6 +4,44 @@ const {
   findCssImportOrderViolation,
 } = require('../../cortex/orchestration/css_operation_safety');
 
+const PROCESS_EXECUTION_VALIDATION_PENDING_REASON = 'portable_sandbox_required';
+
+function buildProcessValidation(processExecutionAllowed) {
+  return processExecutionAllowed
+    ? { status: 'completed', reason: null }
+    : { status: 'pending', reason: PROCESS_EXECUTION_VALIDATION_PENDING_REASON };
+}
+
+function resolveProcessExecutionAllowed(options) {
+  if (options === undefined) return true;
+  if (!options || typeof options !== 'object') return false;
+
+  let prototype;
+  let descriptor;
+  try {
+    prototype = Object.getPrototypeOf(options);
+    descriptor = Object.getOwnPropertyDescriptor(options, 'processExecutionAllowed');
+  } catch {
+    return false;
+  }
+
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  if (!descriptor) return true;
+  if (!Object.prototype.hasOwnProperty.call(descriptor, 'value')) return false;
+  return descriptor.value === true;
+}
+
+function readOwnDataOption(options, key, fallback) {
+  if (!options || typeof options !== 'object') return fallback;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(options, key);
+    if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) return fallback;
+    return descriptor.value;
+  } catch {
+    return fallback;
+  }
+}
+
 function createPostExecutionQualityService(dependencies = {}) {
   const {
     AIDER_LINT_TIMEOUT_MS = 15000,
@@ -283,19 +321,26 @@ function createPostExecutionQualityService(dependencies = {}) {
     }
   }
 
-  async function runPostExecutionQualityReport(projectInfo, {
-    modifiedFiles = [],
-    userMessage = '',
-    attachments = [],
-    executionIntent = '',
-    artifactContext = '',
-  } = {}) {
+  async function runPostExecutionQualityReport(projectInfo, options = undefined) {
+    const processExecutionAllowed = resolveProcessExecutionAllowed(options);
+    const processValidation = buildProcessValidation(processExecutionAllowed);
+    const modifiedFilesOption = readOwnDataOption(options, 'modifiedFiles', []);
+    const attachmentsOption = readOwnDataOption(options, 'attachments', []);
+    const modifiedFiles = Array.isArray(modifiedFilesOption) ? modifiedFilesOption : [];
+    const attachments = Array.isArray(attachmentsOption) ? attachmentsOption : [];
+    const userMessage = readOwnDataOption(options, 'userMessage', '');
+    const executionIntent = readOwnDataOption(options, 'executionIntent', '');
+    const artifactContext = readOwnDataOption(options, 'artifactContext', '');
+
     if (!POST_EXEC_QUALITY_ENABLED) {
       return {
         enabled: false,
         summary: { total: 0, errors: 0, warnings: 0 },
         issues: [],
-        message: 'Diagnóstico pós-execução desativado.',
+        processValidation,
+        message: processExecutionAllowed
+          ? 'Diagnóstico pós-execução desativado.'
+          : `Diagnóstico pós-execução desativado. Validação por processos pendente (${PROCESS_EXECUTION_VALIDATION_PENDING_REASON}).`,
       };
     }
 
@@ -304,7 +349,10 @@ function createPostExecutionQualityService(dependencies = {}) {
         enabled: true,
         summary: { total: 1, errors: 1, warnings: 0 },
         issues: [{ file: 'projeto', severity: 'error', detail: 'Projeto indisponível para diagnóstico.', source: 'quality_context' }],
-        message: 'Não foi possível analisar porque o projeto não está disponível.',
+        processValidation,
+        message: processExecutionAllowed
+          ? 'Não foi possível analisar porque o projeto não está disponível.'
+          : `Não foi possível analisar porque o projeto não está disponível. Validação por processos pendente (${PROCESS_EXECUTION_VALIDATION_PENDING_REASON}).`,
       };
     }
 
@@ -356,7 +404,7 @@ function createPostExecutionQualityService(dependencies = {}) {
         }
       }
 
-      if (['.js', '.mjs', '.cjs'].includes(ext)) {
+      if (processExecutionAllowed && ['.js', '.mjs', '.cjs'].includes(ext)) {
         const check = await runCommand('node', ['--check', relPath], { cwd: rootPath, timeoutMs: 8000 });
         if (!check.ok) {
           pushQualityIssue(issues, {
@@ -369,7 +417,7 @@ function createPostExecutionQualityService(dependencies = {}) {
         }
       }
 
-      if (ext === '.php') {
+      if (processExecutionAllowed && ext === '.php') {
         const phpCheck = await runCommand('php', ['-l', relPath], { cwd: rootPath, timeoutMs: 8000 });
         if (!phpCheck.ok) {
           if (isCommandUnavailableResult(phpCheck, 'php')) {
@@ -393,23 +441,25 @@ function createPostExecutionQualityService(dependencies = {}) {
       }
     }
 
-    const aiderReport = await runAiderLintDiagnostics(rootPath, candidates);
-    if (aiderReport.ok && Array.isArray(aiderReport.issues)) {
-      for (const issue of aiderReport.issues) {
+    if (processExecutionAllowed) {
+      const aiderReport = await runAiderLintDiagnostics(rootPath, candidates);
+      if (aiderReport.ok && Array.isArray(aiderReport.issues)) {
+        for (const issue of aiderReport.issues) {
+          pushQualityIssue(issues, {
+            file: issue.file || 'arquivo_desconhecido',
+            severity: issue.severity || 'warning',
+            detail: issue.detail || 'Aider apontou alerta de lint.',
+            source: issue.source || 'aider_lint',
+          });
+        }
+      } else if (aiderReport.reason && !String(aiderReport.reason).startsWith('import_failed') && aiderReport.reason !== 'aider_root_missing') {
         pushQualityIssue(issues, {
-          file: issue.file || 'arquivo_desconhecido',
-          severity: issue.severity || 'warning',
-          detail: issue.detail || 'Aider apontou alerta de lint.',
-          source: issue.source || 'aider_lint',
+          file: 'aider',
+          severity: 'warning',
+          detail: `Aider indisponível nesta rodada: ${aiderReport.reason}`,
+          source: 'aider_unavailable',
         });
       }
-    } else if (aiderReport.reason && !String(aiderReport.reason).startsWith('import_failed') && aiderReport.reason !== 'aider_root_missing') {
-      pushQualityIssue(issues, {
-        file: 'aider',
-        severity: 'warning',
-        detail: `Aider indisponível nesta rodada: ${aiderReport.reason}`,
-        source: 'aider_unavailable',
-      });
     }
 
     let artifactQuality = null;
@@ -454,14 +504,17 @@ function createPostExecutionQualityService(dependencies = {}) {
       elapsedMs: Date.now() - startedAt,
     };
 
-    const message = !issues.length
-      ? `Diagnóstico pós-execução concluído sem problemas críticos (${summary.checkedFiles} arquivo(s) verificado(s)).`
-      : `Diagnóstico pós-execução: ${summary.errors} erro(s) e ${summary.warnings} aviso(s) em ${summary.checkedFiles} arquivo(s).`;
+    const message = processExecutionAllowed
+      ? (!issues.length
+          ? `Diagnóstico pós-execução concluído sem problemas críticos (${summary.checkedFiles} arquivo(s) verificado(s)).`
+          : `Diagnóstico pós-execução: ${summary.errors} erro(s) e ${summary.warnings} aviso(s) em ${summary.checkedFiles} arquivo(s).`)
+      : `Verificações estruturais pós-execução: ${summary.errors} erro(s) e ${summary.warnings} aviso(s) em ${summary.checkedFiles} arquivo(s). Validação por processos pendente (${PROCESS_EXECUTION_VALIDATION_PENDING_REASON}).`;
 
     return {
       enabled: true,
       summary,
       issues: issues.slice(0, POST_EXEC_QUALITY_MAX_ISSUES),
+      processValidation,
       message,
       userMessage: String(userMessage || ''),
       attachmentsCount: Array.isArray(attachments) ? attachments.length : 0,
@@ -517,10 +570,19 @@ function createPostExecutionQualityService(dependencies = {}) {
     }
 
     const qualitySummary = qualityReport && qualityReport.summary ? qualityReport.summary : null;
+    const processValidation = qualityReport && qualityReport.processValidation
+      ? qualityReport.processValidation
+      : null;
     if (qualitySummary) {
       const errors = Number(qualitySummary.errors || 0);
       const warnings = Number(qualitySummary.warnings || 0);
-      lines.push(`- Validação pós-execução: ${errors} erro(s), ${warnings} aviso(s).`);
+      if (processValidation && processValidation.status === 'pending') {
+        const pendingReason = String(processValidation.reason || PROCESS_EXECUTION_VALIDATION_PENDING_REASON);
+        lines.push(`- Verificações estruturais pós-execução: ${errors} erro(s), ${warnings} aviso(s).`);
+        lines.push(`- Validação por processos pendente: lint, testes e builds não foram executados (${pendingReason}).`);
+      } else {
+        lines.push(`- Validação pós-execução: ${errors} erro(s), ${warnings} aviso(s).`);
+      }
     }
 
     return {

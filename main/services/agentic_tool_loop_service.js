@@ -18,6 +18,12 @@ function actionRequiresFileChanges(action = {}) {
 }
 
 const AGENTIC_EXECUTION_CANCELLED_CODE = 'AGENTIC_EXECUTION_CANCELLED';
+const AGENTIC_PROCESS_VALIDATION_PENDING_MESSAGE =
+  'Tarefa encerrada. Lint, testes e build não foram executados e o preview não foi capturado; essas validações permanecem pendentes até existir um sandbox portátil.';
+const AGENTIC_FAILURE_VALIDATION_PENDING_MESSAGE =
+  'Tarefa encerrada como falha. Lint, testes e build não foram executados e o preview não foi capturado; essas validações permanecem pendentes.';
+const AGENTIC_MODEL_TEXT_CHECKPOINT_MESSAGE =
+  'Resposta textual do modelo recebida; conteúdo omitido. Validações de processo permanecem pendentes.';
 
 class AgenticExecutionCancelledError extends Error {
   constructor(phase = 'agentic_execution') {
@@ -388,10 +394,8 @@ function createAgenticToolLoopService(dependencies = {}) {
       '## Diretrizes de Edição (CRÍTICO)',
       '1. PREFIRA EDITAR A REESCREVER: Nunca use write_file para modificar um arquivo existente inteiro. Sempre use `edit_file_fuzzy`.',
       '2. COMO USAR edit_file_fuzzy: Copie um bloco único e exato do arquivo (targetContent) e forneça a nova versão (replacementContent). O sistema ignora espaços e indentações para te ajudar a encontrar o bloco.',
-      '3. NUNCA DEIXE CÓDIGO QUEBRADO: Se você criar ou modificar arquivos de código (TS, JS, etc), use `run_command` para rodar linters (`npm run lint`), checagem de tipos (`npx tsc --noEmit`) ou testes ANTES de concluir a tarefa.',
-      '4. AUTO-CORREÇÃO: Se um comando de terminal falhar com erros de sintaxe ou lint, analise a saída de erro e chame a ferramenta de edição para corrigir o arquivo.',
-      '5. COMANDOS NÃO-INTERATIVOS: Qualquer comando no `run_command` deve ter flags como -y ou --yes. Não use comandos que exigem input do usuário.',
-      '6. MAPA DA APLICAÇÃO E MILESTONES: `.faber/**` é um namespace privado do runtime — nunca leia, crie ou edite arquivos nele. Ao alterar o produto, mantenha atualizados somente os documentos públicos aplicáveis em `docs/application-map/` e `docs/milestones/`; os espelhos internos são responsabilidade de serviços main-only.',
+      '3. VALIDAÇÃO HONESTA: As ferramentas atuais não executam lint, testes ou builds nem capturam preview. Nunca afirme que essas validações foram executadas; informe-as como pendentes para o usuário.',
+      '4. MAPA DA APLICAÇÃO E MILESTONES: `.faber/**` é um namespace privado do runtime — nunca leia, crie ou edite arquivos nele. Ao alterar o produto, mantenha atualizados somente os documentos públicos aplicáveis em `docs/application-map/` e `docs/milestones/`; os espelhos internos são responsabilidade de serviços main-only.',
       '## Conclusão',
       'Sempre chame a ferramenta `finish_task` para indicar que você terminou, não importa se foi um sucesso ou se você encontrou um bloqueio instransponível.',
       `Projeto ativo: ${rootPath || 'indisponível'}.`,
@@ -613,26 +617,16 @@ function createAgenticToolLoopService(dependencies = {}) {
           },
         },
         execute: async (input = {}) => {
-          return { ok: true, status: input.status, message: 'Tarefa encerrada: ' + input.summary, _isFinishTask: true };
+          const succeeded = input.status === 'success';
+          return {
+            ok: succeeded,
+            status: input.status,
+            message: succeeded
+              ? AGENTIC_PROCESS_VALIDATION_PENDING_MESSAGE
+              : AGENTIC_FAILURE_VALIDATION_PENDING_MESSAGE,
+            _isFinishTask: true,
+          };
         },
-      },
-      {
-        name: 'run_command',
-        description: 'Roda um comando de terminal preso à raiz do projeto e retorna saída auditável. NÃO USE cd, passe caminhos relativos ao invés disso.',
-        inputSchema: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['command'],
-          properties: {
-            command: { type: 'string' },
-            sessionId: { type: 'string' },
-          },
-        },
-        execute: async (input = {}) =>
-          capability('terminal', 'run_command', {
-            command: input.command,
-            sessionId: input.sessionId,
-          }),
       },
       {
         name: 'terminal_status',
@@ -652,21 +646,6 @@ function createAgenticToolLoopService(dependencies = {}) {
           }
           return res;
         },
-      },
-      {
-        name: 'preview_capture',
-        description: 'Inicia preview e captura evidência visual real do projeto.',
-        inputSchema: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            stopAfterCapture: { type: 'boolean' },
-          },
-        },
-        execute: async (input = {}) =>
-          capability('browser_preview', 'capture', {
-            stopAfterCapture: input.stopAfterCapture !== false,
-          }),
       },
       {
         name: 'git_status',
@@ -970,7 +949,7 @@ function createAgenticToolLoopService(dependencies = {}) {
           step: step + 1,
           responseId: previousResponseId || null,
           toolCalls: Array.isArray(turn && turn.toolCalls) ? turn.toolCalls.length : 0,
-          textPreview: turn && turn.text ? clipText(turn.text, 400) : '',
+          textPreview: turn && turn.text ? AGENTIC_MODEL_TEXT_CHECKPOINT_MESSAGE : '',
         });
       }
 
@@ -983,7 +962,7 @@ function createAgenticToolLoopService(dependencies = {}) {
           return {
             ok: true,
             agentic: true,
-            message: finalMessage,
+            message: AGENTIC_PROCESS_VALIDATION_PENDING_MESSAGE,
             modifiedFiles: [...modifiedFiles],
             toolRuns,
           };
@@ -1015,7 +994,7 @@ function createAgenticToolLoopService(dependencies = {}) {
         return {
           ok: true,
           agentic: true,
-          message: finalMessage || 'Concluído.',
+          message: AGENTIC_PROCESS_VALIDATION_PENDING_MESSAGE,
           modifiedFiles: [...modifiedFiles],
           toolRuns,
         };
@@ -1112,6 +1091,16 @@ function createAgenticToolLoopService(dependencies = {}) {
       }
 
       if (isFinished) {
+        if (lastFinishResult && lastFinishResult.status === 'failure') {
+          return {
+            ok: false,
+            status: 'failed',
+            errors: ['agentic_finish_failure'],
+            message: AGENTIC_FAILURE_VALIDATION_PENDING_MESSAGE,
+            modifiedFiles: [...modifiedFiles],
+            toolRuns,
+          };
+        }
         if (actionRequiresFileChanges(action) && modifiedFiles.size === 0 && lastFinishResult && lastFinishResult.status === 'success') {
           return {
             ok: false,

@@ -286,12 +286,39 @@ function assertProjectCapabilityBoundary() {
 function assertAssistantHarnessCompositionBoundary() {
   const mainSource = read('main.js');
   const handlerSource = read('main/ipc/assistant_handlers.js');
+  const agenticToolLoopSource = read('main/services/agentic_tool_loop_service.js');
   const preloadSource = read('preload.js');
   const appActionsSource = read('renderer/app_actions.js');
   const mainRuntimeSources = [
     mainSource,
     ...walkJsFiles(path.join(rootDir, 'main')).map((filePath) => fs.readFileSync(filePath, 'utf8')),
   ].join('\n');
+
+  assertDoesNotMatch(
+    mainSource,
+    /anchored_mutation_backend_adapter|createAnchoredMutationBackendAdapter/,
+    'The diagnostic anchored helper adapter must remain dormant until namespace I/O is integrated'
+  );
+  assertDoesNotMatch(
+    agenticToolLoopSource,
+    /name:\s*['"](?:run_command|preview_capture)['"]/,
+    'the model must not receive shell or preview capture before the portable sandbox exists'
+  );
+  assert.ok(
+    agenticToolLoopSource.includes('informe-as como pendentes para o usuário'),
+    'the model prompt must describe suspended validation honestly'
+  );
+  assert.ok(
+    mainSource.includes('processExecutionPolicy: ASSISTANT_PROCESS_EXECUTION_POLICY')
+      && mainSource.includes('processExecutionAllowed: false')
+      && mainSource.includes('buildAssistantVisualValidationPending()'),
+    'all assistant-owned indirect process and preview paths must stay suspended'
+  );
+  assert.ok(
+    preloadSource.includes("startProjectPreview: (payload) => ipcRenderer.invoke('project:preview:start', payload)")
+      && preloadSource.includes("runProjectTerminalCommand: (payload) => ipcRenderer.invoke('project:terminal:run', payload)"),
+    'direct user Preview and Terminal APIs must remain available while assistant shell is suspended'
+  );
 
   for (const operation of ['plan', 'message', 'execute']) {
     const registrationPattern = new RegExp(

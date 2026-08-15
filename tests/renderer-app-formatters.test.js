@@ -46,6 +46,69 @@ const successMessage = formatters.buildExecutionOutcomeAssistantMessage(
 assert.strictEqual(successMessage, 'Concluído: apliquei a alteração e validei o projeto.');
 assert.doesNotMatch(successMessage, /Resumo da execução|Critérios de aceite|Arquivos alterados|Diff útil/);
 
+const pendingValidationMessage = formatters.buildExecutionOutcomeAssistantMessage(
+  {
+    ok: true,
+    verified: false,
+    validationPending: true,
+    validationPendingReason: 'portable_sandbox_required',
+    modifiedFiles: ['app/page.tsx'],
+  },
+  {},
+  {
+    summary: { errors: 0, warnings: 0, checkedFiles: 1 },
+    processValidation: { status: 'pending', reason: 'portable_sandbox_required' },
+  }
+);
+assert.match(pendingValidationMessage, /apliquei a alteração/i);
+assert.match(pendingValidationMessage, /não foram executados/i);
+assert.match(pendingValidationMessage, /validação ficou pendente/i);
+assert.doesNotMatch(pendingValidationMessage, /validei o projeto/i);
+
+const agenticPendingValidationMessage = formatters.buildExecutionOutcomeAssistantMessage(
+  {
+    ok: true,
+    agentic: true,
+    validationPending: true,
+    modifiedFiles: ['app/page.tsx'],
+    message: 'Apliquei e todos os testes passaram.',
+  },
+  {},
+  null
+);
+assert.match(agenticPendingValidationMessage, /não foram executados/i);
+assert.doesNotMatch(agenticPendingValidationMessage, /todos os testes passaram/i);
+
+const failedPendingValidationMessage = formatters.buildExecutionOutcomeAssistantMessage(
+  {
+    ok: false,
+    agentic: true,
+    validationPending: true,
+    modifiedFiles: [],
+    message: 'A execução falhou antes de concluir.',
+  },
+  {},
+  null
+);
+assert.strictEqual(failedPendingValidationMessage, 'A execução falhou antes de concluir.');
+assert.doesNotMatch(failedPendingValidationMessage, /^Concluído/i);
+
+const blockedPendingValidationMessage = formatters.buildExecutionOutcomeAssistantMessage(
+  {
+    ok: true,
+    validationPending: true,
+    blockedByPostExecutionValidation: true,
+    modifiedFiles: [],
+  },
+  {},
+  {
+    summary: { errors: 1, warnings: 0, checkedFiles: 1 },
+    processValidation: { status: 'pending', reason: 'portable_sandbox_required' },
+  }
+);
+assert.match(blockedPendingValidationMessage, /Parei antes de concluir/i);
+assert.doesNotMatch(blockedPendingValidationMessage, /^Concluído/i);
+
 const blockedMessage = formatters.buildExecutionOutcomeAssistantMessage(
   {
     ok: false,

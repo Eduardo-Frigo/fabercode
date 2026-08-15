@@ -11,6 +11,10 @@ const ANCHORED_FILESYSTEM_MUTATION_PROBE_STATES = Object.freeze({
 const ANCHORED_FILESYSTEM_MUTATION_REQUIRED_GUARANTEES = Object.freeze([
   'physical_root_pinned',
   'ancestor_chain_pinned',
+  // Creation, opening and cleanup of transaction metadata must happen
+  // through the pinned project root. Pathname writes performed before the
+  // anchored session exists do not satisfy this guarantee.
+  'private_namespace_anchored',
   'source_identity_bound',
   'subtree_identity_bound',
   'atomic_rename_to_quarantine',

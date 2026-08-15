@@ -38,6 +38,7 @@
       reasonNoFiles: 'The run ended without creating or changing project files',
       responseNoChanges: 'Response completed without changing files.',
       processingSuccess: 'Processing completed successfully.',
+      processingValidationPending: 'Processing completed; lint, tests, build, and preview remain pending.',
       processingObservations: 'Processing completed with notes.',
       cannotCompleteRound: 'I could not complete this round.',
       cancelledNoChanges: 'Task cancelled. No new operations will be started.',
@@ -120,10 +121,11 @@
       narrativePreparing: 'I am preparing changes in real files.',
       narrativeValidatingPatch: 'I am validating the patch before allowing it to run or be promoted to the real project.',
       narrativeAwaitingConfirmation: 'I prepared a Cortex-validated fix and am waiting for confirmation before touching the files.',
-      narrativeProtectedRun: 'I am running in a protected area and will only promote the changes if the real commands pass.',
-      narrativeValidationRun: 'I am running the build, tests, and visual smoke test and collecting evidence.',
+      narrativeProtectedRun: 'I am applying file changes in a protected area; lint, tests, build, and preview remain pending.',
+      narrativeValidationRun: 'I am checking the result without starting project processes; lint, tests, build, and preview remain pending.',
       narrativeContextOnly: 'I completed this round as a contextual response without changing files.',
       narrativeValidationPassed: 'I completed this round because the real validation passed.',
+      narrativeValidationPending: 'I completed the file changes, but lint, tests, build, and preview were not run and remain pending.',
       narrativePartial: 'I changed {count} file(s), but found items that need attention during validation.',
       narrativeStopped: 'I stopped this round: {reason}',
       narrativeStoppedNoPromote: 'I stopped this round without marking it complete.',
@@ -185,6 +187,7 @@
       reasonNoFiles: 'La ejecución terminó sin crear ni modificar archivos del proyecto',
       responseNoChanges: 'Respuesta completada sin modificar archivos.',
       processingSuccess: 'Procesamiento completado correctamente.',
+      processingValidationPending: 'Procesamiento completado; lint, pruebas, build y preview siguen pendientes.',
       processingObservations: 'Procesamiento completado con observaciones.',
       cannotCompleteRound: 'No pude completar esta ronda.',
       cancelledNoChanges: 'Acción cancelada. No se modificaron archivos.',
@@ -267,10 +270,11 @@
       narrativePreparing: 'Estoy preparando cambios en archivos reales.',
       narrativeValidatingPatch: 'Estoy validando el parche antes de permitir su ejecución o promoción al proyecto real.',
       narrativeAwaitingConfirmation: 'Preparé una corrección validada por Cortex y espero tu confirmación antes de modificar los archivos.',
-      narrativeProtectedRun: 'Estoy ejecutando en un área protegida y solo promoveré los cambios si los comandos reales pasan.',
-      narrativeValidationRun: 'Estoy ejecutando build, pruebas y smoke visual y recopilando evidencias.',
+      narrativeProtectedRun: 'Estoy aplicando cambios de archivos en un área protegida; lint, pruebas, build y preview siguen pendientes.',
+      narrativeValidationRun: 'Estoy revisando el resultado sin iniciar procesos del proyecto; lint, pruebas, build y preview siguen pendientes.',
       narrativeContextOnly: 'Completé esta ronda como respuesta contextual, sin modificar archivos.',
       narrativeValidationPassed: 'Completé esta ronda porque la validación real pasó.',
+      narrativeValidationPending: 'Completé los cambios de archivos, pero lint, pruebas, build y preview no se ejecutaron y siguen pendientes.',
       narrativePartial: 'Modifiqué {count} archivo(s), pero detecté puntos de atención en la validación.',
       narrativeStopped: 'Detuve esta ronda: {reason}',
       narrativeStoppedNoPromote: 'Detuve esta ronda sin marcarla como completada.',
@@ -419,6 +423,23 @@
     return payload.noFileChanges === true || reason === 'conversation_only' || reason === 'edit_needs_target';
   }
 
+  function hasPendingProcessValidation(job) {
+    const candidates = [
+      readLatestJobEventPayload(job, 'job.completed'),
+      readJobCheckpointData(job, 'execute_result'),
+    ];
+    return candidates.some((candidate) => {
+      if (!candidate || typeof candidate !== 'object') return false;
+      if (candidate.validationPending === true) return true;
+      const processValidation = candidate.processValidation;
+      return Boolean(
+        processValidation
+        && typeof processValidation === 'object'
+        && normalizeText(processValidation.status) === 'pending'
+      );
+    });
+  }
+
   function buildJobPhaseSteps(job) {
     if (!job) return [];
     const attempts = job.attemptsByPhase && typeof job.attemptsByPhase === 'object' ? job.attemptsByPhase : {};
@@ -565,7 +586,12 @@
     if (job.status === 'completed') {
       return isCompletedWithoutExecution(job)
         ? uxText('responseNoChanges', 'Resposta concluída sem alterar arquivos.')
-        : uxText('processingSuccess', 'Processamento concluído com sucesso.');
+        : hasPendingProcessValidation(job)
+          ? uxText(
+              'processingValidationPending',
+              'Processamento concluído; lint, testes, build e preview permanecem pendentes.'
+            )
+          : uxText('processingSuccess', 'Processamento concluído com sucesso.');
     }
     if (job.status === 'failed') {
       return isPartialSuccess(job)
@@ -896,18 +922,23 @@
       } else if (phase === 'execute_pending') {
         lines.push(uxText(
           'narrativeProtectedRun',
-          'Estou executando em área protegida e só devo promover se os comandos reais passarem.'
+          'Estou aplicando alterações de arquivo em área protegida; lint, testes, build e preview permanecem pendentes.'
         ));
       } else if (phase === 'execute_validation') {
         lines.push(uxText(
           'narrativeValidationRun',
-          'Estou rodando build, testes, smoke visual e coletando evidência do resultado.'
+          'Estou verificando o resultado sem iniciar processos do projeto; lint, testes, build e preview permanecem pendentes.'
         ));
       } else if (status === 'completed') {
         lines.push(
           isCompletedWithoutExecution(job)
             ? uxText('narrativeContextOnly', 'Concluí esta rodada como resposta contextual, sem alterar arquivos.')
-            : uxText('narrativeValidationPassed', 'Concluí esta rodada porque a validação real passou.')
+            : hasPendingProcessValidation(job)
+              ? uxText(
+                  'narrativeValidationPending',
+                  'Concluí as alterações de arquivo, mas lint, testes, build e preview não foram executados e permanecem pendentes.'
+                )
+              : uxText('narrativeValidationPassed', 'Concluí esta rodada porque a validação real passou.')
         );
       }
     }

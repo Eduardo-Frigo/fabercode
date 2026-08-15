@@ -139,12 +139,118 @@ async function run() {
 
   assert.strictEqual(result.ok, true);
   assert.strictEqual(result.agentic, true);
-  assert.strictEqual(result.message, 'Concluído com alteração real no projeto.');
+  assert.match(result.message, /validações permanecem pendentes/i);
+  assert.doesNotMatch(result.message, /alteração real no projeto/i);
   assert.deepStrictEqual(result.modifiedFiles, ['app/page.tsx']);
   assert.strictEqual(capabilityCalls.length, 1);
   assert.strictEqual(toolCalls.length, 1);
   assert.ok(checkpoints.some((entry) => entry.key === 'agentic_loop'));
   assert.ok(events.some((entry) => entry.type === 'job.agentic_tool_called'));
+  const modelTurnCheckpoint = checkpoints.find(
+    (entry) => entry.key === 'agentic_last_turn' && entry.data && entry.data.textPreview
+  );
+  assert(modelTurnCheckpoint);
+  assert.match(modelTurnCheckpoint.data.textPreview, /conteúdo omitido/i);
+  assert.match(modelTurnCheckpoint.data.textPreview, /Validações de processo permanecem pendentes/i);
+  assert.doesNotMatch(modelTurnCheckpoint.data.textPreview, /Concluído com alteração real/i);
+
+  // Until the portable sandbox exists, the model must not receive shell or
+  // preview-capture capabilities. The prompt must not instruct it to call
+  // tools that are deliberately absent from its surface.
+  let suspendedSurfaceDefinitions = null;
+  let suspendedSurfacePrompt = '';
+  const suspendedSurfaceCapabilityCalls = [];
+  const suspendedSurfaceToolCalls = [];
+  let suspendedSurfaceTurn = 0;
+  const suspendedSurfaceService = buildCancellationService({
+    maxSteps: 3,
+    executeCapability: async (request) => {
+      suspendedSurfaceCapabilityCalls.push(request);
+      return { ok: true, message: 'capability allowed' };
+    },
+    executeTool: async (name, input) => {
+      suspendedSurfaceToolCalls.push({ name, input });
+      return { ok: true, message: 'tool allowed' };
+    },
+    requestModelTurn: async ({ systemPrompt, tools, toolResults }) => {
+      suspendedSurfaceTurn += 1;
+      if (suspendedSurfaceTurn === 1) {
+        suspendedSurfaceDefinitions = tools;
+        suspendedSurfacePrompt = systemPrompt;
+        return {
+          responseId: 'suspended-surface-1',
+          text: '',
+          toolCalls: [
+            {
+              callId: 'forged-run-command',
+              name: 'run_command',
+              input: { command: 'npm test' },
+            },
+            {
+              callId: 'forged-preview-capture',
+              name: 'preview_capture',
+              input: { stopAfterCapture: true },
+            },
+            {
+              callId: 'allowed-read-file',
+              name: 'read_file',
+              input: { path: 'package.json' },
+            },
+            {
+              callId: 'allowed-search-text',
+              name: 'search_text',
+              input: { targetText: 'scripts' },
+            },
+          ],
+        };
+      }
+
+      assert.strictEqual(toolResults.length, 4);
+      assert.match(toolResults[0].output, /Tool desconhecida: run_command/);
+      assert.match(toolResults[1].output, /Tool desconhecida: preview_capture/);
+      assert.match(toolResults[2].output, /capability allowed/);
+      assert.match(toolResults[3].output, /tool allowed/);
+      return {
+        responseId: 'suspended-surface-2',
+        text: '',
+        toolCalls: [{
+          callId: 'finish-suspended-surface',
+          name: 'finish_task',
+          input: { status: 'success', summary: 'inspeção concluída' },
+        }],
+      };
+    },
+  });
+
+  const suspendedSurfaceResult = await suspendedSurfaceService.executeAction(
+    buildAction('job-suspended-surface', 'verifique o estado atual'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    { jobId: 'job-suspended-surface' }
+  );
+  assert.strictEqual(suspendedSurfaceResult.ok, true);
+  assert.match(suspendedSurfaceResult.message, /validações permanecem pendentes/i);
+  assert.doesNotMatch(suspendedSurfaceResult.message, /inspeção concluída/i);
+  assert(Array.isArray(suspendedSurfaceDefinitions));
+  const suspendedSurfaceNames = suspendedSurfaceDefinitions.map((definition) => definition.name);
+  assert.strictEqual(suspendedSurfaceNames.includes('run_command'), false);
+  assert.strictEqual(suspendedSurfaceNames.includes('preview_capture'), false);
+  assert.strictEqual(suspendedSurfaceNames.includes('read_file'), true);
+  assert.strictEqual(suspendedSurfaceNames.includes('search_text'), true);
+  assert.strictEqual(suspendedSurfaceNames.includes('finish_task'), true);
+  assert.doesNotMatch(suspendedSurfacePrompt, /run_command/);
+  assert.doesNotMatch(suspendedSurfacePrompt, /preview_capture/);
+  assert.doesNotMatch(suspendedSurfacePrompt, /comando(?:s)? (?:de )?terminal/i);
+  assert.match(suspendedSurfacePrompt, /não executam lint, testes ou builds nem capturam preview/i);
+  assert.match(suspendedSurfacePrompt, /Nunca afirme que essas validações foram executadas/i);
+  assert.match(suspendedSurfacePrompt, /informe-as como pendentes para o usuário/i);
+  assert.deepStrictEqual(
+    suspendedSurfaceCapabilityCalls.map(({ capability, action }) => ({ capability, action })),
+    [{ capability: 'filesystem', action: 'read_file' }]
+  );
+  assert.deepStrictEqual(
+    suspendedSurfaceToolCalls.map(({ name }) => name),
+    ['automata.search_text_in_files']
+  );
 
   // Test case for agentic_no_file_changes blocker
   const failingService = createAgenticToolLoopService({
@@ -522,7 +628,10 @@ async function run() {
       },
     }
   );
-  assert.strictEqual(callbackErrorResult.ok, true);
+  assert.strictEqual(callbackErrorResult.ok, false);
+  assert.strictEqual(callbackErrorResult.status, 'failed');
+  assert.deepStrictEqual(callbackErrorResult.errors, ['agentic_finish_failure']);
+  assert.match(callbackErrorResult.message, /encerrada como falha/i);
   assert.strictEqual(sanitizedCallbackErrorOutput.includes(callbackErrorSecret), false);
   assert.strictEqual(sanitizedCallbackErrorOutput.includes('DELETE_PATHS_OPERATION_FAILED'), true);
   assert.strictEqual(JSON.stringify(callbackErrorResult).includes(callbackErrorSecret), false);
@@ -588,7 +697,9 @@ async function run() {
       },
     }
   );
-  assert.strictEqual(hostileDeleteResult.ok, true);
+  assert.strictEqual(hostileDeleteResult.ok, false);
+  assert.strictEqual(hostileDeleteResult.status, 'failed');
+  assert.deepStrictEqual(hostileDeleteResult.errors, ['agentic_finish_failure']);
   assert.strictEqual(hostilePathGetterCalls, 0);
   assert.strictEqual(hostileDeleteCallbackCalls, 0);
   assert.strictEqual(hostileDeleteOutputs.length, 2);

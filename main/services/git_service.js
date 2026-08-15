@@ -51,7 +51,24 @@ function createProjectGitService(dependencies = {}) {
   }
 
   function gitPathArgs(rootPath, args = []) {
-    return ['-C', rootPath, '-c', 'core.quotepath=false', ...args];
+    return [
+      '-C',
+      rootPath,
+      '-c',
+      'core.quotepath=false',
+      '-c',
+      'core.fsmonitor=false',
+      ...args,
+    ];
+  }
+
+  function gitReadDiffArgs(rootPath, args = []) {
+    return gitPathArgs(rootPath, [
+      'diff',
+      '--no-ext-diff',
+      '--no-textconv',
+      ...args,
+    ]);
   }
 
   function normalizeGitSelectedPath(file) {
@@ -189,7 +206,7 @@ function createProjectGitService(dependencies = {}) {
     const stats = {};
 
     async function mergeNumstat(args) {
-      const result = await runCommand('git', gitPathArgs(rootPath, args), { timeoutMs: 1800 });
+      const result = await runCommand('git', gitReadDiffArgs(rootPath, args), { timeoutMs: 1800 });
       if (!result.ok || !result.stdout) return;
 
       const lines = result.stdout.split('\n').map((x) => x.trim()).filter(Boolean);
@@ -211,8 +228,8 @@ function createProjectGitService(dependencies = {}) {
     }
 
     try {
-      await mergeNumstat(['diff', '--numstat', '--']);
-      await mergeNumstat(['diff', '--cached', '--numstat', '--']);
+      await mergeNumstat(['--numstat', '--']);
+      await mergeNumstat(['--cached', '--numstat', '--']);
 
       const untrackedRes = await runCommand(
         'git',
@@ -306,7 +323,7 @@ function createProjectGitService(dependencies = {}) {
     }
 
     async function mergeUnifiedDiff(args) {
-      const result = await runCommand('git', gitPathArgs(rootPath, args), { timeoutMs: 2400 });
+      const result = await runCommand('git', gitReadDiffArgs(rootPath, args), { timeoutMs: 2400 });
       if (!result.ok || !result.stdout) return;
 
       let currentFile = '';
@@ -351,8 +368,8 @@ function createProjectGitService(dependencies = {}) {
     }
 
     try {
-      await mergeUnifiedDiff(['diff', '--unified=3', '--']);
-      await mergeUnifiedDiff(['diff', '--cached', '--unified=3', '--']);
+      await mergeUnifiedDiff(['--unified=3', '--']);
+      await mergeUnifiedDiff(['--cached', '--unified=3', '--']);
 
       const untrackedRes = await runCommand(
         'git',
@@ -389,7 +406,7 @@ function createProjectGitService(dependencies = {}) {
     const firstLines = {};
 
     async function mergeUnifiedDiff(args) {
-      const result = await runCommand('git', gitPathArgs(rootPath, args), { timeoutMs: 2200 });
+      const result = await runCommand('git', gitReadDiffArgs(rootPath, args), { timeoutMs: 2200 });
       if (!result.ok || !result.stdout) return;
 
       let currentFile = '';
@@ -407,8 +424,8 @@ function createProjectGitService(dependencies = {}) {
     }
 
     try {
-      await mergeUnifiedDiff(['diff', '--unified=0', '--']);
-      await mergeUnifiedDiff(['diff', '--cached', '--unified=0', '--']);
+      await mergeUnifiedDiff(['--unified=0', '--']);
+      await mergeUnifiedDiff(['--cached', '--unified=0', '--']);
 
       const untrackedRes = await runCommand(
         'git',
@@ -727,7 +744,11 @@ function createProjectGitService(dependencies = {}) {
   async function listStagedProjectGitFiles(rootPath) {
     requireDependency('runCommand', runCommand);
 
-    const result = await runCommand('git', gitPathArgs(rootPath, ['diff', '--cached', '--name-only', '--']), { timeoutMs: 3000 });
+    const result = await runCommand(
+      'git',
+      gitReadDiffArgs(rootPath, ['--cached', '--name-only', '--']),
+      { timeoutMs: 3000 }
+    );
     if (!result.ok) {
       return {
         ok: false,

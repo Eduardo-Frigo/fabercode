@@ -17,6 +17,68 @@ const DEFAULT_COPY_EXCLUDED_DIRS = new Set([
 const NODE_MODULES_DIR = 'node_modules';
 const DEFAULT_VERIFICATION_TIMEOUT_MS = 180000;
 const DEFAULT_VISUAL_TIMEOUT_MS = 90000;
+const PROCESS_EXECUTION_POLICIES = Object.freeze({
+  SUSPENDED: 'suspended_until_portable_sandbox',
+});
+const PROCESS_EXECUTION_VALIDATION_PENDING_REASON = 'portable_sandbox_required';
+const PROCESS_EXECUTION_PENDING_CHECKS = Object.freeze(['lint', 'tests', 'build', 'preview']);
+const PROCESS_EXECUTION_SUSPENDED_MESSAGE =
+  'Patch promovido somente como mutacao de arquivos; lint, testes, build e preview continuam com validacao pendente ate existir um sandbox portatil.';
+const PROCESS_EXECUTION_SUSPENDED_STAGING_MESSAGE =
+  'Mutacao de arquivos concluida no staging sem executar processos ou preview; lint, testes, build e preview continuam com validacao pendente.';
+
+function resolveProcessExecutionPolicy(options = {}) {
+  let policyOwnedByCaller = false;
+  try {
+    policyOwnedByCaller = Boolean(
+      options && Object.prototype.hasOwnProperty.call(options, 'processExecutionPolicy')
+    );
+  } catch {
+    policyOwnedByCaller = true;
+  }
+
+  return policyOwnedByCaller
+    ? {
+        processExecutionAllowed: false,
+        processExecutionPolicy: PROCESS_EXECUTION_POLICIES.SUSPENDED,
+        validationPendingReason: PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
+      }
+    : {
+        processExecutionAllowed: true,
+        processExecutionPolicy: null,
+        validationPendingReason: null,
+      };
+}
+
+function buildProcessExecutionSuspendedValidation() {
+  return {
+    ok: false,
+    ready: false,
+    verification: null,
+    visualValidation: null,
+    commandResults: [],
+    verified: false,
+    validationPending: true,
+    validationPendingReason: PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
+    validationPendingChecks: [...PROCESS_EXECUTION_PENDING_CHECKS],
+    processExecutionPolicy: PROCESS_EXECUTION_POLICIES.SUSPENDED,
+    processExecutionPerformed: false,
+    executionScope: 'file_mutation_only',
+    fileMutationStaged: true,
+    message: PROCESS_EXECUTION_SUSPENDED_STAGING_MESSAGE,
+  };
+}
+
+function summarizeFileMutationExecution(result = null) {
+  return {
+    ok: Boolean(result && result.ok),
+    modifiedFiles: Array.isArray(result && result.modifiedFiles) ? [...result.modifiedFiles] : [],
+    diffStats:
+      result && result.diffStats && typeof result.diffStats === 'object'
+        ? result.diffStats
+        : {},
+  };
+}
 
 function normalizeVerifiedExecutionPath(value = '') {
   return String(value || '').replace(/\\/g, '/');
@@ -344,14 +406,20 @@ function createProjectVerifiedExecutionService(dependencies = {}) {
     }
   }
 
-  async function runStagedVerification(stageProjectInfo, {
-    action = null,
-    userMessage = '',
-    executionIntent = '',
-    artifactContext = '',
-    verificationOptions = {},
-    visualOptions = {},
-  } = {}) {
+  async function runStagedVerification(stageProjectInfo, runOptions = {}) {
+    const processExecutionPolicy = resolveProcessExecutionPolicy(runOptions);
+    if (!processExecutionPolicy.processExecutionAllowed) {
+      return buildProcessExecutionSuspendedValidation();
+    }
+
+    const {
+      action = null,
+      userMessage = '',
+      executionIntent = '',
+      artifactContext = '',
+      verificationOptions = {},
+      visualOptions = {},
+    } = runOptions;
     const verificationTimeoutMs = normalizeTimeoutMs(
       verificationOptions.overallTimeoutMs || verificationOptions.timeoutMs,
       DEFAULT_VERIFICATION_TIMEOUT_MS
@@ -437,7 +505,25 @@ function createProjectVerifiedExecutionService(dependencies = {}) {
       return { ok: false, message: 'Projeto indisponivel para execucao verificada.' };
     }
 
+    const processExecutionPolicy = resolveProcessExecutionPolicy(options);
     if (!shouldVerifyAction(action)) {
+      if (!processExecutionPolicy.processExecutionAllowed) {
+        return {
+          ok: false,
+          staged: false,
+          promoted: false,
+          verified: false,
+          validationPending: true,
+          validationPendingReason: processExecutionPolicy.validationPendingReason,
+          validationPendingChecks: [...PROCESS_EXECUTION_PENDING_CHECKS],
+          processExecutionPolicy: processExecutionPolicy.processExecutionPolicy,
+          processExecutionPerformed: false,
+          executionScope: 'file_mutation_only',
+          fileMutationStaged: false,
+          fileMutationApplied: false,
+          message: 'Acao bloqueada enquanto a execucao de processos de origem IA esta suspensa.',
+        };
+      }
       return executeAction(action);
     }
 
@@ -452,6 +538,28 @@ function createProjectVerifiedExecutionService(dependencies = {}) {
       const stagedAction = cloneActionForRoot(action, stageRoot);
       stagedExecution = executeAction(stagedAction);
       if (!stagedExecution || !stagedExecution.ok) {
+        if (!processExecutionPolicy.processExecutionAllowed) {
+          return {
+            ok: false,
+            staged: true,
+            promoted: false,
+            stageRoot,
+            stageCleaned: options.keepStage !== true,
+            stagedExecution: summarizeFileMutationExecution(stagedExecution),
+            verified: false,
+            validationPending: true,
+            validationPendingReason: PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
+            validationPendingChecks: [...PROCESS_EXECUTION_PENDING_CHECKS],
+            processExecutionPolicy: PROCESS_EXECUTION_POLICIES.SUSPENDED,
+            processExecutionPerformed: false,
+            executionScope: 'file_mutation_only',
+            fileMutationStaged: false,
+            fileMutationApplied: false,
+            message:
+              (stagedExecution && stagedExecution.message) ||
+              'A mutacao de arquivos no clone temporario falhou; nada foi promovido ao projeto real.',
+          };
+        }
         return {
           ...(stagedExecution || { ok: false }),
           ok: false,
@@ -465,17 +573,23 @@ function createProjectVerifiedExecutionService(dependencies = {}) {
         };
       }
 
-      const stageProjectInfo = scanProject(stageRoot);
-      stagedValidation = await runStagedVerification(stageProjectInfo, {
+      const stageProjectInfo = processExecutionPolicy.processExecutionAllowed
+        ? scanProject(stageRoot)
+        : { rootPath: stageRoot };
+      const stagedVerificationOptions = {
         action: stagedAction,
         userMessage: options.userMessage || action.userMessage || '',
         executionIntent: options.executionIntent || action.intent || '',
         artifactContext: options.artifactContext || action.artifactContext || '',
         verificationOptions: options.verificationOptions || {},
         visualOptions: options.visualOptions || {},
-      });
+      };
+      if (!processExecutionPolicy.processExecutionAllowed) {
+        stagedVerificationOptions.processExecutionPolicy = PROCESS_EXECUTION_POLICIES.SUSPENDED;
+      }
+      stagedValidation = await runStagedVerification(stageProjectInfo, stagedVerificationOptions);
 
-      if (!stagedValidation.ok) {
+      if (!stagedValidation.ok && !stagedValidation.validationPending) {
         return {
           ok: false,
           staged: true,
@@ -493,6 +607,35 @@ function createProjectVerifiedExecutionService(dependencies = {}) {
       }
 
       const promotedResult = executeAction(action);
+      if (stagedValidation.validationPending) {
+        const sanitizedPromotedResult = summarizeFileMutationExecution(promotedResult);
+        return {
+          ...sanitizedPromotedResult,
+          staged: true,
+          promoted: Boolean(promotedResult && promotedResult.ok),
+          stageRoot,
+          stageCleaned: options.keepStage !== true,
+          copySummary,
+          stagedExecution: summarizeFileMutationExecution(stagedExecution),
+          stagedValidation,
+          verification: null,
+          visualValidation: null,
+          commandResults: [],
+          verified: false,
+          validationPending: true,
+          validationPendingReason: PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
+          validationPendingChecks: [...PROCESS_EXECUTION_PENDING_CHECKS],
+          processExecutionPolicy: PROCESS_EXECUTION_POLICIES.SUSPENDED,
+          processExecutionPerformed: false,
+          executionScope: 'file_mutation_only',
+          fileMutationStaged: true,
+          fileMutationApplied: Boolean(promotedResult && promotedResult.ok),
+          message:
+            promotedResult && promotedResult.ok
+              ? PROCESS_EXECUTION_SUSPENDED_MESSAGE
+              : 'A promocao da mutacao de arquivos falhou; nenhum processo ou preview foi executado e a validacao continua pendente.',
+        };
+      }
       return {
         ...promotedResult,
         staged: true,
@@ -538,5 +681,8 @@ module.exports = {
   buildDiagnosticsHintFromVerifiedExecution,
   createProjectVerifiedExecutionService,
   cloneActionForRoot,
+  PROCESS_EXECUTION_POLICIES,
+  PROCESS_EXECUTION_PENDING_CHECKS,
+  PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
   shouldVerifyAction,
 };

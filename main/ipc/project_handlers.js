@@ -1,5 +1,6 @@
 function registerProjectHandlers(dependencies = {}) {
   const {
+    automaticGitDiffCollectionAllowed = false,
     appendAuditEvent,
     authorizeProjectRoot,
     buildNextSteps,
@@ -33,6 +34,7 @@ function registerProjectHandlers(dependencies = {}) {
     unstageProjectGitFiles,
     writeProjectsSnapshot,
   } = dependencies;
+  const collectAutomaticGitDiffs = automaticGitDiffCollectionAllowed === true;
 
   function requireDependency(name, value) {
     if (!value) throw new Error(`Project IPC dependency missing: ${name}`);
@@ -349,8 +351,15 @@ function registerProjectHandlers(dependencies = {}) {
 
     try {
       const rows = collectProjectFilesTree(rootPath, 1400);
-      const gitDiffStats = await collectGitDiffStats(rootPath);
-      const gitDiffFirstLines = await collectGitDiffFirstLines(rootPath);
+      // This handler is refreshed automatically by the renderer, including
+      // after assistant writes. Keep repository-controlled Git diff/filter
+      // callbacks out of that path until the portable sandbox exists.
+      const gitDiffStats = collectAutomaticGitDiffs
+        ? await collectGitDiffStats(rootPath)
+        : {};
+      const gitDiffFirstLines = collectAutomaticGitDiffs
+        ? await collectGitDiffFirstLines(rootPath)
+        : {};
       const runtimeStats = getRuntimeDiffStats(rootPath);
       const diffStats = { ...gitDiffStats };
       for (const [relPath, firstLine] of Object.entries(gitDiffFirstLines || {})) {
