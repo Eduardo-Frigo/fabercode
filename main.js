@@ -109,6 +109,9 @@ const { createMilestoneGitStatusService } = require('./main/services/milestone_g
 const { createIpcSecurity } = require('./main/security/ipc_security');
 const { createProjectAccess } = require('./main/security/project_access');
 const { createSecretStore } = require('./main/security/secret_store');
+const {
+  createTransactionJournalAuthenticator,
+} = require('./main/security/transaction_journal_authenticator');
 const { normalizeExternalUrl, normalizePreviewOpenUrl } = require('./main/security/url_policy');
 const {
   createActionDigest,
@@ -189,10 +192,19 @@ const {
   shouldVerifyAction: shouldVerifyProjectAction,
 } = require('./main/services/project_verified_execution_service');
 const { createAgenticDeleteRuntimeService } = require('./main/services/agentic_delete_runtime_service');
+const {
+  createAgenticDeleteRecoveryService,
+} = require('./main/services/agentic_delete_recovery_service');
+const {
+  createAgenticDeleteStartupRecoveryService,
+} = require('./main/services/agentic_delete_startup_recovery_service');
 const { createAgenticToolLoopService } = require('./main/services/agentic_tool_loop_service');
 const { createProjectVisualCaptureService } = require('./main/services/project_visual_capture_service');
 const { createProjectVisualValidationRuntimeService } = require('./main/services/project_visual_validation_runtime_service');
 const { createStackRegistryService } = require('./main/services/stack_registry_service');
+const {
+  createTransactionalFilesystemDeleteService,
+} = require('./main/services/transactional_filesystem_delete_service');
 const { createAttachmentContextService } = require('./main/runtime/attachment_context');
 const { createCustomProviderProfileService } = require('./main/runtime/custom_provider_profile');
 const { buildOperationBatchDiffPreview } = require('./main/runtime/diff_preview');
@@ -1130,6 +1142,7 @@ const AGENTIC_DELETE_ACTOR_ID_PATTERN = /^[A-Za-z0-9._:@-]{1,256}$/;
 let agenticDeleteActorId = `main-process:${crypto.randomUUID()}`;
 let agenticDeleteReleaseBinding = null;
 let agenticDeleteRuntimeServiceInstance = null;
+let agenticDeleteStartupRecoveryHealthy = false;
 let assistantExecutionCoordinatorInstance = null;
 let assistantJobAuthorityServiceInstance = null;
 let assistantRuntimeLifecycleReason = null;
@@ -1151,6 +1164,14 @@ function getAgenticDeleteActorId() {
     // The process-local actor remains the fail-closed identity fallback.
   }
   return agenticDeleteActorId;
+}
+
+function assistantRecoveryRequiredResult() {
+  return Object.freeze({
+    ok: false,
+    code: 'assistant_recovery_required',
+    message: 'A recuperação segura de uma tarefa anterior precisa ser concluída antes de novas ações do assistente.',
+  });
 }
 
 function readAgenticDeleteDataProperty(value, key) {
@@ -1246,6 +1267,7 @@ const {
   getJobById,
   isJobCancelled,
   listConversationMessages,
+  listAuthorizedJobRecoveryCandidates,
   listJobs,
   markJobCancelled,
   markJobCompleted,
@@ -5812,12 +5834,14 @@ app.whenReady().then(async () => {
   });
 
   const handleLegacyHarnessPlan = async (payload) => {
+    if (!agenticDeleteStartupRecoveryHealthy) return assistantRecoveryRequiredResult();
     const project = normalizeAuthorizedProjectInfo(payload && payload.projectInfo ? payload.projectInfo : null);
     if (!project.ok) return project;
     return buildAssistantPlanResponse({ ...(payload || {}), projectInfo: project.projectInfo });
   };
 
   const handleLegacyHarnessMessage = async (payload) => {
+    if (!agenticDeleteStartupRecoveryHealthy) return assistantRecoveryRequiredResult();
     const project = normalizeAuthorizedProjectInfo(payload && payload.projectInfo ? payload.projectInfo : null);
     if (!project.ok) return project;
     return handleAssistantMessage({ ...(payload || {}), projectInfo: project.projectInfo });
@@ -5841,6 +5865,16 @@ app.whenReady().then(async () => {
       executionContext,
       'authorityBinding'
     );
+    if (!agenticDeleteStartupRecoveryHealthy) {
+      if (jobId) {
+        try {
+          markJobFailed(jobId, 'assistant_recovery_required', 'execute_recovery_blocked');
+        } catch {
+          // Corrupt/unavailable job persistence must remain untouched.
+        }
+      }
+      return assistantRecoveryRequiredResult();
+    }
     let project;
     try {
       project = normalizeAuthorizedProjectInfo(projectInfo || null);
@@ -6577,6 +6611,72 @@ app.whenReady().then(async () => {
     runtimeConfig: createHarnessRuntimeConfig({ env: process.env }),
   });
 
+  let agenticDeleteJournalAuthenticator = null;
+  let agenticDeleteJournalAuthenticatorErrorCode = null;
+  try {
+    agenticDeleteJournalAuthenticator = createTransactionJournalAuthenticator({
+      storageDir: app.getPath('userData'),
+    });
+  } catch (error) {
+    const errorCode = readAgenticDeleteDataProperty(error, 'code');
+    agenticDeleteJournalAuthenticatorErrorCode = typeof errorCode === 'string'
+      && /^[A-Z0-9_]{1,64}$/.test(errorCode)
+      ? errorCode
+      : 'JOURNAL_AUTHENTICATOR_UNAVAILABLE';
+    console.warn(
+      '[assistant-delete] journal authenticator unavailable',
+      agenticDeleteJournalAuthenticatorErrorCode
+    );
+  }
+  const agenticDeleteMutationBackend = createUnsupportedAnchoredFilesystemMutationBackend({
+    backendId: 'faber-main-anchored-delete-unavailable',
+    reasonCode: 'ATOMIC_MUTATION_BACKEND_UNAVAILABLE',
+  });
+  const agenticDeleteRecoveryService = agenticDeleteJournalAuthenticator
+    ? createAgenticDeleteRecoveryService({
+      getAuthorizedJobById,
+      authorizeProjectBinding: (projectId, rootPath) => (
+        getProjectAccess().authorizeProjectBinding(projectId, rootPath)
+      ),
+      createTransactionalRuntime: (authority) => {
+        const transactionalRuntime = createTransactionalFilesystemDeleteService({
+          authorizeLifecycle: authority.authorizeLifecycle,
+          authorizeRoot: authority.authorizeRoot,
+          authorizeEffectFrontier: authority.authorizeEffectFrontier,
+          journalAuthenticator: agenticDeleteJournalAuthenticator,
+          mutationBackend: agenticDeleteMutationBackend,
+        });
+        return Object.freeze({
+          recoverProject: transactionalRuntime.recoverProject,
+          rollbackJob: transactionalRuntime.rollbackJob,
+          finalizeJob: transactionalRuntime.finalizeJob,
+        });
+      },
+      audit: (event) => appendAuditEvent('assistant.agentic_delete_recovery', event),
+    })
+    : null;
+  const agenticDeleteStartupRecoveryService = createAgenticDeleteStartupRecoveryService({
+    recoverInterruptedJobs,
+    listAuthorizedJobRecoveryCandidates,
+    recoverJob: agenticDeleteRecoveryService
+      ? agenticDeleteRecoveryService.recoverJob
+      : () => Object.freeze({ ok: false }),
+    audit: (event) => appendAuditEvent('assistant.agentic_delete_startup_recovery', event),
+  });
+  const agenticDeleteStartupRecoveryResult = agenticDeleteStartupRecoveryService.recoverAtStartup({
+    reason: 'runtime_restarted_before_job_completed',
+  });
+  agenticDeleteStartupRecoveryHealthy = Boolean(agenticDeleteJournalAuthenticator)
+    && agenticDeleteStartupRecoveryResult.ok === true;
+  if (!agenticDeleteStartupRecoveryResult.ok
+    || agenticDeleteStartupRecoveryResult.interruptedJobs > 0
+    || agenticDeleteStartupRecoveryResult.attemptedRecoveries > 0) {
+    console.warn(
+      '[assistant-delete] startup recovery summary',
+      agenticDeleteStartupRecoveryResult
+    );
+  }
+
   const assistantJobAuthorityService = createAssistantJobAuthorityService({
     authorizeProjectBinding: (projectId, rootPath) => (
       getProjectAccess().authorizeProjectBinding(projectId, rootPath)
@@ -6584,22 +6684,21 @@ app.whenReady().then(async () => {
     getJobById: getAuthorizedJobById,
   });
   assistantJobAuthorityServiceInstance = assistantJobAuthorityService;
-  const agenticDeleteMutationBackend = createUnsupportedAnchoredFilesystemMutationBackend({
-    backendId: 'faber-main-anchored-delete-unavailable',
-    reasonCode: 'ATOMIC_MUTATION_BACKEND_UNAVAILABLE',
-  });
-  const agenticDeleteRuntimeService = createAgenticDeleteRuntimeService({
-    authorizeLifecycle: authorizeAgenticDeleteLifecycle,
-    authorizeRoot: authorizeAgenticDeleteRoot,
-    authorizeEffectFrontier: authorizeAgenticDeleteEffectFrontier,
-    getWindowLease: getAgenticDeleteWindowLease,
-    getActorId: getAgenticDeleteActorId,
-    showNativeDialog: showAgenticDeleteNativeDialog,
-    mutationBackend: agenticDeleteMutationBackend,
-    audit: (event) => appendAuditEvent('assistant.agentic_delete_capability', event),
-    pathStyle: process.platform === 'win32' ? 'windows' : 'posix',
-    caseSensitive: process.platform === 'linux',
-  });
+  const agenticDeleteRuntimeService = agenticDeleteJournalAuthenticator
+    ? createAgenticDeleteRuntimeService({
+      authorizeLifecycle: authorizeAgenticDeleteLifecycle,
+      authorizeRoot: authorizeAgenticDeleteRoot,
+      authorizeEffectFrontier: authorizeAgenticDeleteEffectFrontier,
+      getWindowLease: getAgenticDeleteWindowLease,
+      getActorId: getAgenticDeleteActorId,
+      showNativeDialog: showAgenticDeleteNativeDialog,
+      journalAuthenticator: agenticDeleteJournalAuthenticator,
+      mutationBackend: agenticDeleteMutationBackend,
+      audit: (event) => appendAuditEvent('assistant.agentic_delete_capability', event),
+      pathStyle: process.platform === 'win32' ? 'windows' : 'posix',
+      caseSensitive: process.platform === 'linux',
+    })
+    : null;
   agenticDeleteRuntimeServiceInstance = agenticDeleteRuntimeService;
   const assistantPlanningAuthorizer = createAssistantPlanningAuthorizer({
     authorizeProjectBinding: (projectId, rootPath) => (
@@ -6614,6 +6713,7 @@ app.whenReady().then(async () => {
   });
   const assistantExecutionCoordinator = createAssistantExecutionCoordinator({
     authorityService: assistantJobAuthorityService,
+    maxActiveJobs: MAX_JOBS_STORED,
     beforeAuthorityRelease: beforeAgenticDeleteAuthorityRelease,
     bindActionToProject: bindActionToAuthorizedProject,
     bindJobActionDigest,
@@ -6635,16 +6735,15 @@ app.whenReady().then(async () => {
   assistantExecutionCoordinatorInstance = assistantExecutionCoordinator;
 
   const assistantRuntime = createAssistantRuntimeFacade({
-    authorizePlanningPayload: assistantPlanningAuthorizer.authorize,
+    authorizePlanningPayload: (input) => (
+      agenticDeleteStartupRecoveryHealthy
+        ? assistantPlanningAuthorizer.authorize(input)
+        : assistantRecoveryRequiredResult()
+    ),
     coordinator: assistantExecutionCoordinator,
     harnessRouter,
     kernelId: legacyHarnessKernel.id,
   });
-
-  const interruptedJobsRecovery = recoverInterruptedJobs('runtime_restarted_before_job_completed');
-  if (interruptedJobsRecovery && interruptedJobsRecovery.recovered > 0) {
-    console.warn('[jobs] recovered interrupted jobs after runtime start', interruptedJobsRecovery);
-  }
 
   registerAssistantHandlers({
     assistantRuntime,

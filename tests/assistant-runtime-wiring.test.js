@@ -94,6 +94,17 @@ assert.ok(
   legacyExecuteSource.includes('signal: executionSignal'),
   'the coordinator AbortSignal must reach the agentic loop'
 );
+assertInOrder(
+  legacyExecuteSource,
+  [
+    'const authorityBinding = readAgenticDeleteDataProperty(',
+    'if (!agenticDeleteStartupRecoveryHealthy) {',
+    "markJobFailed(jobId, 'assistant_recovery_required', 'execute_recovery_blocked')",
+    'return assistantRecoveryRequiredResult();',
+    'project = normalizeAuthorizedProjectInfo(projectInfo || null);',
+  ],
+  'failed startup recovery must block every assistant execution before project mutation'
+);
 assert.ok(
   legacyExecuteSource.includes('const autoRepairMaxPasses = executionContext'),
   'derived repair actions must not inherit an exact coordinated action digest'
@@ -149,21 +160,55 @@ assertInOrder(
     'const legacyHarnessKernel = createLegacyKernelAdapter({',
     'const harnessRouter = createHarnessRouter({',
     'runtimeConfig: createHarnessRuntimeConfig({ env: process.env })',
-    'const assistantJobAuthorityService = createAssistantJobAuthorityService({',
-    'assistantJobAuthorityServiceInstance = assistantJobAuthorityService;',
+    'let agenticDeleteJournalAuthenticator = null;',
+    'try {',
+    'agenticDeleteJournalAuthenticator = createTransactionJournalAuthenticator({',
+    "storageDir: app.getPath('userData'),",
+    '} catch (error) {',
+    "agenticDeleteJournalAuthenticatorErrorCode = typeof errorCode === 'string'",
+    "'JOURNAL_AUTHENTICATOR_UNAVAILABLE';",
     'const agenticDeleteMutationBackend = createUnsupportedAnchoredFilesystemMutationBackend({',
     "reasonCode: 'ATOMIC_MUTATION_BACKEND_UNAVAILABLE'",
-    'const agenticDeleteRuntimeService = createAgenticDeleteRuntimeService({',
+    'const agenticDeleteRecoveryService = agenticDeleteJournalAuthenticator',
+    '? createAgenticDeleteRecoveryService({',
+    'getAuthorizedJobById,',
+    'authorizeProjectBinding: (projectId, rootPath) => (',
+    'getProjectAccess().authorizeProjectBinding(projectId, rootPath)',
+    'createTransactionalRuntime: (authority) => {',
+    'const transactionalRuntime = createTransactionalFilesystemDeleteService({',
+    'authorizeLifecycle: authority.authorizeLifecycle,',
+    'authorizeRoot: authority.authorizeRoot,',
+    'authorizeEffectFrontier: authority.authorizeEffectFrontier,',
+    'journalAuthenticator: agenticDeleteJournalAuthenticator,',
+    'mutationBackend: agenticDeleteMutationBackend,',
+    'const agenticDeleteStartupRecoveryService = createAgenticDeleteStartupRecoveryService({',
+    'recoverInterruptedJobs,',
+    'listAuthorizedJobRecoveryCandidates,',
+    'recoverJob: agenticDeleteRecoveryService',
+    '? agenticDeleteRecoveryService.recoverJob',
+    ': () => Object.freeze({ ok: false }),',
+    'const agenticDeleteStartupRecoveryResult = agenticDeleteStartupRecoveryService.recoverAtStartup({',
+    "reason: 'runtime_restarted_before_job_completed',",
+    'agenticDeleteStartupRecoveryHealthy = Boolean(agenticDeleteJournalAuthenticator)',
+    '&& agenticDeleteStartupRecoveryResult.ok === true;',
+    'const assistantJobAuthorityService = createAssistantJobAuthorityService({',
+    'assistantJobAuthorityServiceInstance = assistantJobAuthorityService;',
+    'const agenticDeleteRuntimeService = agenticDeleteJournalAuthenticator',
+    '? createAgenticDeleteRuntimeService({',
+    'journalAuthenticator: agenticDeleteJournalAuthenticator,',
     'mutationBackend: agenticDeleteMutationBackend,',
     'agenticDeleteRuntimeServiceInstance = agenticDeleteRuntimeService;',
     'const assistantPlanningAuthorizer = createAssistantPlanningAuthorizer({',
     'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
+    'maxActiveJobs: MAX_JOBS_STORED,',
     'beforeAuthorityRelease: beforeAgenticDeleteAuthorityRelease,',
     'harnessRouter.execute(action, projectInfo, executionContext)',
     'assistantExecutionCoordinatorInstance = assistantExecutionCoordinator;',
     'const assistantRuntime = createAssistantRuntimeFacade({',
-    'authorizePlanningPayload: assistantPlanningAuthorizer.authorize,',
-    'const interruptedJobsRecovery = recoverInterruptedJobs(',
+    'authorizePlanningPayload: (input) => (',
+    'agenticDeleteStartupRecoveryHealthy',
+    '? assistantPlanningAuthorizer.authorize(input)',
+    ': assistantRecoveryRequiredResult()',
     'registerAssistantHandlers({',
     'assistantRuntime,',
   ],
@@ -244,7 +289,7 @@ assertInOrder(
 );
 
 const deleteRuntimeCompositionStart = mainSource.indexOf(
-  'const agenticDeleteRuntimeService = createAgenticDeleteRuntimeService({'
+  'const agenticDeleteRuntimeService = agenticDeleteJournalAuthenticator'
 );
 const deleteRuntimeCompositionEnd = mainSource.indexOf(
   'agenticDeleteRuntimeServiceInstance = agenticDeleteRuntimeService;',
@@ -270,10 +315,38 @@ for (const dependency of [
   );
 }
 assert.strictEqual(
-  deleteRuntimeComposition.includes('journalAuthenticator'),
-  false,
-  'the unavailable production backend must not create a journal key inside a project'
+  deleteRuntimeComposition.includes('journalAuthenticator: agenticDeleteJournalAuthenticator,'),
+  true,
+  'the live and startup recovery runtimes must share one main-owned external journal authenticator'
 );
+assertInOrder(
+  mainSource,
+  [
+    'registerPreviewHandlers({',
+    'registerTerminalHandlers({',
+    'let agenticDeleteJournalAuthenticator = null;',
+    '} catch (error) {',
+    "'[assistant-delete] journal authenticator unavailable'",
+    'agenticDeleteStartupRecoveryHealthy = Boolean(agenticDeleteJournalAuthenticator)',
+    'const agenticDeleteRuntimeService = agenticDeleteJournalAuthenticator',
+    ': null;',
+    'registerAssistantHandlers({',
+    'createWindow();',
+  ],
+  'journal key loss must block assistant recovery/delete authority without suppressing user IPCs or the window'
+);
+
+for (const importedFactory of [
+  'createTransactionJournalAuthenticator',
+  'createAgenticDeleteRecoveryService',
+  'createAgenticDeleteStartupRecoveryService',
+  'createTransactionalFilesystemDeleteService',
+]) {
+  assert.ok(
+    mainSource.includes(importedFactory),
+    `main process recovery composition is missing import/use: ${importedFactory}`
+  );
+}
 
 assert.strictEqual(
   (mainSource.match(/mainWindowDocumentLease = Object\.freeze\(Object\.create\(null\)\)/g) || []).length,

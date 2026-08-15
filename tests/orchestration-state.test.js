@@ -4,6 +4,9 @@ const os = require('os');
 const path = require('path');
 
 const { createOrchestrationStateStore } = require('../cortex/orchestration/state_store');
+const {
+  createAgenticDeleteStartupRecoveryService,
+} = require('../main/services/agentic_delete_startup_recovery_service');
 
 function createStore(tempRoot, overrides = {}) {
   return createOrchestrationStateStore({
@@ -42,6 +45,335 @@ function buildAuthorityContext(overrides = {}) {
     actionDigest: null,
     ...overrides,
   };
+}
+
+function runAuthorizedRecoveryCandidateTests(tempRoot) {
+  const recoveryRoot = path.join(tempRoot, 'authorized-recovery-candidates');
+  const store = createStore(recoveryRoot, { MAX_JOBS_STORED: 100 });
+  const failedTerminalPhases = [
+    'failed',
+    'runtime_interrupted',
+    'execute_authorization_failed',
+    'execute_validation_fresh_approval_required',
+    'execute_pending_fresh_approval_required',
+    'execute_validation_retry_exhausted',
+    'execute_pending_retry_exhausted',
+    'execute_validation',
+    'execute_failed',
+    'assistant_planning_failed',
+    'provider_failure',
+    'persona_retry_exhausted',
+    'cortex_briefing_retry_exhausted',
+    'cortex_validation_retry_exhausted',
+    'cortex_validation',
+    'persona_non_actionable_route',
+  ];
+  const recoveryAuthority = (actionDigest = `sha256:${'a'.repeat(64)}`) =>
+    buildAuthorityContext({
+      projectId: 'project-recovery',
+      canonicalRootPath: '/workspace/project-recovery',
+      realRootPath: '/workspace/project-recovery',
+      sessionId: 'session-recovery',
+      kernelId: 'kernel-recovery',
+      submissionDigest: `sha256:${'b'.repeat(64)}`,
+      actionDigest,
+    });
+  const makeJob = (id, status, phase, overrides = {}) => ({
+    id,
+    status,
+    phase,
+    projectId: 'project-recovery',
+    rootPath: '/workspace/project-recovery',
+    authorityContext: recoveryAuthority(),
+    authorityContextStatus: 'bound',
+    ...overrides,
+  });
+
+  const eligibleJobs = [
+    makeJob('job-recovery-completed', 'completed', 'done'),
+    makeJob('job-recovery-cancelled', 'cancelled', 'cancelled'),
+    ...failedTerminalPhases.map((phase, index) =>
+      makeJob(`job-recovery-failed-${index}`, 'failed', phase)
+    ),
+  ];
+  const excludedJobs = [
+    makeJob('job-recovery-running', 'running', 'execute_pending'),
+    makeJob('job-recovery-retry', 'retry_pending', 'execute_validation'),
+    makeJob('job-recovery-paused', 'paused_memory_pressure', 'paused_memory_pressure'),
+    makeJob('job-recovery-awaiting', 'completed', 'awaiting_user_input'),
+    makeJob('job-recovery-completed-contradiction', 'completed', 'cancelled'),
+    makeJob('job-recovery-cancelled-contradiction', 'cancelled', 'done'),
+    makeJob('job-recovery-failed-contradiction', 'failed', 'done'),
+    makeJob('job-recovery-unbound-digest', 'completed', 'done', {
+      authorityContext: recoveryAuthority(null),
+    }),
+    makeJob('job-recovery-malformed-digest', 'completed', 'done', {
+      authorityContext: recoveryAuthority('sha256:not-a-valid-digest'),
+    }),
+    makeJob('job-recovery-legacy', 'completed', 'done', {
+      authorityContext: null,
+      authorityContextStatus: 'legacy_missing',
+    }),
+    makeJob('job-recovery-forged-status', 'completed', 'done', {
+      authorityContextStatus: 'legacy_missing',
+    }),
+    makeJob('job-recovery-forged-binding', 'completed', 'done', {
+      projectId: 'forged-project',
+    }),
+    makeJob('job-recovery-id-mismatch', 'completed', 'done', {
+      id: 'job-recovery-other-id',
+    }),
+    makeJob('job-recovery-thenable', 'completed', 'done', {
+      then: null,
+    }),
+  ];
+  const unsafeKeyJob = makeJob('unsafe-recovery-id', 'completed', 'done');
+  const allJobs = [...eligibleJobs, ...excludedJobs, unsafeKeyJob];
+  const jobsById = Object.fromEntries(allJobs.map((job) => [job.id, job]));
+  jobsById['job-recovery-id-mismatch'] = excludedJobs.at(-2);
+  delete jobsById['job-recovery-other-id'];
+  store.writeJobsState({
+    jobsById,
+    jobOrder: [
+      eligibleJobs[1].id,
+      excludedJobs[0].id,
+      eligibleJobs[0].id,
+      eligibleJobs[1].id,
+    ],
+  });
+
+  const expectedIds = new Set(eligibleJobs.map((job) => job.id));
+  const firstResult = store.listAuthorizedJobRecoveryCandidates();
+  assert.deepStrictEqual(Object.keys(firstResult).sort(), ['jobIds', 'ok']);
+  assert.strictEqual(firstResult.ok, true);
+  assert.deepStrictEqual(new Set(firstResult.jobIds), expectedIds);
+  assert.strictEqual(firstResult.jobIds.length, expectedIds.size);
+  const serializedResult = JSON.stringify(firstResult);
+  assert.strictEqual(serializedResult.includes('authorityContext'), false);
+  assert.strictEqual(serializedResult.includes('project-recovery'), false);
+  assert.strictEqual(serializedResult.includes('sha256:'), false);
+
+  const restartedStore = createStore(recoveryRoot, { MAX_JOBS_STORED: 100 });
+  const restartedResult = restartedStore.listAuthorizedJobRecoveryCandidates();
+  assert.deepStrictEqual(new Set(restartedResult.jobIds), expectedIds);
+  assert.strictEqual(restartedResult.jobIds.length, expectedIds.size);
+}
+
+function runAtomicJobsPersistenceTests(tempRoot) {
+  const crashRoot = path.join(tempRoot, 'atomic-jobs-crash');
+  const jobsPath = path.join(crashRoot, 'jobs.json');
+  const previousState = {
+    jobsById: {
+      'job-previous': { id: 'job-previous', status: 'completed', phase: 'done' },
+    },
+    jobOrder: ['job-previous'],
+  };
+  const nextState = {
+    jobsById: {
+      'job-next': { id: 'job-next', status: 'failed', phase: 'runtime_interrupted' },
+    },
+    jobOrder: ['job-next'],
+  };
+  const baselineStore = createStore(crashRoot);
+  baselineStore.writeJobsState(previousState);
+  const previousBytes = fs.readFileSync(jobsPath, 'utf8');
+
+  const crashFs = Object.create(fs);
+  let renameCalls = 0;
+  crashFs.fsyncSync = (descriptor) => {
+    if (fs.fstatSync(descriptor).isFile()) {
+      const error = new Error('injected file fsync failure');
+      error.code = 'EIO';
+      throw error;
+    }
+    return fs.fsyncSync(descriptor);
+  };
+  crashFs.renameSync = (...args) => {
+    renameCalls += 1;
+    return fs.renameSync(...args);
+  };
+  const crashingStore = createStore(crashRoot, { fs: crashFs });
+  assert.throws(
+    () => crashingStore.writeJobsState(nextState),
+    /injected file fsync failure/
+  );
+  assert.strictEqual(renameCalls, 0);
+  assert.strictEqual(fs.readFileSync(jobsPath, 'utf8'), previousBytes);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(jobsPath, 'utf8')), previousState);
+  assert.deepStrictEqual(
+    fs.readdirSync(crashRoot).filter((name) => name !== 'jobs.json'),
+    []
+  );
+
+  const durableRoot = path.join(tempRoot, 'atomic-jobs-durable');
+  const durableJobsPath = path.join(durableRoot, 'jobs.json');
+  const durableFs = Object.create(fs);
+  const descriptorKinds = new Map();
+  const durabilityEvents = [];
+  durableFs.openSync = (...args) => {
+    const descriptor = fs.openSync(...args);
+    descriptorKinds.set(descriptor, fs.fstatSync(descriptor).isDirectory() ? 'directory' : 'file');
+    return descriptor;
+  };
+  durableFs.fsyncSync = (descriptor) => {
+    durabilityEvents.push(`fsync:${descriptorKinds.get(descriptor) || 'unknown'}`);
+    return fs.fsyncSync(descriptor);
+  };
+  durableFs.closeSync = (descriptor) => {
+    const result = fs.closeSync(descriptor);
+    descriptorKinds.delete(descriptor);
+    return result;
+  };
+  durableFs.renameSync = (sourcePath, destinationPath) => {
+    durabilityEvents.push('rename');
+    assert.strictEqual(path.dirname(sourcePath), durableRoot);
+    assert.strictEqual(destinationPath, durableJobsPath);
+    return fs.renameSync(sourcePath, destinationPath);
+  };
+  const durableStore = createStore(durableRoot, { fs: durableFs });
+  durableStore.readJobsState();
+  durabilityEvents.length = 0;
+  durableStore.writeJobsState(nextState);
+  assert.deepStrictEqual(durabilityEvents, ['fsync:file', 'rename', 'fsync:directory']);
+  const reopenedStore = createStore(durableRoot);
+  assert.deepStrictEqual(reopenedStore.readJobsState(), nextState);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(durableJobsPath, 'utf8')), nextState);
+  if (process.platform !== 'win32') {
+    assert.strictEqual(fs.statSync(durableJobsPath).mode & 0o777, 0o600);
+  }
+
+  const orphanRoot = path.join(tempRoot, 'atomic-jobs-orphan');
+  fs.mkdirSync(orphanRoot, { recursive: true });
+  fs.writeFileSync(path.join(orphanRoot, '.jobs.json.999.orphan.tmp'), '{"jobsById":');
+  const orphanStore = createStore(orphanRoot);
+  assert.deepStrictEqual(orphanStore.readJobsState(), { jobsById: {}, jobOrder: [] });
+  assert.deepStrictEqual(
+    JSON.parse(fs.readFileSync(path.join(orphanRoot, 'jobs.json'), 'utf8')),
+    { jobsById: {}, jobOrder: [] }
+  );
+
+  const createDirectorySyncFailureFs = (code, counters) => {
+    const simulatedFs = Object.create(fs);
+    const kinds = new Map();
+    simulatedFs.openSync = (...args) => {
+      const descriptor = fs.openSync(...args);
+      kinds.set(descriptor, fs.fstatSync(descriptor).isDirectory() ? 'directory' : 'file');
+      return descriptor;
+    };
+    simulatedFs.fsyncSync = (descriptor) => {
+      if (kinds.get(descriptor) === 'directory') {
+        counters.directory += 1;
+        const error = new Error(`injected directory fsync failure: ${code}`);
+        error.code = code;
+        throw error;
+      }
+      counters.file += 1;
+      return fs.fsyncSync(descriptor);
+    };
+    simulatedFs.closeSync = (descriptor) => {
+      const result = fs.closeSync(descriptor);
+      kinds.delete(descriptor);
+      return result;
+    };
+    return simulatedFs;
+  };
+
+  const knownWindowsRoot = path.join(tempRoot, 'atomic-jobs-windows-known');
+  const knownWindowsCounters = { file: 0, directory: 0 };
+  const knownWindowsStore = createStore(knownWindowsRoot, {
+    fs: createDirectorySyncFailureFs('EINVAL', knownWindowsCounters),
+    runtimePlatform: 'win32',
+  });
+  knownWindowsStore.writeJobsState(nextState);
+  assert.ok(knownWindowsCounters.file >= 1);
+  assert.ok(knownWindowsCounters.directory >= 1);
+  assert.deepStrictEqual(
+    JSON.parse(fs.readFileSync(path.join(knownWindowsRoot, 'jobs.json'), 'utf8')),
+    nextState
+  );
+
+  const unknownWindowsRoot = path.join(tempRoot, 'atomic-jobs-windows-unknown');
+  const unknownWindowsCounters = { file: 0, directory: 0 };
+  const unknownWindowsStore = createStore(unknownWindowsRoot, {
+    fs: createDirectorySyncFailureFs('EIO', unknownWindowsCounters),
+    runtimePlatform: 'win32',
+  });
+  assert.throws(
+    () => unknownWindowsStore.writeJobsState(nextState),
+    (error) => error && error.code === 'EIO'
+  );
+  assert.ok(unknownWindowsCounters.file >= 1);
+  assert.ok(unknownWindowsCounters.directory >= 1);
+}
+
+function runUnhealthyJobsStorageTests(tempRoot) {
+  const corruptRoot = path.join(tempRoot, 'unhealthy-jobs-parse');
+  const corruptJobsPath = path.join(corruptRoot, 'jobs.json');
+  const corruptBytes = '{broken';
+  fs.mkdirSync(corruptRoot, { recursive: true });
+  fs.writeFileSync(corruptJobsPath, corruptBytes, 'utf8');
+
+  const corruptStore = createStore(corruptRoot);
+  assert.deepStrictEqual(
+    corruptStore.listAuthorizedJobRecoveryCandidates(),
+    { ok: false, jobIds: [] }
+  );
+  let recoveryCalls = 0;
+  const startupRecovery = createAgenticDeleteStartupRecoveryService({
+    recoverInterruptedJobs: corruptStore.recoverInterruptedJobs,
+    listAuthorizedJobRecoveryCandidates: corruptStore.listAuthorizedJobRecoveryCandidates,
+    recoverJob() {
+      recoveryCalls += 1;
+      throw new Error('corrupt storage must never reach recovery');
+    },
+  });
+  const startupResult = startupRecovery.recoverAtStartup({
+    reason: 'runtime_restarted_before_job_completed',
+  });
+  assert.strictEqual(startupResult.ok, false);
+  assert.strictEqual(startupResult.attemptedRecoveries, 0);
+  assert.strictEqual(recoveryCalls, 0);
+
+  assert.throws(
+    () => corruptStore.createAssistantJob({ userMessage: 'não sobrescrever corrupção' }),
+    (error) => error && error.code === 'jobs_storage_unhealthy'
+  );
+  assert.throws(
+    () => corruptStore.writeJobsState({ jobsById: {}, jobOrder: [] }),
+    (error) => error && error.code === 'jobs_storage_unhealthy'
+  );
+  assert.strictEqual(fs.readFileSync(corruptJobsPath, 'utf8'), corruptBytes);
+
+  const repairedState = {
+    jobsById: {
+      'job-repaired': { id: 'job-repaired', status: 'completed', phase: 'done' },
+    },
+    jobOrder: ['job-repaired'],
+  };
+  fs.writeFileSync(corruptJobsPath, JSON.stringify(repairedState), 'utf8');
+  assert.throws(
+    () => corruptStore.writeJobsState({ jobsById: {}, jobOrder: [] }),
+    (error) => error && error.code === 'jobs_storage_unhealthy'
+  );
+  assert.deepStrictEqual(corruptStore.readJobsState(), repairedState);
+  corruptStore.writeJobsState({ jobsById: {}, jobOrder: [] });
+  assert.deepStrictEqual(corruptStore.readJobsState(), { jobsById: {}, jobOrder: [] });
+
+  const invalidShapeRoot = path.join(tempRoot, 'unhealthy-jobs-shape');
+  const invalidShapePath = path.join(invalidShapeRoot, 'jobs.json');
+  const invalidShapeBytes = '{"jobsById":[],"jobOrder":{}}';
+  fs.mkdirSync(invalidShapeRoot, { recursive: true });
+  fs.writeFileSync(invalidShapePath, invalidShapeBytes, 'utf8');
+  const invalidShapeStore = createStore(invalidShapeRoot);
+  assert.deepStrictEqual(
+    invalidShapeStore.listAuthorizedJobRecoveryCandidates(),
+    { ok: false, jobIds: [] }
+  );
+  assert.throws(
+    () => invalidShapeStore.createAssistantJob({ userMessage: 'shape inválido' }),
+    (error) => error && error.code === 'jobs_storage_unhealthy'
+  );
+  assert.strictEqual(fs.readFileSync(invalidShapePath, 'utf8'), invalidShapeBytes);
 }
 
 function runAuthorityAndLifecycleTests(tempRoot) {
@@ -469,6 +801,9 @@ function run() {
     assert.ok(stateAfterRemoval.auditTrail.some((event) => event.type === 'job.interrupted'));
 
     runAuthorityAndLifecycleTests(tempRoot);
+    runAuthorizedRecoveryCandidateTests(tempRoot);
+    runAtomicJobsPersistenceTests(tempRoot);
+    runUnhealthyJobsStorageTests(tempRoot);
 
     console.log('orchestration-state.test.js: ok');
   } finally {

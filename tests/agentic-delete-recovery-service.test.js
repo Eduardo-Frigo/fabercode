@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const childProcess = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
@@ -25,6 +26,7 @@ const {
 
 const digest = (character) => `sha256:${character.repeat(64)}`;
 const journalSecret = Buffer.alloc(32, 0x4d);
+const STRICT_REJECTION_PROBE_FLAG = '--strict-rejection-probe';
 
 const journalAuthenticator = Object.freeze({
   seal(_rootPath, value) {
@@ -271,6 +273,190 @@ function withProject(run) {
     fs.rmSync(rootPath, { recursive: true, force: true });
   }
 }
+
+function runStrictDependencyRejectionProbe() {
+  withProject((rootPath) => {
+    let caseSerial = 0;
+    const nextBinding = () => {
+      caseSerial += 1;
+      return bindingFor(
+        rootPath,
+        `job-recovery-strict-promise-${caseSerial}`,
+        String.fromCharCode(96 + caseSerial)
+      );
+    };
+    const rejected = (label) => Promise.reject(new Error(label));
+
+    {
+      const binding = bindingFor(rootPath, 'job-recovery-strict-input', 'f');
+      const service = createRecoveryHarness({ binding }).service;
+      let thenReads = 0;
+      const input = rejected('recovery input rejected');
+      Object.defineProperty(input, 'then', {
+        configurable: true,
+        get() {
+          thenReads += 1;
+          throw new Error('native Promise input then getter must not run');
+        },
+      });
+      assert.strictEqual(
+        service.recoverJob(input).errorCode,
+        RECOVERY_ERROR_CODES.INVALID_REQUEST
+      );
+      assert.strictEqual(thenReads, 0);
+    }
+
+    {
+      const binding = nextBinding();
+      let thenReads = 0;
+      const service = createRecoveryHarness({
+        binding,
+        getAuthorizedJobById() {
+          const promise = rejected('persisted job rejected');
+          Object.defineProperty(promise, 'then', {
+            configurable: true,
+            get() {
+              thenReads += 1;
+              throw new Error('native Promise then getter must not run');
+            },
+          });
+          return promise;
+        },
+      }).service;
+      assert.strictEqual(
+        service.recoverJob({ jobId: binding.jobId }).errorCode,
+        RECOVERY_ERROR_CODES.JOB_NOT_FOUND
+      );
+      assert.strictEqual(thenReads, 0);
+    }
+
+    {
+      const binding = nextBinding();
+      const service = createRecoveryHarness({
+        binding,
+        authorizeProjectBinding: () => rejected('project authorization rejected'),
+      }).service;
+      assert.strictEqual(
+        service.recoverJob({ jobId: binding.jobId }).errorCode,
+        RECOVERY_ERROR_CODES.PROJECT_UNAVAILABLE
+      );
+    }
+
+    {
+      const binding = nextBinding();
+      const service = createRecoveryHarness({
+        binding,
+        createTransactionalRuntime: () => rejected('runtime factory rejected'),
+      }).service;
+      assert.strictEqual(
+        service.recoverJob({ jobId: binding.jobId }).errorCode,
+        RECOVERY_ERROR_CODES.RUNTIME_INVALID
+      );
+    }
+
+    {
+      const binding = nextBinding();
+      const service = createRecoveryHarness({
+        binding,
+        createTransactionalRuntime: () => Object.freeze({
+          recoverProject: () => rejected('recoverProject rejected'),
+          rollbackJob() { throw new Error('must not reach rollback'); },
+          finalizeJob() { throw new Error('must not reach finalize'); },
+        }),
+      }).service;
+      assert.strictEqual(
+        service.recoverJob({ jobId: binding.jobId }).errorCode,
+        RECOVERY_ERROR_CODES.RECOVERY_UNKNOWN
+      );
+    }
+
+    {
+      const binding = nextBinding();
+      const service = createRecoveryHarness({
+        binding,
+        createTransactionalRuntime: () => Object.freeze({
+          recoverProject: () => ({
+            ok: true,
+            recovered: 0,
+            retainedCommitted: 1,
+            retainedUnknown: 0,
+          }),
+          rollbackJob: () => rejected('rollbackJob rejected'),
+          finalizeJob() { throw new Error('must not reach finalize'); },
+        }),
+      }).service;
+      assert.strictEqual(
+        service.recoverJob({ jobId: binding.jobId }).errorCode,
+        RECOVERY_ERROR_CODES.RECOVERY_FAILED
+      );
+    }
+
+    {
+      const binding = nextBinding();
+      const service = createRecoveryHarness({
+        binding,
+        job: terminalJob(binding, { status: 'completed', phase: 'done' }),
+        createTransactionalRuntime: () => Object.freeze({
+          recoverProject: () => ({
+            ok: true,
+            recovered: 0,
+            retainedCommitted: 1,
+            retainedUnknown: 0,
+          }),
+          rollbackJob() { throw new Error('must not reach rollback'); },
+          finalizeJob: () => rejected('finalizeJob rejected'),
+        }),
+      }).service;
+      assert.strictEqual(
+        service.recoverJob({ jobId: binding.jobId }).errorCode,
+        RECOVERY_ERROR_CODES.RECOVERY_FAILED
+      );
+    }
+
+    let hostileThenReads = 0;
+    const hostileThenable = Object.create(null);
+    Object.defineProperty(hostileThenable, 'then', {
+      enumerable: true,
+      get() {
+        hostileThenReads += 1;
+        throw new Error('hostile thenable must not execute');
+      },
+    });
+    const thenableBinding = nextBinding();
+    const thenableService = createRecoveryHarness({
+      binding: thenableBinding,
+      getAuthorizedJobById: () => hostileThenable,
+    }).service;
+    assert.strictEqual(
+      thenableService.recoverJob({ jobId: thenableBinding.jobId }).errorCode,
+      RECOVERY_ERROR_CODES.JOB_NOT_FOUND
+    );
+    assert.strictEqual(hostileThenReads, 0);
+
+    let hostileProxyGets = 0;
+    const hostileProxy = new Proxy({}, {
+      get() {
+        hostileProxyGets += 1;
+        throw new Error('hostile proxy getter must not execute');
+      },
+    });
+    const proxyBinding = nextBinding();
+    const proxyService = createRecoveryHarness({
+      binding: proxyBinding,
+      authorizeProjectBinding: () => hostileProxy,
+    }).service;
+    assert.strictEqual(
+      proxyService.recoverJob({ jobId: proxyBinding.jobId }).ok,
+      false
+    );
+    assert.strictEqual(hostileProxyGets, 0);
+  });
+}
+
+if (process.argv[2] === STRICT_REJECTION_PROBE_FLAG) {
+  runStrictDependencyRejectionProbe();
+  setImmediate(() => process.stdout.write('strict rejection probe passed\n'));
+} else {
 
 assert.strictEqual(
   AGENTIC_DELETE_RECOVERY_SERVICE_VERSION,
@@ -914,4 +1100,73 @@ withProject((rootPath) => {
   assert.strictEqual(auditCalls, 1);
 });
 
+// Audit stays behind the active recovery barrier and cannot start another effectful job.
+withProject((rootPath) => {
+  const outerBinding = bindingFor(rootPath, 'job-recovery-audit-outer', 'a');
+  const nestedBinding = bindingFor(rootPath, 'job-recovery-audit-nested', 'b');
+  const jobs = new Map([
+    [outerBinding.jobId, terminalJob(outerBinding)],
+    [nestedBinding.jobId, terminalJob(nestedBinding)],
+  ]);
+  let service;
+  let nestedResult;
+  let runtimeCreations = 0;
+  let recoveryEffects = 0;
+  let terminalEffects = 0;
+  service = createAgenticDeleteRecoveryService({
+    getAuthorizedJobById: (jobId) => ({ ok: true, job: jobs.get(jobId) }),
+    authorizeProjectBinding(projectId) {
+      return allowProject(
+        projectId === outerBinding.projectId ? outerBinding : nestedBinding
+      );
+    },
+    createTransactionalRuntime: () => {
+      runtimeCreations += 1;
+      return Object.freeze({
+        recoverProject() {
+          recoveryEffects += 1;
+          return { ok: true, recovered: 0, retainedCommitted: 0, retainedUnknown: 0 };
+        },
+        rollbackJob() {
+          terminalEffects += 1;
+          return { ok: true, purged: 0, rolledBack: 0, recoveryRequired: 0 };
+        },
+        finalizeJob() { throw new Error('wrong terminal disposition'); },
+      });
+    },
+    audit() {
+      nestedResult = service.recoverJob({ jobId: nestedBinding.jobId });
+    },
+  });
+
+  const outerResult = service.recoverJob({ jobId: outerBinding.jobId });
+  assert.deepStrictEqual(outerResult, {
+    schemaVersion: 'agentic-delete-recovery-result.v1',
+    ok: true,
+    status: 'completed',
+    disposition: 'rollback',
+    errorCode: null,
+    idempotent: false,
+  });
+  assert.strictEqual(nestedResult.errorCode, RECOVERY_ERROR_CODES.RECOVERY_BUSY);
+  assert.strictEqual(runtimeCreations, 1);
+  assert.strictEqual(recoveryEffects, 1);
+  assert.strictEqual(terminalEffects, 1);
+  assert.strictEqual(service.diagnostics().active, false);
+  assert.strictEqual(service.diagnostics().reentrantAttempts, 1);
+});
+
+const strictRejectionProbe = childProcess.spawnSync(
+  process.execPath,
+  ['--unhandled-rejections=strict', __filename, STRICT_REJECTION_PROBE_FLAG],
+  { encoding: 'utf8', timeout: 15_000 }
+);
+assert.strictEqual(
+  strictRejectionProbe.status,
+  0,
+  `strict rejection probe failed:\n${strictRejectionProbe.stderr || strictRejectionProbe.stdout}`
+);
+assert.match(strictRejectionProbe.stdout, /strict rejection probe passed/);
+
 console.log('agentic delete recovery service tests passed');
+}

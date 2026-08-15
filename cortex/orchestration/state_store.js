@@ -1,5 +1,15 @@
 const { createJobStateStore } = require('./state_store_jobs');
 
+const WINDOWS_DIRECTORY_SYNC_UNSUPPORTED_CODES = new Set([
+  'EINVAL',
+  'EISDIR',
+  'EACCES',
+  'ENOTSUP',
+  'EPERM',
+]);
+const MAX_JOBS_TEMP_OPEN_ATTEMPTS = 32;
+let jobsAtomicWriteSerial = 0;
+
 function createOrchestrationStateStore(dependencies = {}) {
   const {
     CORTEX_BRIEFING_MAX_RETRIES = 8,
@@ -23,7 +33,9 @@ function createOrchestrationStateStore(dependencies = {}) {
     onJobTerminal,
     path,
     randomUUID,
+    runtimePlatform = process.platform,
   } = dependencies;
+  let jobsStorageHealth = 'unknown';
 
   function requireDependency(name, value) {
     if (!value) throw new Error(`Orchestration state dependency missing: ${name}`);
@@ -37,14 +49,20 @@ function createOrchestrationStateStore(dependencies = {}) {
     requireDependency('path', path);
   }
 
-  function ensureStoreFile(fileName, initialState) {
+  function ensureStoreDirectory() {
     assertReady();
     const storeDir = getUserDataPath();
-    const storePath = path.join(storeDir, fileName);
 
     if (!fs.existsSync(storeDir)) {
       fs.mkdirSync(storeDir, { recursive: true });
     }
+
+    return storeDir;
+  }
+
+  function ensureStoreFile(fileName, initialState) {
+    const storeDir = ensureStoreDirectory();
+    const storePath = path.join(storeDir, fileName);
 
     if (!fs.existsSync(storePath)) {
       fs.writeFileSync(storePath, JSON.stringify(initialState, null, 2), 'utf8');
@@ -96,35 +114,207 @@ function createOrchestrationStateStore(dependencies = {}) {
     fs.writeFileSync(storePath, JSON.stringify(nextState, null, 2), 'utf8');
   }
 
+  function tolerateKnownWindowsFilesystemLimitation(error) {
+    return Boolean(
+      runtimePlatform === 'win32' &&
+        error &&
+        WINDOWS_DIRECTORY_SYNC_UNSUPPORTED_CODES.has(error.code)
+    );
+  }
+
+  function syncJobsDirectory(storeDir) {
+    let descriptor;
+    try {
+      const flags = fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY || 0);
+      descriptor = fs.openSync(storeDir, flags);
+      fs.fsyncSync(descriptor);
+    } catch (error) {
+      if (!tolerateKnownWindowsFilesystemLimitation(error)) throw error;
+    } finally {
+      if (descriptor !== undefined) fs.closeSync(descriptor);
+    }
+  }
+
+  function openJobsTemporaryFile(storePath) {
+    const storeDir = path.dirname(storePath);
+    const baseName = path.basename(storePath);
+    const flags =
+      fs.constants.O_WRONLY |
+      fs.constants.O_CREAT |
+      fs.constants.O_EXCL |
+      (fs.constants.O_NOFOLLOW || 0);
+
+    for (let attempt = 0; attempt < MAX_JOBS_TEMP_OPEN_ATTEMPTS; attempt += 1) {
+      jobsAtomicWriteSerial += 1;
+      const temporaryPath = path.join(
+        storeDir,
+        `.${baseName}.${process.pid}.${jobsAtomicWriteSerial}.tmp`
+      );
+      try {
+        return {
+          descriptor: fs.openSync(temporaryPath, flags, 0o600),
+          temporaryPath,
+        };
+      } catch (error) {
+        if (!error || error.code !== 'EEXIST') throw error;
+      }
+    }
+
+    const error = new Error('Não foi possível criar o arquivo temporário de jobs.');
+    error.code = 'jobs_temp_unavailable';
+    throw error;
+  }
+
+  function setPrivateJobsFileMode(descriptor) {
+    if (typeof fs.fchmodSync !== 'function') return;
+    try {
+      fs.fchmodSync(descriptor, 0o600);
+    } catch (error) {
+      if (!tolerateKnownWindowsFilesystemLimitation(error)) throw error;
+    }
+  }
+
+  function isPlainJobsRecord(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  }
+
+  function isStrictJobsState(value) {
+    if (!isPlainJobsRecord(value)) return false;
+    let keys;
+    try {
+      keys = Reflect.ownKeys(value).sort();
+    } catch {
+      return false;
+    }
+    if (
+      keys.length !== 2 ||
+      keys[0] !== 'jobOrder' ||
+      keys[1] !== 'jobsById'
+    ) {
+      return false;
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const jobsDescriptor = descriptors.jobsById;
+    const orderDescriptor = descriptors.jobOrder;
+    if (
+      !jobsDescriptor ||
+      !orderDescriptor ||
+      jobsDescriptor.enumerable !== true ||
+      orderDescriptor.enumerable !== true ||
+      !Object.prototype.hasOwnProperty.call(jobsDescriptor, 'value') ||
+      !Object.prototype.hasOwnProperty.call(orderDescriptor, 'value') ||
+      !isPlainJobsRecord(jobsDescriptor.value) ||
+      !Array.isArray(orderDescriptor.value) ||
+      orderDescriptor.value.some((jobId) => typeof jobId !== 'string')
+    ) {
+      return false;
+    }
+    return Object.values(jobsDescriptor.value).every(
+      (job) => isPlainJobsRecord(job)
+    );
+  }
+
+  function parseStrictJobsState(raw) {
+    const parsed = JSON.parse(raw);
+    if (!isStrictJobsState(parsed)) {
+      throw new TypeError('Formato persistido de jobs inválido.');
+    }
+    return parsed;
+  }
+
+  function createJobsStorageUnhealthyError() {
+    const error = new Error('Persistência de jobs indisponível até uma leitura válida.');
+    error.code = 'jobs_storage_unhealthy';
+    return error;
+  }
+
+  function assertJobsStorageHealthyForWrite(storePath) {
+    if (jobsStorageHealth === 'unhealthy') {
+      throw createJobsStorageUnhealthyError();
+    }
+    if (!fs.existsSync(storePath)) return;
+    try {
+      parseStrictJobsState(fs.readFileSync(storePath, 'utf8'));
+      jobsStorageHealth = 'healthy';
+    } catch {
+      jobsStorageHealth = 'unhealthy';
+      throw createJobsStorageUnhealthyError();
+    }
+  }
+
+  function writeJobsFileAtomically(storePath, nextState) {
+    if (!isStrictJobsState(nextState)) {
+      const error = new TypeError('Estado de jobs inválido para persistência.');
+      error.code = 'jobs_state_invalid';
+      throw error;
+    }
+    const serialized = JSON.stringify(nextState, null, 2);
+    if (typeof serialized !== 'string') {
+      throw new TypeError('Estado de jobs inválido para persistência.');
+    }
+    const bytes = Buffer.from(`${serialized}\n`, 'utf8');
+    const { descriptor: openedDescriptor, temporaryPath } = openJobsTemporaryFile(storePath);
+    let descriptor = openedDescriptor;
+    let renamed = false;
+
+    try {
+      setPrivateJobsFileMode(descriptor);
+      fs.writeFileSync(descriptor, bytes);
+      fs.fsyncSync(descriptor);
+      fs.closeSync(descriptor);
+      descriptor = undefined;
+      fs.renameSync(temporaryPath, storePath);
+      renamed = true;
+      syncJobsDirectory(path.dirname(storePath));
+    } catch (error) {
+      if (descriptor !== undefined) {
+        try {
+          fs.closeSync(descriptor);
+        } catch {}
+      }
+      if (!renamed) {
+        try {
+          fs.unlinkSync(temporaryPath);
+        } catch {}
+      }
+      throw error;
+    }
+  }
+
   function ensureJobsStore() {
-    return ensureStoreFile('jobs.json', {
-      jobsById: {},
-      jobOrder: [],
-    });
+    const storeDir = ensureStoreDirectory();
+    const storePath = path.join(storeDir, 'jobs.json');
+    if (!fs.existsSync(storePath)) {
+      writeJobsFileAtomically(storePath, {
+        jobsById: {},
+        jobOrder: [],
+      });
+      jobsStorageHealth = 'healthy';
+    }
+    return storePath;
   }
 
   function readJobsState() {
     const storePath = ensureJobsStore();
     try {
       const raw = fs.readFileSync(storePath, 'utf8');
-      const parsed = JSON.parse(raw);
-      const jobsById =
-        parsed &&
-        parsed.jobsById &&
-        typeof parsed.jobsById === 'object' &&
-        !Array.isArray(parsed.jobsById)
-          ? parsed.jobsById
-          : {};
-      const jobOrder = parsed && Array.isArray(parsed.jobOrder) ? parsed.jobOrder : [];
-      return { jobsById, jobOrder };
+      const parsed = parseStrictJobsState(raw);
+      jobsStorageHealth = 'healthy';
+      return parsed;
     } catch {
+      jobsStorageHealth = 'unhealthy';
       return { jobsById: {}, jobOrder: [] };
     }
   }
 
   function writeJobsState(nextState) {
-    const storePath = ensureJobsStore();
-    fs.writeFileSync(storePath, JSON.stringify(nextState, null, 2), 'utf8');
+    const storeDir = ensureStoreDirectory();
+    const storePath = path.join(storeDir, 'jobs.json');
+    assertJobsStorageHealthyForWrite(storePath);
+    writeJobsFileAtomically(storePath, nextState);
+    jobsStorageHealth = 'healthy';
   }
 
   function appendAuditEvent(type, payload = {}) {
@@ -160,6 +350,7 @@ function createOrchestrationStateStore(dependencies = {}) {
     appendAuditEvent,
     computeRetryBackoffMs,
     isNonRetriableProviderReason,
+    isJobsStorageHealthy: () => jobsStorageHealth === 'healthy',
     onJobTerminal,
     randomUUID,
     readJobsState,
@@ -174,6 +365,7 @@ function createOrchestrationStateStore(dependencies = {}) {
     getAuthorizedJobById,
     getJobById,
     isJobCancelled,
+    listAuthorizedJobRecoveryCandidates,
     listJobs,
     markJobAwaitingUserInput,
     markJobCancelled,
@@ -565,6 +757,7 @@ function createOrchestrationStateStore(dependencies = {}) {
     getJobById,
     isJobCancelled,
     listConversationMessages,
+    listAuthorizedJobRecoveryCandidates,
     listJobs,
     markJobAwaitingUserInput,
     markJobCancelled,

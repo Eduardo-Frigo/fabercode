@@ -14,6 +14,7 @@ const HARD_MAX_TRACKED_JOBS = 10_000;
 // addition to root/lifecycle fences. Keep this bounded, but above that valid
 // worst-case operating envelope so restart recovery cannot self-deny midway.
 const MAX_AUTHORITY_USES_PER_RECOVERY = 512;
+const NATIVE_PROMISE_THEN = Promise.prototype.then;
 
 const OPTION_KEYS = Object.freeze([
   'getAuthorizedJobById',
@@ -120,6 +121,16 @@ function inspectDataRecord(value, { allowedKeys = null, requiredKeys = [] } = {}
     return values;
   } catch {
     return null;
+  }
+}
+
+function absorbNativePromise(value) {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')) return false;
+  try {
+    Reflect.apply(NATIVE_PROMISE_THEN, value, [() => {}, () => {}]);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -310,13 +321,7 @@ function createAgenticDeleteRecoveryService(options = {}) {
   function safeAudit(status, disposition, errorCode) {
     try {
       const result = audit(Object.freeze({ status, disposition, errorCode }));
-      if (result && (typeof result === 'object' || typeof result === 'function')) {
-        try {
-          Reflect.apply(Promise.prototype.then, result, [() => {}, () => {}]);
-        } catch {
-          // Ignore non-Promise telemetry values without invoking thenables.
-        }
-      }
+      absorbNativePromise(result);
     } catch {
       // Recovery never depends on telemetry.
     }
@@ -327,8 +332,12 @@ function createAgenticDeleteRecoveryService(options = {}) {
     try { raw = getAuthorizedJobById(jobId); } catch {
       return { errorCode: RECOVERY_ERROR_CODES.JOB_NOT_FOUND };
     }
+    const returnedNativePromise = absorbNativePromise(raw);
     if (interferenceGeneration !== epoch || !activeRecovery) {
       return { errorCode: RECOVERY_ERROR_CODES.RECOVERY_BUSY };
+    }
+    if (returnedNativePromise) {
+      return { errorCode: RECOVERY_ERROR_CODES.JOB_NOT_FOUND };
     }
     const fields = inspectDataRecord(raw);
     if (!fields || fields.has('then') || fields.get('ok') !== true) {
@@ -346,7 +355,9 @@ function createAgenticDeleteRecoveryService(options = {}) {
     } catch {
       return null;
     }
+    const returnedNativePromise = absorbNativePromise(raw);
     if (interferenceGeneration !== epoch || !activeRecovery) return null;
+    if (returnedNativePromise) return null;
     const fields = inspectDataRecord(raw);
     if (!fields
       || fields.has('then')
@@ -448,6 +459,8 @@ function createAgenticDeleteRecoveryService(options = {}) {
     } catch {
       return null;
     }
+    const returnedNativePromise = absorbNativePromise(runtime);
+    if (returnedNativePromise) return null;
     if (interferenceGeneration !== epoch || !activeRecovery || issuedRuntimes.has(runtime)) {
       return null;
     }
@@ -474,21 +487,27 @@ function createAgenticDeleteRecoveryService(options = {}) {
     } catch {
       return null;
     }
+    const returnedNativePromise = absorbNativePromise(result);
     if (interferenceGeneration !== epoch || !activeRecovery) return null;
+    if (returnedNativePromise) return null;
     return result;
   }
 
   function finishAttempt(attempt, result) {
-    attempt.state = 'sealed';
     attempt.result = result;
     if (result.status === 'completed') completedJobs += 1;
     else if (result.status === 'denied') deniedJobs += 1;
     else failedJobs += 1;
     safeAudit(result.status, result.disposition, result.errorCode);
+    attempt.state = 'sealed';
     return result;
   }
 
   function recoverJob(input = {}) {
+    const inputIsNativePromise = absorbNativePromise(input);
+    if (inputIsNativePromise) {
+      return denied(RECOVERY_ERROR_CODES.INVALID_REQUEST);
+    }
     const inputFields = inspectDataRecord(input, {
       allowedKeys: RECOVER_KEYS,
       requiredKeys: RECOVER_KEYS,
@@ -620,8 +639,11 @@ function createAgenticDeleteRecoveryService(options = {}) {
       return result;
     } finally {
       if (authority) authority.revoke();
-      activeRecovery = null;
-      finishAttempt(attempt, result || failed(RECOVERY_ERROR_CODES.RECOVERY_FAILED));
+      try {
+        finishAttempt(attempt, result || failed(RECOVERY_ERROR_CODES.RECOVERY_FAILED));
+      } finally {
+        activeRecovery = null;
+      }
     }
   }
 

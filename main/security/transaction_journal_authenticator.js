@@ -27,6 +27,8 @@ const MAXIMUM_KEY_BYTES = 64;
 const MAXIMUM_KEY_FILE_BYTES = 2048;
 const TRANSIENT_HARDLINK_RETRIES = 50;
 const TRANSIENT_HARDLINK_WAIT_MS = 2;
+const INITIAL_KEY_PUBLICATION_RETRIES = 100;
+const INITIAL_KEY_PUBLICATION_WAIT_MS = 5;
 const WINDOWS_DIRECTORY_SYNC_UNSUPPORTED_CODES = new Set([
   'EINVAL',
   'EISDIR',
@@ -247,7 +249,7 @@ function ensurePrivateStorageDirectory(storageCapture) {
     fail('KEY_STORAGE_INVALID', 'Journal authentication storage is invalid');
   }
   if (created) syncDirectory(storageCapture.realPath);
-  return Object.freeze({ path: privatePath, capture });
+  return Object.freeze({ path: privatePath, capture, created });
 }
 
 function strictJsonRecord(bytes) {
@@ -573,21 +575,39 @@ function recoverPublishedKeyTempLink(privatePath, keyPath) {
   }
 }
 
-function loadOrCreateKey(privatePath) {
+function keyFileExists(keyPath) {
+  try {
+    fs.lstatSync(keyPath);
+    return true;
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return false;
+    fail('KEY_STORAGE_INVALID', 'Journal authentication key is invalid');
+  }
+}
+
+function waitForInitialKeyPublication(keyPath) {
+  for (let attempt = 0; attempt <= INITIAL_KEY_PUBLICATION_RETRIES; attempt += 1) {
+    if (keyFileExists(keyPath)) return;
+    if (attempt === INITIAL_KEY_PUBLICATION_RETRIES) {
+      fail('KEY_STATE_LOST', 'Journal authentication key state is missing');
+    }
+    waitSynchronously(INITIAL_KEY_PUBLICATION_WAIT_MS);
+  }
+}
+
+function loadOrCreateKey(privatePath, privateDirectoryCreated) {
   const keyPath = path.join(
     privatePath,
     TRANSACTION_JOURNAL_AUTHENTICATOR_KEY_FILE_NAME
   );
-  let exists = false;
-  try {
-    fs.lstatSync(keyPath);
-    exists = true;
-  } catch (error) {
-    if (!error || error.code !== 'ENOENT') {
-      fail('KEY_STORAGE_INVALID', 'Journal authentication key is invalid');
+  const exists = keyFileExists(keyPath);
+  if (!exists) {
+    if (privateDirectoryCreated === true) {
+      createKeyFileAtomically(privatePath, keyPath);
+    } else {
+      waitForInitialKeyPublication(keyPath);
     }
   }
-  if (!exists) createKeyFileAtomically(privatePath, keyPath);
 
   for (let attempt = 0; attempt <= TRANSIENT_HARDLINK_RETRIES; attempt += 1) {
     try {
@@ -687,7 +707,7 @@ function createTransactionJournalAuthenticator(options = {}) {
   const storagePath = normalizeStoragePath(inspectOptions(options));
   const storageCapture = captureStorageDirectory(storagePath);
   const privateStorage = ensurePrivateStorageDirectory(storageCapture);
-  const key = loadOrCreateKey(privateStorage.capture.realPath);
+  const key = loadOrCreateKey(privateStorage.capture.realPath, privateStorage.created);
   let operationActive = false;
 
   function assertStableState() {

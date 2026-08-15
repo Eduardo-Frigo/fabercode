@@ -921,13 +921,16 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     } catch {
       fail('MANIFEST_INVALID', 'The transaction manifest contracts are invalid');
     }
-    if (!sameBinding(binding, expectedBinding)
-      || raw.bindingDigest !== canonicalSha256Digest(binding)
+    if (binding.canonicalRootPath !== expectedBinding.canonicalRootPath
+      || binding.realRootPath !== expectedBinding.realRootPath) {
+      fail('MANIFEST_BINDING_MISMATCH', 'The transaction manifest is bound elsewhere');
+    }
+    if (raw.bindingDigest !== canonicalSha256Digest(binding)
       || checkpointManifest.checkpointDigest !== raw.checkpointManifest.checkpointDigest
       || checkpointManifest.planDigest !== plan.planDigest
       || checkpointManifest.requestDigest !== plan.requestDigest
       || checkpointManifest.impactDigest !== plan.impactDigest) {
-      fail('MANIFEST_BINDING_MISMATCH', 'The transaction manifest is bound elsewhere');
+      fail('MANIFEST_INVALID', 'The transaction manifest digests are invalid');
     }
     const targetValues = denseDataValues(raw.targets, 'private manifest targets');
     if (targetValues.length !== plan.request.paths.length) {
@@ -959,7 +962,11 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     };
     const signed = { ...core, manifestDigest: canonicalSha256Digest(core) };
     if (raw.manifestDigest !== signed.manifestDigest
-      || !authenticationIsValid(binding.realRootPath, signed, raw.authenticationTag)) {
+      || !authenticationIsValid(
+        expectedBinding.realRootPath,
+        signed,
+        raw.authenticationTag
+      )) {
       fail('MANIFEST_AUTHENTICATION_FAILED', 'The transaction manifest failed authentication');
     }
     return Object.freeze({ ...signed, targets, authenticationTag: raw.authenticationTag });
@@ -1237,6 +1244,127 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     });
   }
 
+  function isCanonicalSha256Digest(value) {
+    try { return normalizeDigest(value, 'journal head digest') === value; } catch {
+      return false;
+    }
+  }
+
+  function validateAuthenticatedOrphanHead(raw, transactionId, rootPath, fieldName) {
+    assertExactKeys(raw, [
+      'schemaVersion',
+      'authenticationVersion',
+      'transactionId',
+      'bindingDigest',
+      'manifestDigest',
+      'revision',
+      'previousAnchorDigest',
+      'sequence',
+      'headDigest',
+      'journalDigest',
+      'latestState',
+      'authenticationTag',
+    ], [
+      'schemaVersion',
+      'authenticationVersion',
+      'transactionId',
+      'bindingDigest',
+      'manifestDigest',
+      'revision',
+      'previousAnchorDigest',
+      'sequence',
+      'headDigest',
+      'journalDigest',
+      'latestState',
+      'authenticationTag',
+    ], fieldName);
+    const core = {
+      schemaVersion: raw.schemaVersion,
+      authenticationVersion: raw.authenticationVersion,
+      transactionId: raw.transactionId,
+      bindingDigest: raw.bindingDigest,
+      manifestDigest: raw.manifestDigest,
+      revision: raw.revision,
+      previousAnchorDigest: raw.previousAnchorDigest,
+      sequence: raw.sequence,
+      headDigest: raw.headDigest,
+      journalDigest: raw.journalDigest,
+      latestState: raw.latestState,
+    };
+    const digestsAreCanonical = [
+      raw.bindingDigest,
+      raw.manifestDigest,
+      raw.headDigest,
+      raw.journalDigest,
+    ].every(isCanonicalSha256Digest)
+      && (raw.previousAnchorDigest === null
+        || isCanonicalSha256Digest(raw.previousAnchorDigest));
+    if (raw.schemaVersion !== PRIVATE_HEAD_SCHEMA_VERSION
+      || raw.authenticationVersion !== JOURNAL_AUTHENTICATOR_VERSION
+      || raw.transactionId !== transactionId
+      || !SAFE_TRANSACTION_ID.test(raw.transactionId)
+      || !Number.isSafeInteger(raw.revision)
+      || raw.revision < 1
+      || Object.is(raw.revision, -0)
+      || !Number.isSafeInteger(raw.sequence)
+      || raw.sequence < 0
+      || Object.is(raw.sequence, -0)
+      || !Object.values(TRANSACTIONAL_DELETE_STATES).includes(raw.latestState)
+      || !digestsAreCanonical
+      || !authenticationIsValid(rootPath, core, raw.authenticationTag)) {
+      fail('JOURNAL_HEAD_INVALID', 'An orphan journal head failed authentication');
+    }
+    return Object.freeze({ ...core, authenticationTag: raw.authenticationTag });
+  }
+
+  function validateOrphanAnchorChain(anchorPath, transactionId, rootPath) {
+    let stat;
+    try { stat = fs.lstatSync(anchorPath); } catch {
+      fail('JOURNAL_ANCHOR_INVALID', 'The orphan journal anchor chain is missing');
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      fail('JOURNAL_ANCHOR_INVALID', 'The orphan journal anchor directory is unsafe');
+    }
+    const names = fs.readdirSync(anchorPath).sort();
+    if (!names.length) {
+      fail('JOURNAL_ANCHOR_INVALID', 'The orphan journal anchor chain has a gap');
+    }
+    let previousAnchorDigest = null;
+    let previousSequence = null;
+    let bindingDigest = null;
+    let manifestDigest = null;
+    let latestHead = null;
+    for (let index = 0; index < names.length; index += 1) {
+      const name = names[index];
+      const match = /^(\d{12})-([a-f0-9]{64})\.json$/.exec(name);
+      if (!match || Number(match[1]) !== index + 1) {
+        fail('JOURNAL_ANCHOR_INVALID', 'The orphan journal anchor order is invalid');
+      }
+      const head = validateAuthenticatedOrphanHead(
+        readPrivateJson(path.join(anchorPath, name)),
+        transactionId,
+        rootPath,
+        'orphan journal anchor'
+      );
+      if (head.revision !== index + 1
+        || head.previousAnchorDigest !== previousAnchorDigest
+        || (previousSequence === null
+          ? head.sequence !== 0
+          : head.sequence < previousSequence || head.sequence > previousSequence + 1)
+        || head.journalDigest !== `sha256:${match[2]}`
+        || (bindingDigest !== null && head.bindingDigest !== bindingDigest)
+        || (manifestDigest !== null && head.manifestDigest !== manifestDigest)) {
+        fail('JOURNAL_ANCHOR_INVALID', 'An orphan journal anchor is invalid');
+      }
+      bindingDigest = head.bindingDigest;
+      manifestDigest = head.manifestDigest;
+      previousAnchorDigest = canonicalSha256Digest(head);
+      previousSequence = head.sequence;
+      latestHead = head;
+    }
+    return Object.freeze({ latestHead, lastAnchorDigest: previousAnchorDigest });
+  }
+
   function persistJournal(transaction, journal = transaction.journal) {
     const head = buildHead(transaction, journal);
     const generationName = `${String(journal.revision).padStart(12, '0')}-${journal.journalDigest.slice(7)}.json`;
@@ -1464,6 +1592,11 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       transactionId,
       binding
     );
+    // A project root may retain checkpoints for more than one authorized job.
+    // Ignore another job only after its complete manifest, digests, root
+    // binding, and authentication tag have all been validated above. Unknown
+    // or tampered manifests still throw and remain recovery-blocking.
+    if (!sameBinding(manifest.binding, binding)) return null;
     const anchorPath = path.join(
       binding.realRootPath,
       '.faber',
@@ -1543,6 +1676,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       if (transactionsById.has(name)) continue;
       try {
         const transaction = loadTransactionFromDisk(binding, name);
+        if (!transaction) continue;
         register(transaction);
         discovered.push(transaction);
       } catch {
@@ -1574,69 +1708,29 @@ function createTransactionalFilesystemDeleteService(options = {}) {
             if (transactionNames.has(transactionId)) continue;
             const headPath = path.join(headsPath, fileName);
             try {
-              const head = readPrivateJson(headPath);
-              assertExactKeys(head, [
-                'schemaVersion',
-                'authenticationVersion',
-                'transactionId',
-                'bindingDigest',
-                'manifestDigest',
-                'revision',
-                'previousAnchorDigest',
-                'sequence',
-                'headDigest',
-                'journalDigest',
-                'latestState',
-                'authenticationTag',
-              ], [
-                'schemaVersion',
-                'authenticationVersion',
-                'transactionId',
-                'bindingDigest',
-                'manifestDigest',
-                'revision',
-                'previousAnchorDigest',
-                'sequence',
-                'headDigest',
-                'journalDigest',
-                'latestState',
-                'authenticationTag',
-              ], 'orphan journal head');
-              const core = {
-                schemaVersion: head.schemaVersion,
-                authenticationVersion: head.authenticationVersion,
-                transactionId: head.transactionId,
-                bindingDigest: head.bindingDigest,
-                manifestDigest: head.manifestDigest,
-                revision: head.revision,
-                previousAnchorDigest: head.previousAnchorDigest,
-                sequence: head.sequence,
-                headDigest: head.headDigest,
-                journalDigest: head.journalDigest,
-                latestState: head.latestState,
-              };
-              if (head.schemaVersion !== PRIVATE_HEAD_SCHEMA_VERSION
-                || head.authenticationVersion !== JOURNAL_AUTHENTICATOR_VERSION
-                || head.transactionId !== transactionId
-                || head.bindingDigest !== canonicalSha256Digest(binding)
-                || head.latestState !== TRANSACTIONAL_DELETE_STATES.PURGING
-                || !authenticationIsValid(
-                  binding.realRootPath,
-                  core,
-                  head.authenticationTag
-                )) {
+              const head = validateAuthenticatedOrphanHead(
+                readPrivateJson(headPath),
+                transactionId,
+                binding.realRootPath,
+                'orphan journal head'
+              );
+              if (head.latestState !== TRANSACTIONAL_DELETE_STATES.PURGING) {
                 fail('JOURNAL_HEAD_INVALID', 'An orphan journal head is not safely purgeable');
               }
               const orphanAnchorPath = path.join(headsPath, transactionId);
-              const anchorNames = fs.readdirSync(orphanAnchorPath).sort();
-              const latestAnchorName = anchorNames[anchorNames.length - 1];
-              const latestAnchor = latestAnchorName
-                ? readPrivateJson(path.join(orphanAnchorPath, latestAnchorName))
-                : null;
-              if (!latestAnchor
-                || canonicalSha256Digest(latestAnchor) !== canonicalSha256Digest(head)) {
+              const anchorChain = validateOrphanAnchorChain(
+                orphanAnchorPath,
+                transactionId,
+                binding.realRootPath
+              );
+              if (canonicalSha256Digest(anchorChain.latestHead)
+                !== canonicalSha256Digest(head)) {
                 fail('JOURNAL_REPLAY_DETECTED', 'The orphan head does not match its anchor');
               }
+              // The root-scoped HMAC authenticates an orphan independently of
+              // the caller's job binding. Preserve a fully valid foreign pair
+              // for its owner; only the exact binding may remove it.
+              if (head.bindingDigest !== canonicalSha256Digest(binding)) continue;
               fs.unlinkSync(headPath);
               fs.rmSync(orphanAnchorPath, { recursive: true, force: false });
               durability.syncDirectory(headsPath);

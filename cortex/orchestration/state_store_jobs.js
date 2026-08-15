@@ -1,6 +1,24 @@
 const { randomUUID: defaultRandomUUID } = require('crypto');
 
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const AUTHORIZED_RECOVERY_FAILED_TERMINAL_PHASES = new Set([
+  'failed',
+  'runtime_interrupted',
+  'execute_authorization_failed',
+  'execute_validation_fresh_approval_required',
+  'execute_pending_fresh_approval_required',
+  'execute_validation_retry_exhausted',
+  'execute_pending_retry_exhausted',
+  'execute_validation',
+  'execute_failed',
+  'assistant_planning_failed',
+  'provider_failure',
+  'persona_retry_exhausted',
+  'cortex_briefing_retry_exhausted',
+  'cortex_validation_retry_exhausted',
+  'cortex_validation',
+  'persona_non_actionable_route',
+]);
 const AUTHORITY_CONTEXT_SCHEMA_VERSION = 'assistant-job-authority.v1';
 const AUTHORITY_CONTEXT_KEYS = [
   'schemaVersion',
@@ -42,6 +60,7 @@ function createJobStateStore(dependencies = {}) {
     MAX_JOBS_STORED = 180,
     appendAuditEvent,
     computeRetryBackoffMs,
+    isJobsStorageHealthy = () => true,
     isNonRetriableProviderReason,
     onJobTerminal,
     randomUUID = defaultRandomUUID,
@@ -1116,6 +1135,77 @@ function createJobStateStore(dependencies = {}) {
     return { ok: true, recovered: recoveredJobIds.length, jobIds: recoveredJobIds };
   }
 
+  function listAuthorizedJobRecoveryCandidates() {
+    const current = readJobsState();
+    if (isJobsStorageHealthy() !== true) {
+      return { ok: false, jobIds: [] };
+    }
+    const orderedJobIds = [];
+    const seenJobIds = new Set();
+
+    const appendJobId = (jobId) => {
+      if (
+        seenJobIds.has(jobId) ||
+        !isSafeJobId(jobId) ||
+        !Object.hasOwn(current.jobsById, jobId)
+      ) {
+        return;
+      }
+      seenJobIds.add(jobId);
+      orderedJobIds.push(jobId);
+    };
+
+    if (Array.isArray(current.jobOrder)) {
+      current.jobOrder.forEach(appendJobId);
+    }
+    Object.keys(current.jobsById).forEach(appendJobId);
+
+    const jobIds = orderedJobIds.filter((jobId) => {
+      const job = current.jobsById[jobId];
+      const authority = validateStoredAuthorityJob(job);
+      if (
+        !authority.ok ||
+        authority.authorityContextStatus !== 'bound' ||
+        !authority.authorityContext ||
+        !SHA256_DIGEST_PATTERN.test(authority.authorityContext.actionDigest)
+      ) {
+        return false;
+      }
+
+      let descriptors;
+      try {
+        descriptors = Object.getOwnPropertyDescriptors(job);
+      } catch {
+        return false;
+      }
+      if (Object.hasOwn(descriptors, 'then')) return false;
+
+      const readDataProperty = (key) => {
+        const descriptor = descriptors[key];
+        if (
+          !descriptor ||
+          descriptor.enumerable !== true ||
+          !Object.prototype.hasOwnProperty.call(descriptor, 'value')
+        ) {
+          return undefined;
+        }
+        return descriptor.value;
+      };
+      const storedId = readDataProperty('id');
+      const status = readDataProperty('status');
+      const phase = readDataProperty('phase');
+      if (storedId !== jobId) return false;
+
+      return (
+        (status === 'completed' && phase === 'done') ||
+        (status === 'cancelled' && phase === 'cancelled') ||
+        (status === 'failed' && AUTHORIZED_RECOVERY_FAILED_TERMINAL_PHASES.has(phase))
+      );
+    });
+
+    return { ok: true, jobIds };
+  }
+
   function listJobs({ projectId = null, limit = 30 } = {}) {
     const current = readJobsState();
     const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Number(limit))) : 30;
@@ -1139,6 +1229,7 @@ function createJobStateStore(dependencies = {}) {
     getAuthorizedJobById,
     getJobById,
     isJobCancelled,
+    listAuthorizedJobRecoveryCandidates,
     listJobs,
     markJobAwaitingUserInput,
     markJobCancelled,

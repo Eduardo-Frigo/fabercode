@@ -129,6 +129,62 @@ async function runTests() {
   assert.strictEqual(restarted.verify(rootPath, value, tag), true);
   assert.strictEqual(restarted.seal(rootPath, value), tag);
 
+  const continuityStorage = temporaryDirectory('faber-journal-auth-continuity-');
+  const continuityRoot = temporaryDirectory('faber-journal-auth-continuity-root-');
+  const continuityAuthenticator = createTransactionJournalAuthenticator({
+    storageDir: continuityStorage,
+  });
+  const continuityValue = { revision: 9, state: 'COMMITTED' };
+  const continuityTag = continuityAuthenticator.seal(continuityRoot, continuityValue);
+  const continuityPaths = keyPaths(continuityStorage);
+  const retainedWalPath = path.join(
+    continuityRoot,
+    '.faber',
+    'transactions',
+    'job-retained',
+    'journal.json'
+  );
+  fs.mkdirSync(path.dirname(retainedWalPath), { recursive: true });
+  const retainedWalBytes = `${JSON.stringify({
+    state: 'COMMITTED',
+    authenticationTag: continuityTag,
+  })}\n`;
+  fs.writeFileSync(retainedWalPath, retainedWalBytes, 'utf8');
+  fs.unlinkSync(continuityPaths.keyPath);
+
+  assert.throws(
+    () => createTransactionJournalAuthenticator({ storageDir: continuityStorage }),
+    errorHasCode('KEY_STATE_LOST')
+  );
+  assert.strictEqual(fs.existsSync(continuityPaths.keyPath), false);
+  assert.strictEqual(fs.readFileSync(retainedWalPath, 'utf8'), retainedWalBytes);
+  assert.strictEqual(JSON.parse(retainedWalBytes).authenticationTag, continuityTag);
+  assert.strictEqual(
+    continuityAuthenticator.verify(continuityRoot, continuityValue, continuityTag),
+    false
+  );
+  assert.strictEqual(fs.existsSync(continuityPaths.keyPath), false);
+
+  const prePublishCrashStorage = temporaryDirectory('faber-journal-auth-pre-publish-crash-');
+  const prePublishCrashPaths = keyPaths(prePublishCrashStorage);
+  fs.mkdirSync(prePublishCrashPaths.privateDir, { mode: 0o700 });
+  if (process.platform !== 'win32') fs.chmodSync(prePublishCrashPaths.privateDir, 0o700);
+  const abandonedPrePublishTemp = path.join(
+    prePublishCrashPaths.privateDir,
+    `.${TRANSACTION_JOURNAL_AUTHENTICATOR_KEY_FILE_NAME}.999999.${'B'.repeat(24)}.tmp`
+  );
+  const abandonedPrePublishBytes = 'truncated-key-material';
+  fs.writeFileSync(abandonedPrePublishTemp, abandonedPrePublishBytes, { mode: 0o600 });
+  assert.throws(
+    () => createTransactionJournalAuthenticator({ storageDir: prePublishCrashStorage }),
+    errorHasCode('KEY_STATE_LOST')
+  );
+  assert.strictEqual(fs.existsSync(prePublishCrashPaths.keyPath), false);
+  assert.strictEqual(
+    fs.readFileSync(abandonedPrePublishTemp, 'utf8'),
+    abandonedPrePublishBytes
+  );
+
   const paths = keyPaths(storageDir);
   const privateStat = fs.lstatSync(paths.privateDir);
   const keyStat = fs.lstatSync(paths.keyPath);

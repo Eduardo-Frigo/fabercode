@@ -185,10 +185,14 @@ function sessionWithOverrides(session, overrides = {}) {
 }
 
 function createHarness(rootPath, overrides = {}) {
+  const {
+    bindingOverrides = {},
+    ...serviceOverrides
+  } = overrides;
   let transactionSerial = 0;
   let lifecycleAuthorized = true;
   let rootAuthorized = true;
-  const binding = projectBinding(rootPath);
+  const binding = projectBinding(rootPath, bindingOverrides);
   const service = createTransactionalFilesystemDeleteService({
     authorizeLifecycle(candidate) {
       return lifecycleAuthorized
@@ -219,8 +223,8 @@ function createHarness(rootPath, overrides = {}) {
       return `transaction-id-${String(transactionSerial).padStart(4, '0')}`;
     },
     journalAuthenticator: testJournalAuthenticator,
-    mutationBackend: createTestMutationBackend(overrides.fs || fs),
-    ...overrides,
+    mutationBackend: createTestMutationBackend(serviceOverrides.fs || fs),
+    ...serviceOverrides,
   });
   return {
     binding,
@@ -459,6 +463,153 @@ withProject((rootPath) => {
   assert.strictEqual(terminal.ok, true);
   assert.strictEqual(terminal.rolledBack, 1);
   assert.strictEqual(fs.readFileSync(path.join(rootPath, 'restart.txt'), 'utf8'), 'restart-safe');
+});
+
+withProject((rootPath) => {
+  fs.writeFileSync(path.join(rootPath, 'job-a.txt'), 'job-a-safe');
+  fs.writeFileSync(path.join(rootPath, 'job-b.txt'), 'job-b-safe');
+  const bindingA = {
+    jobId: 'job-restart-a',
+    sessionId: 'session-restart-a',
+    kernelId: 'kernel-restart-a',
+    submissionDigest: digest('a'),
+  };
+  const bindingB = {
+    jobId: 'job-restart-b',
+    sessionId: 'session-restart-b',
+    kernelId: 'kernel-restart-b',
+    submissionDigest: digest('b'),
+  };
+  const firstA = createHarness(rootPath, {
+    bindingOverrides: bindingA,
+    transactionIdFactory: () => 'transaction-restart-job-a',
+  });
+  const firstB = createHarness(rootPath, {
+    bindingOverrides: bindingB,
+    transactionIdFactory: () => 'transaction-restart-job-b',
+  });
+  assert.strictEqual(commit(prepare(firstA, ['job-a.txt'])).state, 'COMMITTED');
+  assert.strictEqual(commit(prepare(firstB, ['job-b.txt'])).state, 'COMMITTED');
+
+  const restartedA = createHarness(rootPath, { bindingOverrides: bindingA });
+  assert.deepStrictEqual(restartedA.service.recoverProject({ binding: restartedA.binding }), {
+    ok: true,
+    recovered: 0,
+    retainedCommitted: 1,
+    retainedUnknown: 0,
+  });
+  assert.deepStrictEqual(restartedA.service.rollbackJob({ binding: restartedA.binding }), {
+    ok: true,
+    purged: 0,
+    rolledBack: 1,
+    recoveryRequired: 0,
+  });
+  assert.strictEqual(fs.readFileSync(path.join(rootPath, 'job-a.txt'), 'utf8'), 'job-a-safe');
+  assert.strictEqual(fs.existsSync(path.join(rootPath, 'job-b.txt')), false);
+
+  const restartedB = createHarness(rootPath, { bindingOverrides: bindingB });
+  assert.deepStrictEqual(restartedB.service.recoverProject({ binding: restartedB.binding }), {
+    ok: true,
+    recovered: 0,
+    retainedCommitted: 1,
+    retainedUnknown: 0,
+  });
+  assert.deepStrictEqual(restartedB.service.rollbackJob({ binding: restartedB.binding }), {
+    ok: true,
+    purged: 0,
+    rolledBack: 1,
+    recoveryRequired: 0,
+  });
+  assert.strictEqual(fs.readFileSync(path.join(rootPath, 'job-b.txt'), 'utf8'), 'job-b-safe');
+  assert.deepStrictEqual(fs.readdirSync(path.join(rootPath, '.faber', 'transactions')), []);
+});
+
+withProject((rootPath) => {
+  fs.writeFileSync(path.join(rootPath, 'foreign.txt'), 'foreign-safe');
+  const owner = createHarness(rootPath, {
+    bindingOverrides: {
+      jobId: 'job-foreign-owner',
+      sessionId: 'session-foreign-owner',
+      kernelId: 'kernel-foreign-owner',
+      submissionDigest: digest('c'),
+    },
+    transactionIdFactory: () => 'transaction-foreign-owner',
+  });
+  assert.strictEqual(commit(prepare(owner, ['foreign.txt'])).state, 'COMMITTED');
+
+  let mutationSessionPreparations = 0;
+  const baseBackend = createTestMutationBackend();
+  const observingBackend = Object.freeze({
+    probe: baseBackend.probe,
+    prepare(input) {
+      mutationSessionPreparations += 1;
+      return baseBackend.prepare(input);
+    },
+  });
+  const observer = createHarness(rootPath, {
+    bindingOverrides: {
+      jobId: 'job-foreign-observer',
+      sessionId: 'session-foreign-observer',
+      kernelId: 'kernel-foreign-observer',
+      submissionDigest: digest('d'),
+    },
+    mutationBackend: observingBackend,
+  });
+  assert.deepStrictEqual(observer.service.recoverProject({ binding: observer.binding }), {
+    ok: true,
+    recovered: 0,
+    retainedCommitted: 0,
+    retainedUnknown: 0,
+  });
+  assert.strictEqual(mutationSessionPreparations, 0);
+  assert.strictEqual(fs.existsSync(path.join(rootPath, 'foreign.txt')), false);
+  assert.strictEqual(
+    fs.readdirSync(path.join(rootPath, '.faber', 'transactions')).length,
+    1
+  );
+});
+
+withProject((rootPath) => {
+  fs.writeFileSync(path.join(rootPath, 'foreign-tampered.txt'), 'foreign-tampered-safe');
+  const owner = createHarness(rootPath, {
+    bindingOverrides: {
+      jobId: 'job-tampered-owner',
+      sessionId: 'session-tampered-owner',
+      kernelId: 'kernel-tampered-owner',
+      submissionDigest: digest('e'),
+    },
+    transactionIdFactory: () => 'transaction-tampered-owner',
+  });
+  assert.strictEqual(commit(prepare(owner, ['foreign-tampered.txt'])).state, 'COMMITTED');
+  const manifestPath = path.join(
+    rootPath,
+    '.faber',
+    'transactions',
+    'transaction-tampered-owner',
+    'manifest.json'
+  );
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const finalTagCharacter = manifest.authenticationTag.at(-1);
+  manifest.authenticationTag = `${manifest.authenticationTag.slice(0, -1)}${
+    finalTagCharacter === '0' ? '1' : '0'
+  }`;
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, 'utf8');
+
+  const observer = createHarness(rootPath, {
+    bindingOverrides: {
+      jobId: 'job-tampered-observer',
+      sessionId: 'session-tampered-observer',
+      kernelId: 'kernel-tampered-observer',
+      submissionDigest: digest('f'),
+    },
+  });
+  assert.deepStrictEqual(observer.service.recoverProject({ binding: observer.binding }), {
+    ok: false,
+    recovered: 0,
+    retainedCommitted: 0,
+    retainedUnknown: 1,
+  });
+  assert.strictEqual(fs.existsSync(path.join(rootPath, 'foreign-tampered.txt')), false);
 });
 
 withProject((rootPath) => {
@@ -724,6 +875,150 @@ withProject((rootPath) => {
     'an interrupted purge must finish removing authenticated metadata'
   );
 });
+
+withProject((rootPath) => {
+  fs.writeFileSync(path.join(rootPath, 'foreign-orphan.txt'), 'foreign-orphan');
+  const ownerBinding = {
+    jobId: 'job-orphan-owner',
+    sessionId: 'session-orphan-owner',
+    kernelId: 'kernel-orphan-owner',
+    submissionDigest: digest('1'),
+  };
+  let interruptAfterTransactionRemoval = true;
+  const interruptedBackend = createWrappedTestMutationBackend({
+    wrapSession(session, input) {
+      return sessionWithOverrides(session, {
+        purgeQuarantine(frontier) {
+          if (interruptAfterTransactionRemoval) {
+            interruptAfterTransactionRemoval = false;
+            fs.rmSync(input.transactionPath, { recursive: true, force: false });
+            throw new Error('crash after transaction removal and before head cleanup');
+          }
+          return session.purgeQuarantine(frontier);
+        },
+      });
+    },
+  });
+  const firstOwner = createHarness(rootPath, {
+    bindingOverrides: ownerBinding,
+    mutationBackend: interruptedBackend,
+    transactionIdFactory: () => 'transaction-foreign-orphan-owner',
+  });
+  assert.strictEqual(commit(prepare(firstOwner, ['foreign-orphan.txt'])).state, 'COMMITTED');
+  assert.deepStrictEqual(firstOwner.service.finalizeJob({
+    binding: firstOwner.binding,
+    outcome: 'success',
+  }), {
+    ok: false,
+    purged: 0,
+    rolledBack: 0,
+    recoveryRequired: 1,
+  });
+
+  const transactionsPath = path.join(rootPath, '.faber', 'transactions');
+  const headsPath = path.join(rootPath, '.faber', 'transaction-heads');
+  const transactionId = 'transaction-foreign-orphan-owner';
+  const headPath = path.join(headsPath, `${transactionId}.json`);
+  const anchorPath = path.join(headsPath, transactionId);
+  assert.deepStrictEqual(fs.readdirSync(transactionsPath), []);
+  assert.strictEqual(lstatExists(headPath), true);
+  assert.strictEqual(lstatExists(anchorPath), true);
+
+  const observer = createHarness(rootPath, {
+    bindingOverrides: {
+      jobId: 'job-orphan-observer',
+      sessionId: 'session-orphan-observer',
+      kernelId: 'kernel-orphan-observer',
+      submissionDigest: digest('2'),
+    },
+  });
+  assert.deepStrictEqual(observer.service.recoverProject({ binding: observer.binding }), {
+    ok: true,
+    recovered: 0,
+    retainedCommitted: 0,
+    retainedUnknown: 0,
+  });
+  assert.strictEqual(lstatExists(headPath), true, 'a foreign authenticated head must be retained');
+  assert.strictEqual(
+    lstatExists(anchorPath),
+    true,
+    'a foreign authenticated anchor chain must be retained'
+  );
+
+  const restartedOwner = createHarness(rootPath, { bindingOverrides: ownerBinding });
+  assert.deepStrictEqual(restartedOwner.service.recoverProject({
+    binding: restartedOwner.binding,
+  }), {
+    ok: true,
+    recovered: 1,
+    retainedCommitted: 0,
+    retainedUnknown: 0,
+  });
+  assert.strictEqual(lstatExists(headPath), false);
+  assert.strictEqual(lstatExists(anchorPath), false);
+});
+
+for (const orphanCorruption of ['tampered-anchor', 'unreadable-head']) {
+  withProject((rootPath) => {
+    const targetName = `${orphanCorruption}.txt`;
+    const transactionId = `transaction-orphan-${orphanCorruption}`;
+    fs.writeFileSync(path.join(rootPath, targetName), orphanCorruption);
+    const interruptedBackend = createWrappedTestMutationBackend({
+      wrapSession(session, input) {
+        return sessionWithOverrides(session, {
+          purgeQuarantine() {
+            fs.rmSync(input.transactionPath, { recursive: true, force: false });
+            throw new Error('crash after transaction removal and before metadata cleanup');
+          },
+        });
+      },
+    });
+    const owner = createHarness(rootPath, {
+      bindingOverrides: {
+        jobId: `job-owner-${orphanCorruption}`,
+        sessionId: `session-owner-${orphanCorruption}`,
+        kernelId: `kernel-owner-${orphanCorruption}`,
+        submissionDigest: digest('3'),
+      },
+      mutationBackend: interruptedBackend,
+      transactionIdFactory: () => transactionId,
+    });
+    assert.strictEqual(commit(prepare(owner, [targetName])).state, 'COMMITTED');
+    assert.strictEqual(owner.service.finalizeJob({
+      binding: owner.binding,
+      outcome: 'success',
+    }).ok, false);
+
+    const headsPath = path.join(rootPath, '.faber', 'transaction-heads');
+    const headPath = path.join(headsPath, `${transactionId}.json`);
+    const anchorPath = path.join(headsPath, transactionId);
+    if (orphanCorruption === 'tampered-anchor') {
+      const oldestAnchorPath = path.join(anchorPath, fs.readdirSync(anchorPath).sort()[0]);
+      const oldestAnchor = JSON.parse(fs.readFileSync(oldestAnchorPath, 'utf8'));
+      oldestAnchor.manifestDigest = digest('4');
+      fs.writeFileSync(oldestAnchorPath, `${JSON.stringify(oldestAnchor)}\n`, 'utf8');
+    } else {
+      fs.writeFileSync(headPath, '{', 'utf8');
+    }
+
+    const observer = createHarness(rootPath, {
+      bindingOverrides: {
+        jobId: `job-observer-${orphanCorruption}`,
+        sessionId: `session-observer-${orphanCorruption}`,
+        kernelId: `kernel-observer-${orphanCorruption}`,
+        submissionDigest: digest('5'),
+      },
+    });
+    assert.deepStrictEqual(observer.service.recoverProject({ binding: observer.binding }), {
+      ok: false,
+      recovered: 0,
+      retainedCommitted: 0,
+      retainedUnknown: 1,
+    });
+    assert.strictEqual(lstatExists(headPath), true);
+    assert.strictEqual(lstatExists(anchorPath), true);
+  });
+}
 
 withProject((rootPath) => {
   fs.writeFileSync(path.join(rootPath, 'invalid-session.txt'), 'invalid-session');
