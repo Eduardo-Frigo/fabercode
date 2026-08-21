@@ -4,7 +4,9 @@ const crypto = require('crypto');
 
 const {
   ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION,
+  ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION,
   ANCHORED_FILESYSTEM_MUTATION_REQUIRED_GUARANTEES,
+  ANCHORED_FILESYSTEM_MUTATION_ROOT_NAMESPACE_VERSION,
   ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
 } = require('./anchored_filesystem_mutation_backend_contract');
 const {
@@ -15,16 +17,24 @@ const {
 } = require('./transactional_delete_contracts');
 
 const ANCHORED_MUTATION_HELPER_PROTOCOL_VERSION =
-  'anchored-mutation-helper-protocol.v1';
+  'anchored-mutation-helper-protocol.v2';
 const ANCHORED_MUTATION_HELPER_HANDSHAKE_VERSION =
-  'anchored-mutation-helper-handshake.v1';
+  'anchored-mutation-helper-handshake.v2';
 const ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION =
-  'anchored-mutation-helper.namespace-io-integration.v1';
+  'anchored-mutation-helper.namespace-io-integration.v2';
 
 const ANCHORED_MUTATION_HELPER_OPERATIONS = Object.freeze({
   HANDSHAKE: 'handshake',
+  ROOT_NAMESPACE_OPEN: 'root_namespace.open',
+  ROOT_NAMESPACE_READ_FILE: 'root_namespace.read_file',
+  ROOT_NAMESPACE_LIST: 'root_namespace.list',
+  ROOT_NAMESPACE_OPEN_EXISTING_SESSION: 'root_namespace.open_existing_session',
+  ROOT_NAMESPACE_CLEANUP_AUTHENTICATED_ORPHAN:
+    'root_namespace.cleanup_authenticated_orphan',
+  ROOT_NAMESPACE_CLOSE: 'root_namespace.close',
   SESSION_OPEN: 'session.open',
   SESSION_VERIFY: 'session.verify',
+  SESSION_INSPECT_PROGRESS: 'session.inspect_progress',
   SESSION_MOVE_TO_QUARANTINE: 'session.move_to_quarantine',
   SESSION_RESTORE_FROM_QUARANTINE: 'session.restore_from_quarantine',
   SESSION_PURGE_QUARANTINE: 'session.purge_quarantine',
@@ -38,18 +48,23 @@ const ANCHORED_MUTATION_HELPER_OPERATIONS = Object.freeze({
 });
 
 const ANCHORED_MUTATION_HELPER_LIMITS = Object.freeze({
-  maxMessageBytes: 512 * 1024,
+  maxMessageBytes: 3 * 1024 * 1024,
   maxPathHintLength: 4096,
   maxPrivateRelativePathLength: 1024,
-  maxPrivateFileBytes: 256 * 1024,
-  maxNamespaceEntries: 256,
+  maxPrivateFileBytes: 2 * 1024 * 1024,
+  maxNamespaceEntries: 512,
   maxTargets: 32,
   maxCheckpointEntries: 36,
   maxSequence: 1_000_000,
-  maxActiveSessions: 8,
-  maxTotalSessions: 64,
-  maxRequestsPerClient: 4096,
+  maxActiveSessions: 256,
+  maxTotalSessions: 65_536,
+  maxRequestsPerClient: 262_144,
   maxOrphanLeaseMs: 5_000,
+});
+const DATA_GRAPH_PREFLIGHT_LIMITS = Object.freeze({
+  maxDepth: 64,
+  maxNodes: 100_000,
+  maxProperties: 200_000,
 });
 
 const MESSAGE_KINDS = Object.freeze({
@@ -65,6 +80,15 @@ const NAMESPACE_POLICY = immutableSnapshot({
   cleanup: 'anchored_session',
   pathnameHintsAreAuthority: false,
 });
+const ROOT_NAMESPACE_POLICY = immutableSnapshot({
+  privateRootName: '.faber',
+  transactionNamespaceName: 'transactions',
+  mode: 'open_existing_private_read_only',
+  authority: 'pinned_root_handle',
+  io: 'root_namespace_mediated',
+  cleanup: 'authenticated_orphan_only',
+  pathnameHintsAreAuthority: false,
+});
 const HANDSHAKE_REQUIREMENTS = immutableSnapshot({
   synchronousEffects: true,
   dataOnlyMessages: true,
@@ -73,6 +97,14 @@ const HANDSHAKE_REQUIREMENTS = immutableSnapshot({
   privateNamespaceIo: 'session_mediated',
   namespaceOpenedBeforeWrites: true,
   anchoredNamespaceCleanup: true,
+  rootNamespaceBootstrap: true,
+  rootNamespaceReadOnly: true,
+  authenticatedOrphanCleanup: true,
+  movementProgressInspection: true,
+  identityContinuity: true,
+  atomicReplace: true,
+  durableNamespaceSync: true,
+  boundedListingOverflow: 'fail_closed',
   outOfBandAbort: true,
   orphanedSessionAutoClose: 'bounded_native_lease',
   maxOrphanLeaseMs: 5_000,
@@ -131,6 +163,17 @@ function fail(code, message) {
 }
 
 function dataFields(value, allowedKeys, requiredKeys = allowedKeys, fieldName = 'value') {
+  const preflight = absorbNativePromisesInDataGraph(value);
+  if (preflight.hasNativePromise) {
+    fail('PROTOCOL_ASYNC_INPUT', `${fieldName} must be synchronous plain data`);
+  }
+  if (!preflight.bounded) {
+    fail('PROTOCOL_LIMIT_EXCEEDED', `${fieldName} exceeded the data graph bound`);
+  }
+  if (!preflight.inspectable) {
+    fail('PROTOCOL_DATA_INVALID', `${fieldName} must be inspectable plain data`);
+  }
+  rejectAsyncInput(value, fieldName);
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     fail('PROTOCOL_DATA_INVALID', `${fieldName} must be a plain data record`);
   }
@@ -139,7 +182,8 @@ function dataFields(value, allowedKeys, requiredKeys = allowedKeys, fieldName = 
   try {
     prototype = Object.getPrototypeOf(value);
     keys = Reflect.ownKeys(value);
-  } catch {
+  } catch (error) {
+    absorbNativePromise(error);
     fail('PROTOCOL_DATA_INVALID', `${fieldName} must be inspectable plain data`);
   }
   if (prototype !== Object.prototype && prototype !== null) {
@@ -153,26 +197,39 @@ function dataFields(value, allowedKeys, requiredKeys = allowedKeys, fieldName = 
   const fields = new Map();
   for (const key of keys) {
     let descriptor;
-    try { descriptor = Object.getOwnPropertyDescriptor(value, key); } catch {
+    try { descriptor = Object.getOwnPropertyDescriptor(value, key); } catch (error) {
+      absorbNativePromise(error);
       fail('PROTOCOL_DATA_INVALID', `${fieldName}.${key} must be a data property`);
     }
     if (!descriptor || descriptor.enumerable !== true
       || !Object.hasOwn(descriptor, 'value') || descriptor.value === undefined) {
       fail('PROTOCOL_DATA_INVALID', `${fieldName}.${key} must be an enumerable data property`);
     }
+    rejectAsyncInput(descriptor.value, `${fieldName}.${key}`);
     fields.set(key, descriptor.value);
   }
   return fields;
 }
 
 function denseDataArray(value, fieldName, { maxLength, minLength = 0 } = {}) {
+  const preflight = absorbNativePromisesInDataGraph(value);
+  if (preflight.hasNativePromise) {
+    fail('PROTOCOL_ASYNC_INPUT', `${fieldName} must be synchronous plain data`);
+  }
+  if (!preflight.bounded) {
+    fail('PROTOCOL_LIMIT_EXCEEDED', `${fieldName} exceeded the data graph bound`);
+  }
+  if (!preflight.inspectable) {
+    fail('PROTOCOL_DATA_INVALID', `${fieldName} must be inspectable plain data`);
+  }
   if (!Array.isArray(value)) fail('PROTOCOL_DATA_INVALID', `${fieldName} must be an array`);
   let prototype;
   let keys;
   try {
     prototype = Object.getPrototypeOf(value);
     keys = Reflect.ownKeys(value).filter((key) => key !== 'length');
-  } catch {
+  } catch (error) {
+    absorbNativePromise(error);
     fail('PROTOCOL_DATA_INVALID', `${fieldName} must be inspectable plain data`);
   }
   if (prototype !== Array.prototype
@@ -185,10 +242,15 @@ function denseDataArray(value, fieldName, { maxLength, minLength = 0 } = {}) {
   }
   const result = [];
   for (const key of keys) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    let descriptor;
+    try { descriptor = Object.getOwnPropertyDescriptor(value, key); } catch (error) {
+      absorbNativePromise(error);
+      fail('PROTOCOL_DATA_INVALID', `${fieldName} must contain inspectable data values`);
+    }
     if (!descriptor || descriptor.enumerable !== true || !Object.hasOwn(descriptor, 'value')) {
       fail('PROTOCOL_DATA_INVALID', `${fieldName} must contain data values only`);
     }
+    rejectAsyncInput(descriptor.value, `${fieldName}[${key}]`);
     result.push(descriptor.value);
   }
   return result;
@@ -289,6 +351,21 @@ function normalizeNamespacePolicy(value) {
     }
   }
   return NAMESPACE_POLICY;
+}
+
+function normalizeRootNamespacePolicy(value) {
+  const fields = dataFields(
+    value,
+    Object.keys(ROOT_NAMESPACE_POLICY),
+    Object.keys(ROOT_NAMESPACE_POLICY),
+    'rootNamespacePolicy'
+  );
+  for (const [key, expected] of Object.entries(ROOT_NAMESPACE_POLICY)) {
+    if (fields.get(key) !== expected) {
+      fail('PROTOCOL_DOWNGRADE_DETECTED', `rootNamespacePolicy.${key} was downgraded`);
+    }
+  }
+  return ROOT_NAMESPACE_POLICY;
 }
 
 function normalizeHandshakeRequirements(value) {
@@ -501,6 +578,156 @@ function normalizeHandshakeResponsePayload(value) {
   });
 }
 
+function normalizeRootNamespaceOpenRequestPayload(value) {
+  const fields = dataFields(value, [
+    'backendContractVersion',
+    'integrationVersion',
+    'rootPathHint',
+    'namespacePolicy',
+  ], undefined, 'root_namespace.open request payload');
+  if (fields.get('backendContractVersion') !== ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION
+    || fields.get('integrationVersion') !== ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION) {
+    fail('PROTOCOL_VERSION_UNSUPPORTED', 'root namespace contract version is unsupported');
+  }
+  return immutableSnapshot({
+    backendContractVersion: ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION,
+    integrationVersion: ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION,
+    rootPathHint: normalizePathHint(fields.get('rootPathHint'), 'rootPathHint'),
+    namespacePolicy: normalizeRootNamespacePolicy(fields.get('namespacePolicy')),
+  });
+}
+
+function normalizeRootNamespaceOpenResponsePayload(value) {
+  const fields = dataFields(value, [
+    'opened',
+    'sessionId',
+    'namespaceCapabilityId',
+    'rootIdentityDigest',
+    'namespaceIdentityDigest',
+  ], undefined, 'root_namespace.open response payload');
+  if (fields.get('opened') !== true) {
+    fail('PROTOCOL_DOWNGRADE_DETECTED', 'anchored root namespace was not opened');
+  }
+  return immutableSnapshot({
+    opened: true,
+    sessionId: normalizeIdentifier(fields.get('sessionId'), 'sessionId'),
+    namespaceCapabilityId: normalizeIdentifier(
+      fields.get('namespaceCapabilityId'),
+      'namespaceCapabilityId'
+    ),
+    rootIdentityDigest: normalizeDigest(fields.get('rootIdentityDigest'), 'rootIdentityDigest'),
+    namespaceIdentityDigest: normalizeDigest(
+      fields.get('namespaceIdentityDigest'),
+      'namespaceIdentityDigest'
+    ),
+  });
+}
+
+function normalizeExistingSessionOpenRequestPayload(value) {
+  const fields = dataFields(value, [
+    'namespaceCapabilityId',
+    'backendContractVersion',
+    'sessionContractVersion',
+    'integrationVersion',
+    'transactionPathHint',
+    'payloadPathHint',
+    'headPathHint',
+    'anchorPathHint',
+    'bindingDigest',
+    'checkpointDigest',
+    'manifestDigest',
+    'journalDigest',
+    'targets',
+    'checkpointEntries',
+  ], undefined, 'root_namespace.open_existing_session request payload');
+  if (fields.get('backendContractVersion') !== ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION
+    || fields.get('sessionContractVersion') !== ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION
+    || fields.get('integrationVersion') !== ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION) {
+    fail('PROTOCOL_VERSION_UNSUPPORTED', 'existing session contract version is unsupported');
+  }
+  return immutableSnapshot({
+    namespaceCapabilityId: normalizeIdentifier(
+      fields.get('namespaceCapabilityId'),
+      'namespaceCapabilityId'
+    ),
+    backendContractVersion: ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION,
+    sessionContractVersion: ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
+    integrationVersion: ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION,
+    transactionPathHint: normalizePathHint(fields.get('transactionPathHint'), 'transactionPathHint'),
+    payloadPathHint: normalizePathHint(fields.get('payloadPathHint'), 'payloadPathHint'),
+    headPathHint: normalizePathHint(fields.get('headPathHint'), 'headPathHint'),
+    anchorPathHint: normalizePathHint(fields.get('anchorPathHint'), 'anchorPathHint'),
+    bindingDigest: normalizeDigest(fields.get('bindingDigest'), 'bindingDigest'),
+    checkpointDigest: normalizeDigest(fields.get('checkpointDigest'), 'checkpointDigest'),
+    manifestDigest: normalizeDigest(fields.get('manifestDigest'), 'manifestDigest'),
+    journalDigest: normalizeDigest(fields.get('journalDigest'), 'journalDigest'),
+    targets: normalizeTargets(fields.get('targets')),
+    checkpointEntries: normalizeCheckpointEntries(fields.get('checkpointEntries')),
+  });
+}
+
+function normalizeExistingSessionOpenResponsePayload(value) {
+  const fields = dataFields(value, [
+    'opened',
+    'sessionId',
+    'namespaceCapabilityId',
+    'rootIdentityDigest',
+    'namespaceIdentityDigest',
+    'targetSetIdentityDigest',
+    'rootNamespaceClosed',
+    'movementProgress',
+  ], undefined, 'root_namespace.open_existing_session response payload');
+  if (fields.get('opened') !== true || fields.get('rootNamespaceClosed') !== true) {
+    fail('PROTOCOL_DOWNGRADE_DETECTED', 'root namespace was not atomically promoted');
+  }
+  return immutableSnapshot({
+    opened: true,
+    sessionId: normalizeIdentifier(fields.get('sessionId'), 'sessionId'),
+    namespaceCapabilityId: normalizeIdentifier(
+      fields.get('namespaceCapabilityId'),
+      'namespaceCapabilityId'
+    ),
+    rootIdentityDigest: normalizeDigest(fields.get('rootIdentityDigest'), 'rootIdentityDigest'),
+    namespaceIdentityDigest: normalizeDigest(
+      fields.get('namespaceIdentityDigest'),
+      'namespaceIdentityDigest'
+    ),
+    targetSetIdentityDigest: normalizeDigest(
+      fields.get('targetSetIdentityDigest'),
+      'targetSetIdentityDigest'
+    ),
+    rootNamespaceClosed: true,
+    movementProgress: normalizeMovementProgress(
+      fields.get('movementProgress'),
+      'root_namespace.open_existing_session movementProgress'
+    ),
+  });
+}
+
+function normalizeAuthenticatedOrphanCleanupRequestPayload(value) {
+  const fields = dataFields(value, [
+    'namespaceCapabilityId',
+    'transactionId',
+    'bindingDigest',
+    'manifestDigest',
+    'journalDigest',
+    'headContentDigest',
+    'anchorChainDigest',
+  ], undefined, 'root_namespace.cleanup_authenticated_orphan request payload');
+  return Object.freeze({
+    namespaceCapabilityId: normalizeIdentifier(
+      fields.get('namespaceCapabilityId'),
+      'namespaceCapabilityId'
+    ),
+    transactionId: normalizeIdentifier(fields.get('transactionId'), 'transactionId'),
+    bindingDigest: normalizeDigest(fields.get('bindingDigest'), 'bindingDigest'),
+    manifestDigest: normalizeDigest(fields.get('manifestDigest'), 'manifestDigest'),
+    journalDigest: normalizeDigest(fields.get('journalDigest'), 'journalDigest'),
+    headContentDigest: normalizeDigest(fields.get('headContentDigest'), 'headContentDigest'),
+    anchorChainDigest: normalizeDigest(fields.get('anchorChainDigest'), 'anchorChainDigest'),
+  });
+}
+
 function normalizeSessionOpenRequestPayload(value) {
   const fields = dataFields(value, [
     'backendContractVersion',
@@ -578,6 +805,44 @@ function normalizeSessionOpenResponsePayload(value) {
   });
 }
 
+function normalizeSessionClientInput(value) {
+  const fields = dataFields(value, [
+    'rootPath',
+    'transactionPath',
+    'payloadPath',
+    'headPath',
+    'anchorPath',
+    'bindingDigest',
+    'checkpointDigest',
+    'targets',
+    'checkpointEntries',
+  ], undefined, 'session input');
+  return immutableSnapshot({
+    rootPath: normalizePathHint(fields.get('rootPath'), 'session input.rootPath'),
+    transactionPath: normalizePathHint(
+      fields.get('transactionPath'),
+      'session input.transactionPath'
+    ),
+    payloadPath: normalizePathHint(fields.get('payloadPath'), 'session input.payloadPath'),
+    headPath: normalizePathHint(fields.get('headPath'), 'session input.headPath'),
+    anchorPath: normalizePathHint(fields.get('anchorPath'), 'session input.anchorPath'),
+    bindingDigest: normalizeDigest(fields.get('bindingDigest'), 'session input.bindingDigest'),
+    checkpointDigest: normalizeDigest(
+      fields.get('checkpointDigest'),
+      'session input.checkpointDigest'
+    ),
+    targets: normalizeTargets(fields.get('targets')),
+    checkpointEntries: normalizeCheckpointEntries(fields.get('checkpointEntries')),
+  });
+}
+
+function normalizeRootNamespaceClientInput(value) {
+  const fields = dataFields(value, ['rootPath'], ['rootPath'], 'root namespace input');
+  return Object.freeze({
+    rootPath: normalizePathHint(fields.get('rootPath'), 'root namespace input.rootPath'),
+  });
+}
+
 function normalizeMovementProgress(value, fieldName) {
   const fields = dataFields(
     value,
@@ -622,8 +887,58 @@ function normalizeOperationRequestPayload(operation, value) {
   switch (operation) {
     case ANCHORED_MUTATION_HELPER_OPERATIONS.HANDSHAKE:
       return normalizeHandshakeRequestPayload(value);
+    case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN:
+      return normalizeRootNamespaceOpenRequestPayload(value);
+    case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN_EXISTING_SESSION:
+      return normalizeExistingSessionOpenRequestPayload(value);
+    case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_CLEANUP_AUTHENTICATED_ORPHAN:
+      return normalizeAuthenticatedOrphanCleanupRequestPayload(value);
+    case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_READ_FILE: {
+      const { fields, namespaceCapabilityId } = normalizeNamespaceCapabilityPayload(
+        value,
+        operation,
+        ['relativePath', 'maxBytes']
+      );
+      return Object.freeze({
+        namespaceCapabilityId,
+        relativePath: normalizePrivateRelativePath(
+          fields.get('relativePath'),
+          `${operation}.relativePath`
+        ),
+        maxBytes: normalizeNonNegativeNumber(fields.get('maxBytes'), `${operation}.maxBytes`, {
+          integer: true,
+          maximum: ANCHORED_MUTATION_HELPER_LIMITS.maxPrivateFileBytes,
+        }),
+      });
+    }
+    case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_LIST: {
+      const { fields, namespaceCapabilityId } = normalizeNamespaceCapabilityPayload(
+        value,
+        operation,
+        ['relativePath', 'maxEntries']
+      );
+      return Object.freeze({
+        namespaceCapabilityId,
+        relativePath: normalizePrivateRelativePath(
+          fields.get('relativePath'),
+          `${operation}.relativePath`,
+          { allowRoot: true }
+        ),
+        maxEntries: normalizeNonNegativeNumber(fields.get('maxEntries'), `${operation}.maxEntries`, {
+          integer: true,
+          maximum: ANCHORED_MUTATION_HELPER_LIMITS.maxNamespaceEntries,
+        }),
+      });
+    }
+    case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_CLOSE: {
+      const { namespaceCapabilityId } = normalizeNamespaceCapabilityPayload(value, operation, []);
+      return Object.freeze({ namespaceCapabilityId });
+    }
     case ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_OPEN:
       return normalizeSessionOpenRequestPayload(value);
+    case ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_INSPECT_PROGRESS:
+      dataFields(value, [], [], `${operation} request payload`);
+      return Object.freeze({});
     case ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_VERIFY:
     case ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_MOVE_TO_QUARANTINE:
     case ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_RESTORE_FROM_QUARANTINE:
@@ -825,8 +1140,18 @@ function normalizeOperationResponsePayload(operation, value) {
   switch (operation) {
     case ANCHORED_MUTATION_HELPER_OPERATIONS.HANDSHAKE:
       return normalizeHandshakeResponsePayload(value);
+    case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN:
+      return normalizeRootNamespaceOpenResponsePayload(value);
+    case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN_EXISTING_SESSION:
+      return normalizeExistingSessionOpenResponsePayload(value);
+    case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_CLEANUP_AUTHENTICATED_ORPHAN:
+      return normalizeBooleanResponse(value, operation, 'cleaned');
+    case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_CLOSE:
+      return normalizeBooleanResponse(value, operation, 'closed');
     case ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_OPEN:
       return normalizeSessionOpenResponsePayload(value);
+    case ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_INSPECT_PROGRESS:
+      return normalizeMovementProgress(value, `${operation} response payload`);
     case ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_VERIFY:
       return normalizeBooleanResponse(value, operation, 'verified');
     case ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_MOVE_TO_QUARANTINE:
@@ -844,6 +1169,7 @@ function normalizeOperationResponsePayload(operation, value) {
         contentDigest: normalizeDigest(fields.get('contentDigest'), `${operation}.contentDigest`),
       });
     }
+    case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_READ_FILE:
     case ANCHORED_MUTATION_HELPER_OPERATIONS.NAMESPACE_READ_FILE: {
       const fields = dataFields(
         value,
@@ -865,6 +1191,7 @@ function normalizeOperationResponsePayload(operation, value) {
       }
       return Object.freeze({ found: true, contentBase64: content.value, contentDigest });
     }
+    case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_LIST:
     case ANCHORED_MUTATION_HELPER_OPERATIONS.NAMESPACE_LIST: {
       const fields = dataFields(value, ['entries'], ['entries'], `${operation} response payload`);
       const entries = denseDataArray(fields.get('entries'), `${operation}.entries`, {
@@ -1099,6 +1426,66 @@ function absorbNativePromise(value) {
   }
 }
 
+function absorbNativePromisesInDataGraph(root) {
+  const seen = new Set();
+  const stack = [{ depth: 0, value: root }];
+  let hasNativePromise = false;
+  let inspectable = true;
+  let bounded = true;
+  let nodeCount = 0;
+  let propertyCount = 0;
+
+  while (stack.length > 0) {
+    const { depth, value } = stack.pop();
+    if (absorbNativePromise(value)) {
+      hasNativePromise = true;
+      continue;
+    }
+    if (!value || (typeof value !== 'object' && typeof value !== 'function')) continue;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    nodeCount += 1;
+    if (nodeCount > DATA_GRAPH_PREFLIGHT_LIMITS.maxNodes
+      || depth > DATA_GRAPH_PREFLIGHT_LIMITS.maxDepth) {
+      bounded = false;
+      continue;
+    }
+
+    let keys;
+    try { keys = Reflect.ownKeys(value); } catch (error) {
+      if (absorbNativePromise(error)) hasNativePromise = true;
+      inspectable = false;
+      continue;
+    }
+    propertyCount += keys.length;
+    const mayDescend = propertyCount <= DATA_GRAPH_PREFLIGHT_LIMITS.maxProperties;
+    if (!mayDescend) bounded = false;
+    for (const key of keys) {
+      let descriptor;
+      try { descriptor = Object.getOwnPropertyDescriptor(value, key); } catch (error) {
+        if (absorbNativePromise(error)) hasNativePromise = true;
+        inspectable = false;
+        continue;
+      }
+      if (!descriptor || !Object.hasOwn(descriptor, 'value')) continue;
+      if (absorbNativePromise(descriptor.value)) {
+        hasNativePromise = true;
+      } else if (mayDescend && descriptor.value
+        && (typeof descriptor.value === 'object' || typeof descriptor.value === 'function')) {
+        stack.push({ depth: depth + 1, value: descriptor.value });
+      }
+    }
+  }
+
+  return Object.freeze({ bounded, hasNativePromise, inspectable });
+}
+
+function rejectAsyncInput(value, fieldName) {
+  if (absorbNativePromise(value)) {
+    fail('PROTOCOL_ASYNC_INPUT', `${fieldName} must be synchronous plain data`);
+  }
+}
+
 function normalizeTransport(value) {
   const fields = dataFields(value, ['exchange', 'abort'], ['exchange', 'abort'], 'transport');
   if (typeof fields.get('exchange') !== 'function' || typeof fields.get('abort') !== 'function') {
@@ -1165,7 +1552,8 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
       );
       if (abortFields.get('aborted') !== true
         || abortFields.get('abortDigest') !== abortMessage.abortDigest) return;
-    } catch {
+    } catch (error) {
+      absorbNativePromise(error);
       // The strict handshake requires a bounded native lease, so an abort
       // transport failure cannot leave the OS helper handle alive forever.
     }
@@ -1186,7 +1574,7 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
         );
         if (abortFields.get('aborted') !== true
           || abortFields.get('abortDigest') !== abortMessage.abortDigest) continue;
-      } catch {}
+      } catch (error) { absorbNativePromise(error); }
     }
   }
 
@@ -1214,6 +1602,7 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
     }
     let value;
     try { value = requestIdFactory(); } catch (error) {
+      absorbNativePromise(error);
       if (clientPoisoned && error instanceof AnchoredMutationHelperProtocolError
         && error.code === 'PROTOCOL_REENTRANCY') {
         fail('PROTOCOL_REENTRANCY', 'requestIdFactory reentered the helper protocol client');
@@ -1244,6 +1633,7 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
     try {
       rawResponse = Reflect.apply(transport.exchange, transport.receiver, [request]);
     } catch (error) {
+      absorbNativePromise(error);
       poison();
       if (clientPoisoned && error instanceof AnchoredMutationHelperProtocolError
         && error.code === 'PROTOCOL_REENTRANCY') {
@@ -1278,6 +1668,7 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
       }
       return response;
     } catch (error) {
+      absorbNativePromise(error);
       poison();
       if (error instanceof AnchoredMutationHelperProtocolError) throw error;
       fail('PROTOCOL_DATA_INVALID', 'native helper returned an invalid response');
@@ -1322,47 +1713,54 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
     return runExclusive(performHandshake);
   }
 
-  function performOpenSession(input) {
+  function performOpenSession(input, promotion = null) {
     const handshakeResult = performHandshake();
     if (clientPoisoned) fail('PROTOCOL_CLIENT_POISONED', 'helper protocol client is poisoned');
-    if (activeSessions.size >= ANCHORED_MUTATION_HELPER_LIMITS.maxActiveSessions
-      || totalSessions >= ANCHORED_MUTATION_HELPER_LIMITS.maxTotalSessions) {
+    if (!promotion && (activeSessions.size >= ANCHORED_MUTATION_HELPER_LIMITS.maxActiveSessions
+      || totalSessions >= ANCHORED_MUTATION_HELPER_LIMITS.maxTotalSessions)) {
       fail('PROTOCOL_CAPACITY_EXCEEDED', 'helper protocol session capacity was exhausted');
     }
-    const inputFields = dataFields(input, [
-      'rootPath',
-      'transactionPath',
-      'payloadPath',
-      'headPath',
-      'anchorPath',
-      'bindingDigest',
-      'checkpointDigest',
-      'targets',
-      'checkpointEntries',
-    ], undefined, 'session input');
-    const request = createAnchoredMutationHelperRequest({
-      requestId: nextRequestId(),
-      operation: ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_OPEN,
-      sequence: 0,
-      sessionId: null,
-      previousResponseDigest: handshakeState.responseDigest,
-      payload: {
-        backendContractVersion: ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION,
-        sessionContractVersion: ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
-        integrationVersion: ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION,
-        rootPathHint: inputFields.get('rootPath'),
-        transactionPathHint: inputFields.get('transactionPath'),
-        payloadPathHint: inputFields.get('payloadPath'),
-        headPathHint: inputFields.get('headPath'),
-        anchorPathHint: inputFields.get('anchorPath'),
-        bindingDigest: inputFields.get('bindingDigest'),
-        checkpointDigest: inputFields.get('checkpointDigest'),
-        targets: inputFields.get('targets'),
-        checkpointEntries: inputFields.get('checkpointEntries'),
-        namespacePolicy: { ...NAMESPACE_POLICY },
-      },
-    });
-    const response = exchange(request, () => { poisonClient('PROTOCOL_SESSION_OPEN_INVALID'); });
+    let request;
+    let response;
+    if (promotion) {
+      request = promotion.request;
+      response = promotion.response;
+    } else {
+      const inputFields = dataFields(input, [
+        'rootPath',
+        'transactionPath',
+        'payloadPath',
+        'headPath',
+        'anchorPath',
+        'bindingDigest',
+        'checkpointDigest',
+        'targets',
+        'checkpointEntries',
+      ], undefined, 'session input');
+      request = createAnchoredMutationHelperRequest({
+        requestId: nextRequestId(),
+        operation: ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_OPEN,
+        sequence: 0,
+        sessionId: null,
+        previousResponseDigest: handshakeState.responseDigest,
+        payload: {
+          backendContractVersion: ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION,
+          sessionContractVersion: ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
+          integrationVersion: ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION,
+          rootPathHint: inputFields.get('rootPath'),
+          transactionPathHint: inputFields.get('transactionPath'),
+          payloadPathHint: inputFields.get('payloadPath'),
+          headPathHint: inputFields.get('headPath'),
+          anchorPathHint: inputFields.get('anchorPath'),
+          bindingDigest: inputFields.get('bindingDigest'),
+          checkpointDigest: inputFields.get('checkpointDigest'),
+          targets: inputFields.get('targets'),
+          checkpointEntries: inputFields.get('checkpointEntries'),
+          namespacePolicy: { ...NAMESPACE_POLICY },
+        },
+      });
+      response = exchange(request, () => { poisonClient('PROTOCOL_SESSION_OPEN_INVALID'); });
+    }
     const sessionId = response.payload.sessionId;
     const namespaceCapabilityId = response.payload.namespaceCapabilityId;
     const checkpointDigest = request.payload.checkpointDigest;
@@ -1370,27 +1768,51 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
     const openProgress = response.payload.movementProgress;
     const progressIsPrefix = openProgress.checkpointDigest === checkpointDigest
       && openProgress.moved.every((name, index) => name === targetPayloadNames[index]);
-    if (!progressIsPrefix
-      || usedSessionIds.has(sessionId)
-      || usedNamespaceCapabilityIds.has(namespaceCapabilityId)) {
+    const identityContinues = !promotion || (
+      response.payload.rootNamespaceClosed === true
+      && sessionId === promotion.sessionId
+      && response.payload.rootIdentityDigest === promotion.rootIdentityDigest
+      && response.payload.namespaceIdentityDigest === promotion.namespaceIdentityDigest
+    );
+    const sessionIdReplayed = promotion
+      ? sessionId !== promotion.sessionId
+      : usedSessionIds.has(sessionId);
+    const namespaceCapabilityReplayed = usedNamespaceCapabilityIds.has(namespaceCapabilityId)
+      && (!promotion || namespaceCapabilityId !== promotion.namespaceCapabilityId);
+    if (!progressIsPrefix || !identityContinues
+      || sessionIdReplayed || namespaceCapabilityReplayed) {
       const orphan = {
         abortSent: false,
         namespaceCapabilityId,
         previousResponseDigest: response.responseDigest,
-        sequence: 1,
+        sequence: promotion ? promotion.sequence : 1,
         sessionId,
       };
-      issueAbort(orphan, progressIsPrefix ? 'PROTOCOL_REPLAY_DETECTED' : 'PROTOCOL_PROGRESS_INVALID');
-      poisonClient(progressIsPrefix ? 'PROTOCOL_REPLAY_DETECTED' : 'PROTOCOL_PROGRESS_INVALID');
+      const reasonCode = !progressIsPrefix
+        ? 'PROTOCOL_PROGRESS_INVALID'
+        : !identityContinues ? 'PROTOCOL_IDENTITY_MISMATCH' : 'PROTOCOL_REPLAY_DETECTED';
+      if (promotion) {
+        // The promotion response names the native capability that may now own
+        // effects. Consume the bootstrap controller without sending an abort
+        // to its stale identifiers, then abort exactly the returned pair.
+        promotion.controller.poisoned = true;
+        promotion.controller.abortSent = true;
+        activeSessions.delete(promotion.controller);
+        issueAbort(orphan, reasonCode);
+      } else {
+        issueAbort(orphan, reasonCode);
+      }
+      poisonClient(reasonCode);
       fail(
-        progressIsPrefix ? 'PROTOCOL_REPLAY_DETECTED' : 'PROTOCOL_PROGRESS_INVALID',
+        reasonCode,
         'native helper opened an invalid or replayed session'
       );
     }
-    usedSessionIds.add(sessionId);
+    if (!promotion) usedSessionIds.add(sessionId);
     usedNamespaceCapabilityIds.add(namespaceCapabilityId);
-    totalSessions += 1;
-    let sequence = 1;
+    if (!promotion) totalSessions += 1;
+    else activeSessions.delete(promotion.controller);
+    let sequence = promotion ? promotion.sequence : 1;
     let previousResponseDigest = response.responseDigest;
     let closed = false;
     let namespaceCleaned = false;
@@ -1441,7 +1863,7 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
     }
 
     const privateNamespace = Object.freeze({
-      capabilityVersion: ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION,
+      capabilityVersion: ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION,
       writeFile(value) {
         const fields = dataFields(
           value,
@@ -1449,13 +1871,18 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
           undefined,
           'privateNamespace.writeFile input'
         );
-        return invoke(ANCHORED_MUTATION_HELPER_OPERATIONS.NAMESPACE_WRITE_FILE, {
+        const result = invoke(ANCHORED_MUTATION_HELPER_OPERATIONS.NAMESPACE_WRITE_FILE, {
           namespaceCapabilityId,
           relativePath: fields.get('relativePath'),
           contentBase64: fields.get('contentBase64'),
           contentDigest: fields.get('contentDigest'),
           mode: fields.get('mode'),
         }, { namespace: true });
+        if (result.contentDigest !== fields.get('contentDigest')) {
+          poisonClient('PROTOCOL_DIGEST_MISMATCH');
+          fail('PROTOCOL_DIGEST_MISMATCH', 'private namespace write digest changed');
+        }
+        return result;
       },
       readFile(value) {
         const fields = dataFields(
@@ -1464,11 +1891,17 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
           undefined,
           'privateNamespace.readFile input'
         );
-        return invoke(ANCHORED_MUTATION_HELPER_OPERATIONS.NAMESPACE_READ_FILE, {
+        const result = invoke(ANCHORED_MUTATION_HELPER_OPERATIONS.NAMESPACE_READ_FILE, {
           namespaceCapabilityId,
           relativePath: fields.get('relativePath'),
           maxBytes: fields.get('maxBytes'),
         }, { namespace: true });
+        if (result.found
+          && Buffer.from(result.contentBase64, 'base64').length > fields.get('maxBytes')) {
+          poisonClient('PROTOCOL_LIMIT_EXCEEDED');
+          fail('PROTOCOL_LIMIT_EXCEEDED', 'private namespace read exceeded the requested bound');
+        }
+        return result;
       },
       list(value) {
         const fields = dataFields(
@@ -1477,11 +1910,16 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
           undefined,
           'privateNamespace.list input'
         );
-        return invoke(ANCHORED_MUTATION_HELPER_OPERATIONS.NAMESPACE_LIST, {
+        const result = invoke(ANCHORED_MUTATION_HELPER_OPERATIONS.NAMESPACE_LIST, {
           namespaceCapabilityId,
           relativePath: fields.get('relativePath'),
           maxEntries: fields.get('maxEntries'),
         }, { namespace: true });
+        if (result.entries.length > fields.get('maxEntries')) {
+          poisonClient('PROTOCOL_LIMIT_EXCEEDED');
+          fail('PROTOCOL_LIMIT_EXCEEDED', 'private namespace list exceeded the requested bound');
+        }
+        return result;
       },
       remove(value) {
         const fields = dataFields(
@@ -1522,7 +1960,32 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
     return Object.freeze({
       schemaVersion: ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
       helperId: handshakeResult.helperId,
+      rootIdentityDigest: response.payload.rootIdentityDigest,
+      namespaceIdentityDigest: response.payload.namespaceIdentityDigest,
       privateNamespace,
+      inspectProgress() {
+        const result = invoke(
+          ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_INSPECT_PROGRESS,
+          {}
+        );
+        const isPrefix = result.checkpointDigest === checkpointDigest
+          && result.moved.every((name, index) => name === targetPayloadNames[index]);
+        const regressedOutsideRestore = phase !== 'restored'
+          && result.moved.length < movedCount;
+        if (!isPrefix || regressedOutsideRestore
+          || (phase === 'restored' && result.moved.length !== 0)) {
+          poisonClient('PROTOCOL_PROGRESS_INVALID');
+          fail('PROTOCOL_PROGRESS_INVALID', 'helper returned invalid inspected movement progress');
+        }
+        movedCount = result.moved.length;
+        progressDigest = result.progressDigest;
+        if (phase !== 'restored') {
+          phase = movedCount === 0
+            ? 'prepared'
+            : movedCount === targetPayloadNames.length ? 'quarantined' : 'partial';
+        }
+        return result;
+      },
       verify(value) {
         const normalized = normalizeCheckpointRequestPayload(value, 'verify input');
         if (normalized.checkpointDigest !== checkpointDigest) {
@@ -1618,13 +2081,246 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
     });
   }
 
+  function performOpenRootNamespace(input) {
+    const handshakeResult = performHandshake();
+    if (clientPoisoned) fail('PROTOCOL_CLIENT_POISONED', 'helper protocol client is poisoned');
+    if (activeSessions.size >= ANCHORED_MUTATION_HELPER_LIMITS.maxActiveSessions
+      || totalSessions >= ANCHORED_MUTATION_HELPER_LIMITS.maxTotalSessions) {
+      fail('PROTOCOL_CAPACITY_EXCEEDED', 'helper protocol session capacity was exhausted');
+    }
+    const inputFields = dataFields(input, ['rootPath'], ['rootPath'], 'root namespace input');
+    const request = createAnchoredMutationHelperRequest({
+      requestId: nextRequestId(),
+      operation: ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN,
+      sequence: 0,
+      sessionId: null,
+      previousResponseDigest: handshakeState.responseDigest,
+      payload: {
+        backendContractVersion: ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION,
+        integrationVersion: ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION,
+        rootPathHint: inputFields.get('rootPath'),
+        namespacePolicy: { ...ROOT_NAMESPACE_POLICY },
+      },
+    });
+    const response = exchange(request, () => {
+      poisonClient('PROTOCOL_ROOT_NAMESPACE_OPEN_INVALID');
+    });
+    const {
+      sessionId,
+      namespaceCapabilityId,
+      rootIdentityDigest,
+      namespaceIdentityDigest,
+    } = response.payload;
+    if (usedSessionIds.has(sessionId) || usedNamespaceCapabilityIds.has(namespaceCapabilityId)) {
+      const orphan = {
+        abortSent: false,
+        namespaceCapabilityId,
+        previousResponseDigest: response.responseDigest,
+        sequence: 1,
+        sessionId,
+      };
+      issueAbort(orphan, 'PROTOCOL_REPLAY_DETECTED');
+      poisonClient('PROTOCOL_REPLAY_DETECTED');
+      fail('PROTOCOL_REPLAY_DETECTED', 'native helper replayed a root namespace capability');
+    }
+    usedSessionIds.add(sessionId);
+    usedNamespaceCapabilityIds.add(namespaceCapabilityId);
+    totalSessions += 1;
+    let closed = false;
+    let promoted = false;
+    const controller = {
+      abortSent: false,
+      namespaceCapabilityId,
+      poisoned: false,
+      previousResponseDigest: response.responseDigest,
+      sequence: 1,
+      sessionId,
+    };
+    activeSessions.add(controller);
+
+    function assertRootUsable() {
+      if (controller.poisoned) {
+        fail('PROTOCOL_SESSION_POISONED', 'anchored root namespace is poisoned');
+      }
+      if (promoted) fail('PROTOCOL_ROOT_NAMESPACE_PROMOTED', 'root namespace was promoted');
+      if (closed) fail('PROTOCOL_SESSION_CLOSED', 'anchored root namespace is closed');
+    }
+
+    function invokeRootRaw(operation, payload) {
+      assertRootUsable();
+      const operationRequest = createAnchoredMutationHelperRequest({
+        requestId: nextRequestId(),
+        operation,
+        sequence: controller.sequence,
+        sessionId,
+        previousResponseDigest: controller.previousResponseDigest,
+        payload,
+      });
+      const operationResponse = exchange(operationRequest, () => {
+        poisonClient('PROTOCOL_ROOT_NAMESPACE_RESPONSE_INVALID');
+      });
+      controller.sequence += 1;
+      controller.previousResponseDigest = operationResponse.responseDigest;
+      return Object.freeze({ request: operationRequest, response: operationResponse });
+    }
+
+    const privateNamespace = Object.freeze({
+      capabilityVersion: ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION,
+      readFile(value) {
+        return runExclusive(() => {
+          const inputValue = dataFields(
+            value,
+            ['relativePath', 'maxBytes'],
+            undefined,
+            'root privateNamespace.readFile input'
+          );
+          const { response: readResponse } = invokeRootRaw(
+            ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_READ_FILE,
+            {
+              namespaceCapabilityId: controller.namespaceCapabilityId,
+              relativePath: inputValue.get('relativePath'),
+              maxBytes: inputValue.get('maxBytes'),
+            }
+          );
+          const result = readResponse.payload;
+          if (result.found
+            && Buffer.from(result.contentBase64, 'base64').length > inputValue.get('maxBytes')) {
+            poisonClient('PROTOCOL_LIMIT_EXCEEDED');
+            fail('PROTOCOL_LIMIT_EXCEEDED', 'root namespace read exceeded the requested bound');
+          }
+          return result;
+        });
+      },
+      list(value) {
+        return runExclusive(() => {
+          const inputValue = dataFields(
+            value,
+            ['relativePath', 'maxEntries'],
+            undefined,
+            'root privateNamespace.list input'
+          );
+          const { response: listResponse } = invokeRootRaw(
+            ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_LIST,
+            {
+              namespaceCapabilityId: controller.namespaceCapabilityId,
+              relativePath: inputValue.get('relativePath'),
+              maxEntries: inputValue.get('maxEntries'),
+            }
+          );
+          const result = listResponse.payload;
+          if (result.entries.length > inputValue.get('maxEntries')) {
+            poisonClient('PROTOCOL_LIMIT_EXCEEDED');
+            fail('PROTOCOL_LIMIT_EXCEEDED', 'root namespace list exceeded the requested bound');
+          }
+          return result;
+        });
+      },
+    });
+
+    return Object.freeze({
+      schemaVersion: ANCHORED_FILESYSTEM_MUTATION_ROOT_NAMESPACE_VERSION,
+      helperId: handshakeResult.helperId,
+      rootIdentityDigest,
+      namespaceIdentityDigest,
+      privateNamespace,
+      cleanupAuthenticatedOrphan(value) {
+        return runExclusive(() => {
+          const inputValue = dataFields(value, [
+            'transactionId',
+            'bindingDigest',
+            'manifestDigest',
+            'journalDigest',
+            'headContentDigest',
+            'anchorChainDigest',
+          ], undefined, 'cleanupAuthenticatedOrphan input');
+          return invokeRootRaw(
+            ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_CLEANUP_AUTHENTICATED_ORPHAN,
+            {
+              namespaceCapabilityId: controller.namespaceCapabilityId,
+              transactionId: inputValue.get('transactionId'),
+              bindingDigest: inputValue.get('bindingDigest'),
+              manifestDigest: inputValue.get('manifestDigest'),
+              journalDigest: inputValue.get('journalDigest'),
+              headContentDigest: inputValue.get('headContentDigest'),
+              anchorChainDigest: inputValue.get('anchorChainDigest'),
+            }
+          ).response.payload;
+        });
+      },
+      openExistingSession(value) {
+        return runExclusive(() => {
+          const inputValue = dataFields(value, [
+            'transactionPath',
+            'payloadPath',
+            'headPath',
+            'anchorPath',
+            'bindingDigest',
+            'checkpointDigest',
+            'manifestDigest',
+            'journalDigest',
+            'targets',
+            'checkpointEntries',
+          ], undefined, 'openExistingSession input');
+          const { request: promotionRequest, response: promotionResponse } = invokeRootRaw(
+            ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN_EXISTING_SESSION,
+            {
+              namespaceCapabilityId: controller.namespaceCapabilityId,
+              backendContractVersion: ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION,
+              sessionContractVersion: ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
+              integrationVersion: ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION,
+              transactionPathHint: inputValue.get('transactionPath'),
+              payloadPathHint: inputValue.get('payloadPath'),
+              headPathHint: inputValue.get('headPath'),
+              anchorPathHint: inputValue.get('anchorPath'),
+              bindingDigest: inputValue.get('bindingDigest'),
+              checkpointDigest: inputValue.get('checkpointDigest'),
+              manifestDigest: inputValue.get('manifestDigest'),
+              journalDigest: inputValue.get('journalDigest'),
+              targets: inputValue.get('targets'),
+              checkpointEntries: inputValue.get('checkpointEntries'),
+            }
+          );
+          promoted = true;
+          return performOpenSession(null, {
+            controller,
+            namespaceCapabilityId: controller.namespaceCapabilityId,
+            namespaceIdentityDigest,
+            request: promotionRequest,
+            response: promotionResponse,
+            rootIdentityDigest,
+            sequence: controller.sequence,
+            sessionId,
+          });
+        });
+      },
+      close() {
+        return runExclusive(() => {
+          const result = invokeRootRaw(
+            ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_CLOSE,
+            { namespaceCapabilityId: controller.namespaceCapabilityId }
+          ).response.payload;
+          if (result.closed === true) {
+            closed = true;
+            activeSessions.delete(controller);
+          }
+          return result;
+        });
+      },
+    });
+  }
+
   function openSession(input) {
-    return runExclusive(() => performOpenSession(input));
+    return runExclusive(() => performOpenSession(normalizeSessionClientInput(input)));
+  }
+
+  function openRootNamespace(input) {
+    return runExclusive(() => performOpenRootNamespace(normalizeRootNamespaceClientInput(input)));
   }
 
   return Object.freeze({
     version: ANCHORED_MUTATION_HELPER_PROTOCOL_VERSION,
     handshake,
+    openRootNamespace,
     openSession,
   });
 }

@@ -1,29 +1,60 @@
 'use strict';
 
 const assert = require('assert');
+const childProcess = require('child_process');
 
 const {
   ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION,
+  ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION,
   ANCHORED_FILESYSTEM_MUTATION_PROBE_STATES,
   ANCHORED_FILESYSTEM_MUTATION_REQUIRED_GUARANTEES,
   ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
   assertAnchoredFilesystemMutationBackend,
+  assertAnchoredFilesystemMutationNamespaceBackend,
   assertAnchoredFilesystemMutationProbe,
 } = require('../main/capabilities/anchored_filesystem_mutation_backend_contract');
 const {
   ANCHORED_MUTATION_HELPER_HANDSHAKE_VERSION,
   ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION,
   ANCHORED_MUTATION_HELPER_PROTOCOL_VERSION,
+  ANCHORED_MUTATION_HELPER_OPERATIONS,
   createAnchoredMutationHelperResponse,
 } = require('../main/capabilities/anchored_mutation_helper_protocol');
 const {
   ANCHORED_MUTATION_BACKEND_ADAPTER_VERSION,
   createAnchoredMutationBackendAdapter,
 } = require('../main/services/anchored_mutation_backend_adapter');
+const {
+  canonicalSha256Digest,
+} = require('../main/capabilities/transactional_delete_contracts');
+
+const digest = (character) => `sha256:${character.repeat(64)}`;
 
 function idFactory(prefix = 'adapter-request') {
   let sequence = 0;
   return () => `${prefix}-${++sequence}`;
+}
+
+function sessionInput() {
+  return {
+    rootPath: '/project',
+    transactionPath: '/project/.faber/transactions/transaction-1',
+    payloadPath: '/project/.faber/transactions/transaction-1/payload',
+    headPath: '/project/.faber/transaction-heads/job-1.json',
+    anchorPath: '/project/.faber/transaction-journal/transaction-1',
+    bindingDigest: digest('d'),
+    checkpointDigest: digest('e'),
+    targets: [{ relativePath: 'docs/file.txt', payloadName: 'target-0001' }],
+    checkpointEntries: [{
+      relativePath: 'docs/file.txt',
+      kind: 'file',
+      bytes: 3,
+      mode: 0o644,
+      mtimeMs: 100,
+      contentDigest: digest('f'),
+      linkTarget: null,
+    }],
+  };
 }
 
 function validHandshakePayload(overrides = {}) {
@@ -44,6 +75,14 @@ function validHandshakePayload(overrides = {}) {
       privateNamespaceIo: 'session_mediated',
       namespaceOpenedBeforeWrites: true,
       anchoredNamespaceCleanup: true,
+      rootNamespaceBootstrap: true,
+      rootNamespaceReadOnly: true,
+      authenticatedOrphanCleanup: true,
+      movementProgressInspection: true,
+      identityContinuity: true,
+      atomicReplace: true,
+      durableNamespaceSync: true,
+      boundedListingOverflow: 'fail_closed',
       outOfBandAbort: true,
       orphanedSessionAutoClose: 'bounded_native_lease',
       maxOrphanLeaseMs: 5_000,
@@ -62,7 +101,39 @@ function transportHarness({ responseMutator, asyncExchange = false } = {}) {
     }
     : function exchangeSync(request) {
       operations.push(request.operation);
-      const response = createAnchoredMutationHelperResponse(request, validHandshakePayload());
+      let payload;
+      if (request.operation === ANCHORED_MUTATION_HELPER_OPERATIONS.HANDSHAKE) {
+        payload = validHandshakePayload();
+      } else if (request.operation === ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_OPEN) {
+        const progressCore = { checkpointDigest: request.payload.checkpointDigest, moved: [] };
+        payload = {
+          opened: true,
+          sessionId: 'adapter-session-1',
+          namespaceCapabilityId: 'adapter-namespace-1',
+          rootIdentityDigest: digest('a'),
+          namespaceIdentityDigest: digest('b'),
+          targetSetIdentityDigest: digest('c'),
+          namespaceReadyBeforeWrites: true,
+          movementProgress: {
+            ...progressCore,
+            progressDigest: canonicalSha256Digest(progressCore),
+          },
+        };
+      } else if (request.operation === ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN) {
+        payload = {
+          opened: true,
+          sessionId: 'adapter-root-session-1',
+          namespaceCapabilityId: 'adapter-root-namespace-1',
+          rootIdentityDigest: digest('a'),
+          namespaceIdentityDigest: digest('b'),
+        };
+      } else if (request.operation === ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_CLOSE
+        || request.operation === ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_CLOSE) {
+        payload = { closed: true };
+      } else {
+        throw new Error(`Unexpected adapter test operation ${request.operation}`);
+      }
+      const response = createAnchoredMutationHelperResponse(request, payload);
       return responseMutator ? responseMutator(request, response) : response;
     };
   return {
@@ -81,7 +152,9 @@ function transportHarness({ responseMutator, asyncExchange = false } = {}) {
 function assertUnavailable(adapter, reasonCode) {
   assert.strictEqual(adapter.version, ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION);
   assert.strictEqual(adapter.adapterVersion, ANCHORED_MUTATION_BACKEND_ADAPTER_VERSION);
+  assert.strictEqual(adapter.namespaceIoVersion, ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION);
   assert.strictEqual(assertAnchoredFilesystemMutationBackend(adapter), adapter);
+  assert.strictEqual(assertAnchoredFilesystemMutationNamespaceBackend(adapter), adapter);
   const probe = assertAnchoredFilesystemMutationProbe(adapter.probe());
   assert.strictEqual(probe.state, ANCHORED_FILESYSTEM_MUTATION_PROBE_STATES.UNAVAILABLE);
   assert.strictEqual(probe.reasonCode, reasonCode);
@@ -120,9 +193,64 @@ function assertUnavailable(adapter, reasonCode) {
   assert.strictEqual(calls, 0);
 }
 
-// Even a perfect helper handshake cannot make the current adapter ENFORCED:
-// only the future service-v2 consumer can prove all private namespace I/O is
-// routed through the capability.
+// Promise-valued adapter options are absorbed before any handshake and reduce
+// to an inert unavailable backend under strict unhandled-rejection mode.
+{
+  const topLevel = createAnchoredMutationBackendAdapter(
+    Promise.reject(new Error('async adapter options'))
+  );
+  assertUnavailable(topLevel, 'NATIVE_MUTATION_ADAPTER_OPTIONS_INVALID');
+
+  const harness = transportHarness();
+  const nested = createAnchoredMutationBackendAdapter({
+    integrationVersion: Promise.reject(new Error('async integration version')),
+    transport: harness.transport,
+  });
+  assertUnavailable(nested, 'NATIVE_MUTATION_ADAPTER_OPTIONS_INVALID');
+  assert.deepStrictEqual(harness.operations, []);
+}
+
+// Adapter option preflight observes every rejected Promise before rejecting an
+// invalid graph, including unknown nested transport data and Promise siblings.
+{
+  const adapterPath = require.resolve('../main/services/anchored_mutation_backend_adapter');
+  const protocolPath = require.resolve(
+    '../main/capabilities/anchored_mutation_helper_protocol'
+  );
+  const script = `
+    const {
+      createAnchoredMutationBackendAdapter,
+    } = require(${JSON.stringify(adapterPath)});
+    const {
+      ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION,
+    } = require(${JSON.stringify(protocolPath)});
+    const nested = createAnchoredMutationBackendAdapter({
+      integrationVersion: ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION,
+      transport: {
+        exchange() { throw new Error('transport must not be reached'); },
+        abort() { throw new Error('abort must not be reached'); },
+        unknown: Promise.reject(new Error('nested unknown rejected Promise')),
+      },
+    });
+    if (nested.probe().state !== 'unavailable') process.exit(21);
+    const siblings = createAnchoredMutationBackendAdapter({
+      integrationVersion: Promise.reject(new Error('first rejected option')),
+      backendId: Promise.reject(new Error('second rejected option')),
+    });
+    if (siblings.probe().state !== 'unavailable') process.exit(22);
+    setImmediate(() => process.stdout.write('strict adapter preflight survived'));
+  `;
+  const child = childProcess.spawnSync(process.execPath, [
+    '--unhandled-rejections=strict',
+    '-e',
+    script,
+  ], { encoding: 'utf8' });
+  assert.strictEqual(child.status, 0, child.stderr || child.stdout);
+  assert.match(child.stdout, /strict adapter preflight survived/);
+}
+
+// An exact v2 handshake exposes both live preparation and anchored recovery
+// bootstrap; the service still has to opt in with the integration version.
 {
   const harness = transportHarness();
   const adapter = createAnchoredMutationBackendAdapter({
@@ -131,15 +259,44 @@ function assertUnavailable(adapter, reasonCode) {
     transport: harness.transport,
     requestIdFactory: idFactory('valid'),
   });
-  assertUnavailable(adapter, 'NAMESPACE_IO_CONSUMER_NOT_INTEGRATED');
+  assert.strictEqual(assertAnchoredFilesystemMutationNamespaceBackend(adapter), adapter);
+  const probe = assertAnchoredFilesystemMutationProbe(adapter.probe(), { requireEnforced: true });
+  assert.strictEqual(probe.reasonCode, 'ENFORCED');
   assert.deepStrictEqual(harness.operations, ['handshake']);
+  const session = adapter.prepare(sessionInput());
+  assert.strictEqual(session.schemaVersion, ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION);
+  assert.strictEqual(session.close().closed, true);
+  const root = adapter.openRootNamespace({ rootPath: '/project' });
+  assert.strictEqual(root.close().closed, true);
+  assert.deepStrictEqual(harness.operations, [
+    'handshake',
+    'session.open',
+    'session.close',
+    'root_namespace.open',
+    'root_namespace.close',
+  ]);
+}
+
+// Effect inputs are scanned for native Promises before probe() can perform the
+// handshake, including Promise-valued nested fields.
+{
+  const harness = transportHarness();
+  const adapter = createAnchoredMutationBackendAdapter({
+    integrationVersion: ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION,
+    transport: harness.transport,
+    requestIdFactory: idFactory('async-effect-input'),
+  });
   assert.throws(
-    () => adapter.prepare({ hostilePath: '/must/not/reach/helper' }),
-    (error) => error
-      && error.code === 'ATOMIC_MUTATION_BACKEND_UNAVAILABLE'
-      && !Object.hasOwn(error, 'cause')
+    () => adapter.prepare(Promise.reject(new Error('async prepare input'))),
+    (error) => error && error.code === 'PROTOCOL_ASYNC_INPUT'
   );
-  assert.deepStrictEqual(harness.operations, ['handshake']);
+  assert.throws(
+    () => adapter.openRootNamespace({
+      rootPath: Promise.reject(new Error('async root input field')),
+    }),
+    (error) => error && error.code === 'PROTOCOL_ASYNC_INPUT'
+  );
+  assert.deepStrictEqual(harness.operations, []);
 }
 
 // A downgrade is cached as unavailable; prepare never emits session.open.

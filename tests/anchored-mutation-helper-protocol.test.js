@@ -1,11 +1,14 @@
 'use strict';
 
 const assert = require('assert');
+const childProcess = require('child_process');
 const crypto = require('crypto');
 
 const {
   ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION,
+  ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION,
   ANCHORED_FILESYSTEM_MUTATION_REQUIRED_GUARANTEES,
+  ANCHORED_FILESYSTEM_MUTATION_ROOT_NAMESPACE_VERSION,
   ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
 } = require('../main/capabilities/anchored_filesystem_mutation_backend_contract');
 const {
@@ -96,6 +99,14 @@ function handshakePayload(overrides = {}) {
       privateNamespaceIo: 'session_mediated',
       namespaceOpenedBeforeWrites: true,
       anchoredNamespaceCleanup: true,
+      rootNamespaceBootstrap: true,
+      rootNamespaceReadOnly: true,
+      authenticatedOrphanCleanup: true,
+      movementProgressInspection: true,
+      identityContinuity: true,
+      atomicReplace: true,
+      durableNamespaceSync: true,
+      boundedListingOverflow: 'fail_closed',
       outOfBandAbort: true,
       orphanedSessionAutoClose: 'bounded_native_lease',
       maxOrphanLeaseMs: 5_000,
@@ -122,10 +133,58 @@ function openPayload(serial = 1, moved = []) {
   };
 }
 
-function createResponder({ mutate, operations = [], requestHook, aborts = [] } = {}) {
-  const storedFiles = new Map();
+function rootOpenPayload(serial = 1) {
+  return {
+    opened: true,
+    sessionId: `native-root-session-${serial}`,
+    namespaceCapabilityId: `root-namespace-capability-${serial}`,
+    rootIdentityDigest: digest('d'),
+    namespaceIdentityDigest: digest('e'),
+  };
+}
+
+function promotedPayload(request, serial = 1, moved = []) {
+  const opened = openPayload(serial, moved);
+  return {
+    opened: true,
+    sessionId: request.sessionId,
+    namespaceCapabilityId: `promoted-namespace-capability-${serial}`,
+    rootIdentityDigest: opened.rootIdentityDigest,
+    namespaceIdentityDigest: opened.namespaceIdentityDigest,
+    targetSetIdentityDigest: opened.targetSetIdentityDigest,
+    rootNamespaceClosed: true,
+    movementProgress: opened.movementProgress,
+  };
+}
+
+function replaceResponsePayload(response, payload) {
+  const core = {
+    schemaVersion: response.schemaVersion,
+    kind: response.kind,
+    requestId: response.requestId,
+    operation: response.operation,
+    sequence: response.sequence,
+    sessionId: response.sessionId,
+    requestDigest: response.requestDigest,
+    previousResponseDigest: response.previousResponseDigest,
+    payload,
+    payloadDigest: canonicalSha256Digest(payload),
+  };
+  return { ...core, responseDigest: canonicalSha256Digest(core) };
+}
+
+function createResponder({
+  mutate,
+  operations = [],
+  requestHook,
+  aborts = [],
+  initialFiles = [],
+} = {}) {
+  const storedFiles = new Map(initialFiles);
   let openSerial = 0;
+  let rootSerial = 0;
   let targetNames = [];
+  let movedNames = [];
   return Object.freeze({
     exchange(request) {
       operations.push(request.operation);
@@ -138,11 +197,42 @@ function createResponder({ mutate, operations = [], requestHook, aborts = [] } =
         case ANCHORED_MUTATION_HELPER_OPERATIONS.HANDSHAKE:
           payload = handshakePayload();
           break;
+        case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN:
+          rootSerial += 1;
+          payload = rootOpenPayload(rootSerial);
+          break;
+        case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_READ_FILE: {
+          const contentBase64 = storedFiles.get(request.payload.relativePath);
+          payload = contentBase64 === undefined
+            ? { found: false, contentBase64: null, contentDigest: null }
+            : {
+              found: true,
+              contentBase64,
+              contentDigest: bytesDigest(Buffer.from(contentBase64, 'base64')),
+            };
+          break;
+        }
+        case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_LIST:
+          payload = { entries: [...storedFiles.keys()] };
+          break;
+        case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_CLEANUP_AUTHENTICATED_ORPHAN:
+          payload = { cleaned: true };
+          break;
+        case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN_EXISTING_SESSION:
+          openSerial += 1;
+          targetNames = request.payload.targets.map((target) => target.payloadName);
+          movedNames = [];
+          payload = promotedPayload(request, openSerial);
+          break;
+        case ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_CLOSE:
+          payload = { closed: true };
+          break;
         case ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_OPEN:
           assert.strictEqual(request.payload.namespacePolicy.io, 'session_mediated');
           assert.strictEqual(request.payload.namespacePolicy.pathnameHintsAreAuthority, false);
           openSerial += 1;
           targetNames = request.payload.targets.map((target) => target.payloadName);
+          movedNames = [];
           payload = openPayload(openSerial);
           break;
         case ANCHORED_MUTATION_HELPER_OPERATIONS.NAMESPACE_WRITE_FILE:
@@ -177,7 +267,13 @@ function createResponder({ mutate, operations = [], requestHook, aborts = [] } =
         case ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_VERIFY:
           payload = { verified: true };
           break;
+        case ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_INSPECT_PROGRESS: {
+          const progressCore = { checkpointDigest: digest('b'), moved: [...movedNames] };
+          payload = { ...progressCore, progressDigest: canonicalSha256Digest(progressCore) };
+          break;
+        }
         case ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_MOVE_TO_QUARANTINE:
+          movedNames = [...targetNames];
           payload = {
             moved: [...targetNames],
             checkpointDigest: digest('b'),
@@ -188,6 +284,7 @@ function createResponder({ mutate, operations = [], requestHook, aborts = [] } =
           };
           break;
         case ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_RESTORE_FROM_QUARANTINE:
+          movedNames = [];
           payload = {
             restored: [...targetNames].reverse(),
             remainingMoved: [],
@@ -326,6 +423,240 @@ function createResponder({ mutate, operations = [], requestHook, aborts = [] } =
   assert.strictEqual(calls, 1);
 }
 
+{
+  const transport = createResponder({
+    mutate(request, response) {
+      if (request.operation !== ANCHORED_MUTATION_HELPER_OPERATIONS.HANDSHAKE) return response;
+      return replaceResponsePayload(response, {
+        ...response.payload,
+        features: { ...response.payload.features, atomicReplace: false },
+      });
+    },
+  });
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport,
+    requestIdFactory: idFactory('atomic-downgrade'),
+  });
+  assert.throws(
+    () => client.handshake(),
+    (error) => error && error.code === 'PROTOCOL_DOWNGRADE_DETECTED'
+  );
+}
+
+// Recovery discovers metadata through a read-only pinned root and atomically
+// promotes that exact identity into a mutable transaction session.
+{
+  const operations = [];
+  const metadata = Buffer.from('{"state":"COMMITTED"}', 'utf8').toString('base64');
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: createResponder({
+      operations,
+      initialFiles: [['transactions/transaction-1/journal.json', metadata]],
+    }),
+    requestIdFactory: idFactory('root-bootstrap'),
+  });
+  const root = client.openRootNamespace({ rootPath: '/project' });
+  assert.strictEqual(root.schemaVersion, ANCHORED_FILESYSTEM_MUTATION_ROOT_NAMESPACE_VERSION);
+  assert.strictEqual(
+    root.privateNamespace.capabilityVersion,
+    ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION
+  );
+  assert.deepStrictEqual(root.privateNamespace.readFile({
+    relativePath: 'transactions/transaction-1/journal.json',
+    maxBytes: 1024,
+  }), {
+    found: true,
+    contentBase64: metadata,
+    contentDigest: bytesDigest(Buffer.from(metadata, 'base64')),
+  });
+  assert.deepStrictEqual(root.privateNamespace.list({
+    relativePath: 'transactions',
+    maxEntries: 10,
+  }).entries, ['transactions/transaction-1/journal.json']);
+  assert.strictEqual(root.cleanupAuthenticatedOrphan({
+    transactionId: 'orphan-1',
+    bindingDigest: digest('1'),
+    manifestDigest: digest('2'),
+    journalDigest: digest('3'),
+    headContentDigest: digest('4'),
+    anchorChainDigest: digest('5'),
+  }).cleaned, true);
+  const existing = sessionInput();
+  delete existing.rootPath;
+  existing.manifestDigest = digest('6');
+  existing.journalDigest = digest('7');
+  const session = root.openExistingSession(existing);
+  assert.strictEqual(session.schemaVersion, ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION);
+  assert.deepStrictEqual(session.inspectProgress().moved, []);
+  session.moveToQuarantine({ checkpointDigest: digest('b') });
+  assert.deepStrictEqual(session.inspectProgress().moved, ['target-0001']);
+  assert.throws(
+    () => root.close(),
+    (error) => error && error.code === 'PROTOCOL_ROOT_NAMESPACE_PROMOTED'
+  );
+  assert.strictEqual(session.purgeQuarantine({ checkpointDigest: digest('b') }).purged, true);
+  assert.strictEqual(session.close().closed, true);
+  assert.deepStrictEqual(operations, [
+    'handshake',
+    'root_namespace.open',
+    'root_namespace.read_file',
+    'root_namespace.list',
+    'root_namespace.cleanup_authenticated_orphan',
+    'root_namespace.open_existing_session',
+    'session.inspect_progress',
+    'session.move_to_quarantine',
+    'session.inspect_progress',
+    'session.purge_quarantine',
+    'session.close',
+  ]);
+}
+
+// Promotion cannot switch the pinned physical root or private namespace. The
+// mismatch poisons the client and emits one best-effort abort for the promoted
+// native capability.
+{
+  const aborts = [];
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: createResponder({
+      aborts,
+      mutate(request, response) {
+        if (request.operation
+          !== ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN_EXISTING_SESSION) {
+          return response;
+        }
+        return createAnchoredMutationHelperResponse(request, {
+          ...promotedPayload(request, 1),
+          rootIdentityDigest: digest('0'),
+        });
+      },
+    }),
+    requestIdFactory: idFactory('identity-switch'),
+  });
+  const root = client.openRootNamespace({ rootPath: '/project' });
+  const existing = sessionInput();
+  delete existing.rootPath;
+  existing.manifestDigest = digest('6');
+  existing.journalDigest = digest('7');
+  assert.throws(
+    () => root.openExistingSession(existing),
+    (error) => error && error.code === 'PROTOCOL_IDENTITY_MISMATCH'
+  );
+  assert.strictEqual(aborts.length, 1);
+  assert.strictEqual(aborts[0].reasonCode, 'PROTOCOL_IDENTITY_MISMATCH');
+}
+
+// A discovery-only root handle closes without creating or promoting a delete
+// session and then rejects every subsequent namespace effect locally.
+{
+  const operations = [];
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: createResponder({ operations }),
+    requestIdFactory: idFactory('root-close'),
+  });
+  const root = client.openRootNamespace({ rootPath: '/project' });
+  assert.strictEqual(root.close().closed, true);
+  const before = operations.length;
+  assert.throws(() => root.privateNamespace.list({
+    relativePath: '',
+    maxEntries: 1,
+  }), /closed/);
+  assert.strictEqual(operations.length, before);
+}
+
+// Every continuity fact is fail-closed. If promotion returns another session
+// or namespace identity, the abort targets exactly the returned capability,
+// including the next sequence after all preceding bootstrap reads.
+for (const continuityCase of [
+  {
+    name: 'session-id',
+    override: { sessionId: 'switched-native-session' },
+    code: 'PROTOCOL_IDENTITY_MISMATCH',
+  },
+  {
+    name: 'namespace-identity',
+    override: { namespaceIdentityDigest: digest('9') },
+    code: 'PROTOCOL_IDENTITY_MISMATCH',
+  },
+]) {
+  const aborts = [];
+  let returnedPromotion;
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: createResponder({
+      aborts,
+      mutate(request, response) {
+        if (request.operation
+          !== ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN_EXISTING_SESSION) {
+          return response;
+        }
+        returnedPromotion = createAnchoredMutationHelperResponse(request, {
+          ...promotedPayload(request, 1),
+          ...continuityCase.override,
+        });
+        return returnedPromotion;
+      },
+    }),
+    requestIdFactory: idFactory(`continuity-${continuityCase.name}`),
+  });
+  const root = client.openRootNamespace({ rootPath: '/project' });
+  root.privateNamespace.list({ relativePath: '', maxEntries: 1 });
+  const existing = sessionInput();
+  delete existing.rootPath;
+  existing.manifestDigest = digest('6');
+  existing.journalDigest = digest('7');
+  assert.throws(
+    () => root.openExistingSession(existing),
+    (error) => error && error.code === continuityCase.code
+  );
+  assert.strictEqual(aborts.length, 1);
+  assert.strictEqual(aborts[0].sessionId, returnedPromotion.payload.sessionId);
+  assert.strictEqual(
+    aborts[0].namespaceCapabilityId,
+    returnedPromotion.payload.namespaceCapabilityId
+  );
+  assert.strictEqual(aborts[0].sequence, 3);
+  assert.strictEqual(aborts[0].lastResponseDigest, returnedPromotion.responseDigest);
+}
+
+// A helper that did not atomically consume the root is rejected and the still
+// authoritative root capability—not the uncommitted promoted claim—is aborted.
+{
+  const aborts = [];
+  let rootSessionId;
+  let rootCapabilityId;
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: createResponder({
+      aborts,
+      mutate(request, response) {
+        if (request.operation === ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN) {
+          rootSessionId = response.payload.sessionId;
+          rootCapabilityId = response.payload.namespaceCapabilityId;
+        }
+        if (request.operation
+          !== ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN_EXISTING_SESSION) {
+          return response;
+        }
+        return replaceResponsePayload(response, {
+          ...response.payload,
+          rootNamespaceClosed: false,
+        });
+      },
+    }),
+    requestIdFactory: idFactory('root-not-closed'),
+  });
+  const root = client.openRootNamespace({ rootPath: '/project' });
+  const existing = sessionInput();
+  delete existing.rootPath;
+  existing.manifestDigest = digest('6');
+  existing.journalDigest = digest('7');
+  assert.throws(
+    () => root.openExistingSession(existing),
+    (error) => error && error.code === 'PROTOCOL_DOWNGRADE_DETECTED'
+  );
+  assert.strictEqual(aborts.length, 1);
+  assert.strictEqual(aborts[0].sessionId, rootSessionId);
+  assert.strictEqual(aborts[0].namespaceCapabilityId, rootCapabilityId);
+}
+
 // A payload spoof with stale digests poisons the session before another effect.
 {
   const operations = [];
@@ -435,6 +766,120 @@ function createResponder({ mutate, operations = [], requestHook, aborts = [] } =
   assert.strictEqual(calls, 1);
 }
 
+// Promise-valued public inputs are absorbed and rejected before the first
+// native effect. This includes nested fields, not only a top-level Promise.
+{
+  const operations = [];
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: createResponder({ operations }),
+    requestIdFactory: idFactory('async-public-open'),
+  });
+  assert.throws(
+    () => client.openSession(Promise.reject(new Error('async session input'))),
+    (error) => error && error.code === 'PROTOCOL_ASYNC_INPUT'
+  );
+  assert.throws(
+    () => client.openRootNamespace({
+      rootPath: Promise.reject(new Error('async root path')),
+    }),
+    (error) => error && error.code === 'PROTOCOL_ASYNC_INPUT'
+  );
+  assert.deepStrictEqual(operations, []);
+}
+
+// Promise preflight must observe the entire rejected input graph before shape
+// validation fails. Unknown fields and Promise-valued siblings must not leave
+// a later unhandled rejection under Node's strict policy.
+{
+  const protocolPath = require.resolve(
+    '../main/capabilities/anchored_mutation_helper_protocol'
+  );
+  const script = `
+    const {
+      createAnchoredMutationHelperProtocolClient,
+    } = require(${JSON.stringify(protocolPath)});
+    const transport = Object.freeze({
+      exchange() { throw new Error('transport must not be reached'); },
+      abort() { throw new Error('abort must not be reached'); },
+    });
+    const client = createAnchoredMutationHelperProtocolClient({ transport });
+    try {
+      client.openRootNamespace({
+        rootPath: '/project',
+        unknown: Promise.reject(new Error('unknown rejected Promise')),
+      });
+    } catch (error) {
+      if (!error || error.code !== 'PROTOCOL_ASYNC_INPUT') process.exit(11);
+    }
+    try {
+      client.openSession({
+        rootPath: Promise.reject(new Error('first rejected Promise')),
+        transactionPath: Promise.reject(new Error('second rejected Promise')),
+      });
+    } catch (error) {
+      if (!error || error.code !== 'PROTOCOL_ASYNC_INPUT') process.exit(12);
+    }
+    setImmediate(() => process.stdout.write('strict protocol preflight survived'));
+  `;
+  const child = childProcess.spawnSync(process.execPath, [
+    '--unhandled-rejections=strict',
+    '-e',
+    script,
+  ], { encoding: 'utf8' });
+  assert.strictEqual(child.status, 0, child.stderr || child.stdout);
+  assert.match(child.stdout, /strict protocol preflight survived/);
+}
+
+// Every effect-bearing session and namespace entry point rejects a Promise
+// locally, without consuming a sequence number or contacting the helper.
+{
+  const operations = [];
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: createResponder({ operations }),
+    requestIdFactory: idFactory('async-session-effects'),
+  });
+  const session = client.openSession(sessionInput());
+  const before = operations.length;
+  const effects = [
+    () => session.verify(Promise.reject(new Error('async verify'))),
+    () => session.moveToQuarantine(Promise.reject(new Error('async move'))),
+    () => session.restoreFromQuarantine(Promise.reject(new Error('async restore'))),
+    () => session.purgeQuarantine(Promise.reject(new Error('async purge'))),
+    () => session.privateNamespace.writeFile(Promise.reject(new Error('async write'))),
+    () => session.privateNamespace.readFile(Promise.reject(new Error('async read'))),
+    () => session.privateNamespace.list(Promise.reject(new Error('async list'))),
+    () => session.privateNamespace.remove(Promise.reject(new Error('async remove'))),
+  ];
+  for (const effect of effects) {
+    assert.throws(effect, (error) => error && error.code === 'PROTOCOL_ASYNC_INPUT');
+  }
+  assert.strictEqual(operations.length, before);
+  session.close();
+}
+
+// Root bootstrap methods apply the same no-async-input rule after the root is
+// pinned and before any read, listing, cleanup or promotion message is sent.
+{
+  const operations = [];
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: createResponder({ operations }),
+    requestIdFactory: idFactory('async-root-effects'),
+  });
+  const root = client.openRootNamespace({ rootPath: '/project' });
+  const before = operations.length;
+  const effects = [
+    () => root.privateNamespace.readFile(Promise.reject(new Error('async root read'))),
+    () => root.privateNamespace.list(Promise.reject(new Error('async root list'))),
+    () => root.cleanupAuthenticatedOrphan(Promise.reject(new Error('async orphan cleanup'))),
+    () => root.openExistingSession(Promise.reject(new Error('async promotion'))),
+  ];
+  for (const effect of effects) {
+    assert.throws(effect, (error) => error && error.code === 'PROTOCOL_ASYNC_INPUT');
+  }
+  assert.strictEqual(operations.length, before);
+  root.close();
+}
+
 // Rejected native Promises are denied and immediately observed, so strict
 // unhandled-rejection mode cannot crash after the synchronous denial.
 {
@@ -448,6 +893,22 @@ function createResponder({ mutate, operations = [], requestHook, aborts = [] } =
   assert.throws(
     () => client.handshake(),
     (error) => error && error.code === 'HELPER_TRANSPORT_ASYNC'
+  );
+}
+
+// Rejected Promises thrown as exception values are also observed. Native
+// boundaries do not get to evade absorption by throwing instead of returning.
+{
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: Object.freeze({
+      exchange() { throw Promise.reject(new Error('thrown rejected exchange')); },
+      abort(message) { return { aborted: true, abortDigest: message.abortDigest }; },
+    }),
+    requestIdFactory: idFactory('thrown-rejected-exchange'),
+  });
+  assert.throws(
+    () => client.handshake(),
+    (error) => error && error.code === 'HELPER_TRANSPORT_FAILED'
   );
 }
 
@@ -495,6 +956,27 @@ function createResponder({ mutate, operations = [], requestHook, aborts = [] } =
   assert.throws(
     () => session.close(),
     (error) => error && error.code === 'PROTOCOL_SESSION_POISONED'
+  );
+}
+
+{
+  const base = createResponder({
+    mutate(request, response) {
+      if (request.operation !== ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_VERIFY) return response;
+      return { ...response, payloadDigest: digest('0') };
+    },
+  });
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: Object.freeze({
+      exchange: base.exchange,
+      abort() { throw Promise.reject(new Error('thrown rejected abort')); },
+    }),
+    requestIdFactory: idFactory('thrown-rejected-abort'),
+  });
+  const session = client.openSession(sessionInput());
+  assert.throws(
+    () => session.verify({ checkpointDigest: digest('b') }),
+    (error) => error && error.code === 'PROTOCOL_DIGEST_MISMATCH'
   );
 }
 
@@ -558,6 +1040,50 @@ function createResponder({ mutate, operations = [], requestHook, aborts = [] } =
     mode: 'create_exclusive',
   }), /bounded canonical base64/);
   assert.strictEqual(operations.length, before);
+}
+
+// The full 2 MiB metadata frontier fits inside the 3 MiB message envelope.
+{
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: createResponder(),
+    requestIdFactory: idFactory('metadata-boundary'),
+  });
+  const session = client.openSession(sessionInput());
+  const bytes = Buffer.alloc(ANCHORED_MUTATION_HELPER_LIMITS.maxPrivateFileBytes, 0x61);
+  assert.strictEqual(session.privateNamespace.writeFile({
+    relativePath: 'transactions/transaction-1/maximum-metadata.json',
+    contentBase64: bytes.toString('base64'),
+    contentDigest: bytesDigest(bytes),
+    mode: 'replace_atomic',
+  }).written, true);
+  session.close();
+}
+
+// A helper may respect the global bound while violating the tighter bound of
+// one request; the client detects that overflow and poisons before another I/O.
+{
+  const aborts = [];
+  const bytes = Buffer.from('ab', 'utf8');
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: createResponder({
+      aborts,
+      initialFiles: [['transactions/tiny.json', bytes.toString('base64')]],
+    }),
+    requestIdFactory: idFactory('requested-bound'),
+  });
+  const root = client.openRootNamespace({ rootPath: '/project' });
+  assert.throws(
+    () => root.privateNamespace.readFile({
+      relativePath: 'transactions/tiny.json',
+      maxBytes: 1,
+    }),
+    (error) => error && error.code === 'PROTOCOL_LIMIT_EXCEEDED'
+  );
+  assert.strictEqual(aborts.length, 1);
+  assert.throws(
+    () => root.close(),
+    (error) => error && error.code === 'PROTOCOL_SESSION_POISONED'
+  );
 }
 
 // Cleanup closes only the namespace capability; no later namespace effect is
@@ -716,6 +1242,35 @@ function createResponder({ mutate, operations = [], requestHook, aborts = [] } =
   assert.strictEqual(aborts.length, 1);
 }
 
+// Inspection cannot silently move a forward-only quarantine prefix backward.
+// Only the authenticated restore operation may establish the restored phase.
+{
+  const aborts = [];
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: createResponder({
+      aborts,
+      mutate(request, response) {
+        if (request.operation !== ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_INSPECT_PROGRESS) {
+          return response;
+        }
+        const progressCore = { checkpointDigest: digest('b'), moved: [] };
+        return createAnchoredMutationHelperResponse(request, {
+          ...progressCore,
+          progressDigest: canonicalSha256Digest(progressCore),
+        });
+      },
+    }),
+    requestIdFactory: idFactory('inspect-regression'),
+  });
+  const session = client.openSession(sessionInput());
+  session.moveToQuarantine({ checkpointDigest: digest('b') });
+  assert.throws(
+    () => session.inspectProgress(),
+    (error) => error && error.code === 'PROTOCOL_PROGRESS_INVALID'
+  );
+  assert.strictEqual(aborts.length, 1);
+}
+
 // A malformed session.open poisons the whole client. With no trustworthy
 // session identifier there is no abort message; the handshake's bounded native
 // orphan lease is the cleanup guarantee.
@@ -831,22 +1386,15 @@ function createResponder({ mutate, operations = [], requestHook, aborts = [] } =
   for (const session of sessions) session.close();
 }
 
-// Total session allocation is also bounded even when handles are closed.
+// Production-scale capacities are explicit protocol invariants. Exhausting the
+// 65k lifetime budget in a unit test would obscure the semantic checks above.
 {
-  const operations = [];
-  const client = createAnchoredMutationHelperProtocolClient({
-    transport: createResponder({ operations }),
-    requestIdFactory: idFactory('total-capacity'),
-  });
-  for (let index = 0; index < ANCHORED_MUTATION_HELPER_LIMITS.maxTotalSessions; index += 1) {
-    client.openSession(sessionInput()).close();
-  }
-  const before = operations.length;
-  assert.throws(
-    () => client.openSession(sessionInput()),
-    (error) => error && error.code === 'PROTOCOL_CAPACITY_EXCEEDED'
-  );
-  assert.strictEqual(operations.length, before);
+  assert.strictEqual(ANCHORED_MUTATION_HELPER_LIMITS.maxPrivateFileBytes, 2 * 1024 * 1024);
+  assert.strictEqual(ANCHORED_MUTATION_HELPER_LIMITS.maxMessageBytes, 3 * 1024 * 1024);
+  assert.strictEqual(ANCHORED_MUTATION_HELPER_LIMITS.maxNamespaceEntries, 512);
+  assert.strictEqual(ANCHORED_MUTATION_HELPER_LIMITS.maxActiveSessions, 256);
+  assert.strictEqual(ANCHORED_MUTATION_HELPER_LIMITS.maxTotalSessions, 65_536);
+  assert.strictEqual(ANCHORED_MUTATION_HELPER_LIMITS.maxRequestsPerClient, 262_144);
 }
 
 // A main-owned ID factory cannot reenter the client before transport exchange.
@@ -882,6 +1430,19 @@ function createResponder({ mutate, operations = [], requestHook, aborts = [] } =
   const client = createAnchoredMutationHelperProtocolClient({
     transport: createResponder({ operations }),
     requestIdFactory() { return Promise.reject(new Error('async request id')); },
+  });
+  assert.throws(
+    () => client.handshake(),
+    (error) => error && error.code === 'PROTOCOL_REQUEST_ID_INVALID'
+  );
+  assert.deepStrictEqual(operations, []);
+}
+
+{
+  const operations = [];
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: createResponder({ operations }),
+    requestIdFactory() { throw Promise.reject(new Error('thrown async request id')); },
   });
   assert.throws(
     () => client.handshake(),

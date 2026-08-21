@@ -8,11 +8,6 @@ const os = require('os');
 const path = require('path');
 
 const {
-  ANCHORED_FILESYSTEM_MUTATION_REQUIRED_GUARANTEES,
-  ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
-  createAnchoredFilesystemMutationProbe,
-} = require('../main/capabilities/anchored_filesystem_mutation_backend_contract');
-const {
   canonicalSha256Digest,
 } = require('../main/capabilities/transactional_delete_contracts');
 const {
@@ -23,6 +18,9 @@ const {
 const {
   createTransactionalFilesystemDeleteService,
 } = require('../main/services/transactional_filesystem_delete_service');
+const {
+  createAnchoredMutationTestBackend,
+} = require('./support/anchored_mutation_test_backend');
 
 const digest = (character) => `sha256:${character.repeat(64)}`;
 const journalSecret = Buffer.alloc(32, 0x4d);
@@ -60,79 +58,8 @@ function physicalIdentity(rootPath) {
 }
 
 function createTestMutationBackend() {
-  const probe = createAnchoredFilesystemMutationProbe({
+  return createAnchoredMutationTestBackend({
     backendId: 'recovery-test-anchored-backend',
-    state: 'enforced',
-    guarantees: [...ANCHORED_FILESYSTEM_MUTATION_REQUIRED_GUARANTEES],
-    reasonCode: 'ENFORCED',
-  });
-  return Object.freeze({
-    probe() { return probe; },
-    prepare(input) {
-      const targets = input.targets.map((target) => ({ ...target }));
-      const identities = targets.map((target) => {
-        const targetPath = path.join(input.rootPath, ...target.relativePath.split('/'));
-        const payloadPath = path.join(input.payloadPath, target.payloadName);
-        const candidate = exists(targetPath) ? targetPath : payloadPath;
-        const stat = fs.lstatSync(candidate);
-        return { dev: stat.dev, ino: stat.ino };
-      });
-      let closed = false;
-      function verify() {
-        if (closed) return { verified: false };
-        return {
-          verified: targets.every((target, index) => {
-            const targetPath = path.join(input.rootPath, ...target.relativePath.split('/'));
-            const payloadPath = path.join(input.payloadPath, target.payloadName);
-            const candidate = exists(targetPath) ? targetPath : payloadPath;
-            if (!exists(candidate)) return false;
-            const stat = fs.lstatSync(candidate);
-            return stat.dev === identities[index].dev && stat.ino === identities[index].ino;
-          }),
-        };
-      }
-      return Object.freeze({
-        schemaVersion: ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
-        verify,
-        moveToQuarantine() {
-          if (!verify().verified) throw new Error('identity changed');
-          const moved = [];
-          for (const target of targets) {
-            fs.renameSync(
-              path.join(input.rootPath, ...target.relativePath.split('/')),
-              path.join(input.payloadPath, target.payloadName)
-            );
-            moved.push(target.payloadName);
-          }
-          return { moved };
-        },
-        restoreFromQuarantine() {
-          const restored = [];
-          for (const target of [...targets].reverse()) {
-            const source = path.join(input.payloadPath, target.payloadName);
-            const destination = path.join(input.rootPath, ...target.relativePath.split('/'));
-            if (exists(source) && exists(destination)) throw new Error('rollback collision');
-            if (exists(source)) {
-              fs.renameSync(source, destination);
-              restored.push(target.payloadName);
-            }
-          }
-          return { restored };
-        },
-        purgeQuarantine() {
-          fs.rmSync(input.transactionPath, { recursive: true, force: false });
-          if (exists(input.headPath)) fs.unlinkSync(input.headPath);
-          if (exists(input.anchorPath)) {
-            fs.rmSync(input.anchorPath, { recursive: true, force: false });
-          }
-          return { purged: true };
-        },
-        close() {
-          closed = true;
-          return { closed: true };
-        },
-      });
-    },
   });
 }
 

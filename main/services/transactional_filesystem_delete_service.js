@@ -28,21 +28,24 @@ const {
   normalizeDigest,
 } = require('../capabilities/capability_delegation_contracts');
 const {
+  ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION,
   ANCHORED_FILESYSTEM_MUTATION_PROBE_STATES,
-  assertAnchoredFilesystemMutationBackend,
+  assertAnchoredFilesystemMutationNamespaceSession,
   assertAnchoredFilesystemMutationProbe,
-  assertAnchoredFilesystemMutationSession,
+  assertAnchoredFilesystemMutationRootNamespace,
   createUnsupportedAnchoredFilesystemMutationBackend,
 } = require('../capabilities/anchored_filesystem_mutation_backend_contract');
 
 const TRANSACTIONAL_FILESYSTEM_DELETE_SERVICE_VERSION =
-  'transactional-filesystem-delete-service.v1';
+  'transactional-filesystem-delete-service.v2';
 const PRIVATE_MANIFEST_SCHEMA_VERSION = 'transactional-delete.private-manifest.v1';
 const PRIVATE_JOURNAL_SCHEMA_VERSION = 'transactional-delete.private-journal.v1';
 const PRIVATE_JOURNAL_RECORD_SCHEMA_VERSION = 'transactional-delete.private-state.v1';
 const PRIVATE_HEAD_SCHEMA_VERSION = 'transactional-delete.private-head.v1';
 const JOURNAL_AUTHENTICATOR_VERSION = 'transactional-delete.hmac-sha256.v1';
 const MAX_PRIVATE_METADATA_BYTES = 2 * 1024 * 1024;
+const MAX_PRIVATE_NAMESPACE_LIST_ENTRIES = 512;
+const MAX_ROOT_TRANSACTIONS = 192;
 const MAX_DIRECTORY_SCAN_DEPTH = 256;
 const SAFE_TRANSACTION_ID = /^[A-Za-z0-9_-]{16,128}$/;
 const TERMINAL_SUCCESS = new Set(['success', 'completed']);
@@ -66,10 +69,33 @@ function fail(code, message) {
   throw new TransactionalFilesystemDeleteError(code, message);
 }
 
+function absorbNativePromise(value) {
+  try {
+    Promise.prototype.then.call(value, undefined, () => undefined);
+  } catch {}
+}
+
 function isPromiseLike(value) {
-  return Boolean(value)
-    && (typeof value === 'object' || typeof value === 'function')
-    && typeof value.then === 'function';
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')) return false;
+  // Never execute an attacker-controlled `then` getter merely to decide
+  // whether a trust-boundary result is asynchronous. A getter is itself
+  // treated as thenable and therefore rejected by the synchronous contract.
+  try {
+    let candidate = value;
+    while (candidate) {
+      const descriptor = Object.getOwnPropertyDescriptor(candidate, 'then');
+      if (descriptor) {
+        const thenable = Object.hasOwn(descriptor, 'get')
+          || (Object.hasOwn(descriptor, 'value') && typeof descriptor.value === 'function');
+        if (thenable && Object.hasOwn(descriptor, 'value')) absorbNativePromise(value);
+        return thenable;
+      }
+      candidate = Object.getPrototypeOf(candidate);
+    }
+  } catch {
+    return true;
+  }
+  return false;
 }
 
 function isPlainDataRecord(value) {
@@ -140,55 +166,6 @@ function entryKind(stat) {
   fail('SPECIAL_FILE_REJECTED', 'Only regular files, directories, and symlinks may be deleted');
 }
 
-function createDefaultDeleteDurabilityAdapter({ fs = defaultFs, path = defaultPath } = {}) {
-  let serial = 0;
-
-  function syncDirectory(directoryPath) {
-    let descriptor;
-    try {
-      descriptor = fs.openSync(directoryPath, fs.constants.O_RDONLY);
-      fs.fsyncSync(descriptor);
-    } finally {
-      if (descriptor !== undefined) fs.closeSync(descriptor);
-    }
-  }
-
-  function writeJsonAtomic(filePath, value) {
-    const directoryPath = path.dirname(filePath);
-    const temporaryPath = path.join(
-      directoryPath,
-      `.${path.basename(filePath)}.tmp-${process.pid}-${serial += 1}`
-    );
-    const bytes = Buffer.from(`${JSON.stringify(value)}\n`, 'utf8');
-    let descriptor;
-    try {
-      descriptor = fs.openSync(
-        temporaryPath,
-        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
-        0o600
-      );
-      fs.writeFileSync(descriptor, bytes);
-      fs.fsyncSync(descriptor);
-      fs.closeSync(descriptor);
-      descriptor = undefined;
-      fs.renameSync(temporaryPath, filePath);
-      syncDirectory(directoryPath);
-    } catch (error) {
-      if (descriptor !== undefined) {
-        try { fs.closeSync(descriptor); } catch {}
-      }
-      try { fs.unlinkSync(temporaryPath); } catch {}
-      throw error;
-    }
-  }
-
-  function readJson(filePath) {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  }
-
-  return Object.freeze({ writeJsonAtomic, readJson, syncDirectory });
-}
-
 function createUnavailableDeleteJournalAuthenticator() {
   return Object.freeze({
     version: JOURNAL_AUTHENTICATOR_VERSION,
@@ -214,7 +191,6 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       'authorizeLifecycle',
       'authorizeRoot',
       'authorizeEffectFrontier',
-      'durability',
       'journalAuthenticator',
       'mutationBackend',
     ],
@@ -230,8 +206,6 @@ function createTransactionalFilesystemDeleteService(options = {}) {
   const authorizeLifecycle = dataValue(options, 'authorizeLifecycle');
   const authorizeRoot = dataValue(options, 'authorizeRoot');
   const authorizeEffectFrontier = dataValue(options, 'authorizeEffectFrontier');
-  const durability = dataValue(options, 'durability')
-    || createDefaultDeleteDurabilityAdapter({ fs, path });
   const hasExternalJournalAuthenticator = Object.hasOwn(options, 'journalAuthenticator');
   const journalAuthenticator = hasExternalJournalAuthenticator
     ? dataValue(options, 'journalAuthenticator')
@@ -247,11 +221,6 @@ function createTransactionalFilesystemDeleteService(options = {}) {
   ]) {
     if (typeof callback !== 'function') fail('INVALID_OPTIONS', `${name} must be a function`);
   }
-  for (const name of ['writeJsonAtomic', 'readJson', 'syncDirectory']) {
-    if (!durability || typeof durability[name] !== 'function') {
-      fail('INVALID_OPTIONS', `durability.${name} must be a function`);
-    }
-  }
   for (const name of ['seal', 'verify']) {
     if (!journalAuthenticator || typeof journalAuthenticator[name] !== 'function') {
       fail('INVALID_OPTIONS', `journalAuthenticator.${name} must be a function`);
@@ -259,16 +228,47 @@ function createTransactionalFilesystemDeleteService(options = {}) {
   }
   let initialMutationProbe;
   try {
-    assertAnchoredFilesystemMutationBackend(mutationBackend);
-    initialMutationProbe = assertAnchoredFilesystemMutationProbe(mutationBackend.probe());
+    if (!mutationBackend || typeof mutationBackend !== 'object' || Array.isArray(mutationBackend)) {
+      throw new TypeError('backend required');
+    }
+    for (const method of ['probe', 'prepare']) {
+      const descriptor = Object.getOwnPropertyDescriptor(mutationBackend, method);
+      if (!descriptor || !Object.hasOwn(descriptor, 'value')
+        || typeof descriptor.value !== 'function') {
+        throw new TypeError(`mutationBackend.${method} is required`);
+      }
+    }
+    const probe = Object.getOwnPropertyDescriptor(mutationBackend, 'probe').value
+      .call(mutationBackend);
+    if (isPromiseLike(probe)) throw new TypeError('probe must be synchronous');
+    initialMutationProbe = assertAnchoredFilesystemMutationProbe(probe);
   } catch {
     fail('INVALID_OPTIONS', 'mutationBackend must satisfy the anchored mutation contract');
+  }
+  function backendSupportsNamespaceIo() {
+    const descriptor = Object.getOwnPropertyDescriptor(mutationBackend, 'namespaceIoVersion');
+    return Boolean(descriptor)
+      && Object.hasOwn(descriptor, 'value')
+      && descriptor.value === ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION;
+  }
+  function backendHasRootNamespace() {
+    const descriptor = Object.getOwnPropertyDescriptor(mutationBackend, 'openRootNamespace');
+    return Boolean(descriptor)
+      && Object.hasOwn(descriptor, 'value')
+      && typeof descriptor.value === 'function';
   }
   if (initialMutationProbe.state === ANCHORED_FILESYSTEM_MUTATION_PROBE_STATES.ENFORCED
     && !hasExternalJournalAuthenticator) {
     fail(
       'JOURNAL_AUTHENTICATOR_REQUIRED',
       'An enforced mutation backend requires an external main-owned journal authenticator'
+    );
+  }
+  if (initialMutationProbe.state === ANCHORED_FILESYSTEM_MUTATION_PROBE_STATES.ENFORCED
+    && (!backendSupportsNamespaceIo() || !backendHasRootNamespace())) {
+    fail(
+      'INVALID_OPTIONS',
+      'An enforced mutation backend requires anchored namespace I/O v2'
     );
   }
 
@@ -287,6 +287,13 @@ function createTransactionalFilesystemDeleteService(options = {}) {
         fail(
           'JOURNAL_AUTHENTICATOR_REQUIRED',
           'An enforced mutation backend requires an external main-owned journal authenticator'
+        );
+      }
+      if (normalized.state === ANCHORED_FILESYSTEM_MUTATION_PROBE_STATES.ENFORCED
+        && (!backendSupportsNamespaceIo() || !backendHasRootNamespace())) {
+        fail(
+          'ATOMIC_MUTATION_BACKEND_UNAVAILABLE',
+          'Anchored namespace I/O v2 is unavailable'
         );
       }
       return normalized;
@@ -330,35 +337,124 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     });
   }
 
-  function readPrivateJson(filePath) {
-    let descriptor;
+  function namespaceMethod(namespace, name, errorCode = 'ATOMIC_MUTATION_BACKEND_UNAVAILABLE') {
+    if (!namespace || typeof namespace !== 'object' || Array.isArray(namespace)) {
+      fail(errorCode, 'The anchored private namespace is unavailable');
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(namespace, name);
+    if (!descriptor || !Object.hasOwn(descriptor, 'value')
+      || typeof descriptor.value !== 'function') {
+      fail(errorCode, `The anchored private namespace omitted ${name}`);
+    }
+    return descriptor.value;
+  }
+
+  function invokeNamespace(namespace, name, input, errorCode = 'JOURNAL_INVALID') {
+    let result;
     try {
-      const first = fs.lstatSync(filePath);
-      if (!first.isFile() || first.isSymbolicLink() || first.nlink !== 1
-        || first.size < 2 || first.size > MAX_PRIVATE_METADATA_BYTES) {
-        fail('JOURNAL_INVALID', 'Transaction metadata is unsafe');
-      }
-      descriptor = fs.openSync(
-        filePath,
-        fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0)
-      );
-      const opened = fs.fstatSync(descriptor);
-      if (!compareStatIdentity(first, opened)) {
-        fail('JOURNAL_INVALID', 'Transaction metadata changed while being read');
-      }
-      const bytes = fs.readFileSync(descriptor);
-      const final = fs.fstatSync(descriptor);
-      if (!compareStatIdentity(opened, final) || bytes.length !== opened.size) {
-        fail('JOURNAL_INVALID', 'Transaction metadata changed while being read');
-      }
-      return JSON.parse(bytes.toString('utf8'));
+      result = namespaceMethod(namespace, name, errorCode).call(namespace, input);
     } catch (error) {
       if (error instanceof TransactionalFilesystemDeleteError) throw error;
+      fail(errorCode, `Anchored namespace ${name} failed`);
+    }
+    if (isPromiseLike(result) || !isPlainDataRecord(result)) {
+      fail(errorCode, `Anchored namespace ${name} returned invalid data`);
+    }
+    return result;
+  }
+
+  function readNamespaceJson(
+    namespace,
+    relativePath,
+    { optional = false, includeContentDigest = false } = {}
+  ) {
+    const result = invokeNamespace(namespace, 'readFile', Object.freeze({
+      relativePath,
+      maxBytes: MAX_PRIVATE_METADATA_BYTES,
+    }));
+    if (dataValue(result, 'found') !== true) {
+      if (optional && dataValue(result, 'found') === false) return null;
+      fail('JOURNAL_INVALID', 'Transaction metadata is missing');
+    }
+    const contentBase64 = dataValue(result, 'contentBase64');
+    const contentDigest = dataValue(result, 'contentDigest');
+    if (typeof contentBase64 !== 'string' || typeof contentDigest !== 'string') {
       fail('JOURNAL_INVALID', 'Transaction metadata is unreadable');
-    } finally {
-      if (descriptor !== undefined) {
-        try { fs.closeSync(descriptor); } catch {}
-      }
+    }
+    let bytes;
+    try { bytes = Buffer.from(contentBase64, 'base64'); } catch {
+      fail('JOURNAL_INVALID', 'Transaction metadata is unreadable');
+    }
+    if (bytes.length < 2
+      || bytes.length > MAX_PRIVATE_METADATA_BYTES
+      || bytes.toString('base64') !== contentBase64
+      || sha256Buffer(crypto, bytes) !== contentDigest) {
+      fail('JOURNAL_INVALID', 'Transaction metadata failed integrity checks');
+    }
+    let value;
+    try { value = JSON.parse(bytes.toString('utf8')); } catch {
+      fail('JOURNAL_INVALID', 'Transaction metadata is unreadable');
+    }
+    return includeContentDigest
+      ? Object.freeze({ value, contentDigest })
+      : value;
+  }
+
+  function listNamespace(namespace, relativePath, maxEntries = MAX_PRIVATE_NAMESPACE_LIST_ENTRIES) {
+    const result = invokeNamespace(namespace, 'list', Object.freeze({
+      relativePath,
+      maxEntries,
+    }));
+    const entries = denseDataValues(dataValue(result, 'entries'), 'anchored namespace entries');
+    if (entries.length > maxEntries || entries.some((entry) => (
+      typeof entry !== 'string'
+      || !entry
+      || entry.startsWith('/')
+      || entry.includes('\\')
+      || entry.split('/').some((component) => !component || component === '.' || component === '..')
+    ))) {
+      fail('JOURNAL_INVALID', 'Anchored namespace listing is invalid');
+    }
+    return entries;
+  }
+
+  function writeNamespaceJson(namespace, relativePath, value) {
+    let bytes;
+    try { bytes = Buffer.from(`${JSON.stringify(value)}\n`, 'utf8'); } catch {
+      fail('CHECKPOINT_CREATE_FAILED', 'Transaction metadata is not serializable');
+    }
+    if (bytes.length < 2 || bytes.length > MAX_PRIVATE_METADATA_BYTES) {
+      fail('CHECKPOINT_CREATE_FAILED', 'Transaction metadata exceeded its bound');
+    }
+    const contentDigest = sha256Buffer(crypto, bytes);
+    const written = invokeNamespace(namespace, 'writeFile', Object.freeze({
+      relativePath,
+      contentBase64: bytes.toString('base64'),
+      contentDigest,
+      mode: 'replace_atomic',
+    }), 'CHECKPOINT_CREATE_FAILED');
+    if (dataValue(written, 'written') !== true
+      || dataValue(written, 'contentDigest') !== contentDigest) {
+      fail('CHECKPOINT_CREATE_FAILED', 'Anchored namespace write was not durable');
+    }
+    const synced = invokeNamespace(
+      namespace,
+      'sync',
+      undefined,
+      'CHECKPOINT_CREATE_FAILED'
+    );
+    if (dataValue(synced, 'synced') !== true) {
+      fail('CHECKPOINT_CREATE_FAILED', 'Anchored namespace sync failed');
+    }
+  }
+
+  function removeNamespaceEntry(namespace, relativePath, recursive) {
+    const removed = invokeNamespace(namespace, 'remove', Object.freeze({
+      relativePath,
+      recursive,
+    }), 'PURGE_FAILED');
+    if (dataValue(removed, 'removed') !== true) {
+      fail('PURGE_FAILED', 'Anchored namespace removal failed');
     }
   }
 
@@ -370,34 +466,58 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     return !isPromiseLike(verified) && verified === true;
   }
 
-  function prepareMutationSession(transaction) {
+  function sessionOpenInput(transaction) {
+    return Object.freeze({
+      rootPath: transaction.binding.realRootPath,
+      transactionPath: transaction.transactionPath,
+      payloadPath: transaction.payloadPath,
+      headPath: transaction.headPath,
+      anchorPath: transaction.anchorPath,
+      bindingDigest: transaction.bindingDigest,
+      checkpointDigest: transaction.checkpointManifest.checkpointDigest,
+      targets: Object.freeze(transaction.targets.map((target) => Object.freeze({
+        relativePath: target.relativePath,
+        payloadName: target.payloadName,
+      }))),
+      checkpointEntries: Object.freeze(
+        transaction.checkpointManifest.entries.map((entry) => Object.freeze({
+          relativePath: entry.relativePath,
+          kind: entry.kind,
+          bytes: entry.bytes,
+          mode: entry.mode,
+          mtimeMs: entry.mtimeMs,
+          contentDigest: entry.contentDigest,
+          linkTarget: entry.linkTarget,
+        }))
+      ),
+    });
+  }
+
+  function existingSessionOpenInput(transaction) {
+    const live = sessionOpenInput(transaction);
+    return Object.freeze({
+      transactionPath: live.transactionPath,
+      payloadPath: live.payloadPath,
+      headPath: live.headPath,
+      anchorPath: live.anchorPath,
+      bindingDigest: live.bindingDigest,
+      checkpointDigest: live.checkpointDigest,
+      manifestDigest: transaction.manifest.manifestDigest,
+      journalDigest: transaction.journal.journalDigest,
+      targets: live.targets,
+      checkpointEntries: live.checkpointEntries,
+    });
+  }
+
+  function prepareMutationSession(transaction, openSession = null) {
     readMutationProbe({ requireEnforced: true });
     let session;
     try {
-      session = mutationBackend.prepare(Object.freeze({
-        rootPath: transaction.binding.realRootPath,
-        transactionPath: transaction.transactionPath,
-        payloadPath: transaction.payloadPath,
-        headPath: transaction.headPath,
-        anchorPath: transaction.anchorPath,
-        bindingDigest: transaction.bindingDigest,
-        checkpointDigest: transaction.checkpointManifest.checkpointDigest,
-        targets: Object.freeze(transaction.targets.map((target) => Object.freeze({
-          relativePath: target.relativePath,
-          payloadName: target.payloadName,
-        }))),
-        checkpointEntries: Object.freeze(
-          transaction.checkpointManifest.entries.map((entry) => Object.freeze({
-            relativePath: entry.relativePath,
-            kind: entry.kind,
-            bytes: entry.bytes,
-            mode: entry.mode,
-            mtimeMs: entry.mtimeMs,
-            contentDigest: entry.contentDigest,
-            linkTarget: entry.linkTarget,
-          }))
-        ),
-      }));
+      const opener = openSession
+        || Object.getOwnPropertyDescriptor(mutationBackend, 'prepare').value.bind(mutationBackend);
+      session = opener(openSession
+        ? existingSessionOpenInput(transaction)
+        : sessionOpenInput(transaction));
     } catch (error) {
       fail(
         error && error.code === 'ATOMIC_MUTATION_BACKEND_UNAVAILABLE'
@@ -409,7 +529,17 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     if (isPromiseLike(session)) {
       fail('ATOMIC_MUTATION_BACKEND_UNAVAILABLE', 'Anchored mutation session creation must be synchronous');
     }
-    try { return assertAnchoredFilesystemMutationSession(session); } catch {
+    try {
+      const normalized = assertAnchoredFilesystemMutationNamespaceSession(session);
+      const namespaceDescriptor = Object.getOwnPropertyDescriptor(normalized, 'privateNamespace');
+      if (!namespaceDescriptor || !Object.hasOwn(namespaceDescriptor, 'value')) {
+        throw new TypeError('session private namespace required');
+      }
+      for (const method of ['readFile', 'list', 'writeFile', 'remove', 'sync']) {
+        namespaceMethod(namespaceDescriptor.value, method);
+      }
+      return normalized;
+    } catch {
       // A backend may have opened descriptors before returning a malformed
       // session. Do not leak those handles merely because validation failed.
       try {
@@ -527,29 +657,6 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       fail('TRANSACTION_ID_INVALID', 'Unable to allocate a transaction');
     }
     return candidate;
-  }
-
-  function ensurePrivateDirectories(rootPath) {
-    const faberPath = path.join(rootPath, '.faber');
-    const transactionsPath = path.join(faberPath, 'transactions');
-    const headsPath = path.join(faberPath, 'transaction-heads');
-    for (const directoryPath of [faberPath, transactionsPath, headsPath]) {
-      try {
-        if (fs.existsSync(directoryPath)) {
-          const stat = fs.lstatSync(directoryPath);
-          if (!stat.isDirectory() || stat.isSymbolicLink()) {
-            fail('PRIVATE_DIRECTORY_UNSAFE', 'The transaction directory is unsafe');
-          }
-        } else {
-          fs.mkdirSync(directoryPath, { mode: 0o700 });
-          durability.syncDirectory(path.dirname(directoryPath));
-        }
-      } catch (error) {
-        if (error instanceof TransactionalFilesystemDeleteError) throw error;
-        fail('CHECKPOINT_CREATE_FAILED', 'Unable to create the transaction directory');
-      }
-    }
-    return transactionsPath;
   }
 
   function assertSafeAncestors(rootPath, relativePath) {
@@ -1155,15 +1262,15 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     return Object.freeze({ ...core, authenticationTag: raw.authenticationTag });
   }
 
-  function validateAnchorChain(anchorPath, manifest) {
-    let stat;
-    try { stat = fs.lstatSync(anchorPath); } catch {
-      fail('JOURNAL_ANCHOR_INVALID', 'The durable journal anchor chain is missing');
-    }
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      fail('JOURNAL_ANCHOR_INVALID', 'The durable journal anchor directory is unsafe');
-    }
-    const names = fs.readdirSync(anchorPath).sort();
+  function validateAnchorChain(namespace, anchorRelativePath, manifest) {
+    const prefix = `${anchorRelativePath}/`;
+    const entries = listNamespace(namespace, anchorRelativePath);
+    const names = entries.map((entry) => {
+      if (!entry.startsWith(prefix) || entry.slice(prefix.length).includes('/')) {
+        fail('JOURNAL_ANCHOR_INVALID', 'The durable journal anchor directory is unsafe');
+      }
+      return entry.slice(prefix.length);
+    }).sort();
     if (!names.length) {
       fail('JOURNAL_ANCHOR_INVALID', 'The durable journal anchor chain has a gap');
     }
@@ -1176,7 +1283,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       if (!match || Number(match[1]) !== index + 1) {
         fail('JOURNAL_ANCHOR_INVALID', 'The durable journal anchor order is invalid');
       }
-      const head = readPrivateJson(path.join(anchorPath, name));
+      const head = readNamespaceJson(namespace, `${anchorRelativePath}/${name}`);
       assertExactKeys(head, [
         'schemaVersion',
         'authenticationVersion',
@@ -1317,15 +1424,15 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     return Object.freeze({ ...core, authenticationTag: raw.authenticationTag });
   }
 
-  function validateOrphanAnchorChain(anchorPath, transactionId, rootPath) {
-    let stat;
-    try { stat = fs.lstatSync(anchorPath); } catch {
-      fail('JOURNAL_ANCHOR_INVALID', 'The orphan journal anchor chain is missing');
-    }
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      fail('JOURNAL_ANCHOR_INVALID', 'The orphan journal anchor directory is unsafe');
-    }
-    const names = fs.readdirSync(anchorPath).sort();
+  function validateOrphanAnchorChain(namespace, anchorRelativePath, transactionId, rootPath) {
+    const prefix = `${anchorRelativePath}/`;
+    const entries = listNamespace(namespace, anchorRelativePath);
+    const names = entries.map((entry) => {
+      if (!entry.startsWith(prefix) || entry.slice(prefix.length).includes('/')) {
+        fail('JOURNAL_ANCHOR_INVALID', 'The orphan journal anchor directory is unsafe');
+      }
+      return entry.slice(prefix.length);
+    }).sort();
     if (!names.length) {
       fail('JOURNAL_ANCHOR_INVALID', 'The orphan journal anchor chain has a gap');
     }
@@ -1341,7 +1448,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
         fail('JOURNAL_ANCHOR_INVALID', 'The orphan journal anchor order is invalid');
       }
       const head = validateAuthenticatedOrphanHead(
-        readPrivateJson(path.join(anchorPath, name)),
+        readNamespaceJson(namespace, `${anchorRelativePath}/${name}`),
         transactionId,
         rootPath,
         'orphan journal anchor'
@@ -1368,31 +1475,43 @@ function createTransactionalFilesystemDeleteService(options = {}) {
   function persistJournal(transaction, journal = transaction.journal) {
     const head = buildHead(transaction, journal);
     const generationName = `${String(journal.revision).padStart(12, '0')}-${journal.journalDigest.slice(7)}.json`;
-    const generationPath = path.join(transaction.generationsPath, generationName);
-    if (lstatExists(fs, generationPath)) {
-      const existingGeneration = readPrivateJson(generationPath);
+    const generationRelativePath = `${transaction.generationsRelativePath}/${generationName}`;
+    const existingGeneration = readNamespaceJson(
+      transaction.privateNamespace,
+      generationRelativePath,
+      { optional: true }
+    );
+    if (existingGeneration) {
       if (canonicalSha256Digest(existingGeneration) !== canonicalSha256Digest(journal)) {
         fail('JOURNAL_GENERATION_CONFLICT', 'A durable journal generation conflicts with this update');
       }
     } else {
-      durability.writeJsonAtomic(generationPath, journal);
+      writeNamespaceJson(transaction.privateNamespace, generationRelativePath, journal);
     }
     const anchorName = `${String(head.revision).padStart(12, '0')}-${head.journalDigest.slice(7)}.json`;
-    const anchorPath = path.join(transaction.anchorPath, anchorName);
-    if (lstatExists(fs, anchorPath)) {
-      const existingAnchor = readPrivateJson(anchorPath);
+    const anchorRelativePath = `${transaction.anchorRelativePath}/${anchorName}`;
+    const existingAnchor = readNamespaceJson(
+      transaction.privateNamespace,
+      anchorRelativePath,
+      { optional: true }
+    );
+    if (existingAnchor) {
       if (canonicalSha256Digest(existingAnchor) !== canonicalSha256Digest(head)) {
         fail('JOURNAL_ANCHOR_CONFLICT', 'A durable journal anchor conflicts with this update');
       }
     } else {
-      durability.writeJsonAtomic(anchorPath, head);
+      writeNamespaceJson(transaction.privateNamespace, anchorRelativePath, head);
     }
     transaction.lastAnchorDigest = canonicalSha256Digest(head);
 
     // These are replaceable read caches, not the commit point. Recovery uses
     // the authenticated immutable generation selected by the anchor chain.
-    try { durability.writeJsonAtomic(transaction.journalPath, journal); } catch {}
-    try { durability.writeJsonAtomic(transaction.headPath, head); } catch {}
+    try {
+      writeNamespaceJson(transaction.privateNamespace, transaction.journalRelativePath, journal);
+    } catch {}
+    try {
+      writeNamespaceJson(transaction.privateNamespace, transaction.headRelativePath, head);
+    } catch {}
   }
 
   function transition(transaction, state, reasonCode = '') {
@@ -1450,65 +1569,34 @@ function createTransactionalFilesystemDeleteService(options = {}) {
   }
 
   function verifyQuarantinedTargets(transaction) {
-    const physicalIdentities = new Set();
-    const budget = { files: 0, bytes: 0, directories: 0 };
-    for (const target of transaction.targets) {
-      const sourcePath = path.join(transaction.payloadPath, target.payloadName);
-      if (!lstatExists(fs, sourcePath)) continue;
-      const relocatedEntries = [];
-      scanEntry(
-        transaction.payloadPath,
-        target.payloadName,
-        relocatedEntries,
-        physicalIdentities,
-        budget,
-        0
-      );
-      const mappedEntries = relocatedEntries.map((entry) => {
-        const suffix = entry.relativePath === target.payloadName
-          ? ''
-          : entry.relativePath.slice(target.payloadName.length);
-        return { ...entry, relativePath: `${target.relativePath}${suffix}` };
-      }).sort((left, right) => left.relativePath.localeCompare(right.relativePath));
-      const expectedEntries = transaction.checkpointManifest.entries
-        .filter((entry) => entry.relativePath === target.relativePath
-          || entry.relativePath.startsWith(`${target.relativePath}/`));
-      if (canonicalSha256Digest(mappedEntries) !== canonicalSha256Digest(expectedEntries)) {
-        fail('CHECKPOINT_TAMPERED', 'Quarantined checkpoint data failed verification');
-      }
-    }
+    verifyMutationSession(transaction);
+    inferMovementProgress(transaction);
   }
 
   function inferMovementProgress(transaction) {
-    let movedCount = 0;
-    let reachedUnmoved = false;
-    for (const target of transaction.targets) {
-      const sourcePath = path.join(transaction.payloadPath, target.payloadName);
-      const targetPath = path.join(
-        transaction.binding.realRootPath,
-        ...target.relativePath.split('/')
-      );
-      const sourceExists = lstatExists(fs, sourcePath);
-      const targetExists = lstatExists(fs, targetPath);
-      if (sourceExists === targetExists) {
-        fail(
-          sourceExists ? 'ROLLBACK_COLLISION' : 'CHECKPOINT_MISSING',
-          'Transaction movement state is ambiguous'
-        );
-      }
-      if (sourceExists) {
-        if (reachedUnmoved) fail('JOURNAL_PROGRESS_INVALID', 'Transaction movement is not a prefix');
-        movedCount += 1;
-      } else {
-        reachedUnmoved = true;
-      }
+    const descriptor = transaction.mutationSession
+      ? Object.getOwnPropertyDescriptor(transaction.mutationSession, 'inspectProgress')
+      : null;
+    if (!descriptor || !Object.hasOwn(descriptor, 'value')
+      || typeof descriptor.value !== 'function') {
+      fail('ATOMIC_MUTATION_BACKEND_UNAVAILABLE', 'Anchored progress inspection is unavailable');
     }
-    const payloadNames = fs.readdirSync(transaction.payloadPath).sort();
-    const expectedNames = transaction.targets.slice(0, movedCount).map((target) => target.payloadName);
-    if (JSON.stringify(payloadNames) !== JSON.stringify(expectedNames)) {
-      fail('CHECKPOINT_TAMPERED', 'The quarantine contains unexpected entries');
+    let result;
+    try { result = descriptor.value.call(transaction.mutationSession); } catch (error) {
+      if (error && typeof error.code === 'string') {
+        fail(error.code, 'Anchored progress inspection failed');
+      }
+      fail('CHECKPOINT_TAMPERED', 'Anchored progress inspection failed');
     }
-    return expectedNames;
+    if (isPromiseLike(result) || !isPlainDataRecord(result)) {
+      fail('CHECKPOINT_TAMPERED', 'Anchored progress inspection returned invalid data');
+    }
+    const moved = denseDataValues(dataValue(result, 'moved'), 'anchored movement progress');
+    if (moved.length > transaction.targets.length
+      || moved.some((name, index) => name !== transaction.targets[index].payloadName)) {
+      fail('JOURNAL_PROGRESS_INVALID', 'Transaction movement is not an ordered prefix');
+    }
+    return moved;
   }
 
   function reconcileMovementProgress(transaction) {
@@ -1544,15 +1632,8 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       || restored.some((name) => !expected.includes(name))) {
       fail('ROLLBACK_FAILED', 'The anchored mutation backend returned incomplete restoration progress');
     }
-    for (const target of transaction.targets) {
-      const payloadEntryPath = path.join(transaction.payloadPath, target.payloadName);
-      const targetPath = path.join(
-        transaction.binding.realRootPath,
-        ...target.relativePath.split('/')
-      );
-      if (lstatExists(fs, payloadEntryPath) || !lstatExists(fs, targetPath)) {
-        fail('ROLLBACK_FAILED', 'The anchored mutation backend left restoration incomplete');
-      }
+    if (inferMovementProgress(transaction).length !== 0) {
+      fail('ROLLBACK_FAILED', 'The anchored mutation backend left restoration incomplete');
     }
     verifyMutationSession(transaction);
     const restoredScan = scanTargets(
@@ -1569,16 +1650,84 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     }
   }
 
-  function loadTransactionFromDisk(binding, transactionId) {
+  function rootNamespaceMethod(rootNamespace, name) {
+    if (!rootNamespace || typeof rootNamespace !== 'object' || Array.isArray(rootNamespace)) {
+      fail('ATOMIC_MUTATION_BACKEND_UNAVAILABLE', 'Anchored root namespace is unavailable');
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(rootNamespace, name);
+    if (!descriptor || !Object.hasOwn(descriptor, 'value')
+      || typeof descriptor.value !== 'function') {
+      fail('ATOMIC_MUTATION_BACKEND_UNAVAILABLE', `Anchored root namespace omitted ${name}`);
+    }
+    return descriptor.value;
+  }
+
+  function openRootNamespace(rootPath) {
+    readMutationProbe({ requireEnforced: true });
+    let rootNamespace;
+    try {
+      const opener = Object.getOwnPropertyDescriptor(mutationBackend, 'openRootNamespace').value;
+      rootNamespace = opener.call(mutationBackend, Object.freeze({ rootPath }));
+    } catch {
+      fail('ATOMIC_MUTATION_BACKEND_UNAVAILABLE', 'Unable to open the anchored root namespace');
+    }
+    if (isPromiseLike(rootNamespace)) {
+      fail('ATOMIC_MUTATION_BACKEND_UNAVAILABLE', 'Anchored root namespace creation must be synchronous');
+    }
+    try { return assertAnchoredFilesystemMutationRootNamespace(rootNamespace); } catch {
+      fail('ATOMIC_MUTATION_BACKEND_UNAVAILABLE', 'Anchored root namespace is invalid');
+    }
+  }
+
+  function closeRootNamespace(rootNamespace) {
+    if (!rootNamespace) return;
+    let result;
+    try { result = rootNamespaceMethod(rootNamespace, 'close').call(rootNamespace); } catch {
+      fail('ATOMIC_MUTATION_BACKEND_UNAVAILABLE', 'Anchored root namespace did not close');
+    }
+    if (isPromiseLike(result) || !isPlainDataRecord(result)
+      || dataValue(result, 'closed') !== true) {
+      fail('ATOMIC_MUTATION_BACKEND_UNAVAILABLE', 'Anchored root namespace did not close');
+    }
+  }
+
+  function assertTransactionCapacity(rootPath) {
+    let rootNamespace = null;
+    try {
+      rootNamespace = openRootNamespace(rootPath);
+      const entries = listNamespace(
+        dataValue(rootNamespace, 'privateNamespace'),
+        'transactions',
+        MAX_ROOT_TRANSACTIONS
+      );
+      const prefix = 'transactions/';
+      if (entries.some((entry) => (
+        !entry.startsWith(prefix) || entry.slice(prefix.length).includes('/')
+      ))) {
+        fail('JOURNAL_INVALID', 'The transaction root listing is invalid');
+      }
+      if (entries.length >= MAX_ROOT_TRANSACTIONS) {
+        fail('TRANSACTION_CAPACITY_EXCEEDED', 'The transaction root is at capacity');
+      }
+      closeRootNamespace(rootNamespace);
+      rootNamespace = null;
+    } catch (error) {
+      try { closeRootNamespace(rootNamespace); } catch {}
+      if (error instanceof TransactionalFilesystemDeleteError) throw error;
+      fail('ATOMIC_MUTATION_BACKEND_UNAVAILABLE', 'Unable to inspect transaction capacity');
+    }
+  }
+
+  function loadTransactionFromAnchoredNamespace(binding, transactionId) {
     if (!SAFE_TRANSACTION_ID.test(transactionId)) {
       fail('JOURNAL_INVALID', 'An unsafe transaction directory was retained');
     }
+    const rootNamespace = openRootNamespace(binding.realRootPath);
+    let promoted = false;
+    const bootstrapNamespace = dataValue(rootNamespace, 'privateNamespace');
     const transactionsPath = path.join(binding.realRootPath, '.faber', 'transactions');
     const transactionPath = path.join(transactionsPath, transactionId);
-    const transactionStat = fs.lstatSync(transactionPath);
-    if (!transactionStat.isDirectory() || transactionStat.isSymbolicLink()) {
-      fail('JOURNAL_INVALID', 'The transaction path is unsafe');
-    }
+    const transactionRelativePath = `transactions/${transactionId}`;
     const manifestPath = path.join(transactionPath, 'manifest.json');
     const journalPath = path.join(transactionPath, 'journal.json');
     const headPath = path.join(
@@ -1587,37 +1736,39 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       'transaction-heads',
       `${transactionId}.json`
     );
-    const manifest = validatePrivateManifest(
-      readPrivateJson(manifestPath),
-      transactionId,
-      binding
-    );
+    let transaction = null;
+    try {
+      const manifest = validatePrivateManifest(
+        readNamespaceJson(bootstrapNamespace, `${transactionRelativePath}/manifest.json`),
+        transactionId,
+        binding
+      );
     // A project root may retain checkpoints for more than one authorized job.
     // Ignore another job only after its complete manifest, digests, root
     // binding, and authentication tag have all been validated above. Unknown
     // or tampered manifests still throw and remain recovery-blocking.
-    if (!sameBinding(manifest.binding, binding)) return null;
+      if (!sameBinding(manifest.binding, binding)) {
+        closeRootNamespace(rootNamespace);
+        return null;
+      }
     const anchorPath = path.join(
       binding.realRootPath,
       '.faber',
       'transaction-heads',
       transactionId
     );
-    const anchorChain = validateAnchorChain(anchorPath, manifest);
+    const anchorRelativePath = `transaction-heads/${transactionId}`;
+      const anchorChain = validateAnchorChain(bootstrapNamespace, anchorRelativePath, manifest);
     const generationsPath = path.join(transactionPath, 'journal-generations');
-    const generationPath = path.join(
-      generationsPath,
-      `${String(anchorChain.latestHead.revision).padStart(12, '0')}-${anchorChain.latestHead.journalDigest.slice(7)}.json`
-    );
-    const journal = validatePrivateJournal(readPrivateJson(generationPath), manifest);
-    validatePrivateHead(anchorChain.latestHead, manifest, journal);
-    const lastAnchorDigest = anchorChain.lastAnchorDigest;
-    const payloadPath = path.join(transactionPath, 'payload');
-    const payloadStat = fs.lstatSync(payloadPath);
-    if (!payloadStat.isDirectory() || payloadStat.isSymbolicLink()) {
-      fail('CHECKPOINT_TAMPERED', 'The transaction payload directory is unsafe');
-    }
-    const transaction = {
+    const generationName = `${String(anchorChain.latestHead.revision).padStart(12, '0')}-${anchorChain.latestHead.journalDigest.slice(7)}.json`;
+      const journal = validatePrivateJournal(readNamespaceJson(
+        bootstrapNamespace,
+        `${transactionRelativePath}/journal-generations/${generationName}`
+      ), manifest);
+      validatePrivateHead(anchorChain.latestHead, manifest, journal);
+      const lastAnchorDigest = anchorChain.lastAnchorDigest;
+      const payloadPath = path.join(transactionPath, 'payload');
+      transaction = {
       id: transactionId,
       binding: manifest.binding,
       bindingDigest: manifest.bindingDigest,
@@ -1628,8 +1779,14 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       generationsPath,
       manifestPath,
       journalPath,
+      transactionRelativePath,
+      manifestRelativePath: `${transactionRelativePath}/manifest.json`,
+      journalRelativePath: `${transactionRelativePath}/journal.json`,
+      generationsRelativePath: `${transactionRelativePath}/journal-generations`,
       headPath,
       anchorPath,
+      headRelativePath: `transaction-heads/${transactionId}.json`,
+      anchorRelativePath,
       targets: manifest.targets,
       moved: [...journal.moved],
       state: journal.records[journal.records.length - 1].stateRecord.state,
@@ -1638,9 +1795,17 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       lastAnchorDigest,
       mutationSession: null,
       mutationSessionClosed: false,
-    };
-    try {
-      transaction.mutationSession = prepareMutationSession(transaction);
+      privateNamespace: null,
+      restoredInSession: false,
+      };
+      const opener = rootNamespaceMethod(rootNamespace, 'openExistingSession')
+        .bind(rootNamespace);
+      transaction.mutationSession = prepareMutationSession(transaction, opener);
+      promoted = true;
+      transaction.privateNamespace = dataValue(
+        transaction.mutationSession,
+        'privateNamespace'
+      );
       reconcileMovementProgress(transaction);
       verifyQuarantinedTargets(transaction);
       return transaction;
@@ -1648,34 +1813,82 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       // Discovery is intentionally fail-closed and may swallow the load error.
       // Once the anchored backend has returned a session, however, every load
       // failure must still release its root/ancestor/source handles.
-      try { closeMutationSession(transaction); } catch {}
+      if (transaction && transaction.mutationSession) {
+        try { closeMutationSession(transaction); } catch {}
+      } else if (!promoted) {
+        try { closeRootNamespace(rootNamespace); } catch {}
+      }
       throw error;
     }
   }
 
   function discoverTransactions(binding) {
-    const transactionsPath = path.join(binding.realRootPath, '.faber', 'transactions');
     const discovered = [];
     let retainedUnknown = 0;
     let recoveredOrphanHeads = 0;
-    let names = [];
+    let probe;
     try {
-      if (!lstatExists(fs, transactionsPath)) {
-        names = [];
-      } else {
-      const stat = fs.lstatSync(transactionsPath);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) {
-        return { discovered, retainedUnknown: 1, recoveredOrphanHeads };
-      }
-      names = fs.readdirSync(transactionsPath).sort();
-      }
+      probe = readMutationProbe();
     } catch {
+      return { discovered, retainedUnknown: 1, recoveredOrphanHeads };
+    }
+    if (probe.state !== ANCHORED_FILESYSTEM_MUTATION_PROBE_STATES.ENFORCED) {
+      // An unavailable backend may safely report an empty root as recovered,
+      // but existing private metadata must be retained fail-closed. There is
+      // deliberately no mutable pathname fallback.
+      return {
+        discovered,
+        retainedUnknown: lstatExists(
+          fs,
+          path.join(binding.realRootPath, '.faber')
+        ) ? 1 : 0,
+        recoveredOrphanHeads,
+      };
+    }
+    let names = [];
+    let headNames = [];
+    let listingRoot = null;
+    try {
+      listingRoot = openRootNamespace(binding.realRootPath);
+      const namespace = dataValue(listingRoot, 'privateNamespace');
+      const transactionEntries = listNamespace(
+        namespace,
+        'transactions',
+        MAX_ROOT_TRANSACTIONS
+      );
+      names = transactionEntries.map((entry) => {
+        const prefix = 'transactions/';
+        if (!entry.startsWith(prefix) || entry.slice(prefix.length).includes('/')) {
+          fail('JOURNAL_INVALID', 'The transaction root listing is invalid');
+        }
+        return entry.slice(prefix.length);
+      }).sort();
+      const headEntries = listNamespace(
+        namespace,
+        'transaction-heads',
+        MAX_PRIVATE_NAMESPACE_LIST_ENTRIES
+      );
+      headNames = headEntries.map((entry) => {
+        const prefix = 'transaction-heads/';
+        if (!entry.startsWith(prefix) || entry.slice(prefix.length).includes('/')) {
+          fail('JOURNAL_INVALID', 'The transaction head listing is invalid');
+        }
+        return entry.slice(prefix.length);
+      }).sort();
+      if (new Set(names).size !== names.length
+        || new Set(headNames).size !== headNames.length) {
+        fail('JOURNAL_INVALID', 'The private namespace listing contains duplicates');
+      }
+      closeRootNamespace(listingRoot);
+      listingRoot = null;
+    } catch {
+      try { closeRootNamespace(listingRoot); } catch {}
       return { discovered, retainedUnknown: 1, recoveredOrphanHeads };
     }
     for (const name of names) {
       if (transactionsById.has(name)) continue;
       try {
-        const transaction = loadTransactionFromDisk(binding, name);
+        const transaction = loadTransactionFromAnchoredNamespace(binding, name);
         if (!transaction) continue;
         register(transaction);
         discovered.push(transaction);
@@ -1684,65 +1897,70 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       }
     }
     const transactionNames = new Set(names);
-    const headsPath = path.join(binding.realRootPath, '.faber', 'transaction-heads');
-    try {
-      if (lstatExists(fs, headsPath)) {
-        const headsStat = fs.lstatSync(headsPath);
-        if (!headsStat.isDirectory() || headsStat.isSymbolicLink()) {
-          retainedUnknown += 1;
-        } else {
-          const headNames = fs.readdirSync(headsPath).sort();
-          const headNameSet = new Set(headNames);
-          for (const fileName of headNames) {
-            if (transactionNames.has(fileName)) continue;
-            if (!fileName.endsWith('.json')) {
-              // An orphan anchor directory is validated and removed together
-              // with its authenticated companion head below. Do not count the
-              // same recoverable pair as an unknown merely because directory
-              // names sort before their `.json` head.
-              if (headNameSet.has(`${fileName}.json`)) continue;
-              retainedUnknown += 1;
-              continue;
-            }
-            const transactionId = fileName.slice(0, -5);
-            if (transactionNames.has(transactionId)) continue;
-            const headPath = path.join(headsPath, fileName);
-            try {
-              const head = validateAuthenticatedOrphanHead(
-                readPrivateJson(headPath),
-                transactionId,
-                binding.realRootPath,
-                'orphan journal head'
-              );
-              if (head.latestState !== TRANSACTIONAL_DELETE_STATES.PURGING) {
-                fail('JOURNAL_HEAD_INVALID', 'An orphan journal head is not safely purgeable');
-              }
-              const orphanAnchorPath = path.join(headsPath, transactionId);
-              const anchorChain = validateOrphanAnchorChain(
-                orphanAnchorPath,
-                transactionId,
-                binding.realRootPath
-              );
-              if (canonicalSha256Digest(anchorChain.latestHead)
-                !== canonicalSha256Digest(head)) {
-                fail('JOURNAL_REPLAY_DETECTED', 'The orphan head does not match its anchor');
-              }
-              // The root-scoped HMAC authenticates an orphan independently of
-              // the caller's job binding. Preserve a fully valid foreign pair
-              // for its owner; only the exact binding may remove it.
-              if (head.bindingDigest !== canonicalSha256Digest(binding)) continue;
-              fs.unlinkSync(headPath);
-              fs.rmSync(orphanAnchorPath, { recursive: true, force: false });
-              durability.syncDirectory(headsPath);
-              recoveredOrphanHeads += 1;
-            } catch {
-              retainedUnknown += 1;
-            }
-          }
-        }
+    const headNameSet = new Set(headNames);
+    for (const fileName of headNames) {
+      if (transactionNames.has(fileName)) continue;
+      if (!fileName.endsWith('.json')) {
+        // An orphan anchor directory is validated and removed together with
+        // its authenticated companion head.
+        if (headNameSet.has(`${fileName}.json`)) continue;
+        retainedUnknown += 1;
+        continue;
       }
-    } catch {
-      retainedUnknown += 1;
+      const transactionId = fileName.slice(0, -5);
+      if (transactionNames.has(transactionId)) continue;
+      let orphanRoot = null;
+      try {
+        orphanRoot = openRootNamespace(binding.realRootPath);
+        const namespace = dataValue(orphanRoot, 'privateNamespace');
+        const headRead = readNamespaceJson(
+          namespace,
+          `transaction-heads/${fileName}`,
+          { includeContentDigest: true }
+        );
+        const head = validateAuthenticatedOrphanHead(
+          headRead.value,
+          transactionId,
+          binding.realRootPath,
+          'orphan journal head'
+        );
+        if (head.latestState !== TRANSACTIONAL_DELETE_STATES.PURGING) {
+          fail('JOURNAL_HEAD_INVALID', 'An orphan journal head is not safely purgeable');
+        }
+        const anchorChain = validateOrphanAnchorChain(
+          namespace,
+          `transaction-heads/${transactionId}`,
+          transactionId,
+          binding.realRootPath
+        );
+        if (canonicalSha256Digest(anchorChain.latestHead)
+          !== canonicalSha256Digest(head)) {
+          fail('JOURNAL_REPLAY_DETECTED', 'The orphan head does not match its anchor');
+        }
+        // Preserve a fully authenticated foreign pair for its owner.
+        if (head.bindingDigest === canonicalSha256Digest(binding)) {
+          authorizeFinalFrontier(binding);
+          const cleaned = rootNamespaceMethod(orphanRoot, 'cleanupAuthenticatedOrphan')
+            .call(orphanRoot, Object.freeze({
+              transactionId,
+              bindingDigest: head.bindingDigest,
+              manifestDigest: head.manifestDigest,
+              journalDigest: head.journalDigest,
+              headContentDigest: headRead.contentDigest,
+              anchorChainDigest: anchorChain.lastAnchorDigest,
+            }));
+          if (isPromiseLike(cleaned) || !isPlainDataRecord(cleaned)
+            || dataValue(cleaned, 'cleaned') !== true) {
+            fail('PURGE_FAILED', 'Anchored orphan cleanup failed');
+          }
+          recoveredOrphanHeads += 1;
+        }
+        closeRootNamespace(orphanRoot);
+        orphanRoot = null;
+      } catch {
+        try { closeRootNamespace(orphanRoot); } catch {}
+        retainedUnknown += 1;
+      }
     }
     return { discovered, retainedUnknown, recoveredOrphanHeads };
   }
@@ -1766,28 +1984,48 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     return [...transactions.values()].sort((left, right) => left.id.localeCompare(right.id));
   }
 
-  function purge(transaction) {
-    if (transaction.state === TRANSACTIONAL_DELETE_STATES.PURGED) return;
-    if (!lstatExists(fs, transaction.transactionPath)) {
-      // purgeQuarantine may have completed the irreversible checkpoint removal
-      // and then failed while deleting its replaceable head/anchor metadata.
-      // Finish that cleanup idempotently instead of trying to append to a WAL
-      // that no longer exists.
-      try { if (lstatExists(fs, transaction.headPath)) fs.unlinkSync(transaction.headPath); } catch {
-        fail('PURGE_FAILED', 'The delete checkpoint head could not be purged');
-      }
-      try {
-        if (lstatExists(fs, transaction.anchorPath)) {
-          fs.rmSync(transaction.anchorPath, { recursive: true, force: false });
+  function cleanupRestoredTransaction(transaction) {
+    try {
+      if (!transaction.restoredInSession) {
+        reconcileMovementProgress(transaction);
+        authorizeFinalFrontier(transaction.binding);
+        const restoration = transaction.mutationSession.restoreFromQuarantine(
+          Object.freeze({
+            checkpointDigest: transaction.checkpointManifest.checkpointDigest,
+          })
+        );
+        if (isPromiseLike(restoration) || !isPlainDataRecord(restoration)) {
+          fail('ROLLBACK_FAILED', 'The anchored mutation backend returned invalid restoration data');
         }
-        durability.syncDirectory(path.dirname(transaction.headPath));
-      } catch {
-        fail('PURGE_FAILED', 'The delete checkpoint anchor could not be purged');
+        verifyRestoredTargets(transaction, restoration);
+        transaction.moved = [];
+        transaction.restoredInSession = true;
+      }
+      authorizeFinalFrontier(transaction.binding);
+      const cleaned = namespaceMethod(
+        transaction.privateNamespace,
+        'cleanup',
+        'PURGE_FAILED'
+      ).call(transaction.privateNamespace);
+      if (isPromiseLike(cleaned) || !isPlainDataRecord(cleaned)
+        || dataValue(cleaned, 'cleaned') !== true) {
+        fail('PURGE_FAILED', 'The restored checkpoint namespace was not cleaned');
       }
       transaction.state = TRANSACTIONAL_DELETE_STATES.PURGED;
       closeMutationSession(transaction);
       completedTransactions += 1;
       unregister(transaction);
+    } catch (error) {
+      recoveryRequiredTransactions += 1;
+      if (error instanceof TransactionalFilesystemDeleteError) throw error;
+      fail('PURGE_FAILED', 'The restored checkpoint namespace could not be cleaned');
+    }
+  }
+
+  function purge(transaction) {
+    if (transaction.state === TRANSACTIONAL_DELETE_STATES.PURGED) return;
+    if (transaction.state === TRANSACTIONAL_DELETE_STATES.ROLLED_BACK) {
+      cleanupRestoredTransaction(transaction);
       return;
     }
     if (transaction.state === TRANSACTIONAL_DELETE_STATES.COMMITTED) {
@@ -1807,9 +2045,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
         || dataValue(purged, 'purged') !== true) {
         fail('PURGE_FAILED', 'The anchored mutation backend did not purge the checkpoint');
       }
-      if (lstatExists(fs, transaction.transactionPath)
-        || lstatExists(fs, transaction.headPath)
-        || lstatExists(fs, transaction.anchorPath)) {
+      if (dataValue(purged, 'namespaceCleaned') !== true) {
         fail('PURGE_FAILED', 'The anchored mutation backend left checkpoint data behind');
       }
       transaction.state = TRANSACTIONAL_DELETE_STATES.PURGED;
@@ -1817,19 +2053,10 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       completedTransactions += 1;
       unregister(transaction);
     } catch {
-      try {
-        if (lstatExists(fs, transaction.transactionPath)) {
-          transition(
-            transaction,
-            TRANSACTIONAL_DELETE_STATES.RECOVERY_POST_COMMIT,
-            'PURGE_INTERRUPTED'
-          );
-        } else {
-          transaction.state = TRANSACTIONAL_DELETE_STATES.RECOVERY_POST_COMMIT;
-        }
-      } catch {
-        transaction.state = TRANSACTIONAL_DELETE_STATES.RECOVERY_POST_COMMIT;
-      }
+      // PURGING was durably anchored before the irreversible frontier. Do not
+      // attempt another namespace write after the helper may already have
+      // removed the transaction directory; doing so could resurrect metadata.
+      transaction.state = TRANSACTIONAL_DELETE_STATES.RECOVERY_POST_COMMIT;
       recoveryRequiredTransactions += 1;
       fail('PURGE_FAILED', 'The delete checkpoint could not be purged');
     }
@@ -1837,12 +2064,8 @@ function createTransactionalFilesystemDeleteService(options = {}) {
 
   function rollback(transaction, reasonCode = '') {
     if (transaction.state === TRANSACTIONAL_DELETE_STATES.PURGED) return;
-    if (transaction.state === TRANSACTIONAL_DELETE_STATES.PREPARED) {
-      purge(transaction);
-      return;
-    }
     if (transaction.state === TRANSACTIONAL_DELETE_STATES.ROLLED_BACK) {
-      purge(transaction);
+      cleanupRestoredTransaction(transaction);
       return;
     }
     if (transaction.state !== TRANSACTIONAL_DELETE_STATES.ROLLING_BACK) {
@@ -1866,8 +2089,9 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       }
       verifyRestoredTargets(transaction, restoration);
       transaction.moved = [];
+      transaction.restoredInSession = true;
       transition(transaction, TRANSACTIONAL_DELETE_STATES.ROLLED_BACK);
-      purge(transaction);
+      cleanupRestoredTransaction(transaction);
     } catch (error) {
       try { reconcileMovementProgress(transaction); } catch {}
       try {
@@ -2087,22 +2311,14 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       const createdAt = readNow();
       const scanned = scanTargets(binding, request, pathStyle, caseSensitive, createdAt);
       authorize(binding);
-      const transactionsPath = ensurePrivateDirectories(binding.realRootPath);
+      assertTransactionCapacity(binding.realRootPath);
       const id = safeTransactionId();
+      const transactionsPath = path.join(binding.realRootPath, '.faber', 'transactions');
       const transactionPath = path.join(transactionsPath, id);
       const payloadPath = path.join(transactionPath, 'payload');
       const generationsPath = path.join(transactionPath, 'journal-generations');
       const anchorPath = path.join(binding.realRootPath, '.faber', 'transaction-heads', id);
-      try {
-        fs.mkdirSync(transactionPath, { mode: 0o700 });
-        fs.mkdirSync(payloadPath, { mode: 0o700 });
-        fs.mkdirSync(generationsPath, { mode: 0o700 });
-        fs.mkdirSync(anchorPath, { mode: 0o700 });
-        durability.syncDirectory(transactionsPath);
-        durability.syncDirectory(path.dirname(anchorPath));
-      } catch {
-        fail('CHECKPOINT_CREATE_FAILED', 'Unable to reserve a transaction checkpoint');
-      }
+      const transactionRelativePath = `transactions/${id}`;
       const transaction = {
         id,
         binding,
@@ -2114,6 +2330,10 @@ function createTransactionalFilesystemDeleteService(options = {}) {
         generationsPath,
         manifestPath: path.join(transactionPath, 'manifest.json'),
         journalPath: path.join(transactionPath, 'journal.json'),
+        transactionRelativePath,
+        manifestRelativePath: `${transactionRelativePath}/manifest.json`,
+        journalRelativePath: `${transactionRelativePath}/journal.json`,
+        generationsRelativePath: `${transactionRelativePath}/journal-generations`,
         anchorPath,
         headPath: path.join(
           binding.realRootPath,
@@ -2121,6 +2341,8 @@ function createTransactionalFilesystemDeleteService(options = {}) {
           'transaction-heads',
           `${id}.json`
         ),
+        anchorRelativePath: `transaction-heads/${id}`,
+        headRelativePath: `transaction-heads/${id}.json`,
         targets: scanned.plan.request.paths.map((relativePath, index) => ({
           relativePath,
           payloadName: String(index).padStart(4, '0'),
@@ -2132,18 +2354,57 @@ function createTransactionalFilesystemDeleteService(options = {}) {
         lastAnchorDigest: null,
         mutationSession: null,
         mutationSessionClosed: false,
+        privateNamespace: null,
+        restoredInSession: false,
       };
       transaction.manifest = privateManifest(transaction);
       transaction.journal = buildJournal(transaction, [], [], []);
       try {
-        durability.writeJsonAtomic(transaction.manifestPath, transaction.manifest);
+        // This is the critical namespace-order invariant: the native anchored
+        // session must exist before the first private metadata write.
+        transaction.mutationSession = prepareMutationSession(transaction);
+        transaction.privateNamespace = dataValue(
+          transaction.mutationSession,
+          'privateNamespace'
+        );
+        writeNamespaceJson(
+          transaction.privateNamespace,
+          transaction.manifestRelativePath,
+          transaction.manifest
+        );
         transition(transaction, TRANSACTIONAL_DELETE_STATES.PREPARING);
         transition(transaction, TRANSACTIONAL_DELETE_STATES.PREPARED);
-        transaction.mutationSession = prepareMutationSession(transaction);
       } catch (error) {
-        try { fs.rmSync(transactionPath, { recursive: true, force: true }); } catch {}
-        try { fs.unlinkSync(transaction.headPath); } catch {}
-        try { fs.rmSync(transaction.anchorPath, { recursive: true, force: true }); } catch {}
+        try {
+          if (transaction.mutationSession) {
+            // No target effect can have started before prepare returns. Move the
+            // empty session through its protocol-valid restored disposition,
+            // then clean only through the anchored namespace capability.
+            authorizeFinalFrontier(transaction.binding);
+            const restoration = transaction.mutationSession.restoreFromQuarantine(Object.freeze({
+              checkpointDigest: transaction.checkpointManifest.checkpointDigest,
+            }));
+            if (isPromiseLike(restoration) || !isPlainDataRecord(restoration)
+              || denseDataValues(
+                dataValue(restoration, 'restored'),
+                'failed prepare restoration'
+              ).length !== 0
+              || inferMovementProgress(transaction).length !== 0) {
+              fail('CHECKPOINT_CREATE_FAILED', 'Failed prepare restoration was invalid');
+            }
+            authorizeFinalFrontier(transaction.binding);
+            const cleaned = namespaceMethod(
+              transaction.privateNamespace,
+              'cleanup',
+              'CHECKPOINT_CREATE_FAILED'
+            ).call(transaction.privateNamespace);
+            if (isPromiseLike(cleaned) || !isPlainDataRecord(cleaned)
+              || dataValue(cleaned, 'cleaned') !== true) {
+              fail('CHECKPOINT_CREATE_FAILED', 'Failed prepare namespace was not cleaned');
+            }
+          }
+        } catch {}
+        try { closeMutationSession(transaction); } catch {}
         if (error instanceof TransactionalFilesystemDeleteError) throw error;
         fail('CHECKPOINT_CREATE_FAILED', 'Unable to persist the delete checkpoint');
       }
@@ -2297,6 +2558,5 @@ module.exports = {
   TRANSACTIONAL_FILESYSTEM_DELETE_SERVICE_VERSION,
   TransactionalFilesystemDeleteError,
   TransactionalFilesystemDeleteService,
-  createDefaultDeleteDurabilityAdapter,
   createTransactionalFilesystemDeleteService,
 };

@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const childProcess = require('child_process');
 
 const {
   ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION,
@@ -106,5 +107,84 @@ assert.throws(() => assertAnchoredFilesystemMutationSession({
   ...session,
   moveToQuarantine: undefined,
 }), /moveToQuarantine/);
+
+// Backend validation never executes accessors or reads attacker-controlled
+// thenables, and rejected native Promises are observed before synchronous
+// denial so strict unhandled-rejection mode remains safe.
+{
+  let getterCalls = 0;
+  const hostile = {
+    prepare() {},
+  };
+  Object.defineProperty(hostile, 'probe', {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return () => enforcedProbe;
+    },
+  });
+  assert.throws(() => assertAnchoredFilesystemMutationBackend(hostile), /probe/);
+  assert.strictEqual(getterCalls, 0);
+
+  assert.throws(() => assertAnchoredFilesystemMutationBackend({
+    probe() { return Promise.reject(new Error('async probe')); },
+    prepare() {},
+  }), /synchronous/);
+  assert.throws(() => assertAnchoredFilesystemMutationBackend({
+    probe() { throw Promise.reject(new Error('thrown rejected probe')); },
+    prepare() {},
+  }), /probe failed/);
+
+  let thenGetterCalls = 0;
+  const thenableProbe = {};
+  Object.defineProperty(thenableProbe, 'then', {
+    enumerable: true,
+    get() {
+      thenGetterCalls += 1;
+      return () => {};
+    },
+  });
+  assert.throws(() => assertAnchoredFilesystemMutationBackend({
+    probe() { return thenableProbe; },
+    prepare() {},
+  }));
+  assert.strictEqual(thenGetterCalls, 0);
+}
+
+// Malformed probe data is fully preflighted before its shape is rejected, so
+// unknown and sibling native Promise rejections cannot escape strict mode.
+{
+  const contractPath = require.resolve(
+    '../main/capabilities/anchored_filesystem_mutation_backend_contract'
+  );
+  const script = `
+    const {
+      assertAnchoredFilesystemMutationBackend,
+    } = require(${JSON.stringify(contractPath)});
+    try {
+      assertAnchoredFilesystemMutationBackend({
+        prepare() {},
+        probe() {
+          return {
+            schemaVersion: 'anchored-filesystem-mutation-backend.v1',
+            backendId: 'strict-probe',
+            state: 'unavailable',
+            guarantees: [Promise.reject(new Error('first rejected probe value'))],
+            reasonCode: 'UNAVAILABLE',
+            unknown: Promise.reject(new Error('second rejected probe value')),
+          };
+        },
+      });
+    } catch {}
+    setImmediate(() => process.stdout.write('strict contract preflight survived'));
+  `;
+  const child = childProcess.spawnSync(process.execPath, [
+    '--unhandled-rejections=strict',
+    '-e',
+    script,
+  ], { encoding: 'utf8' });
+  assert.strictEqual(child.status, 0, child.stderr || child.stdout);
+  assert.match(child.stdout, /strict contract preflight survived/);
+}
 
 console.log('anchored filesystem mutation backend contract tests passed');

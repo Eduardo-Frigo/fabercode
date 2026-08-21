@@ -238,6 +238,7 @@ function assertProjectCapabilityBoundary() {
 
   const nativeEffectApprovalSource = read('main/services/native_effect_approval_service.js');
   const transactionalDeleteSource = read('main/services/transactional_filesystem_delete_service.js');
+  const anchoredMutationAdapterSource = read('main/services/anchored_mutation_backend_adapter.js');
   const deleteOrchestratorSource = read('main/services/agentic_delete_orchestrator.js');
   const deleteRuntimeSource = read('main/services/agentic_delete_runtime_service.js');
   for (const [label, source] of [
@@ -255,9 +256,82 @@ function assertProjectCapabilityBoundary() {
     'Transactional delete must default to an unavailable anchored mutation backend'
   );
   assert.ok(
-    transactionalDeleteSource.includes('authorizeFinalFrontier(transaction.binding);')
-      && transactionalDeleteSource.includes('transaction.mutationSession.moveToQuarantine('),
-    'Transactional delete must enter the combined frontier immediately before the anchored mutation session'
+    /TRANSACTIONAL_FILESYSTEM_DELETE_SERVICE_VERSION\s*=\s*['"]transactional-filesystem-delete-service\.v2['"]/.test(
+      transactionalDeleteSource
+    ),
+    'Transactional delete must keep the anchored namespace-I/O v2 consumer contract'
+  );
+  assertDoesNotMatch(
+    transactionalDeleteSource,
+    /\bfunction\s+(?:readPrivateJson|ensurePrivateDirectories|loadTransactionFromDisk)\s*\(/,
+    'Transactional delete must not retain pathname-based private metadata fallbacks'
+  );
+  const transactionalDeleteFactoryStart = transactionalDeleteSource.indexOf(
+    'function createTransactionalFilesystemDeleteService'
+  );
+  const transactionalDeleteFactoryEnd = transactionalDeleteSource.indexOf(
+    'class TransactionalFilesystemDeleteService',
+    transactionalDeleteFactoryStart
+  );
+  assert.ok(
+    transactionalDeleteFactoryStart >= 0 && transactionalDeleteFactoryEnd > transactionalDeleteFactoryStart,
+    'Transactional delete factory boundary must remain inspectable'
+  );
+  const transactionalDeleteFactorySource = transactionalDeleteSource.slice(
+    transactionalDeleteFactoryStart,
+    transactionalDeleteFactoryEnd
+  );
+  assertDoesNotMatch(
+    transactionalDeleteFactorySource,
+    /\bfs\.(?:appendFileSync|chmodSync|chownSync|copyFileSync|cpSync|linkSync|mkdirSync|renameSync|rmSync|rmdirSync|symlinkSync|truncateSync|unlinkSync|utimesSync|writeFileSync)\s*\(/,
+    'Transactional delete core must not mutate private metadata by pathname'
+  );
+  assertDoesNotMatch(
+    transactionalDeleteFactorySource,
+    /\bdurability\.(?:writeJsonAtomic|syncDirectory)\s*\(/,
+    'Transactional delete core must not revive the legacy pathname durability adapter'
+  );
+  const prepareStart = transactionalDeleteFactorySource.indexOf('function prepare(input = {})');
+  const prepareEnd = transactionalDeleteFactorySource.indexOf(
+    'function normalizeTerminalInput',
+    prepareStart
+  );
+  assert.ok(prepareStart >= 0 && prepareEnd > prepareStart, 'Transactional prepare boundary must remain inspectable');
+  const prepareSource = transactionalDeleteFactorySource.slice(prepareStart, prepareEnd);
+  const prepareSessionIndex = prepareSource.indexOf(
+    'transaction.mutationSession = prepareMutationSession(transaction);'
+  );
+  const firstPrivateWriteIndex = prepareSource.indexOf('writeNamespaceJson(');
+  assert.ok(
+    prepareSessionIndex >= 0 && firstPrivateWriteIndex > prepareSessionIndex,
+    'Transactional delete must open the anchored session before its first private metadata write'
+  );
+  assert.ok(
+    /authorizeFinalFrontier\(transaction\.binding\);\s*const movement = transaction\.mutationSession\.moveToQuarantine\(/.test(
+      transactionalDeleteSource
+    )
+      && /authorizeFinalFrontier\(transaction\.binding\);\s*const purged = transaction\.mutationSession\.purgeQuarantine\(/.test(
+        transactionalDeleteSource
+      )
+      && /authorizeFinalFrontier\(binding\);\s*const cleaned = rootNamespaceMethod\(orphanRoot, 'cleanupAuthenticatedOrphan'\)/.test(
+        transactionalDeleteSource
+      ),
+    'Transactional delete must enter the combined frontier immediately before every irreversible anchored mutation'
+  );
+  assert.ok(
+    /ANCHORED_MUTATION_BACKEND_ADAPTER_VERSION\s*=\s*['"]anchored-mutation-backend-adapter\.v2['"]/.test(
+      anchoredMutationAdapterSource
+    )
+      && anchoredMutationAdapterSource.includes(
+        'namespaceIoVersion: ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION'
+      )
+      && anchoredMutationAdapterSource.includes('openRootNamespace'),
+    'Anchored helper adapter must expose the namespace-I/O v2 backend surface'
+  );
+  assertDoesNotMatch(
+    anchoredMutationAdapterSource,
+    /\bNAMESPACE_IO_CONSUMER_NOT_INTEGRATED\b/,
+    'Anchored helper adapter must not retain the pre-consumer integration blocker'
   );
   assertDoesNotMatch(
     [...publicConsentBoundarySources, ['cortex/tools/automata_tools.js', read('cortex/tools/automata_tools.js')]]
@@ -297,7 +371,16 @@ function assertAssistantHarnessCompositionBoundary() {
   assertDoesNotMatch(
     mainSource,
     /anchored_mutation_backend_adapter|createAnchoredMutationBackendAdapter/,
-    'The diagnostic anchored helper adapter must remain dormant until namespace I/O is integrated'
+    'The anchored helper adapter must remain unwired during phase 2.3F-1'
+  );
+  assert.ok(
+    mainSource.includes("const agenticDeleteMutationBackend = createUnsupportedAnchoredFilesystemMutationBackend({\n    backendId: 'faber-main-anchored-delete-unavailable',\n    reasonCode: 'ATOMIC_MUTATION_BACKEND_UNAVAILABLE',\n  });"),
+    'main.js must keep the production delete backend explicitly unavailable during phase 2.3F-1'
+  );
+  assert.strictEqual(
+    (mainSource.match(/mutationBackend: agenticDeleteMutationBackend,/g) || []).length,
+    2,
+    'main.js must inject the unavailable delete backend into exactly the recovery and live runtimes'
   );
   assertDoesNotMatch(
     agenticToolLoopSource,

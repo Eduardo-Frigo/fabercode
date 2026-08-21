@@ -9,17 +9,14 @@ const path = require('path');
 const {
   TRANSACTIONAL_FILESYSTEM_DELETE_SERVICE_VERSION,
   TransactionalFilesystemDeleteService,
-  createDefaultDeleteDurabilityAdapter,
   createTransactionalFilesystemDeleteService,
 } = require('../main/services/transactional_filesystem_delete_service');
 const {
-  ANCHORED_FILESYSTEM_MUTATION_REQUIRED_GUARANTEES,
-  ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
-  createAnchoredFilesystemMutationProbe,
-} = require('../main/capabilities/anchored_filesystem_mutation_backend_contract');
-const {
   canonicalSha256Digest,
 } = require('../main/capabilities/transactional_delete_contracts');
+const {
+  createAnchoredMutationTestBackend,
+} = require('./support/anchored_mutation_test_backend');
 
 const digest = (character) => `sha256:${character.repeat(64)}`;
 const testJournalKeysByRoot = new Map();
@@ -73,115 +70,51 @@ function lstatExists(entryPath) {
 }
 
 function createTestMutationBackend(fsImpl = fs) {
-  const probe = createAnchoredFilesystemMutationProbe({
+  return createAnchoredMutationTestBackend({
+    fsImpl,
     backendId: 'test-anchored-backend',
-    state: 'enforced',
-    guarantees: [...ANCHORED_FILESYSTEM_MUTATION_REQUIRED_GUARANTEES],
-    reasonCode: 'ENFORCED',
-  });
-  return Object.freeze({
-    probe() { return probe; },
-    prepare(input) {
-      const targets = input.targets.map((target) => ({ ...target }));
-      const identities = targets.map((target) => {
-        const targetPath = path.join(input.rootPath, ...target.relativePath.split('/'));
-        const payloadPath = path.join(input.payloadPath, target.payloadName);
-        const stat = lstatExists(targetPath)
-          ? fsImpl.lstatSync(targetPath)
-          : fsImpl.lstatSync(payloadPath);
-        return { dev: stat.dev, ino: stat.ino };
-      });
-      let closed = false;
-      function verify() {
-        if (closed) return { verified: false };
-        const verified = targets.every((target, index) => {
-          try {
-            const targetPath = path.join(input.rootPath, ...target.relativePath.split('/'));
-            const stat = fsImpl.lstatSync(targetPath);
-            return stat.dev === identities[index].dev && stat.ino === identities[index].ino;
-          } catch {
-            const payloadPath = path.join(input.payloadPath, target.payloadName);
-            try {
-              const stat = fsImpl.lstatSync(payloadPath);
-              return stat.dev === identities[index].dev && stat.ino === identities[index].ino;
-            } catch {
-              return false;
-            }
-          }
-        });
-        return { verified };
-      }
-      return Object.freeze({
-        schemaVersion: ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
-        verify,
-        moveToQuarantine() {
-          if (!verify().verified) {
-            const error = new Error('anchored identity changed');
-            error.code = 'ANCHORED_TARGET_INVALIDATED';
-            throw error;
-          }
-          const moved = [];
-          for (const target of targets) {
-            const sourcePath = path.join(input.rootPath, ...target.relativePath.split('/'));
-            const payloadPath = path.join(input.payloadPath, target.payloadName);
-            fsImpl.renameSync(sourcePath, payloadPath);
-            moved.push(target.payloadName);
-          }
-          return { moved };
-        },
-        restoreFromQuarantine() {
-          const restored = [];
-          for (let index = targets.length - 1; index >= 0; index -= 1) {
-            const target = targets[index];
-            const sourcePath = path.join(input.payloadPath, target.payloadName);
-            const targetPath = path.join(input.rootPath, ...target.relativePath.split('/'));
-            if (lstatExists(sourcePath) && lstatExists(targetPath)) {
-              const error = new Error('rollback collision');
-              error.code = 'ROLLBACK_COLLISION';
-              throw error;
-            }
-            if (lstatExists(sourcePath)) {
-              fsImpl.renameSync(sourcePath, targetPath);
-              restored.push(target.payloadName);
-            }
-          }
-          return { restored };
-        },
-        purgeQuarantine() {
-          fsImpl.rmSync(input.transactionPath, { recursive: true, force: false });
-          if (lstatExists(input.headPath)) fsImpl.unlinkSync(input.headPath);
-          if (lstatExists(input.anchorPath)) {
-            fsImpl.rmSync(input.anchorPath, { recursive: true, force: false });
-          }
-          return { purged: true };
-        },
-        close() {
-          closed = true;
-          return { closed: true };
-        },
-      });
-    },
   });
 }
 
 function createWrappedTestMutationBackend({ fsImpl = fs, wrapSession }) {
-  const base = createTestMutationBackend(fsImpl);
-  return Object.freeze({
-    probe() { return base.probe(); },
-    prepare(input) { return wrapSession(base.prepare(input), input); },
+  return createAnchoredMutationTestBackend({
+    fsImpl,
+    backendId: 'wrapped-test-anchored-backend',
+    wrapSession,
   });
 }
 
 function sessionWithOverrides(session, overrides = {}) {
   return Object.freeze({
     schemaVersion: session.schemaVersion,
+    helperId: session.helperId,
+    rootIdentityDigest: session.rootIdentityDigest,
+    namespaceIdentityDigest: session.namespaceIdentityDigest,
+    privateNamespace: overrides.privateNamespace || session.privateNamespace,
     verify: overrides.verify || session.verify,
+    inspectProgress: overrides.inspectProgress || session.inspectProgress,
     moveToQuarantine: overrides.moveToQuarantine || session.moveToQuarantine,
     restoreFromQuarantine:
       overrides.restoreFromQuarantine || session.restoreFromQuarantine,
     purgeQuarantine: overrides.purgeQuarantine || session.purgeQuarantine,
     close: overrides.close || session.close,
   });
+}
+
+function privateNamespaceWithOverrides(namespace, overrides = {}) {
+  return Object.freeze({
+    capabilityVersion: namespace.capabilityVersion,
+    writeFile: overrides.writeFile || namespace.writeFile,
+    readFile: overrides.readFile || namespace.readFile,
+    list: overrides.list || namespace.list,
+    remove: overrides.remove || namespace.remove,
+    sync: overrides.sync || namespace.sync,
+    cleanup: overrides.cleanup || namespace.cleanup,
+  });
+}
+
+function namespaceWriteValue(input) {
+  return JSON.parse(Buffer.from(input.contentBase64, 'base64').toString('utf8'));
 }
 
 function createHarness(rootPath, overrides = {}) {
@@ -271,7 +204,7 @@ function entryExists(entryPath) {
 
 assert.strictEqual(
   TRANSACTIONAL_FILESYSTEM_DELETE_SERVICE_VERSION,
-  'transactional-filesystem-delete-service.v1'
+  'transactional-filesystem-delete-service.v2'
 );
 assert.throws(() => createTransactionalFilesystemDeleteService(), /unsupported fields/);
 assert.throws(() => createTransactionalFilesystemDeleteService({
@@ -538,12 +471,9 @@ withProject((rootPath) => {
   assert.strictEqual(commit(prepare(owner, ['foreign.txt'])).state, 'COMMITTED');
 
   let mutationSessionPreparations = 0;
-  const baseBackend = createTestMutationBackend();
-  const observingBackend = Object.freeze({
-    probe: baseBackend.probe,
-    prepare(input) {
-      mutationSessionPreparations += 1;
-      return baseBackend.prepare(input);
+  const observingBackend = createAnchoredMutationTestBackend({
+    onEvent(event) {
+      if (event.type === 'session.openExisting') mutationSessionPreparations += 1;
     },
   });
   const observer = createHarness(rootPath, {
@@ -754,23 +684,6 @@ withProject((rootPath) => {
 
 withProject((rootPath) => {
   fs.writeFileSync(path.join(rootPath, 'disk-purging.txt'), 'disk-purging');
-  const baseDurability = createDefaultDeleteDurabilityAdapter({ fs, path });
-  let rejectRecoveryRecord = false;
-  const durability = {
-    writeJsonAtomic(filePath, value) {
-      const lastRecord = value && Array.isArray(value.records) ? value.records.at(-1) : null;
-      if (rejectRecoveryRecord
-        && filePath.includes(`${path.sep}journal-generations${path.sep}`)
-        && lastRecord
-        && lastRecord.stateRecord.state === 'RECOVERY_POST_COMMIT') {
-        rejectRecoveryRecord = false;
-        throw new Error('simulated crash before recovery anchor');
-      }
-      return baseDurability.writeJsonAtomic(filePath, value);
-    },
-    readJson: baseDurability.readJson,
-    syncDirectory: baseDurability.syncDirectory,
-  };
   let rejectFirstPurge = true;
   const failingBackend = createWrappedTestMutationBackend({
     wrapSession(session) {
@@ -785,9 +698,8 @@ withProject((rootPath) => {
       });
     },
   });
-  const first = createHarness(rootPath, { durability, mutationBackend: failingBackend });
+  const first = createHarness(rootPath, { mutationBackend: failingBackend });
   assert.strictEqual(commit(prepare(first, ['disk-purging.txt'])).state, 'COMMITTED');
-  rejectRecoveryRecord = true;
   assert.strictEqual(first.service.finalizeJob({
     binding: first.binding,
     outcome: 'success',
@@ -1023,15 +935,9 @@ for (const orphanCorruption of ['tampered-anchor', 'unreadable-head']) {
 withProject((rootPath) => {
   fs.writeFileSync(path.join(rootPath, 'invalid-session.txt'), 'invalid-session');
   let closeCalls = 0;
-  const probe = createAnchoredFilesystemMutationProbe({
+  const malformedBackend = createAnchoredMutationTestBackend({
     backendId: 'invalid-session-test-backend',
-    state: 'enforced',
-    guarantees: [...ANCHORED_FILESYSTEM_MUTATION_REQUIRED_GUARANTEES],
-    reasonCode: 'ENFORCED',
-  });
-  const malformedBackend = Object.freeze({
-    probe() { return probe; },
-    prepare() {
+    wrapSession() {
       return {
         schemaVersion: 'malformed-session.v1',
         close() {
@@ -1048,6 +954,68 @@ withProject((rootPath) => {
   );
   assert.strictEqual(closeCalls, 1, 'a malformed prepared session must be closed best-effort');
   assert.strictEqual(fs.readFileSync(path.join(rootPath, 'invalid-session.txt'), 'utf8'), 'invalid-session');
+});
+
+withProject((rootPath) => {
+  fs.writeFileSync(path.join(rootPath, 'prepare-write-failure.txt'), 'prepare-safe');
+  let firstWrite = true;
+  let restoreCalls = 0;
+  let cleanupCalls = 0;
+  let purgeCalls = 0;
+  const effectOrder = [];
+  const mutationBackend = createWrappedTestMutationBackend({
+    wrapSession(session) {
+      return sessionWithOverrides(session, {
+        privateNamespace: privateNamespaceWithOverrides(session.privateNamespace, {
+          writeFile(input) {
+            if (firstWrite) {
+              firstWrite = false;
+              const error = new Error('disk full before manifest persistence');
+              error.code = 'ENOSPC';
+              throw error;
+            }
+            return session.privateNamespace.writeFile(input);
+          },
+          cleanup() {
+            cleanupCalls += 1;
+            effectOrder.push('cleanup');
+            return session.privateNamespace.cleanup();
+          },
+        }),
+        restoreFromQuarantine(frontier) {
+          restoreCalls += 1;
+          effectOrder.push('restore');
+          return session.restoreFromQuarantine(frontier);
+        },
+        purgeQuarantine(frontier) {
+          purgeCalls += 1;
+          effectOrder.push('purge');
+          return session.purgeQuarantine(frontier);
+        },
+      });
+    },
+  });
+  const harness = createHarness(rootPath, {
+    mutationBackend,
+    authorizeEffectFrontier(candidate) {
+      effectOrder.push('frontier');
+      return { authorized: true, binding: candidate };
+    },
+  });
+  assert.throws(
+    () => prepare(harness, ['prepare-write-failure.txt']),
+    (error) => error && error.code === 'CHECKPOINT_CREATE_FAILED'
+  );
+  assert.strictEqual(restoreCalls, 1, 'failed prepare must enter the restored session phase');
+  assert.strictEqual(cleanupCalls, 1, 'failed prepare must clean through its private namespace');
+  assert.strictEqual(purgeCalls, 0, 'failed prepare must never purge a non-quarantined session');
+  assert.deepStrictEqual(effectOrder, ['frontier', 'restore', 'frontier', 'cleanup']);
+  assert.strictEqual(
+    fs.readFileSync(path.join(rootPath, 'prepare-write-failure.txt'), 'utf8'),
+    'prepare-safe'
+  );
+  assert.deepStrictEqual(fs.readdirSync(path.join(rootPath, '.faber', 'transactions')), []);
+  assert.deepStrictEqual(fs.readdirSync(path.join(rootPath, '.faber', 'transaction-heads')), []);
 });
 
 withProject((rootPath) => {
@@ -1226,27 +1194,31 @@ withProject((rootPath) => {
 
 withProject((rootPath) => {
   fs.writeFileSync(path.join(rootPath, 'journal-failure.txt'), 'journal-safe');
-  const base = createDefaultDeleteDurabilityAdapter({ fs, path });
   let writes = 0;
   let armed = false;
-  const durability = {
-    writeJsonAtomic(filePath, value) {
-      writes += 1;
-      if (armed
-        && filePath.includes(`${path.sep}journal-generations${path.sep}`)
-        && value.moved
-        && value.moved.length === 1) {
-        armed = false;
-        const error = new Error('disk full');
-        error.code = 'ENOSPC';
-        throw error;
-      }
-      return base.writeJsonAtomic(filePath, value);
+  const mutationBackend = createWrappedTestMutationBackend({
+    wrapSession(session) {
+      return sessionWithOverrides(session, {
+        privateNamespace: privateNamespaceWithOverrides(session.privateNamespace, {
+          writeFile(input) {
+            writes += 1;
+            const value = namespaceWriteValue(input);
+            if (armed
+              && input.relativePath.includes('/journal-generations/')
+              && value.moved
+              && value.moved.length === 1) {
+              armed = false;
+              const error = new Error('disk full');
+              error.code = 'ENOSPC';
+              throw error;
+            }
+            return session.privateNamespace.writeFile(input);
+          },
+        }),
+      });
     },
-    readJson: base.readJson,
-    syncDirectory: base.syncDirectory,
-  };
-  const harness = createHarness(rootPath, { durability });
+  });
+  const harness = createHarness(rootPath, { mutationBackend });
   const prepared = prepare(harness, ['journal-failure.txt']);
   armed = true;
   const result = commit(prepared);
@@ -1346,13 +1318,11 @@ withProject((rootPath) => {
   fs.mkdirSync(path.join(rootPath, 'tree'));
   fs.mkdirSync(path.join(rootPath, 'tree', 'nested'));
   fs.writeFileSync(path.join(rootPath, 'tree', 'nested', 'leaf.txt'), 'leaf');
-  const baseBackend = createTestMutationBackend();
   let checkpointEntries = null;
-  const capturingBackend = Object.freeze({
-    probe() { return baseBackend.probe(); },
-    prepare(input) {
+  const capturingBackend = createAnchoredMutationTestBackend({
+    wrapSession(session, input) {
       checkpointEntries = input.checkpointEntries;
-      return baseBackend.prepare(input);
+      return session;
     },
   });
   const harness = createHarness(rootPath, { mutationBackend: capturingBackend });
@@ -1474,42 +1444,47 @@ withProject((rootPath) => {
 for (const crashPoint of ['generation', 'anchor', 'journal-cache', 'head-cache']) {
   withProject((rootPath) => {
     fs.writeFileSync(path.join(rootPath, `crash-${crashPoint}.txt`), crashPoint);
-    const base = createDefaultDeleteDurabilityAdapter({ fs, path });
     let armed = false;
     let injected = false;
-    const durability = {
-      writeJsonAtomic(filePath, value) {
-        const isMovedGeneration = filePath.includes(`${path.sep}journal-generations${path.sep}`)
-          && value.moved
-          && value.moved.length === 1;
-        const isMovedAnchor = filePath.includes(`${path.sep}transaction-heads${path.sep}transaction-id-`)
-          && value.latestState === 'APPLYING'
-          && value.revision >= 4;
-        const isJournalCache = filePath.endsWith(`${path.sep}journal.json`)
-          && value.moved
-          && value.moved.length === 1;
-        const isHeadCache = filePath.includes(`${path.sep}transaction-heads${path.sep}`)
-          && filePath.endsWith('.json')
-          && !filePath.includes(`${path.sep}transaction-id-`)
-          && value.latestState === 'APPLYING';
-        const shouldFail = armed && !injected && (
-          (crashPoint === 'generation' && isMovedGeneration)
-          || (crashPoint === 'anchor' && isMovedAnchor)
-          || (crashPoint === 'journal-cache' && isJournalCache)
-          || (crashPoint === 'head-cache' && isHeadCache)
-        );
-        if (shouldFail) {
-          injected = true;
-          const error = new Error(`crash at ${crashPoint}`);
-          error.code = 'ENOSPC';
-          throw error;
-        }
-        return base.writeJsonAtomic(filePath, value);
+    const mutationBackend = createWrappedTestMutationBackend({
+      wrapSession(session) {
+        return sessionWithOverrides(session, {
+          privateNamespace: privateNamespaceWithOverrides(session.privateNamespace, {
+            writeFile(input) {
+              const value = namespaceWriteValue(input);
+              const isMovedGeneration = input.relativePath.includes('/journal-generations/')
+                && value.moved
+                && value.moved.length === 1;
+              const isMovedAnchor = input.relativePath.startsWith('transaction-heads/transaction-id-')
+                && input.relativePath.split('/').length === 3
+                && value.latestState === 'APPLYING'
+                && value.revision >= 4;
+              const isJournalCache = input.relativePath.endsWith('/journal.json')
+                && value.moved
+                && value.moved.length === 1;
+              const isHeadCache = input.relativePath.startsWith('transaction-heads/')
+                && input.relativePath.endsWith('.json')
+                && input.relativePath.split('/').length === 2
+                && value.latestState === 'APPLYING';
+              const shouldFail = armed && !injected && (
+                (crashPoint === 'generation' && isMovedGeneration)
+                || (crashPoint === 'anchor' && isMovedAnchor)
+                || (crashPoint === 'journal-cache' && isJournalCache)
+                || (crashPoint === 'head-cache' && isHeadCache)
+              );
+              if (shouldFail) {
+                injected = true;
+                const error = new Error(`crash at ${crashPoint}`);
+                error.code = 'ENOSPC';
+                throw error;
+              }
+              return session.privateNamespace.writeFile(input);
+            },
+          }),
+        });
       },
-      readJson: base.readJson,
-      syncDirectory: base.syncDirectory,
-    };
-    const harness = createHarness(rootPath, { durability });
+    });
+    const harness = createHarness(rootPath, { mutationBackend });
     const prepared = prepare(harness, [`crash-${crashPoint}.txt`]);
     armed = true;
     const result = commit(prepared);
