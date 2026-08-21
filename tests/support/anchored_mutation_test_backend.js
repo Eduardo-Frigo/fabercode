@@ -11,6 +11,13 @@ const {
   ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
   createAnchoredFilesystemMutationProbe,
 } = require('../../main/capabilities/anchored_filesystem_mutation_backend_contract');
+const {
+  assertAnchoredMutationIdentityReceipt,
+  createAnchoredMutationIdentityReceipt,
+} = require('../../main/capabilities/anchored_mutation_identity_receipt_contract');
+const {
+  canonicalSha256Digest,
+} = require('../../main/capabilities/transactional_delete_contracts');
 
 const NAMESPACE_IO_INTEGRATION_VERSION =
   ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION;
@@ -32,12 +39,133 @@ function digestBytes(bytes) {
 }
 
 function identityDigest(fsImpl, entryPath) {
+  return physicalIdentity(fsImpl, entryPath).identityDigest;
+}
+
+function physicalIdentity(fsImpl, entryPath) {
   const stat = fsImpl.lstatSync(entryPath);
-  return digestBytes(Buffer.from([
+  const volumeIdentityDigest = digestBytes(Buffer.from(
+    `test-volume:${String(stat.dev)}`,
+    'utf8'
+  ));
+  const objectIdentityDigest = digestBytes(Buffer.from(
+    `test-object:${String(stat.dev)}:${String(stat.ino)}`,
+    'utf8'
+  ));
+  const generationIdentityDigest = digestBytes(Buffer.from([
+    'test-generation',
     String(stat.dev),
     String(stat.ino),
+    String(stat.birthtimeMs),
     String(stat.mode),
   ].join(':'), 'utf8'));
+  const core = {
+    volumeIdentityDigest,
+    objectIdentityDigest,
+    generationIdentityDigest,
+  };
+  return Object.freeze({
+    ...core,
+    identityDigest: canonicalSha256Digest(core),
+  });
+}
+
+function deterministicDigest(value) {
+  return canonicalSha256Digest(value);
+}
+
+function receiptEntryPath(fsImpl, rootPath, privatePathSet, targets, relativePath) {
+  const target = targets.find((candidate) => (
+    relativePath === candidate.relativePath
+      || relativePath.startsWith(`${candidate.relativePath}/`)
+  ));
+  if (!target) throw Object.assign(new Error('checkpoint entry is outside its target set'), {
+    code: 'PROTOCOL_DATA_INVALID',
+  });
+  const sourceRoot = path.join(rootPath, ...target.relativePath.split('/'));
+  if (exists(fsImpl, sourceRoot)) {
+    return path.join(rootPath, ...relativePath.split('/'));
+  }
+  const suffix = relativePath === target.relativePath
+    ? []
+    : relativePath.slice(target.relativePath.length + 1).split('/');
+  return path.join(privatePathSet.payloadPath, target.payloadName, ...suffix);
+}
+
+function createPhysicalIdentityReceipt(fsImpl, input, privatePathSet, targets) {
+  const entryCores = input.checkpointEntries.map((entry) => {
+    const entryPath = receiptEntryPath(
+      fsImpl,
+      input.rootPath,
+      privatePathSet,
+      targets,
+      entry.relativePath
+    );
+    const identity = physicalIdentity(fsImpl, entryPath);
+    const linkIdentityDigest = entry.kind === 'symlink'
+      ? digestBytes(Buffer.from(`test-link:${fsImpl.readlinkSync(entryPath)}`, 'utf8'))
+      : null;
+    return Object.freeze({
+      relativePath: entry.relativePath,
+      kind: entry.kind,
+      identity,
+      closureDigest: null,
+      linkIdentityDigest,
+    });
+  });
+  const entries = entryCores.map((entry) => {
+    if (entry.kind !== 'directory') return entry;
+    const prefix = `${entry.relativePath}/`;
+    const closure = entryCores
+      .filter((candidate) => (
+        candidate.relativePath === entry.relativePath
+          || candidate.relativePath.startsWith(prefix)
+      ))
+      .map((candidate) => Object.freeze({
+        relativePath: candidate.relativePath,
+        kind: candidate.kind,
+        identityDigest: candidate.identity.identityDigest,
+        linkIdentityDigest: candidate.linkIdentityDigest,
+      }));
+    return Object.freeze({
+      ...entry,
+      closureDigest: deterministicDigest(closure),
+    });
+  });
+  const entriesByPath = new Map(entries.map((entry) => [entry.relativePath, entry]));
+  const receiptTargets = targets.map((target) => {
+    const entry = entriesByPath.get(target.relativePath);
+    if (!entry) throw Object.assign(new Error('target omitted from checkpoint entries'), {
+      code: 'PROTOCOL_DATA_INVALID',
+    });
+    return Object.freeze({
+      relativePath: target.relativePath,
+      payloadName: target.payloadName,
+      kind: entry.kind,
+      identity: entry.identity,
+      closureDigest: entry.closureDigest,
+      linkIdentityDigest: entry.linkIdentityDigest,
+    });
+  });
+  const platform = Object.freeze({
+    os: process.platform,
+    architecture: process.arch,
+    filesystemType: 'node-test-filesystem',
+    capabilityDigest: deterministicDigest({
+      helper: 'anchored-mutation-test-helper-build-v1',
+      scope: 'tests-only',
+    }),
+  });
+  return createAnchoredMutationIdentityReceipt({
+    helperBuildId: 'anchored-mutation-test-helper-build-v1',
+    platform,
+    bindingDigest: input.bindingDigest,
+    checkpointDigest: input.checkpointDigest,
+    rootIdentity: physicalIdentity(fsImpl, input.rootPath),
+    namespaceIdentity: physicalIdentity(fsImpl, privatePathSet.namespacePath),
+    targets: receiptTargets,
+    entries,
+  });
 }
 
 function normalizeRelativePath(relativePath, { allowEmpty = false } = {}) {
@@ -337,6 +465,32 @@ function createAnchoredMutationTestBackend({
     }
 
     const targets = input.targets.map((target) => Object.freeze({ ...target }));
+    const identityReceipt = createPhysicalIdentityReceipt(
+      fsImpl,
+      input,
+      privatePathSet,
+      targets
+    );
+    if (existing) {
+      let expectedReceipt;
+      try {
+        expectedReceipt = assertAnchoredMutationIdentityReceipt(input.identityReceipt, {
+          bindingDigest: input.bindingDigest,
+          checkpointDigest: input.checkpointDigest,
+          targets,
+          checkpointEntries: input.checkpointEntries,
+        });
+      } catch {
+        throw Object.assign(new Error('expected identity receipt is invalid'), {
+          code: 'PROTOCOL_DATA_INVALID',
+        });
+      }
+      if (expectedReceipt.receiptDigest !== identityReceipt.receiptDigest) {
+        throw Object.assign(new Error('anchored identity continuity mismatch'), {
+          code: 'ANCHORED_IDENTITY_MISMATCH',
+        });
+      }
+    }
     const identities = targets.map((target) => {
       const sourcePath = path.join(input.rootPath, ...target.relativePath.split('/'));
       const payloadPath = path.join(privatePathSet.payloadPath, target.payloadName);
@@ -411,14 +565,21 @@ function createAnchoredMutationTestBackend({
       let verified = false;
       try {
         progress();
-        verified = targets.every((target, index) => {
-          const sourcePath = path.join(input.rootPath, ...target.relativePath.split('/'));
-          const payloadPath = path.join(privatePathSet.payloadPath, target.payloadName);
-          const candidate = exists(fsImpl, sourcePath) ? sourcePath : payloadPath;
-          const stat = fsImpl.lstatSync(candidate);
-          return String(stat.dev) === identities[index].device
-            && String(stat.ino) === identities[index].inode;
-        });
+        const currentReceipt = createPhysicalIdentityReceipt(
+          fsImpl,
+          input,
+          privatePathSet,
+          targets
+        );
+        verified = currentReceipt.receiptDigest === identityReceipt.receiptDigest
+          && targets.every((target, index) => {
+            const sourcePath = path.join(input.rootPath, ...target.relativePath.split('/'));
+            const payloadPath = path.join(privatePathSet.payloadPath, target.payloadName);
+            const candidate = exists(fsImpl, sourcePath) ? sourcePath : payloadPath;
+            const stat = fsImpl.lstatSync(candidate);
+            return String(stat.dev) === identities[index].device
+              && String(stat.ino) === identities[index].inode;
+          });
       } catch {
         verified = false;
       }
@@ -438,8 +599,9 @@ function createAnchoredMutationTestBackend({
     const session = Object.freeze({
       schemaVersion: ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
       helperId: 'anchored-mutation-test-helper',
-      rootIdentityDigest: identityDigest(fsImpl, input.rootPath),
-      namespaceIdentityDigest: identityDigest(fsImpl, privatePathSet.namespacePath),
+      rootIdentityDigest: identityReceipt.rootIdentity.identityDigest,
+      namespaceIdentityDigest: identityReceipt.namespaceIdentity.identityDigest,
+      identityReceipt,
       privateNamespace,
       verify,
       inspectProgress,

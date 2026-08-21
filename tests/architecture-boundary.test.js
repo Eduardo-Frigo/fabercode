@@ -319,14 +319,14 @@ function assertProjectCapabilityBoundary() {
     'Transactional delete must enter the combined frontier immediately before every irreversible anchored mutation'
   );
   assert.ok(
-    /ANCHORED_MUTATION_BACKEND_ADAPTER_VERSION\s*=\s*['"]anchored-mutation-backend-adapter\.v2['"]/.test(
+    /ANCHORED_MUTATION_BACKEND_ADAPTER_VERSION\s*=\s*['"]anchored-mutation-backend-adapter\.v3['"]/.test(
       anchoredMutationAdapterSource
     )
       && anchoredMutationAdapterSource.includes(
         'namespaceIoVersion: ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION'
       )
       && anchoredMutationAdapterSource.includes('openRootNamespace'),
-    'Anchored helper adapter must expose the namespace-I/O v2 backend surface'
+    'Anchored helper adapter must expose the receipt-bound namespace-I/O v3 backend surface'
   );
   assertDoesNotMatch(
     anchoredMutationAdapterSource,
@@ -337,8 +337,8 @@ function assertProjectCapabilityBoundary() {
     [...publicConsentBoundarySources, ['cortex/tools/automata_tools.js', read('cortex/tools/automata_tools.js')]]
       .map(([, source]) => source)
       .join('\n'),
-    /\bauthorityBinding\b|\bcheckpointDigest\b|\bdelegationId\b|\bnativeEffectApprovalService\b/,
-    'Renderer, IPC and Cortex tools must not expose transactional delete authority internals'
+    /\bauthorityBinding\b|\bcheckpointDigest\b|\bdelegationId\b|\bnativeEffectApprovalService\b|\bidentityReceipt\b|\breceiptDigest\b|\brootIdentityDigest\b|\bnamespaceIdentityDigest\b|\bproviderFactory\b|physicalIdentityReceipts|anchored-mutation-provider/,
+    'Renderer, IPC and Cortex tools must not expose transactional delete authority or physical identity internals'
   );
 
   for (const [label, source] of publicConsentBoundarySources) {
@@ -361,27 +361,87 @@ function assertAssistantHarnessCompositionBoundary() {
   const mainSource = read('main.js');
   const handlerSource = read('main/ipc/assistant_handlers.js');
   const agenticToolLoopSource = read('main/services/agentic_tool_loop_service.js');
+  const mutationBackendFactorySource = read(
+    'main/services/agentic_delete_mutation_backend_factory.js'
+  );
+  const mutationRuntimeConfigSource = read(
+    'main/runtime/anchored_mutation_runtime_config.js'
+  );
   const preloadSource = read('preload.js');
   const appActionsSource = read('renderer/app_actions.js');
+  const mainModuleSources = walkJsFiles(path.join(rootDir, 'main')).map((filePath) => ({
+    filePath,
+    source: fs.readFileSync(filePath, 'utf8'),
+  }));
   const mainRuntimeSources = [
     mainSource,
-    ...walkJsFiles(path.join(rootDir, 'main')).map((filePath) => fs.readFileSync(filePath, 'utf8')),
+    ...mainModuleSources.map(({ source }) => source),
   ].join('\n');
 
   assertDoesNotMatch(
     mainSource,
-    /anchored_mutation_backend_adapter|createAnchoredMutationBackendAdapter/,
-    'The anchored helper adapter must remain unwired during phase 2.3F-1'
+    /anchored_mutation_backend_adapter|createAnchoredMutationBackendAdapter|providerFactory|\.node\b/,
+    'main.js must reach anchored mutation only through the fail-closed main-only factory seam'
   );
   assert.ok(
-    mainSource.includes("const agenticDeleteMutationBackend = createUnsupportedAnchoredFilesystemMutationBackend({\n    backendId: 'faber-main-anchored-delete-unavailable',\n    reasonCode: 'ATOMIC_MUTATION_BACKEND_UNAVAILABLE',\n  });"),
-    'main.js must keep the production delete backend explicitly unavailable during phase 2.3F-1'
+    mainSource.includes('createAnchoredMutationRuntimeConfig({')
+      && mainSource.includes('env: process.env,')
+      && mainSource.includes('createAgenticDeleteMutationBackendSelection({')
+      && mainSource.includes('config: agenticDeleteMutationRuntimeConfig,')
+      && mainSource.includes(
+        'const agenticDeleteMutationBackend = agenticDeleteMutationBackendSelection.backend;'
+      ),
+    'main.js must compose anchored mutation through runtime config and the fail-closed factory'
+  );
+  assertDoesNotMatch(
+    mainSource,
+    /createUnsupportedAnchoredFilesystemMutationBackend|anchored-mutation-provider\.v1|isolationAttestation/,
+    'main.js must neither construct the fallback nor attest a native provider itself'
+  );
+  assert.ok(
+    mutationBackendFactorySource.includes('createUnsupportedAnchoredFilesystemMutationBackend')
+      && mutationBackendFactorySource.includes('createAnchoredMutationBackendAdapter')
+      && mutationBackendFactorySource.includes("'anchored-mutation-isolation-attestation.v1'")
+      && mutationBackendFactorySource.includes('physicalIdentityReceipts')
+      && mutationBackendFactorySource.includes('sourceIdentityCompareAndSwap')
+      && mutationBackendFactorySource.includes('subtreeMutationExcluded')
+      && mutationBackendFactorySource.includes('durablePhysicalProgress'),
+    'the main-only factory must own fallback, adapter creation, and exact isolation attestation'
+  );
+  assert.ok(
+    mutationRuntimeConfigSource.includes("'FABER_ANCHORED_MUTATION_MODE'")
+      && mutationRuntimeConfigSource.includes("'FABER_ANCHORED_MUTATION_KILL_SWITCH'")
+      && mutationRuntimeConfigSource.includes("mode: 'disabled'")
+      && mutationRuntimeConfigSource.includes('killSwitch: true'),
+    'anchored mutation runtime config must default to disabled behind an active kill switch'
   );
   assert.strictEqual(
     (mainSource.match(/mutationBackend: agenticDeleteMutationBackend,/g) || []).length,
     2,
-    'main.js must inject the unavailable delete backend into exactly the recovery and live runtimes'
+    'main.js must inject one selected delete backend into exactly the recovery and live runtimes'
   );
+  assert.ok(
+    mainSource.includes('agenticDeleteMutationBackendSelection.dispose();')
+      && mainSource.includes('agenticDeleteMutationBackendSelection = null;'),
+    'main.js must dispose the selected provider seam at process shutdown'
+  );
+  assert.strictEqual(
+    (mainRuntimeSources.match(/createAgenticDeleteMutationBackendSelection\(\{/g) || []).length,
+    1,
+    'production must keep exactly one fail-closed mutation backend selection site'
+  );
+  for (const { filePath, source } of mainModuleSources) {
+    const relativePath = path.relative(rootDir, filePath);
+    if ([
+      'main/services/agentic_delete_mutation_backend_factory.js',
+      'main/services/anchored_mutation_backend_adapter.js',
+    ].includes(relativePath)) continue;
+    assertDoesNotMatch(
+      source,
+      /\bproviderFactory\b|createAnchoredMutationBackendAdapter|require\(['"][^'"]*anchored_mutation_backend_adapter['"]\)/,
+      `${relativePath} must not activate or bypass the sealed mutation provider seam before phase 2.4`
+    );
+  }
   assertDoesNotMatch(
     agenticToolLoopSource,
     /name:\s*['"](?:run_command|preview_capture)['"]/,

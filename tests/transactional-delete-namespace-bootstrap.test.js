@@ -51,6 +51,7 @@ function createService({
   fsImpl = fs,
   transactionId,
   transactionIdFactory = null,
+  authenticator = journalAuthenticator,
 }) {
   return createTransactionalFilesystemDeleteService({
     fs: fsImpl,
@@ -68,7 +69,7 @@ function createService({
     authorizeEffectFrontier(candidate) {
       return { authorized: true, binding: candidate };
     },
-    journalAuthenticator,
+    journalAuthenticator: authenticator,
     mutationBackend,
     transactionIdFactory: transactionIdFactory || (() => transactionId),
   });
@@ -167,11 +168,21 @@ withProject((rootPath) => {
   const backend = createAnchoredMutationTestBackend({
     onEvent: (event) => events.push(event),
   });
+  const orderedAuthenticator = Object.freeze({
+    seal(root, value) {
+      events.push(Object.freeze({ type: 'journal.seal' }));
+      return journalAuthenticator.seal(root, value);
+    },
+    verify(root, value, tag) {
+      return journalAuthenticator.verify(root, value, tag);
+    },
+  });
   const service = createService({
     binding,
     mutationBackend: backend,
     fsImpl: privatePathBlockingFs(rootPath, blockedCalls),
     transactionId: 'transaction-live-0000001',
+    authenticator: orderedAuthenticator,
   });
   const prepared = service.prepare({
     binding,
@@ -181,11 +192,38 @@ withProject((rootPath) => {
   });
   const firstWrite = events.findIndex((event) => event.type === 'namespace.write');
   const sessionOpen = events.findIndex((event) => event.type === 'session.prepare');
+  const firstAuthentication = events.findIndex((event) => event.type === 'journal.seal');
   assert(sessionOpen >= 0 && firstWrite > sessionOpen);
+  assert(
+    firstAuthentication > sessionOpen && firstWrite > firstAuthentication,
+    'the receipt-bearing session must open before manifest/journal authentication and writes'
+  );
   assert.strictEqual(
     events[firstWrite].relativePath,
     'transactions/transaction-live-0000001/manifest.json',
     'the first private write must be the authenticated transaction manifest'
+  );
+  const transactionPath = path.join(
+    rootPath,
+    '.faber',
+    'transactions',
+    'transaction-live-0000001'
+  );
+  const manifest = JSON.parse(fs.readFileSync(path.join(transactionPath, 'manifest.json'), 'utf8'));
+  const journal = JSON.parse(fs.readFileSync(path.join(transactionPath, 'journal.json'), 'utf8'));
+  assert.strictEqual(manifest.schemaVersion, 'transactional-delete.private-manifest.v2');
+  assert.strictEqual(journal.schemaVersion, 'transactional-delete.private-journal.v2');
+  assert.strictEqual(
+    manifest.identityReceipt.schemaVersion,
+    'anchored-mutation-identity-receipt.v1'
+  );
+  assert.strictEqual(
+    manifest.identityReceipt.bindingDigest,
+    canonicalSha256Digest(binding)
+  );
+  assert.strictEqual(
+    manifest.identityReceipt.checkpointDigest,
+    manifest.checkpointManifest.checkpointDigest
   );
   assert.strictEqual(prepared.abort({ reason: 'test' }).ok, true);
   assert.deepStrictEqual(blockedCalls, []);

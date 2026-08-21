@@ -15,6 +15,9 @@ const {
   canonicalSha256Digest,
 } = require('../main/capabilities/transactional_delete_contracts');
 const {
+  createAnchoredMutationIdentityReceipt,
+} = require('../main/capabilities/anchored_mutation_identity_receipt_contract');
+const {
   createAnchoredMutationTestBackend,
 } = require('./support/anchored_mutation_test_backend');
 
@@ -90,6 +93,7 @@ function sessionWithOverrides(session, overrides = {}) {
     helperId: session.helperId,
     rootIdentityDigest: session.rootIdentityDigest,
     namespaceIdentityDigest: session.namespaceIdentityDigest,
+    identityReceipt: overrides.identityReceipt || session.identityReceipt,
     privateNamespace: overrides.privateNamespace || session.privateNamespace,
     verify: overrides.verify || session.verify,
     inspectProgress: overrides.inspectProgress || session.inspectProgress,
@@ -115,6 +119,44 @@ function privateNamespaceWithOverrides(namespace, overrides = {}) {
 
 function namespaceWriteValue(input) {
   return JSON.parse(Buffer.from(input.contentBase64, 'base64').toString('utf8'));
+}
+
+function rebuildIdentityReceipt(receipt, overrides = {}) {
+  return createAnchoredMutationIdentityReceipt({
+    helperBuildId: receipt.helperBuildId,
+    platform: receipt.platform,
+    bindingDigest: receipt.bindingDigest,
+    checkpointDigest: receipt.checkpointDigest,
+    rootIdentity: receipt.rootIdentity,
+    namespaceIdentity: receipt.namespaceIdentity,
+    targets: receipt.targets,
+    entries: receipt.entries,
+    ...overrides,
+  });
+}
+
+function rewriteAuthenticatedManifest(rootPath, transactionId, mutate) {
+  const manifestPath = path.join(
+    rootPath,
+    '.faber',
+    'transactions',
+    transactionId,
+    'manifest.json'
+  );
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  mutate(manifest);
+  delete manifest.manifestDigest;
+  delete manifest.authenticationTag;
+  const signed = {
+    ...manifest,
+    manifestDigest: canonicalSha256Digest(manifest),
+  };
+  const authenticationTag = testJournalAuthenticator.seal(rootPath, signed);
+  fs.writeFileSync(
+    manifestPath,
+    `${JSON.stringify({ ...signed, authenticationTag })}\n`,
+    'utf8'
+  );
 }
 
 function createHarness(rootPath, overrides = {}) {
@@ -398,6 +440,134 @@ withProject((rootPath) => {
   assert.strictEqual(fs.readFileSync(path.join(rootPath, 'restart.txt'), 'utf8'), 'restart-safe');
 });
 
+// A crash/restart may not silently re-anchor an identical replacement target.
+// Content equality is insufficient: recovery requires the authenticated
+// physical identity receipt captured before the first metadata write.
+withProject((rootPath) => {
+  fs.writeFileSync(path.join(rootPath, 'identical-replacement.txt'), 'same-bytes');
+  const first = createHarness(rootPath, {
+    transactionIdFactory: () => 'transaction-identity-target',
+  });
+  assert.strictEqual(commit(prepare(first, ['identical-replacement.txt'])).state, 'COMMITTED');
+  const payloadPath = path.join(
+    rootPath,
+    '.faber',
+    'transactions',
+    'transaction-identity-target',
+    'payload',
+    '0000'
+  );
+  fs.unlinkSync(payloadPath);
+  fs.writeFileSync(payloadPath, 'same-bytes');
+
+  const second = createHarness(rootPath);
+  assert.deepStrictEqual(second.service.recoverProject({ binding: second.binding }), {
+    ok: false,
+    recovered: 0,
+    retainedCommitted: 0,
+    retainedUnknown: 1,
+  });
+  assert.strictEqual(fs.readFileSync(payloadPath, 'utf8'), 'same-bytes');
+  assert.deepStrictEqual(
+    fs.readdirSync(path.join(rootPath, '.faber', 'transactions')),
+    ['transaction-identity-target'],
+    'identity mismatch must retain the authenticated checkpoint without cleanup'
+  );
+});
+
+// Even after openExistingSession accepts the expected receipt, the consumer
+// independently requires the promoted session to return that exact receipt.
+withProject((rootPath) => {
+  fs.writeFileSync(path.join(rootPath, 'receipt-continuity.txt'), 'continuous');
+  const first = createHarness(rootPath, {
+    transactionIdFactory: () => 'transaction-receipt-continuity',
+  });
+  assert.strictEqual(commit(prepare(first, ['receipt-continuity.txt'])).state, 'COMMITTED');
+
+  const backend = createWrappedTestMutationBackend({
+    wrapSession(session) {
+      return sessionWithOverrides(session, {
+        identityReceipt: rebuildIdentityReceipt(session.identityReceipt, {
+          helperBuildId: 'different-test-helper-build-v1',
+        }),
+      });
+    },
+  });
+  const second = createHarness(rootPath, { mutationBackend: backend });
+  assert.deepStrictEqual(second.service.recoverProject({ binding: second.binding }), {
+    ok: false,
+    recovered: 0,
+    retainedCommitted: 0,
+    retainedUnknown: 1,
+  });
+  assert.deepStrictEqual(
+    fs.readdirSync(path.join(rootPath, '.faber', 'transactions')),
+    ['transaction-receipt-continuity']
+  );
+});
+
+// Copying byte-identical private metadata into a replacement namespace must
+// not transfer the original anchored namespace authority.
+withProject((rootPath) => {
+  fs.writeFileSync(path.join(rootPath, 'namespace-replacement.txt'), 'namespace-safe');
+  const first = createHarness(rootPath, {
+    transactionIdFactory: () => 'transaction-identity-namespace',
+  });
+  assert.strictEqual(commit(prepare(first, ['namespace-replacement.txt'])).state, 'COMMITTED');
+  const namespacePath = path.join(rootPath, '.faber');
+  const copiedNamespacePath = path.join(rootPath, '.faber-copy');
+  const originalNamespacePath = path.join(rootPath, '.faber-original');
+  fs.cpSync(namespacePath, copiedNamespacePath, { recursive: true, preserveTimestamps: true });
+  fs.renameSync(namespacePath, originalNamespacePath);
+  fs.renameSync(copiedNamespacePath, namespacePath);
+
+  const second = createHarness(rootPath);
+  assert.deepStrictEqual(second.service.recoverProject({ binding: second.binding }), {
+    ok: false,
+    recovered: 0,
+    retainedCommitted: 0,
+    retainedUnknown: 1,
+  });
+  assert.strictEqual(
+    fs.readdirSync(path.join(namespacePath, 'transactions')).length,
+    1,
+    'replacement namespace must remain untouched for explicit recovery'
+  );
+});
+
+for (const receiptCase of ['legacy-missing', 'tampered']) {
+  withProject((rootPath) => {
+    const transactionId = `transaction-receipt-${receiptCase}`;
+    const relativePath = `${receiptCase}.txt`;
+    fs.writeFileSync(path.join(rootPath, relativePath), receiptCase);
+    const first = createHarness(rootPath, {
+      transactionIdFactory: () => transactionId,
+    });
+    assert.strictEqual(commit(prepare(first, [relativePath])).state, 'COMMITTED');
+    rewriteAuthenticatedManifest(rootPath, transactionId, (manifest) => {
+      if (receiptCase === 'legacy-missing') {
+        manifest.schemaVersion = 'transactional-delete.private-manifest.v1';
+        delete manifest.identityReceipt;
+      } else {
+        manifest.identityReceipt.targets[0].identity.objectIdentityDigest = digest('9');
+      }
+    });
+
+    const second = createHarness(rootPath);
+    assert.deepStrictEqual(second.service.recoverProject({ binding: second.binding }), {
+      ok: false,
+      recovered: 0,
+      retainedCommitted: 0,
+      retainedUnknown: 1,
+    }, receiptCase);
+    assert.deepStrictEqual(
+      fs.readdirSync(path.join(rootPath, '.faber', 'transactions')),
+      [transactionId],
+      `${receiptCase} receipt must never be cleaned during fail-closed recovery`
+    );
+  });
+}
+
 withProject((rootPath) => {
   fs.writeFileSync(path.join(rootPath, 'job-a.txt'), 'job-a-safe');
   fs.writeFileSync(path.join(rootPath, 'job-b.txt'), 'job-b-safe');
@@ -540,6 +710,52 @@ withProject((rootPath) => {
     retainedUnknown: 1,
   });
   assert.strictEqual(fs.existsSync(path.join(rootPath, 'foreign-tampered.txt')), false);
+});
+
+// Foreign binding is not a bypass for receipt verification: only a fully
+// authenticated and physically continuous checkpoint may be ignored.
+withProject((rootPath) => {
+  fs.writeFileSync(path.join(rootPath, 'foreign-receipt.txt'), 'foreign-receipt-safe');
+  const transactionId = 'transaction-foreign-receipt';
+  const owner = createHarness(rootPath, {
+    bindingOverrides: {
+      jobId: 'job-foreign-receipt-owner',
+      sessionId: 'session-foreign-receipt-owner',
+      kernelId: 'kernel-foreign-receipt-owner',
+      submissionDigest: digest('7'),
+    },
+    transactionIdFactory: () => transactionId,
+  });
+  assert.strictEqual(commit(prepare(owner, ['foreign-receipt.txt'])).state, 'COMMITTED');
+  rewriteAuthenticatedManifest(rootPath, transactionId, (manifest) => {
+    manifest.identityReceipt.targets[0].identity.objectIdentityDigest = digest('8');
+  });
+
+  let existingSessionCalls = 0;
+  const observer = createHarness(rootPath, {
+    bindingOverrides: {
+      jobId: 'job-foreign-receipt-observer',
+      sessionId: 'session-foreign-receipt-observer',
+      kernelId: 'kernel-foreign-receipt-observer',
+      submissionDigest: digest('9'),
+    },
+    mutationBackend: createAnchoredMutationTestBackend({
+      onEvent(event) {
+        if (event.type === 'session.openExisting') existingSessionCalls += 1;
+      },
+    }),
+  });
+  assert.deepStrictEqual(observer.service.recoverProject({ binding: observer.binding }), {
+    ok: false,
+    recovered: 0,
+    retainedCommitted: 0,
+    retainedUnknown: 1,
+  });
+  assert.strictEqual(existingSessionCalls, 0);
+  assert.deepStrictEqual(
+    fs.readdirSync(path.join(rootPath, '.faber', 'transactions')),
+    [transactionId]
+  );
 });
 
 withProject((rootPath) => {
@@ -954,6 +1170,47 @@ withProject((rootPath) => {
   );
   assert.strictEqual(closeCalls, 1, 'a malformed prepared session must be closed best-effort');
   assert.strictEqual(fs.readFileSync(path.join(rootPath, 'invalid-session.txt'), 'utf8'), 'invalid-session');
+});
+
+withProject((rootPath) => {
+  fs.writeFileSync(path.join(rootPath, 'invalid-receipt.txt'), 'invalid-receipt');
+  let sealCalls = 0;
+  const events = [];
+  const mutationBackend = createAnchoredMutationTestBackend({
+    onEvent(event) { events.push(event); },
+    wrapSession(session) {
+      return sessionWithOverrides(session, {
+        identityReceipt: Object.freeze({
+          ...session.identityReceipt,
+          receiptDigest: digest('f'),
+        }),
+      });
+    },
+  });
+  const harness = createHarness(rootPath, {
+    mutationBackend,
+    journalAuthenticator: Object.freeze({
+      seal(...args) {
+        sealCalls += 1;
+        return testJournalAuthenticator.seal(...args);
+      },
+      verify(...args) { return testJournalAuthenticator.verify(...args); },
+    }),
+  });
+  assert.throws(
+    () => prepare(harness, ['invalid-receipt.txt']),
+    (error) => error && error.code === 'ATOMIC_MUTATION_BACKEND_UNAVAILABLE'
+  );
+  assert.strictEqual(sealCalls, 0, 'invalid receipt must fail before manifest authentication');
+  assert.strictEqual(
+    events.some((event) => event.type === 'namespace.write'),
+    false,
+    'invalid receipt must fail before the first private metadata write'
+  );
+  assert.strictEqual(
+    fs.readFileSync(path.join(rootPath, 'invalid-receipt.txt'), 'utf8'),
+    'invalid-receipt'
+  );
 });
 
 withProject((rootPath) => {

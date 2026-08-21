@@ -35,11 +35,14 @@ const {
   assertAnchoredFilesystemMutationRootNamespace,
   createUnsupportedAnchoredFilesystemMutationBackend,
 } = require('../capabilities/anchored_filesystem_mutation_backend_contract');
+const {
+  assertAnchoredMutationIdentityReceipt,
+} = require('../capabilities/anchored_mutation_identity_receipt_contract');
 
 const TRANSACTIONAL_FILESYSTEM_DELETE_SERVICE_VERSION =
   'transactional-filesystem-delete-service.v2';
-const PRIVATE_MANIFEST_SCHEMA_VERSION = 'transactional-delete.private-manifest.v1';
-const PRIVATE_JOURNAL_SCHEMA_VERSION = 'transactional-delete.private-journal.v1';
+const PRIVATE_MANIFEST_SCHEMA_VERSION = 'transactional-delete.private-manifest.v2';
+const PRIVATE_JOURNAL_SCHEMA_VERSION = 'transactional-delete.private-journal.v2';
 const PRIVATE_JOURNAL_RECORD_SCHEMA_VERSION = 'transactional-delete.private-state.v1';
 const PRIVATE_HEAD_SCHEMA_VERSION = 'transactional-delete.private-head.v1';
 const JOURNAL_AUTHENTICATOR_VERSION = 'transactional-delete.hmac-sha256.v1';
@@ -504,9 +507,57 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       checkpointDigest: live.checkpointDigest,
       manifestDigest: transaction.manifest.manifestDigest,
       journalDigest: transaction.journal.journalDigest,
+      identityReceipt: transaction.identityReceipt,
       targets: live.targets,
       checkpointEntries: live.checkpointEntries,
     });
+  }
+
+  function identityReceiptExpectation(transaction) {
+    return Object.freeze({
+      bindingDigest: transaction.bindingDigest,
+      checkpointDigest: transaction.checkpointManifest.checkpointDigest,
+      targets: Object.freeze(transaction.targets.map((target) => Object.freeze({
+        relativePath: target.relativePath,
+        payloadName: target.payloadName,
+      }))),
+      checkpointEntries: Object.freeze(
+        transaction.checkpointManifest.entries.map((entry) => Object.freeze({
+          relativePath: entry.relativePath,
+          kind: entry.kind,
+          bytes: entry.bytes,
+          mode: entry.mode,
+          mtimeMs: entry.mtimeMs,
+          contentDigest: entry.contentDigest,
+          linkTarget: entry.linkTarget,
+        }))
+      ),
+    });
+  }
+
+  function validateSessionIdentityReceipt(session, transaction) {
+    let receipt;
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(session, 'identityReceipt');
+      if (!descriptor || !Object.hasOwn(descriptor, 'value')) {
+        throw new TypeError('session identity receipt required');
+      }
+      receipt = assertAnchoredMutationIdentityReceipt(
+        descriptor.value,
+        identityReceiptExpectation(transaction)
+      );
+      if (session.rootIdentityDigest !== receipt.rootIdentity.identityDigest
+        || session.namespaceIdentityDigest !== receipt.namespaceIdentity.identityDigest) {
+        throw new TypeError('session identity continuity mismatch');
+      }
+      if (transaction.identityReceipt
+        && transaction.identityReceipt.receiptDigest !== receipt.receiptDigest) {
+        throw new TypeError('session identity receipt changed');
+      }
+    } catch {
+      fail('IDENTITY_RECEIPT_INVALID', 'The anchored mutation identity receipt is invalid');
+    }
+    return receipt;
   }
 
   function prepareMutationSession(transaction, openSession = null) {
@@ -538,6 +589,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       for (const method of ['readFile', 'list', 'writeFile', 'remove', 'sync']) {
         namespaceMethod(namespaceDescriptor.value, method);
       }
+      transaction.identityReceipt = validateSessionIdentityReceipt(normalized, transaction);
       return normalized;
     } catch {
       // A backend may have opened descriptors before returning a malformed
@@ -857,6 +909,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       plan: transaction.plan,
       checkpointManifest: transaction.checkpointManifest,
       targets: transaction.targets,
+      identityReceipt: transaction.identityReceipt,
     };
     const signed = Object.freeze({ ...core, manifestDigest: canonicalSha256Digest(core) });
     const authenticationTag = journalAuthenticator.seal(
@@ -969,6 +1022,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       'plan',
       'checkpointManifest',
       'targets',
+      'identityReceipt',
       'manifestDigest',
       'authenticationTag',
     ], [
@@ -980,6 +1034,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       'plan',
       'checkpointManifest',
       'targets',
+      'identityReceipt',
       'manifestDigest',
       'authenticationTag',
     ], 'private manifest');
@@ -1057,6 +1112,17 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       }
       return Object.freeze({ relativePath: target.relativePath, payloadName });
     });
+    let identityReceipt;
+    try {
+      identityReceipt = assertAnchoredMutationIdentityReceipt(raw.identityReceipt, {
+        bindingDigest: raw.bindingDigest,
+        checkpointDigest: checkpointManifest.checkpointDigest,
+        targets,
+        checkpointEntries: checkpointManifest.entries,
+      });
+    } catch {
+      fail('IDENTITY_RECEIPT_INVALID', 'The transaction identity receipt is invalid');
+    }
     const core = {
       schemaVersion: raw.schemaVersion,
       authenticationVersion: raw.authenticationVersion,
@@ -1066,6 +1132,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       plan,
       checkpointManifest,
       targets,
+      identityReceipt,
     };
     const signed = { ...core, manifestDigest: canonicalSha256Digest(core) };
     if (raw.manifestDigest !== signed.manifestDigest
@@ -1076,7 +1143,12 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       )) {
       fail('MANIFEST_AUTHENTICATION_FAILED', 'The transaction manifest failed authentication');
     }
-    return Object.freeze({ ...signed, targets, authenticationTag: raw.authenticationTag });
+    return Object.freeze({
+      ...signed,
+      targets,
+      identityReceipt,
+      authenticationTag: raw.authenticationTag,
+    });
   }
 
   function validatePrivateJournal(raw, manifest) {
@@ -1743,10 +1815,20 @@ function createTransactionalFilesystemDeleteService(options = {}) {
         transactionId,
         binding
       );
+      if (dataValue(rootNamespace, 'rootIdentityDigest')
+          !== manifest.identityReceipt.rootIdentity.identityDigest
+        || dataValue(rootNamespace, 'namespaceIdentityDigest')
+          !== manifest.identityReceipt.namespaceIdentity.identityDigest) {
+        fail(
+          'IDENTITY_RECEIPT_INVALID',
+          'The anchored recovery namespace identity changed'
+        );
+      }
     // A project root may retain checkpoints for more than one authorized job.
-    // Ignore another job only after its complete manifest, digests, root
-    // binding, and authentication tag have all been validated above. Unknown
-    // or tampered manifests still throw and remain recovery-blocking.
+    // Ignore another job only after its complete manifest, physical identity
+    // receipt, digests, root binding, and authentication tag have all been
+    // validated above. Unknown or tampered manifests still throw and remain
+    // recovery-blocking.
       if (!sameBinding(manifest.binding, binding)) {
         closeRootNamespace(rootNamespace);
         return null;
@@ -1788,6 +1870,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       headRelativePath: `transaction-heads/${transactionId}.json`,
       anchorRelativePath,
       targets: manifest.targets,
+      identityReceipt: manifest.identityReceipt,
       moved: [...journal.moved],
       state: journal.records[journal.records.length - 1].stateRecord.state,
       manifest,
@@ -2347,6 +2430,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
           relativePath,
           payloadName: String(index).padStart(4, '0'),
         })),
+        identityReceipt: null,
         moved: [],
         state: null,
         manifest: null,
@@ -2357,16 +2441,17 @@ function createTransactionalFilesystemDeleteService(options = {}) {
         privateNamespace: null,
         restoredInSession: false,
       };
-      transaction.manifest = privateManifest(transaction);
-      transaction.journal = buildJournal(transaction, [], [], []);
       try {
         // This is the critical namespace-order invariant: the native anchored
-        // session must exist before the first private metadata write.
+        // session and its physical identity receipt must exist and validate
+        // before metadata is authenticated or the first private write occurs.
         transaction.mutationSession = prepareMutationSession(transaction);
         transaction.privateNamespace = dataValue(
           transaction.mutationSession,
           'privateNamespace'
         );
+        transaction.manifest = privateManifest(transaction);
+        transaction.journal = buildJournal(transaction, [], [], []);
         writeNamespaceJson(
           transaction.privateNamespace,
           transaction.manifestRelativePath,

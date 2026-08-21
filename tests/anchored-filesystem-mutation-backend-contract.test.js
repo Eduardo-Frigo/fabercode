@@ -5,6 +5,7 @@ const childProcess = require('child_process');
 
 const {
   ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION,
+  ANCHORED_FILESYSTEM_MUTATION_LEGACY_SESSION_VERSION,
   ANCHORED_FILESYSTEM_MUTATION_PROBE_STATES,
   ANCHORED_FILESYSTEM_MUTATION_REQUIRED_GUARANTEES,
   ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
@@ -95,7 +96,7 @@ assert.throws(() => unsupported.prepare({}), (error) => (
 ));
 
 const session = Object.freeze({
-  schemaVersion: ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
+  schemaVersion: ANCHORED_FILESYSTEM_MUTATION_LEGACY_SESSION_VERSION,
   verify() { return { verified: true }; },
   moveToQuarantine() { return { moved: true }; },
   restoreFromQuarantine() { return { restored: true }; },
@@ -103,10 +104,18 @@ const session = Object.freeze({
   close() { return { closed: true }; },
 });
 assert.strictEqual(assertAnchoredFilesystemMutationSession(session), session);
+assert.strictEqual(
+  ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
+  'anchored-filesystem-mutation-session.v2'
+);
 assert.throws(() => assertAnchoredFilesystemMutationSession({
   ...session,
   moveToQuarantine: undefined,
 }), /moveToQuarantine/);
+assert.throws(() => assertAnchoredFilesystemMutationSession({
+  ...session,
+  schemaVersion: ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
+}), /version/);
 
 // Backend validation never executes accessors or reads attacker-controlled
 // thenables, and rejected native Promises are observed before synchronous
@@ -185,6 +194,35 @@ assert.throws(() => assertAnchoredFilesystemMutationSession({
   ], { encoding: 'utf8' });
   assert.strictEqual(child.status, 0, child.stderr || child.stdout);
   assert.match(child.stdout, /strict contract preflight survived/);
+}
+
+// Even the canonical fail-closed backend observes rejected input Promises
+// before synchronously denying a call, including after a selected backend is
+// revoked and delegates to this fallback.
+{
+  const contractPath = require.resolve(
+    '../main/capabilities/anchored_filesystem_mutation_backend_contract'
+  );
+  const script = `
+    const {
+      createUnsupportedAnchoredFilesystemMutationBackend,
+    } = require(${JSON.stringify(contractPath)});
+    const backend = createUnsupportedAnchoredFilesystemMutationBackend({});
+    try {
+      backend.prepare({ nested: Promise.reject(new Error('rejected prepare input')) });
+    } catch {}
+    try {
+      backend.openRootNamespace(Promise.reject(new Error('rejected root input')));
+    } catch {}
+    setImmediate(() => process.stdout.write('strict unsupported backend survived'));
+  `;
+  const child = childProcess.spawnSync(process.execPath, [
+    '--unhandled-rejections=strict',
+    '-e',
+    script,
+  ], { encoding: 'utf8' });
+  assert.strictEqual(child.status, 0, child.stderr || child.stdout);
+  assert.match(child.stdout, /strict unsupported backend survived/);
 }
 
 console.log('anchored filesystem mutation backend contract tests passed');

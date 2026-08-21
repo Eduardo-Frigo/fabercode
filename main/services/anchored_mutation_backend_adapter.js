@@ -15,7 +15,7 @@ const {
 } = require('../capabilities/anchored_mutation_helper_protocol');
 
 const ANCHORED_MUTATION_BACKEND_ADAPTER_VERSION =
-  'anchored-mutation-backend-adapter.v2';
+  'anchored-mutation-backend-adapter.v3';
 const DEFAULT_BACKEND_ID = 'native-anchored-mutation-helper';
 const SAFE_BACKEND_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 const DATA_GRAPH_PREFLIGHT_LIMITS = Object.freeze({

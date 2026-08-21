@@ -27,9 +27,75 @@ const {
 const {
   canonicalSha256Digest,
 } = require('../main/capabilities/transactional_delete_contracts');
+const {
+  createAnchoredMutationIdentityReceipt,
+} = require('../main/capabilities/anchored_mutation_identity_receipt_contract');
 
 const digest = (character) => `sha256:${character.repeat(64)}`;
 const bytesDigest = (bytes) => `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
+
+function identity(seed) {
+  const core = {
+    volumeIdentityDigest: bytesDigest(Buffer.from(`${seed}:volume`)),
+    objectIdentityDigest: bytesDigest(Buffer.from(`${seed}:object`)),
+    generationIdentityDigest: bytesDigest(Buffer.from(`${seed}:generation`)),
+  };
+  return { ...core, identityDigest: canonicalSha256Digest(core) };
+}
+
+const ROOT_IDENTITY = identity('root');
+const NAMESPACE_IDENTITY = identity('namespace');
+
+function receiptForInput(input) {
+  const identityByPath = new Map(input.checkpointEntries.map((entry) => [
+    entry.relativePath,
+    identity(`entry:${entry.relativePath}`),
+  ]));
+  const entries = input.checkpointEntries.map((entry) => ({
+    relativePath: entry.relativePath,
+    kind: entry.kind,
+    identity: identityByPath.get(entry.relativePath),
+    closureDigest: entry.kind === 'directory' ? bytesDigest(Buffer.from(`closure:${entry.relativePath}`)) : null,
+    linkIdentityDigest: entry.kind === 'symlink'
+      ? bytesDigest(Buffer.from(`link:${entry.relativePath}`)) : null,
+  }));
+  const entryByPath = new Map(entries.map((entry) => [entry.relativePath, entry]));
+  return createAnchoredMutationIdentityReceipt({
+    helperBuildId: 'test-native-helper-build-v1',
+    platform: {
+      os: 'linux',
+      architecture: 'x64',
+      filesystemType: 'ext4',
+      capabilityDigest: bytesDigest(Buffer.from('test-helper-capability')),
+    },
+    bindingDigest: input.bindingDigest,
+    checkpointDigest: input.checkpointDigest,
+    rootIdentity: ROOT_IDENTITY,
+    namespaceIdentity: NAMESPACE_IDENTITY,
+    targets: input.targets.map((target) => ({
+      ...target,
+      kind: entryByPath.get(target.relativePath).kind,
+      identity: entryByPath.get(target.relativePath).identity,
+      closureDigest: entryByPath.get(target.relativePath).closureDigest,
+      linkIdentityDigest: entryByPath.get(target.relativePath).linkIdentityDigest,
+    })),
+    entries,
+  });
+}
+
+function recreateReceipt(receipt, overrides = {}) {
+  return createAnchoredMutationIdentityReceipt({
+    helperBuildId: receipt.helperBuildId,
+    platform: receipt.platform,
+    bindingDigest: receipt.bindingDigest,
+    checkpointDigest: receipt.checkpointDigest,
+    rootIdentity: receipt.rootIdentity,
+    namespaceIdentity: receipt.namespaceIdentity,
+    targets: receipt.targets,
+    entries: receipt.entries,
+    ...overrides,
+  });
+}
 
 function idFactory(prefix = 'request') {
   let sequence = 0;
@@ -104,6 +170,10 @@ function handshakePayload(overrides = {}) {
       authenticatedOrphanCleanup: true,
       movementProgressInspection: true,
       identityContinuity: true,
+      physicalIdentityReceipts: true,
+      durablePhysicalProgress: true,
+      sourceIdentityCompareAndSwap: true,
+      subtreeMutationExcluded: true,
       atomicReplace: true,
       durableNamespaceSync: true,
       boundedListingOverflow: 'fail_closed',
@@ -115,16 +185,18 @@ function handshakePayload(overrides = {}) {
   };
 }
 
-function openPayload(serial = 1, moved = []) {
-  const progressCore = { checkpointDigest: digest('b'), moved: [] };
+function openPayload(request, serial = 1, moved = []) {
+  const identityReceipt = receiptForInput(request.payload);
+  const progressCore = { checkpointDigest: request.payload.checkpointDigest, moved: [] };
   progressCore.moved = [...moved];
   return {
     opened: true,
     sessionId: `native-session-${serial}`,
     namespaceCapabilityId: `namespace-capability-${serial}`,
-    rootIdentityDigest: digest('d'),
-    namespaceIdentityDigest: digest('e'),
-    targetSetIdentityDigest: digest('f'),
+    rootIdentityDigest: identityReceipt.rootIdentity.identityDigest,
+    namespaceIdentityDigest: identityReceipt.namespaceIdentity.identityDigest,
+    targetSetIdentityDigest: identityReceipt.targetSetIdentityDigest,
+    identityReceipt,
     namespaceReadyBeforeWrites: true,
     movementProgress: {
       ...progressCore,
@@ -138,22 +210,27 @@ function rootOpenPayload(serial = 1) {
     opened: true,
     sessionId: `native-root-session-${serial}`,
     namespaceCapabilityId: `root-namespace-capability-${serial}`,
-    rootIdentityDigest: digest('d'),
-    namespaceIdentityDigest: digest('e'),
+    rootIdentityDigest: ROOT_IDENTITY.identityDigest,
+    namespaceIdentityDigest: NAMESPACE_IDENTITY.identityDigest,
   };
 }
 
 function promotedPayload(request, serial = 1, moved = []) {
-  const opened = openPayload(serial, moved);
+  const identityReceipt = request.payload.expectedIdentityReceipt;
+  const progressCore = { checkpointDigest: request.payload.checkpointDigest, moved: [...moved] };
   return {
     opened: true,
     sessionId: request.sessionId,
     namespaceCapabilityId: `promoted-namespace-capability-${serial}`,
-    rootIdentityDigest: opened.rootIdentityDigest,
-    namespaceIdentityDigest: opened.namespaceIdentityDigest,
-    targetSetIdentityDigest: opened.targetSetIdentityDigest,
+    rootIdentityDigest: identityReceipt.rootIdentity.identityDigest,
+    namespaceIdentityDigest: identityReceipt.namespaceIdentity.identityDigest,
+    targetSetIdentityDigest: identityReceipt.targetSetIdentityDigest,
+    identityReceipt,
     rootNamespaceClosed: true,
-    movementProgress: opened.movementProgress,
+    movementProgress: {
+      ...progressCore,
+      progressDigest: canonicalSha256Digest(progressCore),
+    },
   };
 }
 
@@ -233,7 +310,7 @@ function createResponder({
           openSerial += 1;
           targetNames = request.payload.targets.map((target) => target.payloadName);
           movedNames = [];
-          payload = openPayload(openSerial);
+          payload = openPayload(request, openSerial);
           break;
         case ANCHORED_MUTATION_HELPER_OPERATIONS.NAMESPACE_WRITE_FILE:
           storedFiles.set(request.payload.relativePath, request.payload.contentBase64);
@@ -331,6 +408,14 @@ function createResponder({
   assert(handshake.guarantees.includes('private_namespace_anchored'));
   const session = client.openSession(sessionInput());
   assert.strictEqual(session.schemaVersion, ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION);
+  assert.strictEqual(
+    session.identityReceipt.rootIdentity.identityDigest,
+    session.rootIdentityDigest
+  );
+  assert.strictEqual(
+    session.identityReceipt.namespaceIdentity.identityDigest,
+    session.namespaceIdentityDigest
+  );
   assert(Object.isFrozen(session));
   assert(Object.isFrozen(session.privateNamespace));
 
@@ -392,6 +477,42 @@ function createResponder({
     (error) => error && error.code === 'PROTOCOL_SESSION_CLOSED'
   );
   assert.strictEqual(operations.length, beforeClosedEffect);
+}
+
+// A structurally valid physical receipt for another binding is rejected after
+// open and the abort targets the exact returned native session/capability.
+{
+  const aborts = [];
+  let returnedOpen;
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: createResponder({
+      aborts,
+      mutate(request, response) {
+        if (request.operation !== ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_OPEN) {
+          return response;
+        }
+        const identityReceipt = recreateReceipt(response.payload.identityReceipt, {
+          bindingDigest: digest('9'),
+        });
+        returnedOpen = createAnchoredMutationHelperResponse(request, {
+          ...response.payload,
+          identityReceipt,
+        });
+        return returnedOpen;
+      },
+    }),
+    requestIdFactory: idFactory('wrong-receipt-binding'),
+  });
+  assert.throws(
+    () => client.openSession(sessionInput()),
+    (error) => error && error.code === 'PROTOCOL_IDENTITY_MISMATCH'
+  );
+  assert.strictEqual(aborts.length, 1);
+  assert.strictEqual(aborts[0].sessionId, returnedOpen.payload.sessionId);
+  assert.strictEqual(
+    aborts[0].namespaceCapabilityId,
+    returnedOpen.payload.namespaceCapabilityId
+  );
 }
 
 // A helper cannot downgrade any required guarantee or namespace-I/O feature.
@@ -485,7 +606,9 @@ function createResponder({
   delete existing.rootPath;
   existing.manifestDigest = digest('6');
   existing.journalDigest = digest('7');
+  existing.identityReceipt = receiptForInput(existing);
   const session = root.openExistingSession(existing);
+  assert.strictEqual(session.identityReceipt.receiptDigest, existing.identityReceipt.receiptDigest);
   assert.strictEqual(session.schemaVersion, ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION);
   assert.deepStrictEqual(session.inspectProgress().moved, []);
   session.moveToQuarantine({ checkpointDigest: digest('b') });
@@ -511,11 +634,11 @@ function createResponder({
   ]);
 }
 
-// Promotion cannot switch the pinned physical root or private namespace. The
-// mismatch poisons the client and emits one best-effort abort for the promoted
-// native capability.
+// Promotion must continue the exact authenticated receipt, not merely reuse
+// its root/namespace/target digests with a different helper-build claim.
 {
   const aborts = [];
+  let returnedPromotion;
   const client = createAnchoredMutationHelperProtocolClient({
     transport: createResponder({
       aborts,
@@ -524,10 +647,55 @@ function createResponder({
           !== ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN_EXISTING_SESSION) {
           return response;
         }
-        return createAnchoredMutationHelperResponse(request, {
-          ...promotedPayload(request, 1),
+        const identityReceipt = recreateReceipt(response.payload.identityReceipt, {
+          helperBuildId: 'different-helper-build-v1',
+        });
+        returnedPromotion = createAnchoredMutationHelperResponse(request, {
+          ...response.payload,
+          identityReceipt,
+        });
+        return returnedPromotion;
+      },
+    }),
+    requestIdFactory: idFactory('receipt-continuity'),
+  });
+  const root = client.openRootNamespace({ rootPath: '/project' });
+  const existing = sessionInput();
+  delete existing.rootPath;
+  existing.manifestDigest = digest('6');
+  existing.journalDigest = digest('7');
+  existing.identityReceipt = receiptForInput(existing);
+  assert.throws(
+    () => root.openExistingSession(existing),
+    (error) => error && error.code === 'PROTOCOL_IDENTITY_MISMATCH'
+  );
+  assert.strictEqual(aborts.length, 1);
+  assert.strictEqual(aborts[0].sessionId, returnedPromotion.payload.sessionId);
+  assert.strictEqual(
+    aborts[0].namespaceCapabilityId,
+    returnedPromotion.payload.namespaceCapabilityId
+  );
+}
+
+// Promotion cannot switch the pinned physical root or private namespace. The
+// mismatch poisons the client and emits one best-effort abort for the promoted
+// native capability.
+{
+  const aborts = [];
+  let returnedMismatch;
+  const client = createAnchoredMutationHelperProtocolClient({
+    transport: createResponder({
+      aborts,
+      mutate(request, response) {
+        if (request.operation
+          !== ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN_EXISTING_SESSION) {
+          return response;
+        }
+        returnedMismatch = replaceResponsePayload(response, {
+          ...response.payload,
           rootIdentityDigest: digest('0'),
         });
+        return returnedMismatch;
       },
     }),
     requestIdFactory: idFactory('identity-switch'),
@@ -537,12 +705,17 @@ function createResponder({
   delete existing.rootPath;
   existing.manifestDigest = digest('6');
   existing.journalDigest = digest('7');
+  existing.identityReceipt = receiptForInput(existing);
   assert.throws(
     () => root.openExistingSession(existing),
     (error) => error && error.code === 'PROTOCOL_IDENTITY_MISMATCH'
   );
   assert.strictEqual(aborts.length, 1);
   assert.strictEqual(aborts[0].reasonCode, 'PROTOCOL_IDENTITY_MISMATCH');
+  assert.throws(
+    () => assertAnchoredMutationHelperResponse(returnedMismatch),
+    (error) => error && error.code === 'PROTOCOL_IDENTITY_MISMATCH'
+  );
 }
 
 // A discovery-only root handle closes without creating or promoting a delete
@@ -588,8 +761,8 @@ for (const continuityCase of [
           !== ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN_EXISTING_SESSION) {
           return response;
         }
-        returnedPromotion = createAnchoredMutationHelperResponse(request, {
-          ...promotedPayload(request, 1),
+        returnedPromotion = replaceResponsePayload(response, {
+          ...response.payload,
           ...continuityCase.override,
         });
         return returnedPromotion;
@@ -603,6 +776,7 @@ for (const continuityCase of [
   delete existing.rootPath;
   existing.manifestDigest = digest('6');
   existing.journalDigest = digest('7');
+  existing.identityReceipt = receiptForInput(existing);
   assert.throws(
     () => root.openExistingSession(existing),
     (error) => error && error.code === continuityCase.code
@@ -648,6 +822,7 @@ for (const continuityCase of [
   delete existing.rootPath;
   existing.manifestDigest = digest('6');
   existing.journalDigest = digest('7');
+  existing.identityReceipt = receiptForInput(existing);
   assert.throws(
     () => root.openExistingSession(existing),
     (error) => error && error.code === 'PROTOCOL_DOWNGRADE_DETECTED'
@@ -1463,7 +1638,7 @@ for (const continuityCase of [
         opens += 1;
         return opens === 1
           ? response
-          : createAnchoredMutationHelperResponse(request, openPayload(1));
+          : createAnchoredMutationHelperResponse(request, openPayload(request, 1));
       },
     }),
     requestIdFactory: idFactory('session-replay'),

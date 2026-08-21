@@ -15,13 +15,16 @@ const {
 const {
   canonicalSha256Digest,
 } = require('./transactional_delete_contracts');
+const {
+  assertAnchoredMutationIdentityReceipt,
+} = require('./anchored_mutation_identity_receipt_contract');
 
 const ANCHORED_MUTATION_HELPER_PROTOCOL_VERSION =
-  'anchored-mutation-helper-protocol.v2';
+  'anchored-mutation-helper-protocol.v3';
 const ANCHORED_MUTATION_HELPER_HANDSHAKE_VERSION =
-  'anchored-mutation-helper-handshake.v2';
+  'anchored-mutation-helper-handshake.v3';
 const ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION =
-  'anchored-mutation-helper.namespace-io-integration.v2';
+  'anchored-mutation-helper.namespace-io-integration.v3';
 
 const ANCHORED_MUTATION_HELPER_OPERATIONS = Object.freeze({
   HANDSHAKE: 'handshake',
@@ -102,6 +105,10 @@ const HANDSHAKE_REQUIREMENTS = immutableSnapshot({
   authenticatedOrphanCleanup: true,
   movementProgressInspection: true,
   identityContinuity: true,
+  physicalIdentityReceipts: true,
+  durablePhysicalProgress: true,
+  sourceIdentityCompareAndSwap: true,
+  subtreeMutationExcluded: true,
   atomicReplace: true,
   durableNamespaceSync: true,
   boundedListingOverflow: 'fail_closed',
@@ -383,6 +390,41 @@ function normalizeHandshakeRequirements(value) {
   return HANDSHAKE_REQUIREMENTS;
 }
 
+function normalizeIdentityReceipt(value, expected = {}, fieldName = 'identityReceipt') {
+  try {
+    return assertAnchoredMutationIdentityReceipt(value, expected);
+  } catch (error) {
+    absorbNativePromise(error);
+    fail('PROTOCOL_IDENTITY_MISMATCH', `${fieldName} is invalid or does not match its context`);
+  }
+}
+
+function normalizeOpenIdentityFields(fields, fieldName) {
+  const rootIdentityDigest = normalizeDigest(
+    fields.get('rootIdentityDigest'),
+    `${fieldName}.rootIdentityDigest`
+  );
+  const namespaceIdentityDigest = normalizeDigest(
+    fields.get('namespaceIdentityDigest'),
+    `${fieldName}.namespaceIdentityDigest`
+  );
+  const targetSetIdentityDigest = normalizeDigest(
+    fields.get('targetSetIdentityDigest'),
+    `${fieldName}.targetSetIdentityDigest`
+  );
+  const identityReceipt = normalizeIdentityReceipt(
+    fields.get('identityReceipt'),
+    {},
+    `${fieldName}.identityReceipt`
+  );
+  return Object.freeze({
+    rootIdentityDigest,
+    namespaceIdentityDigest,
+    targetSetIdentityDigest,
+    identityReceipt,
+  });
+}
+
 function normalizeTarget(value, index) {
   const fields = dataFields(
     value,
@@ -639,12 +681,22 @@ function normalizeExistingSessionOpenRequestPayload(value) {
     'journalDigest',
     'targets',
     'checkpointEntries',
+    'expectedIdentityReceipt',
   ], undefined, 'root_namespace.open_existing_session request payload');
   if (fields.get('backendContractVersion') !== ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION
     || fields.get('sessionContractVersion') !== ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION
     || fields.get('integrationVersion') !== ANCHORED_MUTATION_HELPER_INTEGRATION_VERSION) {
     fail('PROTOCOL_VERSION_UNSUPPORTED', 'existing session contract version is unsupported');
   }
+  const bindingDigest = normalizeDigest(fields.get('bindingDigest'), 'bindingDigest');
+  const checkpointDigest = normalizeDigest(fields.get('checkpointDigest'), 'checkpointDigest');
+  const targets = normalizeTargets(fields.get('targets'));
+  const checkpointEntries = normalizeCheckpointEntries(fields.get('checkpointEntries'));
+  const expectedIdentityReceipt = normalizeIdentityReceipt(
+    fields.get('expectedIdentityReceipt'),
+    { bindingDigest, checkpointDigest, targets, checkpointEntries },
+    'expectedIdentityReceipt'
+  );
   return immutableSnapshot({
     namespaceCapabilityId: normalizeIdentifier(
       fields.get('namespaceCapabilityId'),
@@ -657,12 +709,13 @@ function normalizeExistingSessionOpenRequestPayload(value) {
     payloadPathHint: normalizePathHint(fields.get('payloadPathHint'), 'payloadPathHint'),
     headPathHint: normalizePathHint(fields.get('headPathHint'), 'headPathHint'),
     anchorPathHint: normalizePathHint(fields.get('anchorPathHint'), 'anchorPathHint'),
-    bindingDigest: normalizeDigest(fields.get('bindingDigest'), 'bindingDigest'),
-    checkpointDigest: normalizeDigest(fields.get('checkpointDigest'), 'checkpointDigest'),
+    bindingDigest,
+    checkpointDigest,
     manifestDigest: normalizeDigest(fields.get('manifestDigest'), 'manifestDigest'),
     journalDigest: normalizeDigest(fields.get('journalDigest'), 'journalDigest'),
-    targets: normalizeTargets(fields.get('targets')),
-    checkpointEntries: normalizeCheckpointEntries(fields.get('checkpointEntries')),
+    targets,
+    checkpointEntries,
+    expectedIdentityReceipt,
   });
 }
 
@@ -674,12 +727,17 @@ function normalizeExistingSessionOpenResponsePayload(value) {
     'rootIdentityDigest',
     'namespaceIdentityDigest',
     'targetSetIdentityDigest',
+    'identityReceipt',
     'rootNamespaceClosed',
     'movementProgress',
   ], undefined, 'root_namespace.open_existing_session response payload');
   if (fields.get('opened') !== true || fields.get('rootNamespaceClosed') !== true) {
     fail('PROTOCOL_DOWNGRADE_DETECTED', 'root namespace was not atomically promoted');
   }
+  const identity = normalizeOpenIdentityFields(
+    fields,
+    'root_namespace.open_existing_session response payload'
+  );
   return immutableSnapshot({
     opened: true,
     sessionId: normalizeIdentifier(fields.get('sessionId'), 'sessionId'),
@@ -687,15 +745,7 @@ function normalizeExistingSessionOpenResponsePayload(value) {
       fields.get('namespaceCapabilityId'),
       'namespaceCapabilityId'
     ),
-    rootIdentityDigest: normalizeDigest(fields.get('rootIdentityDigest'), 'rootIdentityDigest'),
-    namespaceIdentityDigest: normalizeDigest(
-      fields.get('namespaceIdentityDigest'),
-      'namespaceIdentityDigest'
-    ),
-    targetSetIdentityDigest: normalizeDigest(
-      fields.get('targetSetIdentityDigest'),
-      'targetSetIdentityDigest'
-    ),
+    ...identity,
     rootNamespaceClosed: true,
     movementProgress: normalizeMovementProgress(
       fields.get('movementProgress'),
@@ -775,12 +825,14 @@ function normalizeSessionOpenResponsePayload(value) {
     'rootIdentityDigest',
     'namespaceIdentityDigest',
     'targetSetIdentityDigest',
+    'identityReceipt',
     'namespaceReadyBeforeWrites',
     'movementProgress',
   ], undefined, 'session.open response payload');
   if (fields.get('opened') !== true || fields.get('namespaceReadyBeforeWrites') !== true) {
     fail('PROTOCOL_DOWNGRADE_DETECTED', 'anchored private namespace was not ready before writes');
   }
+  const identity = normalizeOpenIdentityFields(fields, 'session.open response payload');
   return immutableSnapshot({
     opened: true,
     sessionId: normalizeIdentifier(fields.get('sessionId'), 'sessionId'),
@@ -788,15 +840,7 @@ function normalizeSessionOpenResponsePayload(value) {
       fields.get('namespaceCapabilityId'),
       'namespaceCapabilityId'
     ),
-    rootIdentityDigest: normalizeDigest(fields.get('rootIdentityDigest'), 'rootIdentityDigest'),
-    namespaceIdentityDigest: normalizeDigest(
-      fields.get('namespaceIdentityDigest'),
-      'namespaceIdentityDigest'
-    ),
-    targetSetIdentityDigest: normalizeDigest(
-      fields.get('targetSetIdentityDigest'),
-      'targetSetIdentityDigest'
-    ),
+    ...identity,
     namespaceReadyBeforeWrites: true,
     movementProgress: normalizeMovementProgress(
       fields.get('movementProgress'),
@@ -1317,7 +1361,21 @@ function responseCore(fields, payload) {
   };
 }
 
-function assertAnchoredMutationHelperResponse(value) {
+function assertOpenResponseIdentityConsistency(operation, payload) {
+  if (operation !== ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_OPEN
+    && operation
+      !== ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN_EXISTING_SESSION) return;
+  if (payload.rootIdentityDigest !== payload.identityReceipt.rootIdentity.identityDigest
+    || payload.namespaceIdentityDigest !== payload.identityReceipt.namespaceIdentity.identityDigest
+    || payload.targetSetIdentityDigest !== payload.identityReceipt.targetSetIdentityDigest) {
+    fail(
+      'PROTOCOL_IDENTITY_MISMATCH',
+      'helper open response identity digests do not match identityReceipt'
+    );
+  }
+}
+
+function normalizeAnchoredMutationHelperResponse(value, { deferOpenIdentityConsistency = false } = {}) {
   const fields = dataFields(value, RESPONSE_KEYS, RESPONSE_KEYS, 'helper response');
   if (fields.get('schemaVersion') !== ANCHORED_MUTATION_HELPER_PROTOCOL_VERSION
     || fields.get('kind') !== MESSAGE_KINDS.RESPONSE
@@ -1335,13 +1393,21 @@ function assertAnchoredMutationHelperResponse(value) {
     fail('PROTOCOL_DIGEST_MISMATCH', 'helper response digest is invalid');
   }
   const normalized = immutableSnapshot({ ...core, responseDigest });
+  if (!deferOpenIdentityConsistency) {
+    assertOpenResponseIdentityConsistency(operation, normalized.payload);
+  }
   assertMessageBounded(normalized, 'helper response');
   return normalized;
+}
+
+function assertAnchoredMutationHelperResponse(value) {
+  return normalizeAnchoredMutationHelperResponse(value);
 }
 
 function createAnchoredMutationHelperResponse(requestValue, payload) {
   const request = assertAnchoredMutationHelperRequest(requestValue);
   const normalizedPayload = normalizeOperationResponsePayload(request.operation, payload);
+  assertOpenResponseIdentityConsistency(request.operation, normalizedPayload);
   const fields = new Map([
     ['requestId', request.requestId],
     ['operation', request.operation],
@@ -1651,7 +1717,13 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
       if (absorbNativePromise(rawResponse)) {
         fail('HELPER_TRANSPORT_ASYNC', 'native helper transport returned a Promise');
       }
-      const response = assertAnchoredMutationHelperResponse(rawResponse);
+      // Open-response cross-field identity continuity is checked immediately
+      // after correlation by performOpenSession. Deferring only that check here
+      // lets a fully authenticated promotion mismatch abort the exact returned
+      // native capability instead of the stale bootstrap handle.
+      const response = normalizeAnchoredMutationHelperResponse(rawResponse, {
+        deferOpenIdentityConsistency: true,
+      });
       if (clientPoisoned) {
         fail('PROTOCOL_CLIENT_POISONED', 'helper response validation was reentered');
       }
@@ -1768,12 +1840,33 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
     const openProgress = response.payload.movementProgress;
     const progressIsPrefix = openProgress.checkpointDigest === checkpointDigest
       && openProgress.moved.every((name, index) => name === targetPayloadNames[index]);
-    const identityContinues = !promotion || (
+    let receiptMatchesRequest = response.payload.rootIdentityDigest
+      === response.payload.identityReceipt.rootIdentity.identityDigest
+      && response.payload.namespaceIdentityDigest
+        === response.payload.identityReceipt.namespaceIdentity.identityDigest
+      && response.payload.targetSetIdentityDigest
+        === response.payload.identityReceipt.targetSetIdentityDigest;
+    try {
+      assertAnchoredMutationIdentityReceipt(response.payload.identityReceipt, {
+        bindingDigest: request.payload.bindingDigest,
+        checkpointDigest,
+        targets: request.payload.targets,
+        checkpointEntries: request.payload.checkpointEntries,
+      });
+    } catch (error) {
+      absorbNativePromise(error);
+      receiptMatchesRequest = false;
+    }
+    const identityContinues = receiptMatchesRequest && (!promotion || (
       response.payload.rootNamespaceClosed === true
       && sessionId === promotion.sessionId
       && response.payload.rootIdentityDigest === promotion.rootIdentityDigest
       && response.payload.namespaceIdentityDigest === promotion.namespaceIdentityDigest
-    );
+      && response.payload.targetSetIdentityDigest
+        === request.payload.expectedIdentityReceipt.targetSetIdentityDigest
+      && response.payload.identityReceipt.receiptDigest
+        === request.payload.expectedIdentityReceipt.receiptDigest
+    ));
     const sessionIdReplayed = promotion
       ? sessionId !== promotion.sessionId
       : usedSessionIds.has(sessionId);
@@ -1962,6 +2055,7 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
       helperId: handshakeResult.helperId,
       rootIdentityDigest: response.payload.rootIdentityDigest,
       namespaceIdentityDigest: response.payload.namespaceIdentityDigest,
+      identityReceipt: response.payload.identityReceipt,
       privateNamespace,
       inspectProgress() {
         const result = invoke(
@@ -2260,7 +2354,26 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
             'journalDigest',
             'targets',
             'checkpointEntries',
+            'identityReceipt',
           ], undefined, 'openExistingSession input');
+          const expectedIdentityReceipt = normalizeIdentityReceipt(
+            inputValue.get('identityReceipt'),
+            {
+              bindingDigest: inputValue.get('bindingDigest'),
+              checkpointDigest: inputValue.get('checkpointDigest'),
+              targets: inputValue.get('targets'),
+              checkpointEntries: inputValue.get('checkpointEntries'),
+            },
+            'openExistingSession identityReceipt'
+          );
+          if (expectedIdentityReceipt.rootIdentity.identityDigest !== rootIdentityDigest
+            || expectedIdentityReceipt.namespaceIdentity.identityDigest
+              !== namespaceIdentityDigest) {
+            fail(
+              'PROTOCOL_IDENTITY_MISMATCH',
+              'openExistingSession identityReceipt does not match the anchored root namespace'
+            );
+          }
           const { request: promotionRequest, response: promotionResponse } = invokeRootRaw(
             ANCHORED_MUTATION_HELPER_OPERATIONS.ROOT_NAMESPACE_OPEN_EXISTING_SESSION,
             {
@@ -2278,6 +2391,7 @@ function createAnchoredMutationHelperProtocolClient(options = {}) {
               journalDigest: inputValue.get('journalDigest'),
               targets: inputValue.get('targets'),
               checkpointEntries: inputValue.get('checkpointEntries'),
+              expectedIdentityReceipt,
             }
           );
           promoted = true;

@@ -82,9 +82,6 @@ const { createLegacyKernelAdapter } = require('./main/agent_runtime/legacy_kerne
 const {
   createCapabilityDelegationBinding,
 } = require('./main/capabilities/capability_delegation_contracts');
-const {
-  createUnsupportedAnchoredFilesystemMutationBackend,
-} = require('./main/capabilities/anchored_filesystem_mutation_backend_contract');
 const { registerAccountHandlers } = require('./main/ipc/account_handlers');
 const { registerAiHandlers } = require('./main/ipc/ai_handlers');
 const { registerAssistantHandlers } = require('./main/ipc/assistant_handlers');
@@ -191,6 +188,9 @@ const {
   PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
   shouldVerifyAction: shouldVerifyProjectAction,
 } = require('./main/services/project_verified_execution_service');
+const {
+  createAgenticDeleteMutationBackendSelection,
+} = require('./main/services/agentic_delete_mutation_backend_factory');
 const { createAgenticDeleteRuntimeService } = require('./main/services/agentic_delete_runtime_service');
 const {
   createAgenticDeleteRecoveryService,
@@ -206,6 +206,9 @@ const {
   createTransactionalFilesystemDeleteService,
 } = require('./main/services/transactional_filesystem_delete_service');
 const { createAttachmentContextService } = require('./main/runtime/attachment_context');
+const {
+  createAnchoredMutationRuntimeConfig,
+} = require('./main/runtime/anchored_mutation_runtime_config');
 const { createCustomProviderProfileService } = require('./main/runtime/custom_provider_profile');
 const { buildOperationBatchDiffPreview } = require('./main/runtime/diff_preview');
 const { createFileTextUtils } = require('./main/runtime/file_text_utils');
@@ -1141,6 +1144,7 @@ const AGENTIC_DELETE_ACTOR_ID_PATTERN = /^[A-Za-z0-9._:@-]{1,256}$/;
 
 let agenticDeleteActorId = `main-process:${crypto.randomUUID()}`;
 let agenticDeleteReleaseBinding = null;
+let agenticDeleteMutationBackendSelection = null;
 let agenticDeleteRuntimeServiceInstance = null;
 let agenticDeleteStartupRecoveryHealthy = false;
 let assistantExecutionCoordinatorInstance = null;
@@ -6628,10 +6632,13 @@ app.whenReady().then(async () => {
       agenticDeleteJournalAuthenticatorErrorCode
     );
   }
-  const agenticDeleteMutationBackend = createUnsupportedAnchoredFilesystemMutationBackend({
-    backendId: 'faber-main-anchored-delete-unavailable',
-    reasonCode: 'ATOMIC_MUTATION_BACKEND_UNAVAILABLE',
+  const agenticDeleteMutationRuntimeConfig = createAnchoredMutationRuntimeConfig({
+    env: process.env,
   });
+  agenticDeleteMutationBackendSelection = createAgenticDeleteMutationBackendSelection({
+    config: agenticDeleteMutationRuntimeConfig,
+  });
+  const agenticDeleteMutationBackend = agenticDeleteMutationBackendSelection.backend;
   const agenticDeleteRecoveryService = agenticDeleteJournalAuthenticator
     ? createAgenticDeleteRecoveryService({
       getAuthorizedJobById,
@@ -6892,6 +6899,10 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   clearAssistantRuntimeAuthority('app_before_quit');
+  if (agenticDeleteMutationBackendSelection) {
+    agenticDeleteMutationBackendSelection.dispose();
+    agenticDeleteMutationBackendSelection = null;
+  }
   platformBackendService.stop().catch(() => {});
   resetFaberCapabilityRuntime();
   projectTerminalService.stopAllSessions();

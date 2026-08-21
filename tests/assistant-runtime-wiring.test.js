@@ -167,8 +167,11 @@ assertInOrder(
     '} catch (error) {',
     "agenticDeleteJournalAuthenticatorErrorCode = typeof errorCode === 'string'",
     "'JOURNAL_AUTHENTICATOR_UNAVAILABLE';",
-    'const agenticDeleteMutationBackend = createUnsupportedAnchoredFilesystemMutationBackend({',
-    "reasonCode: 'ATOMIC_MUTATION_BACKEND_UNAVAILABLE'",
+    'const agenticDeleteMutationRuntimeConfig = createAnchoredMutationRuntimeConfig({',
+    'env: process.env,',
+    'agenticDeleteMutationBackendSelection = createAgenticDeleteMutationBackendSelection({',
+    'config: agenticDeleteMutationRuntimeConfig,',
+    'const agenticDeleteMutationBackend = agenticDeleteMutationBackendSelection.backend;',
     'const agenticDeleteRecoveryService = agenticDeleteJournalAuthenticator',
     '? createAgenticDeleteRecoveryService({',
     'getAuthorizedJobById,',
@@ -213,6 +216,37 @@ assertInOrder(
     'assistantRuntime,',
   ],
   'main process must compose authorization, coordination, the low-level router, and IPC in order'
+);
+
+assert.strictEqual(
+  (mainSource.match(/createAgenticDeleteMutationBackendSelection\(\{/g) || []).length,
+  1,
+  'the main process must select one shared anchored mutation backend exactly once'
+);
+for (const forbiddenProductionSeam of [
+  'createUnsupportedAnchoredFilesystemMutationBackend',
+  'createAnchoredMutationBackendAdapter',
+  'anchored_mutation_backend_adapter',
+  'providerFactory',
+  'isolationAttestation',
+]) {
+  assert.strictEqual(
+    mainSource.includes(forbiddenProductionSeam),
+    false,
+    `main.js must not directly own the native provider seam: ${forbiddenProductionSeam}`
+  );
+}
+assertInOrder(
+  mainSource,
+  [
+    "app.on('before-quit', () => {",
+    "clearAssistantRuntimeAuthority('app_before_quit');",
+    'if (agenticDeleteMutationBackendSelection) {',
+    'agenticDeleteMutationBackendSelection.dispose();',
+    'agenticDeleteMutationBackendSelection = null;',
+    'platformBackendService.stop().catch(() => {});',
+  ],
+  'shutdown must revoke assistant authority before disposing the main-only mutation seam'
 );
 
 assertInOrder(
@@ -338,6 +372,8 @@ assertInOrder(
 
 for (const importedFactory of [
   'createTransactionJournalAuthenticator',
+  'createAnchoredMutationRuntimeConfig',
+  'createAgenticDeleteMutationBackendSelection',
   'createAgenticDeleteRecoveryService',
   'createAgenticDeleteStartupRecoveryService',
   'createTransactionalFilesystemDeleteService',

@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const childProcess = require('child_process');
+const crypto = require('crypto');
 
 const {
   ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION,
@@ -27,8 +28,54 @@ const {
 const {
   canonicalSha256Digest,
 } = require('../main/capabilities/transactional_delete_contracts');
+const {
+  createAnchoredMutationIdentityReceipt,
+} = require('../main/capabilities/anchored_mutation_identity_receipt_contract');
 
 const digest = (character) => `sha256:${character.repeat(64)}`;
+const hashedDigest = (seed) => (
+  `sha256:${crypto.createHash('sha256').update(String(seed)).digest('hex')}`
+);
+
+function identity(seed) {
+  const core = {
+    volumeIdentityDigest: hashedDigest(`${seed}:volume`),
+    objectIdentityDigest: hashedDigest(`${seed}:object`),
+    generationIdentityDigest: hashedDigest(`${seed}:generation`),
+  };
+  return { ...core, identityDigest: canonicalSha256Digest(core) };
+}
+
+function receiptForRequest(request) {
+  const targetIdentity = identity(`target:${request.payload.targets[0].relativePath}`);
+  return createAnchoredMutationIdentityReceipt({
+    helperBuildId: 'adapter-test-helper-build-v1',
+    platform: {
+      os: 'linux',
+      architecture: 'x64',
+      filesystemType: 'ext4',
+      capabilityDigest: hashedDigest('adapter-capability'),
+    },
+    bindingDigest: request.payload.bindingDigest,
+    checkpointDigest: request.payload.checkpointDigest,
+    rootIdentity: identity('root'),
+    namespaceIdentity: identity('namespace'),
+    targets: [{
+      ...request.payload.targets[0],
+      kind: 'file',
+      identity: targetIdentity,
+      closureDigest: null,
+      linkIdentityDigest: null,
+    }],
+    entries: [{
+      relativePath: request.payload.checkpointEntries[0].relativePath,
+      kind: 'file',
+      identity: targetIdentity,
+      closureDigest: null,
+      linkIdentityDigest: null,
+    }],
+  });
+}
 
 function idFactory(prefix = 'adapter-request') {
   let sequence = 0;
@@ -80,6 +127,10 @@ function validHandshakePayload(overrides = {}) {
       authenticatedOrphanCleanup: true,
       movementProgressInspection: true,
       identityContinuity: true,
+      physicalIdentityReceipts: true,
+      durablePhysicalProgress: true,
+      sourceIdentityCompareAndSwap: true,
+      subtreeMutationExcluded: true,
       atomicReplace: true,
       durableNamespaceSync: true,
       boundedListingOverflow: 'fail_closed',
@@ -106,13 +157,15 @@ function transportHarness({ responseMutator, asyncExchange = false } = {}) {
         payload = validHandshakePayload();
       } else if (request.operation === ANCHORED_MUTATION_HELPER_OPERATIONS.SESSION_OPEN) {
         const progressCore = { checkpointDigest: request.payload.checkpointDigest, moved: [] };
+        const identityReceipt = receiptForRequest(request);
         payload = {
           opened: true,
           sessionId: 'adapter-session-1',
           namespaceCapabilityId: 'adapter-namespace-1',
-          rootIdentityDigest: digest('a'),
-          namespaceIdentityDigest: digest('b'),
-          targetSetIdentityDigest: digest('c'),
+          rootIdentityDigest: identityReceipt.rootIdentity.identityDigest,
+          namespaceIdentityDigest: identityReceipt.namespaceIdentity.identityDigest,
+          targetSetIdentityDigest: identityReceipt.targetSetIdentityDigest,
+          identityReceipt,
           namespaceReadyBeforeWrites: true,
           movementProgress: {
             ...progressCore,
@@ -249,7 +302,7 @@ function assertUnavailable(adapter, reasonCode) {
   assert.match(child.stdout, /strict adapter preflight survived/);
 }
 
-// An exact v2 handshake exposes both live preparation and anchored recovery
+// An exact v3 handshake exposes both live preparation and anchored recovery
 // bootstrap; the service still has to opt in with the integration version.
 {
   const harness = transportHarness();
@@ -265,6 +318,14 @@ function assertUnavailable(adapter, reasonCode) {
   assert.deepStrictEqual(harness.operations, ['handshake']);
   const session = adapter.prepare(sessionInput());
   assert.strictEqual(session.schemaVersion, ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION);
+  assert.strictEqual(
+    session.identityReceipt.rootIdentity.identityDigest,
+    session.rootIdentityDigest
+  );
+  assert.strictEqual(
+    ANCHORED_MUTATION_BACKEND_ADAPTER_VERSION,
+    'anchored-mutation-backend-adapter.v3'
+  );
   assert.strictEqual(session.close().closed, true);
   const root = adapter.openRootNamespace({ rootPath: '/project' });
   assert.strictEqual(root.close().closed, true);

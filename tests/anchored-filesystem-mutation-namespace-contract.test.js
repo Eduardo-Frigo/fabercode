@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const crypto = require('crypto');
 
 const {
   ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION,
@@ -12,8 +13,56 @@ const {
   assertAnchoredFilesystemMutationRootNamespace,
   createUnsupportedAnchoredFilesystemMutationBackend,
 } = require('../main/capabilities/anchored_filesystem_mutation_backend_contract');
+const {
+  createAnchoredMutationIdentityReceipt,
+} = require('../main/capabilities/anchored_mutation_identity_receipt_contract');
+const {
+  canonicalSha256Digest,
+} = require('../main/capabilities/transactional_delete_contracts');
 
 const digest = (character) => `sha256:${character.repeat(64)}`;
+const hashedDigest = (seed) => (
+  `sha256:${crypto.createHash('sha256').update(String(seed)).digest('hex')}`
+);
+const identity = (seed) => {
+  const core = {
+    volumeIdentityDigest: hashedDigest(`${seed}:volume`),
+    objectIdentityDigest: hashedDigest(`${seed}:object`),
+    generationIdentityDigest: hashedDigest(`${seed}:generation`),
+  };
+  return { ...core, identityDigest: canonicalSha256Digest(core) };
+};
+const rootIdentity = identity('root');
+const namespaceIdentity = identity('namespace');
+const targetIdentity = identity('target');
+const identityReceipt = createAnchoredMutationIdentityReceipt({
+  helperBuildId: 'native-helper-build-v1',
+  platform: {
+    os: 'linux',
+    architecture: 'x64',
+    filesystemType: 'ext4',
+    capabilityDigest: hashedDigest('capability'),
+  },
+  bindingDigest: hashedDigest('binding'),
+  checkpointDigest: hashedDigest('checkpoint'),
+  rootIdentity,
+  namespaceIdentity,
+  targets: [{
+    relativePath: 'target.txt',
+    payloadName: '0000',
+    kind: 'file',
+    identity: targetIdentity,
+    closureDigest: null,
+    linkIdentityDigest: null,
+  }],
+  entries: [{
+    relativePath: 'target.txt',
+    kind: 'file',
+    identity: targetIdentity,
+    closureDigest: null,
+    linkIdentityDigest: null,
+  }],
+});
 
 function mutablePrivateNamespace() {
   return Object.freeze({
@@ -83,8 +132,9 @@ assert.strictEqual(namespaceGetterCalls, 0);
 const session = Object.freeze({
   schemaVersion: ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION,
   helperId: 'native-helper',
-  rootIdentityDigest: digest('a'),
-  namespaceIdentityDigest: digest('b'),
+  rootIdentityDigest: rootIdentity.identityDigest,
+  namespaceIdentityDigest: namespaceIdentity.identityDigest,
+  identityReceipt,
   privateNamespace,
   verify() { return { verified: true }; },
   inspectProgress() { return { moved: [] }; },
@@ -97,6 +147,24 @@ assert.strictEqual(assertAnchoredFilesystemMutationNamespaceSession(session), se
 assert.throws(
   () => assertAnchoredFilesystemMutationNamespaceSession({ ...session, inspectProgress: undefined }),
   /inspectProgress/
+);
+assert.throws(
+  () => assertAnchoredFilesystemMutationNamespaceSession({ ...session, identityReceipt: undefined }),
+  /identityReceipt|native Promises|receipt/i
+);
+assert.throws(
+  () => assertAnchoredFilesystemMutationNamespaceSession({
+    ...session,
+    rootIdentityDigest: digest('a'),
+  }),
+  /rootIdentityDigest.*identityReceipt/
+);
+assert.throws(
+  () => assertAnchoredFilesystemMutationNamespaceSession({
+    ...session,
+    namespaceIdentityDigest: digest('b'),
+  }),
+  /namespaceIdentityDigest.*identityReceipt/
 );
 assert.throws(
   () => assertAnchoredFilesystemMutationNamespaceSession({ ...session, extraMutation() {} }),
@@ -133,8 +201,8 @@ assert.strictEqual(sessionGetterCalls, 0);
 const rootNamespace = Object.freeze({
   schemaVersion: ANCHORED_FILESYSTEM_MUTATION_ROOT_NAMESPACE_VERSION,
   helperId: 'native-helper',
-  rootIdentityDigest: digest('a'),
-  namespaceIdentityDigest: digest('b'),
+  rootIdentityDigest: rootIdentity.identityDigest,
+  namespaceIdentityDigest: namespaceIdentity.identityDigest,
   privateNamespace: readOnlyNamespace,
   cleanupAuthenticatedOrphan() { return { cleaned: true }; },
   openExistingSession() { return session; },
@@ -183,7 +251,7 @@ assert.strictEqual(rootGetterCalls, 0);
 const legacy = createUnsupportedAnchoredFilesystemMutationBackend({});
 assert.throws(
   () => assertAnchoredFilesystemMutationNamespaceBackend(legacy),
-  /namespace-I\/O v2/
+  /namespace-I\/O v3/
 );
 const namespaceBackend = Object.freeze({
   ...legacy,
@@ -206,7 +274,7 @@ Object.defineProperty(hostileVersion, 'namespaceIoVersion', {
 });
 assert.throws(
   () => assertAnchoredFilesystemMutationNamespaceBackend(hostileVersion),
-  /namespace-I\/O v2/
+  /namespace-I\/O v3/
 );
 assert.strictEqual(versionGetterCalls, 0);
 

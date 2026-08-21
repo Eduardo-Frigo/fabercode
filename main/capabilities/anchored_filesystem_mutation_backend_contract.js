@@ -1,13 +1,19 @@
 'use strict';
 
+const {
+  assertAnchoredMutationIdentityReceipt,
+} = require('./anchored_mutation_identity_receipt_contract');
+
 const ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION =
   'anchored-filesystem-mutation-backend.v1';
-const ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION =
+const ANCHORED_FILESYSTEM_MUTATION_LEGACY_SESSION_VERSION =
   'anchored-filesystem-mutation-session.v1';
+const ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION =
+  'anchored-filesystem-mutation-session.v2';
 const ANCHORED_FILESYSTEM_MUTATION_ROOT_NAMESPACE_VERSION =
   'anchored-root-namespace.v1';
 const ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION =
-  'anchored-filesystem-mutation-namespace-io.v2';
+  'anchored-filesystem-mutation-namespace-io.v3';
 const ANCHORED_FILESYSTEM_MUTATION_PROBE_STATES = Object.freeze({
   ENFORCED: 'enforced',
   UNAVAILABLE: 'unavailable',
@@ -34,6 +40,16 @@ const ANCHORED_FILESYSTEM_MUTATION_REQUIRED_GUARANTEES = Object.freeze([
   // them in reverse order. After a crash, physical progress is therefore one
   // authenticated prefix and can be resumed without guessing a bitmap.
   'ordered_prefix_progress',
+  // Every prepared/reopened session authenticates the physical identity of
+  // the root, namespace, targets and checkpoint closure.
+  'physical_identity_receipts',
+  // Physical progress and its authenticated receipt survive helper/process
+  // failure before success is reported.
+  'durable_physical_progress',
+  // The exact source identity is compared immediately before each mutation.
+  'source_identity_compare_and_swap',
+  // No mutation may enter a bound directory subtree between receipt and move.
+  'subtree_mutation_excluded',
 ]);
 
 function isPlainDataRecord(value, allowedKeys = null, requiredKeys = allowedKeys) {
@@ -289,7 +305,7 @@ function assertAnchoredFilesystemMutationSession(session) {
   const versionDescriptor = Object.getOwnPropertyDescriptor(session, 'schemaVersion');
   if (!versionDescriptor
     || !Object.hasOwn(versionDescriptor, 'value')
-    || versionDescriptor.value !== ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION) {
+    || versionDescriptor.value !== ANCHORED_FILESYSTEM_MUTATION_LEGACY_SESSION_VERSION) {
     throw new TypeError('Invalid anchored filesystem mutation session version');
   }
   for (const method of [
@@ -341,6 +357,7 @@ function assertAnchoredFilesystemMutationNamespaceSession(session) {
     'helperId',
     'rootIdentityDigest',
     'namespaceIdentityDigest',
+    'identityReceipt',
     'privateNamespace',
     'inspectProgress',
     'verify',
@@ -354,13 +371,22 @@ function assertAnchoredFilesystemMutationNamespaceSession(session) {
     expectedKeys,
     'Anchored filesystem mutation namespace session'
   );
-  try {
-    assertAnchoredFilesystemMutationSession(session);
-  } catch (error) {
-    if (absorbNativePromise(error)) {
-      throw new TypeError('Anchored filesystem mutation namespace session is not inspectable');
+  const versionDescriptor = descriptors.get('schemaVersion');
+  if (!versionDescriptor
+    || versionDescriptor.value !== ANCHORED_FILESYSTEM_MUTATION_SESSION_VERSION) {
+    throw new TypeError('Invalid anchored filesystem mutation namespace session version');
+  }
+  for (const method of [
+    'verify',
+    'moveToQuarantine',
+    'restoreFromQuarantine',
+    'purgeQuarantine',
+    'close',
+  ]) {
+    const descriptor = descriptors.get(method);
+    if (!descriptor || typeof descriptor.value !== 'function') {
+      throw new TypeError(`Anchored filesystem mutation session.${method} is required`);
     }
-    throw error;
   }
   const inspectDescriptor = descriptors.get('inspectProgress');
   if (!inspectDescriptor || !Object.hasOwn(inspectDescriptor, 'value')
@@ -376,6 +402,22 @@ function assertAnchoredFilesystemMutationNamespaceSession(session) {
     if (!descriptor || !isCanonicalDigest(descriptor.value)) {
       throw new TypeError(`Anchored filesystem mutation session.${field} is invalid`);
     }
+  }
+  const receiptDescriptor = descriptors.get('identityReceipt');
+  const identityReceipt = assertAnchoredMutationIdentityReceipt(
+    receiptDescriptor && receiptDescriptor.value
+  );
+  if (descriptors.get('rootIdentityDigest').value
+      !== identityReceipt.rootIdentity.identityDigest) {
+    throw new TypeError(
+      'Anchored filesystem mutation session.rootIdentityDigest does not match identityReceipt'
+    );
+  }
+  if (descriptors.get('namespaceIdentityDigest').value
+      !== identityReceipt.namespaceIdentity.identityDigest) {
+    throw new TypeError(
+      'Anchored filesystem mutation session.namespaceIdentityDigest does not match identityReceipt'
+    );
   }
   const namespaceDescriptor = descriptors.get('privateNamespace');
   const privateNamespace = namespaceDescriptor && Object.hasOwn(namespaceDescriptor, 'value')
@@ -447,12 +489,14 @@ function createUnsupportedAnchoredFilesystemMutationBackend({
   return Object.freeze({
     version: ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION,
     probe() { return probe; },
-    openRootNamespace() {
+    openRootNamespace(input) {
+      absorbNativePromisesInDataGraph(input);
       const error = new Error('Anchored filesystem mutation backend is unavailable');
       error.code = reasonCode;
       throw error;
     },
-    prepare() {
+    prepare(input) {
+      absorbNativePromisesInDataGraph(input);
       const error = new Error('Anchored filesystem mutation backend is unavailable');
       error.code = reasonCode;
       throw error;
@@ -502,12 +546,12 @@ function assertAnchoredFilesystemMutationNamespaceBackend(backend) {
     versionDescriptor = Object.getOwnPropertyDescriptor(backend, 'namespaceIoVersion');
   } catch (error) {
     absorbNativePromise(error);
-    throw new TypeError('Anchored filesystem mutation namespace-I/O v2 backend is not inspectable');
+    throw new TypeError('Anchored filesystem mutation namespace-I/O v3 backend is not inspectable');
   }
   if (!versionDescriptor
     || !Object.hasOwn(versionDescriptor, 'value')
     || versionDescriptor.value !== ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION) {
-    throw new TypeError('Anchored filesystem mutation namespace-I/O v2 backend is required');
+    throw new TypeError('Anchored filesystem mutation namespace-I/O v3 backend is required');
   }
   let openDescriptor;
   try { openDescriptor = Object.getOwnPropertyDescriptor(backend, 'openRootNamespace'); } catch (error) {
@@ -523,6 +567,7 @@ function assertAnchoredFilesystemMutationNamespaceBackend(backend) {
 
 module.exports = {
   ANCHORED_FILESYSTEM_MUTATION_BACKEND_VERSION,
+  ANCHORED_FILESYSTEM_MUTATION_LEGACY_SESSION_VERSION,
   ANCHORED_FILESYSTEM_MUTATION_NAMESPACE_IO_VERSION,
   ANCHORED_FILESYSTEM_MUTATION_PROBE_STATES,
   ANCHORED_FILESYSTEM_MUTATION_REQUIRED_GUARANTEES,
