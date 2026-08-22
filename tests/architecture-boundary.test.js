@@ -525,12 +525,17 @@ function assertExecutionWorkspaceBoundary() {
   const mainSource = read('main.js');
   const contractSource = read('main/capabilities/execution_workspace_contract.js');
   const registrySource = read('main/capabilities/execution_workspace_registry.js');
+  const rootAuthorityContractSource = read('main/capabilities/project_root_authority_contract.js');
+  const rootAuthorityRegistrySource = read('main/capabilities/project_root_authority_registry.js');
+  const projectScannerSource = read('main/services/project_scanner.js');
   const sandboxContractSource = read('main/capabilities/sandbox_backend_contract.js');
   const verifiedExecutionSource = read('main/services/project_verified_execution_service.js');
 
   for (const [relativePath, source] of [
     ['main/capabilities/execution_workspace_contract.js', contractSource],
     ['main/capabilities/execution_workspace_registry.js', registrySource],
+    ['main/capabilities/project_root_authority_contract.js', rootAuthorityContractSource],
+    ['main/capabilities/project_root_authority_registry.js', rootAuthorityRegistrySource],
   ]) {
     assertDoesNotMatch(
       source,
@@ -544,6 +549,54 @@ function assertExecutionWorkspaceBoundary() {
     );
   }
 
+  for (const guarantee of [
+    'pinned_physical_root',
+    'handle_relative_read',
+    'no_symlink_traversal',
+    'no_pathname_reopen',
+    'authenticated_close',
+  ]) {
+    assert.ok(
+      rootAuthorityContractSource.includes(guarantee),
+      `the project-root authority contract must require ${guarantee}`
+    );
+  }
+
+  assertDoesNotMatch(
+    rootAuthorityRegistrySource,
+    /\bregister\s*\(|process\.platform|sandbox_backend_registry/,
+    'project-root ownership must capture one immutable backend'
+  );
+  const anchoredScannerStart = projectScannerSource.indexOf(
+    'function normalizeRootLeaseInput'
+  );
+  const anchoredScannerEnd = projectScannerSource.indexOf(
+    '  return {\n    collectProjectFilesTree,',
+    anchoredScannerStart
+  );
+  assert.ok(
+    anchoredScannerStart >= 0 && anchoredScannerEnd > anchoredScannerStart,
+    'the anchored project scanner boundary must remain inspectable'
+  );
+  const anchoredScannerSource = projectScannerSource.slice(
+    anchoredScannerStart,
+    anchoredScannerEnd
+  );
+  assertDoesNotMatch(
+    anchoredScannerSource,
+    /\bfs\.|readFileSync|readdirSync|realpathSync|lstatSync|statSync/,
+    'the anchored project scanner must never reopen the project by pathname'
+  );
+  assert.ok(
+    anchoredScannerSource.includes('invokeRootList(reader, relativeDirectory)')
+      && anchoredScannerSource.includes("rootPath: ''"),
+    'the anchored scanner must read through its lease and detect stacks from its snapshot'
+  );
+  assertDoesNotMatch(
+    mainSource,
+    /project_root_authority_(?:contract|registry)|createProjectRootAuthorityRegistry/,
+    'production must keep project-root authority fail-closed until a pinned provider exists'
+  );
   for (const guarantee of [
     'exclusive_source_binding',
     'private_workspace_root',
