@@ -3,6 +3,9 @@
 const crypto = require('crypto');
 
 const {
+  createProjectRootPhysicalIdentityDigest,
+} = require('../capabilities/project_root_authority_contract');
+const {
   isPortableAbsolutePath,
 } = require('../capabilities/sandbox_backend_contract');
 
@@ -905,6 +908,42 @@ function createAssistantJobAuthorityService(options = {}) {
     return allow(bindingFromRecord(record), { actionDigest: digest });
   }
 
+  function authorizeProjectRootLease(inputBinding) {
+    let binding;
+    try {
+      binding = normalizeBinding(inputBinding);
+    } catch {
+      return deny(ASSISTANT_JOB_AUTHORITY_REASONS.INVALID_INPUT);
+    }
+    const lifecycle = authorizeLifecycle(binding);
+    if (!lifecycle.authorized) return lifecycle;
+    const record = activeRecordForBinding(binding);
+    const verified = record ? verifyPersistedJob(record) : null;
+    if (!verified || !verified.ok) {
+      return deny(verified
+        ? verified.reason
+        : ASSISTANT_JOB_AUTHORITY_REASONS.LIFECYCLE_INACTIVE);
+    }
+    if (verified.values.status !== 'running'
+      || !EXECUTABLE_JOB_PHASES.has(
+        typeof verified.values.phase === 'string' ? verified.values.phase : ''
+      )
+      || !record.context.actionDigest
+      || verified.persistedContext.actionDigest !== record.context.actionDigest) {
+      return deny(ASSISTANT_JOB_AUTHORITY_REASONS.LIFECYCLE_INACTIVE);
+    }
+    let physicalRootIdentityDigest;
+    try {
+      physicalRootIdentityDigest = createProjectRootPhysicalIdentityDigest(
+        record.projectAuthorization.physicalRootIdentity
+      );
+    } catch {
+      removeRecord(record);
+      return deny(ASSISTANT_JOB_AUTHORITY_REASONS.PROJECT_NOT_AUTHORIZED);
+    }
+    return allow(bindingFromRecord(record), { physicalRootIdentityDigest });
+  }
+
   function verifyActionDigest(input) {
     return authorizeExecute(input);
   }
@@ -970,6 +1009,7 @@ function createAssistantJobAuthorityService(options = {}) {
 
   return Object.freeze({
     authorizeExecute,
+    authorizeProjectRootLease,
     authorizeLifecycle,
     authorizeRetry,
     beginSubmission,

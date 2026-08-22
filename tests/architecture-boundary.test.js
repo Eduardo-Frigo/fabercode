@@ -523,6 +523,7 @@ function assertProductToolchainUsesExecutionBoundary() {
 
 function assertExecutionWorkspaceBoundary() {
   const mainSource = read('main.js');
+  const coordinatorSource = read('main/agent_runtime/assistant_execution_coordinator.js');
   const contractSource = read('main/capabilities/execution_workspace_contract.js');
   const registrySource = read('main/capabilities/execution_workspace_registry.js');
   const rootAuthorityContractSource = read('main/capabilities/project_root_authority_contract.js');
@@ -561,6 +562,40 @@ function assertExecutionWorkspaceBoundary() {
       `the project-root authority contract must require ${guarantee}`
     );
   }
+
+  assert.ok(
+    coordinatorSource.includes('authorityService.authorizeProjectRootLease(record.binding)')
+      && coordinatorSource.includes('refreshProjectFromRootLease(')
+      && coordinatorSource.includes("purpose: 'execution'"),
+    'execution must authorize, acquire, and refresh from the pinned project root'
+  );
+  assert.ok(
+    coordinatorSource.includes("Object.defineProperty(context, 'projectRootLease'")
+      && coordinatorSource.includes('enumerable: false'),
+    'the project-root lease must remain private in the execution context'
+  );
+  const coordinatorRemovalStart = coordinatorSource.indexOf(
+    '  function removeRecord(record, reason, terminalStatus = null) {'
+  );
+  const coordinatorRemovalEnd = coordinatorSource.indexOf(
+    '  function failPlanningRecord',
+    coordinatorRemovalStart
+  );
+  assert.ok(
+    coordinatorRemovalStart >= 0 && coordinatorRemovalEnd > coordinatorRemovalStart,
+    'the coordinator release boundary must remain inspectable'
+  );
+  const coordinatorRemovalSource = coordinatorSource.slice(
+    coordinatorRemovalStart,
+    coordinatorRemovalEnd
+  );
+  assert.ok(
+    coordinatorRemovalSource.indexOf('releaseBarrierConfirmed')
+      < coordinatorRemovalSource.indexOf('releaseProjectRootLeaseConfirmed')
+      && coordinatorRemovalSource.indexOf('releaseProjectRootLeaseConfirmed')
+        < coordinatorRemovalSource.indexOf('revokeBindingConfirmed'),
+    'execution cleanup must close mutation workflows, then the root, then job authority'
+  );
 
   assertDoesNotMatch(
     rootAuthorityRegistrySource,

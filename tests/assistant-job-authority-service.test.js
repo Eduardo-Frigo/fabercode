@@ -154,6 +154,14 @@ function run() {
   persistAction(job, actionBinding);
   job.phase = 'awaiting_user_confirmation';
   assert.strictEqual(harness.service.authorizeExecute({ binding, action }).authorized, true);
+  const rootLeaseAuthorization = harness.service.authorizeProjectRootLease(binding);
+  assert.strictEqual(rootLeaseAuthorization.authorized, true);
+  assert.deepStrictEqual(rootLeaseAuthorization.binding, binding);
+  assert.match(rootLeaseAuthorization.physicalRootIdentityDigest, /^sha256:[a-f0-9]{64}$/);
+  assert.strictEqual(
+    harness.service.authorizeProjectRootLease(binding).physicalRootIdentityDigest,
+    rootLeaseAuthorization.physicalRootIdentityDigest
+  );
   assert.strictEqual(harness.service.verifyActionDigest({ binding, action }).authorized, true);
 
   // Canonical order never changes submission/action digests.

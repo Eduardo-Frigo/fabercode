@@ -1,12 +1,17 @@
 'use strict';
 
 const { AsyncLocalStorage } = require('async_hooks');
+const {
+  PROJECT_ROOT_AUTHORITY_LEASE_VERSION,
+  PROJECT_ROOT_READER_VERSION,
+} = require('../capabilities/project_root_authority_contract');
 
 const ASSISTANT_EXECUTION_COORDINATOR_VERSION = 'assistant-execution-coordinator.v2';
 const DEFAULT_MAX_ACTIVE_JOBS = 1_024;
 const HARD_MAX_ACTIVE_JOBS = 10_000;
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const SAFE_JOB_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/;
+const SAFE_ROOT_LEASE_ID_PATTERN = /^[A-Za-z0-9._:@-]{1,256}$/;
 const SUPPORTED_PLANNING_OPERATIONS = new Set(['plan', 'message', 'map_message']);
 const APPROVAL_MODES = new Set(['ask_each', 'delegate_task']);
 const TERMINAL_RECORD_STATES = new Set(['executed', 'failed', 'revoked']);
@@ -37,9 +42,12 @@ const PRIVATE_OUTPUT_KEYS = new Set([
   'impactDigest',
   'kernelId',
   'physicalRootIdentity',
+  'physicalRootIdentityDigest',
+  'projectRootLease',
   'proof',
   'realRootPath',
   'requestDigest',
+  'rootLease',
   'sessionId',
   'submissionDigest',
   'submissionId',
@@ -86,6 +94,7 @@ const ASSISTANT_EXECUTION_COORDINATOR_REASONS = Object.freeze({
   AUTHORITY_UNHEALTHY: 'authority_unhealthy',
   CAPACITY_EXCEEDED: 'coordinator_capacity_exceeded',
   EXECUTION_ALREADY_STARTED: 'execution_already_started',
+  EXECUTION_DRAINING: 'execution_draining',
   EXECUTION_FAILED: 'execution_failed',
   EXECUTION_NOT_AUTHORIZED: 'execution_not_authorized',
   INVALID_INPUT: 'coordinator_invalid_input',
@@ -98,6 +107,8 @@ const ASSISTANT_EXECUTION_COORDINATOR_REASONS = Object.freeze({
   OUTPUT_INVALID: 'planning_output_invalid',
   PLANNING_FAILED: 'planning_failed',
   PLANNING_JOB_NO_ACTION: 'planning_job_has_no_action',
+  PROJECT_ROOT_AUTHORITY_FAILED: 'project_root_authority_failed',
+  PROJECT_ROOT_SCAN_FAILED: 'project_root_scan_failed',
   RETRY_ALREADY_STARTED: 'retry_already_started',
   RETRY_NOT_AUTHORIZED: 'retry_not_authorized',
   RETRY_NOT_DUE: 'retry_not_due',
@@ -406,6 +417,14 @@ function createPrivateExecutionContext(record) {
     value: record.binding,
     writable: false,
   });
+  if (record.projectRootLease) {
+    Object.defineProperty(context, 'projectRootLease', {
+      configurable: false,
+      enumerable: false,
+      value: record.projectRootLease,
+      writable: false,
+    });
+  }
   return Object.freeze(context);
 }
 
@@ -433,6 +452,8 @@ function createAssistantExecutionCoordinator(options = {}) {
   const bindActionToProject = fields.get('bindActionToProject');
   const createActionDigest = fields.get('createActionDigest');
   const executeAction = fields.get('executeAction');
+  const projectRootAuthority = fields.get('projectRootAuthority');
+  const refreshProjectFromRootLease = fields.get('refreshProjectFromRootLease');
   const beforeAuthorityRelease = fields.get('beforeAuthorityRelease');
   const onPlanningFailure = fields.get('onPlanningFailure');
   const onAuthorityRevoked = fields.get('onAuthorityRevoked');
@@ -454,6 +475,35 @@ function createAssistantExecutionCoordinator(options = {}) {
   ]) {
     if (typeof authorityService[method] !== 'function') {
       throw new TypeError(`authorityService.${method} is required`);
+    }
+  }
+  const hasProjectRootAuthority = fields.has('projectRootAuthority');
+  const hasProjectRootRefresh = fields.has('refreshProjectFromRootLease');
+  if (hasProjectRootAuthority !== hasProjectRootRefresh) {
+    throw new TypeError(
+      'projectRootAuthority and refreshProjectFromRootLease must be supplied together'
+    );
+  }
+  const projectRootAuthorityEnabled = hasProjectRootAuthority && hasProjectRootRefresh;
+  let acquireProjectRootLease = null;
+  let releaseProjectRootLease = null;
+  if (projectRootAuthorityEnabled) {
+    if (typeof authorityService.authorizeProjectRootLease !== 'function') {
+      throw new TypeError('authorityService.authorizeProjectRootLease is required');
+    }
+    if (!projectRootAuthority || typeof projectRootAuthority !== 'object'
+      || !Object.isFrozen(projectRootAuthority)) {
+      throw new TypeError('projectRootAuthority must be a frozen authority object');
+    }
+    const rootAuthorityFields = dataFields(projectRootAuthority, 'projectRootAuthority');
+    acquireProjectRootLease = rootAuthorityFields.get('acquire');
+    releaseProjectRootLease = rootAuthorityFields.get('release');
+    if (typeof acquireProjectRootLease !== 'function'
+      || typeof releaseProjectRootLease !== 'function') {
+      throw new TypeError('projectRootAuthority.acquire and release are required');
+    }
+    if (typeof refreshProjectFromRootLease !== 'function') {
+      throw new TypeError('refreshProjectFromRootLease must be a function');
     }
   }
   for (const [name, callback] of [
@@ -519,6 +569,70 @@ function createAssistantExecutionCoordinator(options = {}) {
     } catch {
       return false;
     }
+  }
+
+  function projectRootLifecycleActive(record) {
+    return Boolean(
+      projectRootAuthorityEnabled
+      && record
+      && (record.projectRootLeaseInUse
+        || record.projectRootLease
+        || record.projectRootReleaseInProgress)
+    );
+  }
+
+  function deferProjectRootRevocation(record, terminalStatus = 'cancelled') {
+    record.rootRevocationRequested = true;
+    if (!record.terminalObserved) record.terminalObserved = terminalStatus;
+    if (record.abortController && !record.abortController.signal.aborted) {
+      try {
+        record.abortController.abort(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
+      } catch {
+        // The retained root lease and deferred cleanup remain authoritative.
+      }
+    }
+  }
+
+  function validateProjectRootLease(value, record, expectedPhysicalRootIdentityDigest) {
+    if (!Object.isFrozen(value)) throw new TypeError('project-root lease must be frozen');
+    const leaseFields = dataFields(value, 'project-root lease');
+    const leaseKeys = [
+      'version',
+      'leaseId',
+      'jobId',
+      'projectId',
+      'purpose',
+      'physicalRootIdentityDigest',
+      'authorityDigest',
+      'reader',
+      'close',
+    ];
+    if (leaseFields.size !== leaseKeys.length
+      || leaseKeys.some((key) => !leaseFields.has(key))
+      || leaseFields.get('version') !== PROJECT_ROOT_AUTHORITY_LEASE_VERSION
+      || typeof leaseFields.get('leaseId') !== 'string'
+      || !SAFE_ROOT_LEASE_ID_PATTERN.test(leaseFields.get('leaseId'))
+      || leaseFields.get('jobId') !== record.binding.jobId
+      || leaseFields.get('projectId') !== record.binding.projectId
+      || leaseFields.get('purpose') !== 'execution'
+      || leaseFields.get('physicalRootIdentityDigest') !== expectedPhysicalRootIdentityDigest
+      || typeof leaseFields.get('authorityDigest') !== 'string'
+      || !DIGEST_PATTERN.test(leaseFields.get('authorityDigest'))
+      || typeof leaseFields.get('close') !== 'function') {
+      throw new TypeError('project-root lease does not match execution authority');
+    }
+    const reader = leaseFields.get('reader');
+    if (!reader || typeof reader !== 'object' || !Object.isFrozen(reader)) {
+      throw new TypeError('project-root reader must be frozen');
+    }
+    const readerFields = dataFields(reader, 'project-root reader');
+    if (readerFields.size !== 3
+      || readerFields.get('version') !== PROJECT_ROOT_READER_VERSION
+      || typeof readerFields.get('list') !== 'function'
+      || typeof readerFields.get('readFile') !== 'function') {
+      throw new TypeError('project-root reader is invalid');
+    }
+    return value;
   }
 
   function removeLocalRecord(record, reason) {
@@ -616,6 +730,50 @@ function createAssistantExecutionCoordinator(options = {}) {
     return true;
   }
 
+  function releaseProjectRootLeaseConfirmed(record) {
+    if (!record.projectRootLease) return record.projectRootLeaseInUse !== true;
+    if (!projectRootAuthorityEnabled
+      || record.projectRootLeaseInUse
+      || record.projectRootReleaseInProgress) {
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
+    }
+    const lease = record.projectRootLease;
+    const observedGeneration = generation;
+    record.projectRootReleaseInProgress = true;
+    let result;
+    try {
+      result = Reflect.apply(releaseProjectRootLease, projectRootAuthority, [{
+        binding: record.binding,
+        leaseId: lease.leaseId,
+      }]);
+      if (!isSynchronousResult(result) || !Object.isFrozen(result)) {
+        throw new TypeError('project-root release must be synchronous and frozen');
+      }
+      const resultFields = dataFields(result, 'project-root release result');
+      if (resultFields.size !== 3
+        || resultFields.get('ok') !== true
+        || resultFields.get('closed') !== true
+        || typeof resultFields.get('idempotent') !== 'boolean') {
+        throw new TypeError('project-root release was not confirmed');
+      }
+      if (!authorityHealthy
+        || generation !== observedGeneration
+        || recordsByJobId.get(record.jobId) !== record
+        || record.projectRootLease !== lease
+        || record.projectRootReleaseInProgress !== true) {
+        throw new TypeError('project-root release re-entered coordinator lifecycle');
+      }
+    } catch {
+      record.projectRootReleaseInProgress = false;
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
+    }
+    record.projectRootReleaseInProgress = false;
+    record.projectRootLease = null;
+    return true;
+  }
+
   function revokeSubmissionConfirmed(submissionId) {
     let result;
     try {
@@ -633,7 +791,12 @@ function createAssistantExecutionCoordinator(options = {}) {
 
   function removeRecord(record, reason, terminalStatus = null) {
     if (!authorityHealthy || clearing) return false;
+    if (record && (record.projectRootLeaseInUse || record.projectRootReleaseInProgress)) {
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
+    }
     if (!releaseBarrierConfirmed(record, reason, terminalStatus)) return false;
+    if (!releaseProjectRootLeaseConfirmed(record)) return false;
     if (!removeLocalRecord(record, reason)) return false;
     return revokeBindingConfirmed(record.binding);
   }
@@ -920,6 +1083,10 @@ function createAssistantExecutionCoordinator(options = {}) {
         abortController: null,
         releaseInProgress: false,
         releasePrepared: false,
+        projectRootLease: null,
+        projectRootLeaseInUse: false,
+        projectRootReleaseInProgress: false,
+        rootRevocationRequested: false,
       };
       if (!scopeIsCurrent(scope)) {
         revokeBindingConfirmed(binding);
@@ -1304,6 +1471,157 @@ function createAssistantExecutionCoordinator(options = {}) {
     });
   }
 
+  function finishProjectRootPreparation(record, code, terminalStatus = 'failed') {
+    record.projectRootLeaseInUse = false;
+    if (!authorityHealthy || !failPlanningRecord(record, code, terminalStatus)) {
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+    }
+    return deny(code);
+  }
+
+  function prepareProjectRootExecution(record, observedGeneration, observedVersion) {
+    if (!projectRootAuthorityEnabled) {
+      return Object.freeze({ ok: true, project: record.project });
+    }
+
+    let authorization;
+    try {
+      authorization = authorityService.authorizeProjectRootLease(record.binding);
+    } catch {
+      return finishProjectRootPreparation(
+        record,
+        ASSISTANT_EXECUTION_COORDINATOR_REASONS.PROJECT_ROOT_AUTHORITY_FAILED,
+      );
+    }
+    if (!recordIsCurrent(record, observedGeneration, observedVersion, 'executing')) {
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
+    }
+
+    let physicalRootIdentityDigest;
+    try {
+      if (!isSynchronousResult(authorization) || !Object.isFrozen(authorization)) {
+        throw new TypeError('project-root authorization must be synchronous and frozen');
+      }
+      const authorizationFields = dataFields(authorization, 'project-root authorization');
+      physicalRootIdentityDigest = authorizationFields.get('physicalRootIdentityDigest');
+      if (authorizationFields.get('authorized') !== true
+        || !authorityBindingsMatch(authorizationFields.get('binding'), record.binding)
+        || typeof physicalRootIdentityDigest !== 'string'
+        || !DIGEST_PATTERN.test(physicalRootIdentityDigest)) {
+        throw new TypeError('project-root authorization was denied or malformed');
+      }
+    } catch {
+      return finishProjectRootPreparation(
+        record,
+        ASSISTANT_EXECUTION_COORDINATOR_REASONS.PROJECT_ROOT_AUTHORITY_FAILED,
+      );
+    }
+    if (!recordIsCurrent(record, observedGeneration, observedVersion, 'executing')) {
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
+    }
+
+    record.projectRootLeaseInUse = true;
+    let acquired;
+    try {
+      acquired = Reflect.apply(acquireProjectRootLease, projectRootAuthority, [{
+        binding: record.binding,
+        expectedPhysicalRootIdentityDigest: physicalRootIdentityDigest,
+        purpose: 'execution',
+      }]);
+    } catch {
+      const code = record.rootRevocationRequested
+        ? ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
+        : ASSISTANT_EXECUTION_COORDINATOR_REASONS.PROJECT_ROOT_AUTHORITY_FAILED;
+      return finishProjectRootPreparation(
+        record,
+        code,
+        code === ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED ? 'cancelled' : 'failed',
+      );
+    }
+
+    let acquiredFields;
+    try {
+      if (!isSynchronousResult(acquired) || !Object.isFrozen(acquired)) {
+        throw new TypeError('project-root acquire must be synchronous and frozen');
+      }
+      acquiredFields = dataFields(acquired, 'project-root acquire result');
+    } catch {
+      record.projectRootLeaseInUse = false;
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+    }
+    if (acquiredFields.get('ok') !== true) {
+      const code = record.rootRevocationRequested
+        ? ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
+        : ASSISTANT_EXECUTION_COORDINATOR_REASONS.PROJECT_ROOT_AUTHORITY_FAILED;
+      return finishProjectRootPreparation(
+        record,
+        code,
+        code === ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED ? 'cancelled' : 'failed',
+      );
+    }
+    try {
+      if (acquiredFields.size !== 3
+        || typeof acquiredFields.get('idempotent') !== 'boolean') {
+        throw new TypeError('project-root acquire success was malformed');
+      }
+      record.projectRootLease = validateProjectRootLease(
+        acquiredFields.get('lease'),
+        record,
+        physicalRootIdentityDigest,
+      );
+    } catch {
+      record.projectRootLeaseInUse = false;
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+    }
+    if (!recordIsCurrent(record, observedGeneration, observedVersion, 'executing')) {
+      record.projectRootLeaseInUse = false;
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+    }
+    if (record.rootRevocationRequested) {
+      return finishProjectRootPreparation(
+        record,
+        ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+        'cancelled',
+      );
+    }
+
+    let refreshedProject;
+    try {
+      refreshedProject = refreshProjectFromRootLease(
+        cloneForOutput(record.project),
+        record.projectRootLease,
+      );
+      if (!isSynchronousResult(refreshedProject)) {
+        throw new TypeError('refreshProjectFromRootLease must be synchronous');
+      }
+      if (record.rootRevocationRequested) {
+        return finishProjectRootPreparation(
+          record,
+          ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+          'cancelled',
+        );
+      }
+      refreshedProject = buildProjectIdentitySnapshot(refreshedProject, {
+        projectId: record.project.projectId,
+        rootPath: record.project.rootPath,
+      });
+    } catch {
+      return finishProjectRootPreparation(
+        record,
+        ASSISTANT_EXECUTION_COORDINATOR_REASONS.PROJECT_ROOT_SCAN_FAILED,
+      );
+    }
+    if (!recordIsCurrent(record, observedGeneration, observedVersion, 'executing')) {
+      record.projectRootLeaseInUse = false;
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+    }
+    return Object.freeze({ ok: true, project: refreshedProject });
+  }
+
   async function execute(input = {}) {
     let jobId;
     try {
@@ -1376,18 +1694,27 @@ function createAssistantExecutionCoordinator(options = {}) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
     }
 
+    const preparedRoot = prepareProjectRootExecution(
+      record,
+      observedGeneration,
+      observedVersion,
+    );
+    if (!preparedRoot.ok) return preparedRoot;
+
     try {
       const output = await executeAction(
         cloneForOutput(record.action),
-        cloneForOutput(record.project),
+        cloneForOutput(preparedRoot.project),
         createPrivateExecutionContext(record),
       );
+      record.projectRootLeaseInUse = false;
       if (generation !== observedGeneration
         || recordsByJobId.get(jobId) !== record
         || record.version !== observedVersion
         || record.state !== 'executing') {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
+      const revocationRequested = record.rootRevocationRequested;
       record.state = 'executed';
       record.version += 1;
       record.abortController = null;
@@ -1402,24 +1729,36 @@ function createAssistantExecutionCoordinator(options = {}) {
       } catch {
         publicOutput = deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.OUTPUT_INVALID);
       }
-      const terminalStatus = record.terminalObserved
-        || (isPlainRecord(publicOutput) && publicOutput.ok === false ? 'failed' : 'completed');
-      if (!removeRecord(record, 'job_terminal', terminalStatus)) {
+      const terminalStatus = revocationRequested
+        ? (record.terminalObserved || 'cancelled')
+        : (record.terminalObserved
+          || (isPlainRecord(publicOutput) && publicOutput.ok === false ? 'failed' : 'completed'));
+      const removalReason = revocationRequested
+        ? ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
+        : 'job_terminal';
+      if (!removeRecord(record, removalReason, terminalStatus)) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      }
+      if (revocationRequested) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
       return publicOutput;
     } catch {
+      record.projectRootLeaseInUse = false;
       if (!recordIsCurrent(record, observedGeneration, observedVersion, 'executing')) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
+      const failureCode = record.rootRevocationRequested
+        ? ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
+        : ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_FAILED;
       if (!failPlanningRecord(
         record,
-        ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_FAILED,
-        'failed',
+        failureCode,
+        record.rootRevocationRequested ? (record.terminalObserved || 'cancelled') : 'failed',
       )) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
       }
-      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_FAILED);
+      return deny(failureCode);
     }
   }
 
@@ -1438,6 +1777,10 @@ function createAssistantExecutionCoordinator(options = {}) {
     }
     if (!record || TERMINAL_RECORD_STATES.has(record.state)) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.JOB_NOT_FOUND);
+    }
+    if (record.state === 'executing' && projectRootLifecycleActive(record)) {
+      deferProjectRootRevocation(record, 'cancelled');
+      return Object.freeze({ ok: true, revoked: false, deferred: true });
     }
     if (!removeRecord(record, ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED)) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
@@ -1464,17 +1807,28 @@ function createAssistantExecutionCoordinator(options = {}) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY);
     }
     if (!record) return Object.freeze({ ok: true, revoked: false, idempotent: true });
+    const rootExecutionActive = record.state === 'executing'
+      && projectRootLifecycleActive(record);
     const deferTerminal = (record.state === 'planning' && status === 'completed')
-      || (record.state === 'executing' && ['completed', 'failed', 'cancelled'].includes(status));
+      || (record.state === 'executing' && ['completed', 'failed', 'cancelled'].includes(status))
+      || rootExecutionActive;
     if (deferTerminal) {
       if (record.terminalObserved && record.terminalObserved !== status) {
+        if (rootExecutionActive) {
+          deferProjectRootRevocation(record, 'cancelled');
+          return Object.freeze({ ok: true, revoked: false, deferred: true, idempotent: false });
+        }
         if (!removeRecord(record, 'job_terminal_conflict', null)) {
           return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
         }
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
       const idempotent = record.terminalObserved === status;
-      record.terminalObserved = status;
+      if (rootExecutionActive && ['cancelled', 'runtime_interrupted'].includes(status)) {
+        deferProjectRootRevocation(record, status);
+      } else {
+        record.terminalObserved = status;
+      }
       return Object.freeze({ ok: true, revoked: false, deferred: true, idempotent });
     }
     if (!removeRecord(record, 'job_terminal', status)) {
@@ -1486,6 +1840,11 @@ function createAssistantExecutionCoordinator(options = {}) {
   function clear() {
     if (!authorityHealthy) return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY);
     if (clearing) return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY);
+    const draining = [...recordsByJobId.values()].filter(projectRootLifecycleActive);
+    if (draining.length > 0) {
+      for (const record of draining) deferProjectRootRevocation(record, 'cancelled');
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING);
+    }
     clearing = true;
     generation += 1;
     const records = [...recordsByJobId.values()];
@@ -1495,6 +1854,12 @@ function createAssistantExecutionCoordinator(options = {}) {
         ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
         null,
       )) {
+        clearing = false;
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      }
+    }
+    for (const record of records) {
+      if (!releaseProjectRootLeaseConfirmed(record)) {
         clearing = false;
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
       }

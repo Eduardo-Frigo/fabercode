@@ -19,6 +19,8 @@ const PROJECT_ROOT_AUTHORITY_LEASE_VERSION = 'project-root-authority-lease.v1';
 const PROJECT_ROOT_AUTHORITY_CLOSE_RECEIPT_VERSION =
   'project-root-authority-close-receipt.v1';
 const PROJECT_ROOT_READER_VERSION = 'project-root-reader.v1';
+const PROJECT_ROOT_PHYSICAL_IDENTITY_VERSION =
+  'project-root-physical-identity.v1';
 
 const PROJECT_ROOT_AUTHORITY_STATES = Object.freeze({
   ENFORCED: 'enforced',
@@ -46,6 +48,14 @@ const PROJECT_ROOT_AUTHORITY_PURPOSES = Object.freeze([
   'execution',
   'mutation_prepare',
   'recovery',
+]);
+
+const PROJECT_ROOT_PHYSICAL_IDENTITY_KEYS = Object.freeze([
+  'device',
+  'inode',
+  'entryDevice',
+  'entryInode',
+  'entryType',
 ]);
 
 const PROJECT_ROOT_ENTRY_KINDS = Object.freeze({
@@ -136,6 +146,34 @@ function normalizeIdentityDigest(value, fieldName) {
     throw new TypeError(`${fieldName} must be a canonical SHA-256 digest`);
   }
   return normalizeDigest(value, fieldName);
+}
+
+function createProjectRootPhysicalIdentityDigest(value) {
+  const fields = exactDataFields(value, PROJECT_ROOT_PHYSICAL_IDENTITY_KEYS);
+  if (!fields) throw new TypeError('Invalid project-root physical identity');
+  const identity = {};
+  for (const field of PROJECT_ROOT_PHYSICAL_IDENTITY_KEYS) {
+    const entry = fields.get(field);
+    if (typeof entry !== 'string' || !entry || entry.includes('\0')
+      || Buffer.byteLength(entry, 'utf8') > 256) {
+      throw new TypeError('Invalid project-root physical identity');
+    }
+    identity[field] = entry;
+  }
+  if (!['directory', 'symlink'].includes(identity.entryType)) {
+    throw new TypeError('Invalid project-root physical identity');
+  }
+  const core = {
+    version: PROJECT_ROOT_PHYSICAL_IDENTITY_VERSION,
+    identity: {
+      device: identity.device,
+      inode: identity.inode,
+      entryDevice: identity.entryDevice,
+      entryInode: identity.entryInode,
+      entryType: identity.entryType,
+    },
+  };
+  return `sha256:${crypto.createHash('sha256').update(JSON.stringify(core), 'utf8').digest('hex')}`;
 }
 
 function normalizeRelativePath(value, fieldName, { allowRoot = true } = {}) {
@@ -527,9 +565,11 @@ module.exports = {
   PROJECT_ROOT_AUTHORITY_PURPOSES,
   PROJECT_ROOT_AUTHORITY_REQUIRED_GUARANTEES,
   PROJECT_ROOT_AUTHORITY_STATES,
+  PROJECT_ROOT_PHYSICAL_IDENTITY_VERSION,
   PROJECT_ROOT_ENTRY_KINDS,
   PROJECT_ROOT_READER_VERSION,
   ProjectRootAuthorityUnavailableError,
+  createProjectRootPhysicalIdentityDigest,
   assertProjectRootAuthorityAcquireRequest,
   assertProjectRootAuthorityBackend,
   assertProjectRootAuthorityCloseReceipt,
