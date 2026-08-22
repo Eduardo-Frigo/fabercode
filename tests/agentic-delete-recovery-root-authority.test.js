@@ -70,6 +70,7 @@ function createHarness({
 
   const reader = Object.freeze({
     version: PROJECT_ROOT_READER_VERSION,
+    inspectEntry() { throw new Error('recovery pin must not inspect through the scanner API'); },
     list() { throw new Error('recovery pin must not read through the scanner API'); },
     readFile() { throw new Error('recovery pin must not read through the scanner API'); },
   });
@@ -131,8 +132,13 @@ function createHarness({
       });
     },
     projectRootAuthority,
-    createTransactionalRuntime(authority) {
+    createTransactionalRuntime(authority, projectRootReader) {
       capturedAuthority = authority;
+      assert.strictEqual(
+        projectRootReader,
+        reader,
+        'recovery must give the transactional runtime the reader from its held root lease'
+      );
       events.push('runtime_create');
       if (runtimeFailure) throw new Error('injected runtime failure');
       return Object.freeze({

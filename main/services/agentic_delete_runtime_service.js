@@ -42,6 +42,7 @@ const OPTION_KEYS = Object.freeze([
   'getWindowLease',
   'getActorId',
   'showNativeDialog',
+  'getProjectRootReader',
   'mutationBackend',
   'audit',
   'now',
@@ -136,6 +137,9 @@ function createAgenticDeleteRuntimeService(options = {}) {
   const getWindowLease = dataValue(options, 'getWindowLease');
   const getActorId = dataValue(options, 'getActorId');
   const showNativeDialog = dataValue(options, 'showNativeDialog');
+  const getProjectRootReader = Object.hasOwn(options, 'getProjectRootReader')
+    ? dataValue(options, 'getProjectRootReader')
+    : null;
   const now = Object.hasOwn(options, 'now') ? dataValue(options, 'now') : () => Date.now();
   const requestIdFactory = Object.hasOwn(options, 'requestIdFactory')
     ? dataValue(options, 'requestIdFactory')
@@ -155,6 +159,9 @@ function createAgenticDeleteRuntimeService(options = {}) {
     ['audit', audit],
   ]) {
     if (typeof callback !== 'function') throw new TypeError(`${name} must be a function`);
+  }
+  if (getProjectRootReader !== null && typeof getProjectRootReader !== 'function') {
+    throw new TypeError('getProjectRootReader must be a function');
   }
   if (!['posix', 'windows'].includes(pathStyle)) throw new TypeError('pathStyle is invalid');
   if (typeof caseSensitive !== 'boolean') throw new TypeError('caseSensitive must be boolean');
@@ -243,6 +250,9 @@ function createAgenticDeleteRuntimeService(options = {}) {
     mutationBackend,
     now,
   };
+  if (getProjectRootReader !== null) {
+    transactionOptions.getProjectRootReader = getProjectRootReader;
+  }
   for (const key of ['fs', 'path', 'crypto', 'durability', 'journalAuthenticator']) {
     if (Object.hasOwn(options, key)) transactionOptions[key] = dataValue(options, key);
   }

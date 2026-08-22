@@ -626,10 +626,11 @@ function createAssistantExecutionCoordinator(options = {}) {
       throw new TypeError('project-root reader must be frozen');
     }
     const readerFields = dataFields(reader, 'project-root reader');
-    if (readerFields.size !== 3
+    if (readerFields.size !== 4
       || readerFields.get('version') !== PROJECT_ROOT_READER_VERSION
       || typeof readerFields.get('list') !== 'function'
-      || typeof readerFields.get('readFile') !== 'function') {
+      || typeof readerFields.get('readFile') !== 'function'
+      || typeof readerFields.get('inspectEntry') !== 'function') {
       throw new TypeError('project-root reader is invalid');
     }
     return value;

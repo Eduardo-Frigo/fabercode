@@ -457,13 +457,14 @@ function createAgenticDeleteRecoveryService(options = {}) {
       throw new TypeError('recovery project-root reader must be frozen');
     }
     const readerFields = inspectDataRecord(reader, {
-      allowedKeys: ['version', 'list', 'readFile'],
-      requiredKeys: ['version', 'list', 'readFile'],
+      allowedKeys: ['version', 'list', 'readFile', 'inspectEntry'],
+      requiredKeys: ['version', 'list', 'readFile', 'inspectEntry'],
     });
     if (!readerFields
       || readerFields.get('version') !== PROJECT_ROOT_READER_VERSION
       || typeof readerFields.get('list') !== 'function'
-      || typeof readerFields.get('readFile') !== 'function') {
+      || typeof readerFields.get('readFile') !== 'function'
+      || typeof readerFields.get('inspectEntry') !== 'function') {
       throw new TypeError('recovery project-root reader is invalid');
     }
     return value;
@@ -645,14 +646,14 @@ function createAgenticDeleteRecoveryService(options = {}) {
     });
   }
 
-  function createRuntime(authority, epoch) {
+  function createRuntime(authority, projectRootReader, epoch) {
     let runtime;
     try {
       runtime = createTransactionalRuntime(Object.freeze({
         authorizeLifecycle: authority.authorizeLifecycle,
         authorizeRoot: authority.authorizeRoot,
         authorizeEffectFrontier: authority.authorizeEffectFrontier,
-      }));
+      }), projectRootReader);
     } catch {
       return null;
     }
@@ -776,7 +777,10 @@ function createAgenticDeleteRecoveryService(options = {}) {
         result = denied(RECOVERY_ERROR_CODES.AUTHORITY_INVALID);
         return result;
       }
-      const runtimeRecord = createRuntime(authority, epoch);
+      const projectRootReader = attempt.rootLease
+        ? Object.getOwnPropertyDescriptor(attempt.rootLease, 'reader').value
+        : null;
+      const runtimeRecord = createRuntime(authority, projectRootReader, epoch);
       if (!runtimeRecord) {
         result = failed(RECOVERY_ERROR_CODES.RUNTIME_INVALID);
         return result;

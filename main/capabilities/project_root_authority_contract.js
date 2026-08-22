@@ -18,7 +18,7 @@ const PROJECT_ROOT_AUTHORITY_ACQUIRE_REQUEST_VERSION =
 const PROJECT_ROOT_AUTHORITY_LEASE_VERSION = 'project-root-authority-lease.v1';
 const PROJECT_ROOT_AUTHORITY_CLOSE_RECEIPT_VERSION =
   'project-root-authority-close-receipt.v1';
-const PROJECT_ROOT_READER_VERSION = 'project-root-reader.v1';
+const PROJECT_ROOT_READER_VERSION = 'project-root-reader.v2';
 const PROJECT_ROOT_PHYSICAL_IDENTITY_VERSION =
   'project-root-physical-identity.v1';
 
@@ -30,6 +30,7 @@ const PROJECT_ROOT_AUTHORITY_STATES = Object.freeze({
 const PROJECT_ROOT_AUTHORITY_GUARANTEES = Object.freeze({
   PINNED_PHYSICAL_ROOT: 'pinned_physical_root',
   HANDLE_RELATIVE_READ: 'handle_relative_read',
+  HANDLE_RELATIVE_INSPECT: 'handle_relative_inspect',
   NO_SYMLINK_TRAVERSAL: 'no_symlink_traversal',
   NO_PATHNAME_REOPEN: 'no_pathname_reopen',
   AUTHENTICATED_CLOSE: 'authenticated_close',
@@ -38,6 +39,7 @@ const PROJECT_ROOT_AUTHORITY_GUARANTEES = Object.freeze({
 const PROJECT_ROOT_AUTHORITY_REQUIRED_GUARANTEES = Object.freeze([
   PROJECT_ROOT_AUTHORITY_GUARANTEES.PINNED_PHYSICAL_ROOT,
   PROJECT_ROOT_AUTHORITY_GUARANTEES.HANDLE_RELATIVE_READ,
+  PROJECT_ROOT_AUTHORITY_GUARANTEES.HANDLE_RELATIVE_INSPECT,
   PROJECT_ROOT_AUTHORITY_GUARANTEES.NO_SYMLINK_TRAVERSAL,
   PROJECT_ROOT_AUTHORITY_GUARANTEES.NO_PATHNAME_REOPEN,
   PROJECT_ROOT_AUTHORITY_GUARANTEES.AUTHENTICATED_CLOSE,
@@ -73,6 +75,9 @@ const MAX_RELATIVE_PATH_BYTES = 4096;
 const MAX_ENTRY_NAME_BYTES = 255;
 const MAX_READ_BYTES = 2 * 1024 * 1024;
 const MAX_LIST_ENTRIES = 100_000;
+const MAX_ENTRY_INSPECTION_BYTES = 16 * 1024 * 1024;
+const MAX_LINK_TARGET_BYTES = 4096;
+const MAX_MTIME_MS = 8_640_000_000_000_000;
 const SUPPORTED_STATES = new Set(Object.values(PROJECT_ROOT_AUTHORITY_STATES));
 const SUPPORTED_GUARANTEES = new Set(Object.values(PROJECT_ROOT_AUTHORITY_GUARANTEES));
 const SUPPORTED_PURPOSES = new Set(PROJECT_ROOT_AUTHORITY_PURPOSES);
@@ -359,6 +364,116 @@ function assertProjectRootAuthorityProbeResult(value) {
   });
 }
 
+function createProjectRootEntryInspectionRequest(input = {}) {
+  const fields = exactDataFields(input, ['relativePath']);
+  if (!fields) throw new TypeError('Invalid project-root entry inspection request');
+  return Object.freeze({
+    relativePath: normalizeRelativePath(
+      fields.get('relativePath'),
+      'relativePath',
+      { allowRoot: false }
+    ),
+  });
+}
+
+function assertProjectRootEntryInspectionResult(value, expectedRequest) {
+  createProjectRootEntryInspectionRequest(expectedRequest);
+  const fields = exactDataFields(value, [
+    'found',
+    'kind',
+    'bytes',
+    'mode',
+    'mtimeMs',
+    'contentDigest',
+    'linkTarget',
+    'entryIdentityDigest',
+  ]);
+  if (!fields || typeof fields.get('found') !== 'boolean') {
+    throw new TypeError('Invalid project-root entry inspection result');
+  }
+  if (!fields.get('found')) {
+    for (const key of [
+      'kind',
+      'bytes',
+      'mode',
+      'mtimeMs',
+      'contentDigest',
+      'linkTarget',
+      'entryIdentityDigest',
+    ]) {
+      if (fields.get(key) !== null) {
+        throw new TypeError('Missing project-root entry inspection fields must be null');
+      }
+    }
+    return Object.freeze({
+      found: false,
+      kind: null,
+      bytes: null,
+      mode: null,
+      mtimeMs: null,
+      contentDigest: null,
+      linkTarget: null,
+      entryIdentityDigest: null,
+    });
+  }
+
+  const kind = fields.get('kind');
+  const bytes = fields.get('bytes');
+  const mode = fields.get('mode');
+  const mtimeMs = fields.get('mtimeMs');
+  if (!SUPPORTED_ENTRY_KINDS.has(kind)
+    || !Number.isSafeInteger(bytes) || bytes < 0 || Object.is(bytes, -0)
+    || bytes > MAX_ENTRY_INSPECTION_BYTES
+    || !Number.isSafeInteger(mode) || mode < 0 || mode > 0o7777 || Object.is(mode, -0)
+    || !Number.isFinite(mtimeMs) || mtimeMs < 0 || mtimeMs > MAX_MTIME_MS
+    || Object.is(mtimeMs, -0)) {
+    throw new TypeError('Invalid project-root entry inspection metadata');
+  }
+  const entryIdentityDigest = normalizeIdentityDigest(
+    fields.get('entryIdentityDigest'),
+    'entryIdentityDigest'
+  );
+  let contentDigest = fields.get('contentDigest');
+  let linkTarget = fields.get('linkTarget');
+
+  if (kind === PROJECT_ROOT_ENTRY_KINDS.FILE) {
+    contentDigest = normalizeIdentityDigest(contentDigest, 'contentDigest');
+    if (linkTarget !== null) {
+      throw new TypeError('Invalid project-root file inspection result');
+    }
+  } else if (kind === PROJECT_ROOT_ENTRY_KINDS.SYMLINK) {
+    if (typeof linkTarget !== 'string' || !linkTarget || linkTarget.includes('\0')
+      || Buffer.byteLength(linkTarget, 'utf8') > MAX_LINK_TARGET_BYTES
+      || Buffer.byteLength(linkTarget, 'utf8') !== bytes) {
+      throw new TypeError('Invalid project-root symlink inspection result');
+    }
+    contentDigest = normalizeIdentityDigest(contentDigest, 'contentDigest');
+    const expectedDigest = `sha256:${crypto.createHash('sha256')
+      .update(Buffer.from(linkTarget, 'utf8'))
+      .digest('hex')}`;
+    if (contentDigest !== expectedDigest) {
+      throw new TypeError('Invalid project-root symlink inspection digest');
+    }
+  } else {
+    if (bytes !== 0 || contentDigest !== null || linkTarget !== null) {
+      throw new TypeError('Invalid project-root non-file inspection result');
+    }
+    contentDigest = null;
+    linkTarget = null;
+  }
+
+  return Object.freeze({
+    found: true,
+    kind,
+    bytes,
+    mode,
+    mtimeMs,
+    contentDigest,
+    linkTarget,
+    entryIdentityDigest,
+  });
+}
+
 function createProjectRootListRequest(input = {}) {
   const fields = exactDataFields(input, ['relativePath', 'maxEntries']);
   if (!fields) throw new TypeError('Invalid project-root list request');
@@ -436,12 +551,13 @@ function assertProjectRootReadFileResult(value, expectedRequest) {
 }
 
 function assertProjectRootReader(value) {
-  const fields = exactDataFields(value, ['version', 'list', 'readFile']);
+  const fields = exactDataFields(value, ['version', 'list', 'readFile', 'inspectEntry']);
   if (!fields || fields.get('version') !== PROJECT_ROOT_READER_VERSION || !Object.isFrozen(value)) {
     throw new TypeError('Invalid project-root reader');
   }
   assertSynchronousMethod(fields.get('list'), 'project-root reader.list');
   assertSynchronousMethod(fields.get('readFile'), 'project-root reader.readFile');
+  assertSynchronousMethod(fields.get('inspectEntry'), 'project-root reader.inspectEntry');
   return value;
 }
 
@@ -555,6 +671,7 @@ function createUnsupportedProjectRootAuthorityBackend(options = {}) {
 
 module.exports = {
   MAX_LIST_ENTRIES,
+  MAX_ENTRY_INSPECTION_BYTES,
   MAX_READ_BYTES,
   PROJECT_ROOT_AUTHORITY_ACQUIRE_REQUEST_VERSION,
   PROJECT_ROOT_AUTHORITY_BACKEND_VERSION,
@@ -575,12 +692,14 @@ module.exports = {
   assertProjectRootAuthorityCloseReceipt,
   assertProjectRootAuthorityLease,
   assertProjectRootAuthorityProbeResult,
+  assertProjectRootEntryInspectionResult,
   assertProjectRootListResult,
   assertProjectRootReadFileResult,
   assertProjectRootReader,
   createProjectRootAuthorityAcquireRequest,
   createProjectRootAuthorityCloseReceipt,
   createProjectRootAuthorityProbeResult,
+  createProjectRootEntryInspectionRequest,
   createProjectRootListRequest,
   createProjectRootReadFileRequest,
   createUnsupportedProjectRootAuthorityBackend,

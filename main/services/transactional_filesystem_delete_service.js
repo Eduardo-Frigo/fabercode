@@ -38,6 +38,13 @@ const {
 const {
   assertAnchoredMutationIdentityReceipt,
 } = require('../capabilities/anchored_mutation_identity_receipt_contract');
+const {
+  assertProjectRootEntryInspectionResult,
+  assertProjectRootListResult,
+  assertProjectRootReader,
+  createProjectRootEntryInspectionRequest,
+  createProjectRootListRequest,
+} = require('../capabilities/project_root_authority_contract');
 
 const TRANSACTIONAL_FILESYSTEM_DELETE_SERVICE_VERSION =
   'transactional-filesystem-delete-service.v2';
@@ -50,6 +57,9 @@ const MAX_PRIVATE_METADATA_BYTES = 2 * 1024 * 1024;
 const MAX_PRIVATE_NAMESPACE_LIST_ENTRIES = 512;
 const MAX_ROOT_TRANSACTIONS = 192;
 const MAX_DIRECTORY_SCAN_DEPTH = 256;
+const MAX_PROJECT_ROOT_SCAN_LIST_ENTRIES =
+  HARD_MAX_DELEGATION_CONSTRAINTS.maxFilesPerDecision
+  + HARD_MAX_DELEGATION_CONSTRAINTS.maxDirectoriesPerDecision + 1;
 const SAFE_TRANSACTION_ID = /^[A-Za-z0-9_-]{16,128}$/;
 const TERMINAL_SUCCESS = new Set(['success', 'completed']);
 const TERMINAL_ROLLBACK = new Set([
@@ -195,6 +205,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       'authorizeRoot',
       'authorizeEffectFrontier',
       'journalAuthenticator',
+      'getProjectRootReader',
       'mutationBackend',
     ],
     ['authorizeLifecycle', 'authorizeRoot', 'authorizeEffectFrontier'],
@@ -209,6 +220,9 @@ function createTransactionalFilesystemDeleteService(options = {}) {
   const authorizeLifecycle = dataValue(options, 'authorizeLifecycle');
   const authorizeRoot = dataValue(options, 'authorizeRoot');
   const authorizeEffectFrontier = dataValue(options, 'authorizeEffectFrontier');
+  const hasProjectRootReader = Object.hasOwn(options, 'getProjectRootReader');
+  const getProjectRootReader = hasProjectRootReader
+    ? dataValue(options, 'getProjectRootReader') : null;
   const hasExternalJournalAuthenticator = Object.hasOwn(options, 'journalAuthenticator');
   const journalAuthenticator = hasExternalJournalAuthenticator
     ? dataValue(options, 'journalAuthenticator')
@@ -223,6 +237,9 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     ['authorizeEffectFrontier', authorizeEffectFrontier],
   ]) {
     if (typeof callback !== 'function') fail('INVALID_OPTIONS', `${name} must be a function`);
+  }
+  if (hasProjectRootReader && typeof getProjectRootReader !== 'function') {
+    fail('INVALID_OPTIONS', 'getProjectRootReader must be a function');
   }
   for (const name of ['seal', 'verify']) {
     if (!journalAuthenticator || typeof journalAuthenticator[name] !== 'function') {
@@ -677,9 +694,31 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     }
   }
 
-  function authorize(binding) {
+  function resolveProjectRootReader(binding) {
+    if (!hasProjectRootReader) return null;
+    let reader;
+    try { reader = getProjectRootReader(binding); } catch {
+      fail('ROOT_INVALIDATED', 'The project-root reader is unavailable');
+    }
+    if (isPromiseLike(reader)) {
+      fail('ROOT_INVALIDATED', 'The project-root reader must be synchronous');
+    }
+    try {
+      return assertProjectRootReader(reader);
+    } catch {
+      fail('ROOT_INVALIDATED', 'The project-root reader is invalid');
+    }
+  }
+
+  function authorize(binding, rootReader = null) {
     invokeAuthority(authorizeRoot, binding, 'ROOT');
     invokeAuthority(authorizeLifecycle, binding, 'LIFECYCLE');
+    if (rootReader !== null) {
+      try { assertProjectRootReader(rootReader); } catch {
+        fail('ROOT_INVALIDATED', 'The project-root reader is invalid');
+      }
+      return;
+    }
     let rootStat;
     let physicalRoot;
     try {
@@ -709,6 +748,63 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       fail('TRANSACTION_ID_INVALID', 'Unable to allocate a transaction');
     }
     return candidate;
+  }
+
+  function inspectProjectRootEntry(rootReader, relativePath) {
+    let request;
+    let result;
+    try {
+      request = createProjectRootEntryInspectionRequest({ relativePath });
+      const method = Object.getOwnPropertyDescriptor(rootReader, 'inspectEntry').value;
+      result = method.call(rootReader, request);
+    } catch {
+      fail('ROOT_INVALIDATED', 'Project-root entry inspection failed');
+    }
+    if (isPromiseLike(result)) {
+      fail('ROOT_INVALIDATED', 'Project-root entry inspection must be synchronous');
+    }
+    try {
+      return assertProjectRootEntryInspectionResult(result, request);
+    } catch {
+      fail('ROOT_INVALIDATED', 'Project-root entry inspection returned invalid data');
+    }
+  }
+
+  function listProjectRootDirectory(rootReader, relativePath) {
+    let request;
+    let result;
+    try {
+      request = createProjectRootListRequest({
+        relativePath,
+        maxEntries: MAX_PROJECT_ROOT_SCAN_LIST_ENTRIES,
+      });
+      const method = Object.getOwnPropertyDescriptor(rootReader, 'list').value;
+      result = method.call(rootReader, request);
+    } catch {
+      fail('ROOT_INVALIDATED', 'Project-root directory inspection failed');
+    }
+    if (isPromiseLike(result)) {
+      fail('ROOT_INVALIDATED', 'Project-root directory inspection must be synchronous');
+    }
+    try {
+      return assertProjectRootListResult(result, request);
+    } catch {
+      fail('ROOT_INVALIDATED', 'Project-root directory inspection returned invalid data');
+    }
+  }
+
+  function projectRootEntryExists(rootReader, relativePath) {
+    return inspectProjectRootEntry(rootReader, relativePath).found;
+  }
+
+  function sameDirectoryInspection(left, right) {
+    return left.found === true
+      && right.found === true
+      && left.kind === TRANSACTIONAL_DELETE_ENTRY_KINDS.DIRECTORY
+      && right.kind === TRANSACTIONAL_DELETE_ENTRY_KINDS.DIRECTORY
+      && left.entryIdentityDigest === right.entryIdentityDigest
+      && left.mode === right.mode
+      && left.mtimeMs === right.mtimeMs;
   }
 
   function assertSafeAncestors(rootPath, relativePath) {
@@ -859,7 +955,100 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     }
   }
 
-  function scanTargets(binding, request, pathStyle, caseSensitive, createdAt) {
+  function scanAnchoredEntry(
+    rootReader,
+    relativePath,
+    entries,
+    physicalIdentities = new Set(),
+    budget = { files: 0, bytes: 0, directories: 0 },
+    depth = 0,
+    expectedKind = null
+  ) {
+    if (depth > MAX_DIRECTORY_SCAN_DEPTH) {
+      fail('SCAN_DEPTH_EXCEEDED', 'The delete target tree is too deeply nested');
+    }
+    if (isProtectedTransactionalDeletePath(relativePath, 'posix')) {
+      fail('PROTECTED_PATH_REJECTED', 'A protected project path cannot be deleted');
+    }
+    const inspected = inspectProjectRootEntry(rootReader, relativePath);
+    if (!inspected.found) fail('TARGET_NOT_FOUND', 'A delete target does not exist');
+    if (expectedKind !== null && inspected.kind !== expectedKind) {
+      fail('TARGET_CHANGED', 'A delete target changed while it was inspected');
+    }
+    if (physicalIdentities.has(inspected.entryIdentityDigest)) {
+      fail('TARGET_ALIAS_REJECTED', 'Delete targets contain the same physical entry twice');
+    }
+    physicalIdentities.add(inspected.entryIdentityDigest);
+    if (inspected.kind === TRANSACTIONAL_DELETE_ENTRY_KINDS.OTHER) {
+      fail('SPECIAL_FILE_REJECTED', 'Only regular files, directories, and symlinks may be deleted');
+    }
+    if (inspected.kind === TRANSACTIONAL_DELETE_ENTRY_KINDS.FILE
+      || inspected.kind === TRANSACTIONAL_DELETE_ENTRY_KINDS.SYMLINK) {
+      budget.files += 1;
+      if (budget.files > HARD_MAX_DELEGATION_CONSTRAINTS.maxFilesPerDecision
+        || inspected.bytes > HARD_MAX_DELEGATION_CONSTRAINTS.maxBytesPerDecision
+        || budget.bytes + inspected.bytes
+          > HARD_MAX_DELEGATION_CONSTRAINTS.maxBytesPerDecision) {
+        fail('DELETE_IMPACT_CAP_EXCEEDED', 'The delete impact exceeds hard caps');
+      }
+      budget.bytes += inspected.bytes;
+      entries.push({
+        relativePath,
+        kind: inspected.kind,
+        bytes: inspected.bytes,
+        mode: inspected.mode,
+        mtimeMs: inspected.mtimeMs,
+        contentDigest: inspected.contentDigest,
+        linkTarget: inspected.linkTarget,
+      });
+      return;
+    }
+
+    budget.directories += 1;
+    if (budget.directories > HARD_MAX_DELEGATION_CONSTRAINTS.maxDirectoriesPerDecision) {
+      fail('DELETE_IMPACT_CAP_EXCEEDED', 'The delete impact exceeds hard caps');
+    }
+    entries.push({
+      relativePath,
+      kind: inspected.kind,
+      bytes: 0,
+      mode: inspected.mode,
+      mtimeMs: inspected.mtimeMs,
+      contentDigest: null,
+      linkTarget: null,
+    });
+    const listing = listProjectRootDirectory(rootReader, relativePath);
+    if (listing.truncated) {
+      fail('DELETE_IMPACT_CAP_EXCEEDED', 'The delete impact exceeds hard caps');
+    }
+    const children = [...listing.entries].sort((left, right) => (
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0
+    ));
+    for (const child of children) {
+      scanAnchoredEntry(
+        rootReader,
+        `${relativePath}/${child.name}`,
+        entries,
+        physicalIdentities,
+        budget,
+        depth + 1,
+        child.kind
+      );
+    }
+    const finalInspection = inspectProjectRootEntry(rootReader, relativePath);
+    if (!sameDirectoryInspection(inspected, finalInspection)) {
+      fail('TARGET_CHANGED', 'A directory target changed while it was inspected');
+    }
+  }
+
+  function scanTargets(
+    binding,
+    request,
+    pathStyle,
+    caseSensitive,
+    createdAt,
+    rootReader = null
+  ) {
     if (pathStyle !== 'posix' && path.sep === '/') {
       fail('PATH_STYLE_UNSUPPORTED', 'The requested path style is not supported on this host');
     }
@@ -868,16 +1057,27 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     const physicalIdentities = new Set();
     const budget = { files: 0, bytes: 0, directories: 0 };
     for (const relativePath of request.paths) {
-      assertSafeAncestors(binding.realRootPath, relativePath);
       const before = entries.length;
-      scanEntry(
-        binding.realRootPath,
-        relativePath,
-        entries,
-        physicalIdentities,
-        budget,
-        0
-      );
+      if (rootReader === null) {
+        assertSafeAncestors(binding.realRootPath, relativePath);
+        scanEntry(
+          binding.realRootPath,
+          relativePath,
+          entries,
+          physicalIdentities,
+          budget,
+          0
+        );
+      } else {
+        scanAnchoredEntry(
+          rootReader,
+          relativePath,
+          entries,
+          physicalIdentities,
+          budget,
+          0
+        );
+      }
       directEntries.push({ relativePath, kind: entries[before].kind });
     }
     const files = entries.filter((entry) => entry.kind !== 'directory').length;
@@ -1713,7 +1913,8 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       transaction.plan.request,
       transaction.plan.pathStyle,
       transaction.plan.caseSensitive,
-      transaction.checkpointManifest.createdAt
+      transaction.checkpointManifest.createdAt,
+      transaction.rootReader
     );
     if (restoredScan.plan.planDigest !== transaction.plan.planDigest
       || restoredScan.checkpointManifest.checkpointDigest
@@ -1790,7 +1991,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     }
   }
 
-  function loadTransactionFromAnchoredNamespace(binding, transactionId) {
+  function loadTransactionFromAnchoredNamespace(binding, transactionId, rootReader = null) {
     if (!SAFE_TRANSACTION_ID.test(transactionId)) {
       fail('JOURNAL_INVALID', 'An unsafe transaction directory was retained');
     }
@@ -1880,6 +2081,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       mutationSessionClosed: false,
       privateNamespace: null,
       restoredInSession: false,
+      rootReader,
       };
       const opener = rootNamespaceMethod(rootNamespace, 'openExistingSession')
         .bind(rootNamespace);
@@ -1905,7 +2107,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     }
   }
 
-  function discoverTransactions(binding) {
+  function discoverTransactions(binding, rootReader = null) {
     const discovered = [];
     let retainedUnknown = 0;
     let recoveredOrphanHeads = 0;
@@ -1921,10 +2123,12 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       // deliberately no mutable pathname fallback.
       return {
         discovered,
-        retainedUnknown: lstatExists(
-          fs,
-          path.join(binding.realRootPath, '.faber')
-        ) ? 1 : 0,
+        retainedUnknown: rootReader === null
+          ? (lstatExists(
+            fs,
+            path.join(binding.realRootPath, '.faber')
+          ) ? 1 : 0)
+          : (projectRootEntryExists(rootReader, '.faber') ? 1 : 0),
         recoveredOrphanHeads,
       };
     }
@@ -1971,7 +2175,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     for (const name of names) {
       if (transactionsById.has(name)) continue;
       try {
-        const transaction = loadTransactionFromAnchoredNamespace(binding, name);
+        const transaction = loadTransactionFromAnchoredNamespace(binding, name, rootReader);
         if (!transaction) continue;
         register(transaction);
         discovered.push(transaction);
@@ -2195,14 +2399,15 @@ function createTransactionalFilesystemDeleteService(options = {}) {
   }
 
   function verifyTransaction(transaction) {
-    authorize(transaction.binding);
+    authorize(transaction.binding, transaction.rootReader);
     verifyMutationSession(transaction);
     const rescanned = scanTargets(
       transaction.binding,
       transaction.plan.request,
       transaction.plan.pathStyle,
       transaction.plan.caseSensitive,
-      transaction.checkpointManifest.createdAt
+      transaction.checkpointManifest.createdAt,
+      transaction.rootReader
     );
     if (rescanned.plan.planDigest !== transaction.plan.planDigest
       || rescanned.checkpointManifest.checkpointDigest
@@ -2390,10 +2595,13 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     );
     readMutationProbe({ requireEnforced: true });
     return runForRoot(binding.realRootPath, () => {
-      authorize(binding);
+      const rootReader = resolveProjectRootReader(binding);
+      authorize(binding, rootReader);
       const createdAt = readNow();
-      const scanned = scanTargets(binding, request, pathStyle, caseSensitive, createdAt);
-      authorize(binding);
+      const scanned = scanTargets(
+        binding, request, pathStyle, caseSensitive, createdAt, rootReader
+      );
+      authorize(binding, rootReader);
       assertTransactionCapacity(binding.realRootPath);
       const id = safeTransactionId();
       const transactionsPath = path.join(binding.realRootPath, '.faber', 'transactions');
@@ -2440,6 +2648,7 @@ function createTransactionalFilesystemDeleteService(options = {}) {
         mutationSessionClosed: false,
         privateNamespace: null,
         restoredInSession: false,
+        rootReader,
       };
       try {
         // This is the critical namespace-order invariant: the native anchored
@@ -2517,9 +2726,15 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       fail('INVALID_OUTCOME', 'Unsupported terminal job outcome');
     }
     return runForRoot(normalized.binding.realRootPath, () => {
-      authorize(normalized.binding);
-      const discovered = discoverTransactions(normalized.binding);
+      const rootReader = resolveProjectRootReader(normalized.binding);
+      authorize(normalized.binding, rootReader);
+      const discovered = discoverTransactions(normalized.binding, rootReader);
       const transactions = transactionsForBinding(normalized.binding, discovered.discovered);
+      if (rootReader !== null) {
+        for (const transaction of transactions) {
+          transaction.rootReader = rootReader;
+        }
+      }
       let purged = 0;
       let rolledBack = 0;
       let recoveryRequired = discovered.retainedUnknown;
@@ -2557,9 +2772,15 @@ function createTransactionalFilesystemDeleteService(options = {}) {
     assertExactKeys(input, ['binding'], ['binding'], 'recoverProject input');
     const binding = createCapabilityDelegationBinding(dataValue(input, 'binding'));
     return runForRoot(binding.realRootPath, () => {
-      authorize(binding);
-      const discovery = discoverTransactions(binding);
+      const rootReader = resolveProjectRootReader(binding);
+      authorize(binding, rootReader);
+      const discovery = discoverTransactions(binding, rootReader);
       const transactions = transactionsForBinding(binding, discovery.discovered);
+      if (rootReader !== null) {
+        for (const transaction of transactions) {
+          transaction.rootReader = rootReader;
+        }
+      }
       let recovered = discovery.recoveredOrphanHeads;
       let retainedCommitted = 0;
       let retainedUnknown = discovery.retainedUnknown;

@@ -10,6 +10,10 @@ const {
   createCapabilityDelegationBinding,
 } = require('../main/capabilities/capability_delegation_contracts');
 const {
+  PROJECT_ROOT_ENTRY_KINDS,
+  PROJECT_ROOT_READER_VERSION,
+} = require('../main/capabilities/project_root_authority_contract');
+const {
   canonicalSha256Digest,
 } = require('../main/capabilities/transactional_delete_contracts');
 const {
@@ -208,6 +212,55 @@ function makeRuntime() {
     });
     lifecycleActive = true;
     rootActive = true;
+    const targetPath = path.join(realRootPath, 'src', 'obsolete.txt');
+    const targetStat = fs.lstatSync(targetPath);
+    const targetBytes = fs.readFileSync(targetPath);
+    const targetContentDigest = `sha256:${crypto.createHash('sha256')
+      .update(targetBytes).digest('hex')}`;
+    const rootReaderEvents = [];
+    const projectRootReader = Object.freeze({
+      version: PROJECT_ROOT_READER_VERSION,
+      inspectEntry({ relativePath }) {
+        rootReaderEvents.push(`inspect:${relativePath}`);
+        assert.strictEqual(relativePath, 'src/obsolete.txt');
+        return Object.freeze({
+          found: true,
+          kind: PROJECT_ROOT_ENTRY_KINDS.FILE,
+          bytes: targetBytes.length,
+          mode: targetStat.mode & 0o7777,
+          mtimeMs: targetStat.mtimeMs,
+          contentDigest: targetContentDigest,
+          linkTarget: null,
+          entryIdentityDigest: `sha256:${'e'.repeat(64)}`,
+        });
+      },
+      list() {
+        throw new Error('a direct file target must not require directory listing');
+      },
+      readFile() {
+        throw new Error('entry inspection already carries the bounded file digest');
+      },
+    });
+    const forbiddenPathnameIo = [];
+    const guardedFs = Object.create(fs);
+    for (const method of [
+      'fstatSync',
+      'lstatSync',
+      'openSync',
+      'readFileSync',
+      'realpathSync',
+    ]) {
+      Object.defineProperty(guardedFs, method, {
+        configurable: false,
+        enumerable: true,
+        value() {
+          forbiddenPathnameIo.push(method);
+          throw new Error(`agentic transaction reopened a pathname through ${method}`);
+        },
+        writable: false,
+      });
+    }
+    let rootReaderRequests = 0;
     const integrationRuntime = createAgenticDeleteRuntimeService({
       authorizeLifecycle(candidate) {
         return { authorized: true, binding: candidate };
@@ -237,6 +290,12 @@ function makeRuntime() {
       getActorId: () => 'actor-main',
       showNativeDialog: async () => ({ response: 1 }),
       mutationBackend: createTestAnchoredBackend(),
+      getProjectRootReader(candidate) {
+        rootReaderRequests += 1;
+        assert.deepStrictEqual(candidate, integrationBinding);
+        return projectRootReader;
+      },
+      fs: guardedFs,
       journalAuthenticator: testJournalAuthenticator,
       pathStyle: 'posix',
       caseSensitive: true,
@@ -253,11 +312,16 @@ function makeRuntime() {
     assert.strictEqual(integrated.state, 'COMMITTED');
     assert.strictEqual(exists(path.join(realRootPath, 'src', 'obsolete.txt')), false);
     assert.strictEqual(JSON.stringify(integrated).includes(realRootPath), false);
+    assert(rootReaderEvents.length >= 3);
+    assert(rootReaderEvents.every((event) => event === 'inspect:src/obsolete.txt'));
+    assert.deepStrictEqual(forbiddenPathnameIo, []);
     assert.deepStrictEqual(integrationRuntime.beforeAuthorityRelease({
       binding: integrationBinding,
       reason: 'job_terminal',
       terminalStatus: 'completed',
     }), { ok: true });
+    assert.strictEqual(rootReaderRequests, 2);
+    assert.deepStrictEqual(forbiddenPathnameIo, []);
     const transactionsPath = path.join(realRootPath, '.faber', 'transactions');
     assert.deepStrictEqual(fs.readdirSync(transactionsPath), []);
   } finally {

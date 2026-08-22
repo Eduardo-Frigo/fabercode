@@ -32,7 +32,19 @@ function binding(overrides = {}) {
 
 function reader(overrides = {}) {
   return Object.freeze({
-    version: 'project-root-reader.v1',
+    version: 'project-root-reader.v2',
+    inspectEntry() {
+      return Object.freeze({
+        found: false,
+        kind: null,
+        bytes: null,
+        mode: null,
+        mtimeMs: null,
+        contentDigest: null,
+        linkTarget: null,
+        entryIdentityDigest: null,
+      });
+    },
     list() {
       return Object.freeze({
         entries: Object.freeze([]),
@@ -71,6 +83,7 @@ assert.deepStrictEqual(
   Object.freeze([
     PROJECT_ROOT_AUTHORITY_GUARANTEES.PINNED_PHYSICAL_ROOT,
     PROJECT_ROOT_AUTHORITY_GUARANTEES.HANDLE_RELATIVE_READ,
+    PROJECT_ROOT_AUTHORITY_GUARANTEES.HANDLE_RELATIVE_INSPECT,
     PROJECT_ROOT_AUTHORITY_GUARANTEES.NO_SYMLINK_TRAVERSAL,
     PROJECT_ROOT_AUTHORITY_GUARANTEES.NO_PATHNAME_REOPEN,
     PROJECT_ROOT_AUTHORITY_GUARANTEES.AUTHENTICATED_CLOSE,

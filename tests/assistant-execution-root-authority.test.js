@@ -45,6 +45,18 @@ function createHarness({
 
   const rootReader = Object.freeze({
     version: PROJECT_ROOT_READER_VERSION,
+    inspectEntry() {
+      return Object.freeze({
+        found: false,
+        kind: null,
+        bytes: null,
+        mode: null,
+        mtimeMs: null,
+        contentDigest: null,
+        linkTarget: null,
+        entryIdentityDigest: null,
+      });
+    },
     list() { return Object.freeze({ entries: Object.freeze([]), truncated: false }); },
     readFile() {
       return Object.freeze({ found: false, contentBase64: null, contentDigest: null });

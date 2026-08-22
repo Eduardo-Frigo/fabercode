@@ -12,9 +12,11 @@ const {
   assertProjectRootAuthorityCloseReceipt,
   assertProjectRootAuthorityLease,
   assertProjectRootAuthorityProbeResult,
+  assertProjectRootEntryInspectionResult,
   assertProjectRootListResult,
   assertProjectRootReadFileResult,
   createProjectRootAuthorityAcquireRequest,
+  createProjectRootEntryInspectionRequest,
   createProjectRootListRequest,
   createProjectRootReadFileRequest,
   createUnsupportedProjectRootAuthorityBackend,
@@ -270,8 +272,33 @@ function createProjectRootAuthorityRegistry(options = {}) {
   function createReaderFacade(record, providerReader) {
     const listMethod = Object.getOwnPropertyDescriptor(providerReader, 'list').value;
     const readFileMethod = Object.getOwnPropertyDescriptor(providerReader, 'readFile').value;
+    const inspectEntryMethod = Object.getOwnPropertyDescriptor(providerReader, 'inspectEntry').value;
     return Object.freeze({
       version: PROJECT_ROOT_READER_VERSION,
+      inspectEntry(input) {
+        const request = createProjectRootEntryInspectionRequest(input);
+        assertRecordReadable(record);
+        let result;
+        try {
+          result = invokeProvider(
+            providerReader,
+            inspectEntryMethod,
+            [request],
+            'reader.inspectEntry'
+          );
+        } catch (error) {
+          preflightDataGraph(error);
+          throw error;
+        }
+        try {
+          return assertProjectRootEntryInspectionResult(result, request);
+        } catch (error) {
+          poisonRecord(record);
+          throw new TypeError(
+            'Project-root authority reader returned an invalid inspection result'
+          );
+        }
+      },
       list(input) {
         const request = createProjectRootListRequest(input);
         assertRecordReadable(record);

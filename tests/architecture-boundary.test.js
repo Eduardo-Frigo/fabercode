@@ -530,6 +530,10 @@ function assertExecutionWorkspaceBoundary() {
   const rootAuthorityContractSource = read('main/capabilities/project_root_authority_contract.js');
   const rootAuthorityRegistrySource = read('main/capabilities/project_root_authority_registry.js');
   const projectScannerSource = read('main/services/project_scanner.js');
+  const transactionalDeleteSource = read(
+    'main/services/transactional_filesystem_delete_service.js'
+  );
+  const agenticDeleteRuntimeSource = read('main/services/agentic_delete_runtime_service.js');
   const sandboxContractSource = read('main/capabilities/sandbox_backend_contract.js');
   const verifiedExecutionSource = read('main/services/project_verified_execution_service.js');
 
@@ -554,6 +558,7 @@ function assertExecutionWorkspaceBoundary() {
   for (const guarantee of [
     'pinned_physical_root',
     'handle_relative_read',
+    'handle_relative_inspect',
     'no_symlink_traversal',
     'no_pathname_reopen',
     'authenticated_close',
@@ -624,6 +629,64 @@ function assertExecutionWorkspaceBoundary() {
       && recoveryCleanupSource.indexOf('authority.revoke()')
         < recoveryCleanupSource.indexOf('finishAttempt('),
     'recovery must close the root, revoke ephemeral authority, then seal and audit'
+  );
+
+  assert.ok(
+    recoverySource.includes('createTransactionalRuntime(Object.freeze({')
+      && recoverySource.includes('}), projectRootReader)'),
+    'recovery must pass its already-held root reader into the transactional runtime'
+  );
+  assert.ok(
+    agenticDeleteRuntimeSource.includes(
+      'transactionOptions.getProjectRootReader = getProjectRootReader'
+    ),
+    'the agentic runtime must forward private root-reader authority to transactions'
+  );
+  const anchoredDeleteStart = transactionalDeleteSource.indexOf(
+    '  function inspectProjectRootEntry('
+  );
+  const anchoredReaderEnd = transactionalDeleteSource.indexOf(
+    '  function assertSafeAncestors(',
+    anchoredDeleteStart
+  );
+  assert.ok(
+    anchoredDeleteStart >= 0 && anchoredReaderEnd > anchoredDeleteStart,
+    'the anchored transactional reader boundary must remain inspectable'
+  );
+  const anchoredReaderSource = transactionalDeleteSource.slice(
+    anchoredDeleteStart,
+    anchoredReaderEnd
+  );
+  const anchoredScanStart = transactionalDeleteSource.indexOf(
+    '  function scanAnchoredEntry('
+  );
+  const anchoredScanEnd = transactionalDeleteSource.indexOf(
+    '  function scanTargets(',
+    anchoredScanStart
+  );
+  assert.ok(
+    anchoredScanStart >= 0 && anchoredScanEnd > anchoredScanStart,
+    'the anchored transactional scan boundary must remain inspectable'
+  );
+  const anchoredScanSource = transactionalDeleteSource.slice(
+    anchoredScanStart,
+    anchoredScanEnd
+  );
+  assert.ok(
+    anchoredScanSource.includes('rootReader,')
+      && anchoredScanSource.includes('inspectProjectRootEntry(rootReader, relativePath)')
+      && anchoredScanSource.includes('listProjectRootDirectory(rootReader, relativePath)'),
+    'transaction preparation must inspect targets through the retained root reader'
+  );
+  assertDoesNotMatch(
+    `${anchoredReaderSource}\n${anchoredScanSource}`,
+    /\bfs\.|readFileSync|readdirSync|realpathSync|lstatSync|statSync|openSync|fstatSync/,
+    'the anchored transactional scan must never reopen the project by pathname'
+  );
+  assertDoesNotMatch(
+    transactionalDeleteSource,
+    /purpose:\s*['"]mutation_prepare['"]|projectRootAuthority\.acquire|acquireProjectRootLease/,
+    'transaction preparation must reuse the execution/recovery lease instead of acquiring another root'
   );
 
   assertDoesNotMatch(

@@ -6645,14 +6645,18 @@ app.whenReady().then(async () => {
       authorizeProjectBinding: (projectId, rootPath) => (
         getProjectAccess().authorizeProjectBinding(projectId, rootPath)
       ),
-      createTransactionalRuntime: (authority) => {
-        const transactionalRuntime = createTransactionalFilesystemDeleteService({
+      createTransactionalRuntime: (authority, projectRootReader) => {
+        const transactionalOptions = {
           authorizeLifecycle: authority.authorizeLifecycle,
           authorizeRoot: authority.authorizeRoot,
           authorizeEffectFrontier: authority.authorizeEffectFrontier,
           journalAuthenticator: agenticDeleteJournalAuthenticator,
           mutationBackend: agenticDeleteMutationBackend,
-        });
+        };
+        if (projectRootReader) {
+          transactionalOptions.getProjectRootReader = () => projectRootReader;
+        }
+        const transactionalRuntime = createTransactionalFilesystemDeleteService(transactionalOptions);
         return Object.freeze({
           recoverProject: transactionalRuntime.recoverProject,
           rollbackJob: transactionalRuntime.rollbackJob,

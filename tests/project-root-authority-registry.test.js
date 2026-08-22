@@ -73,6 +73,20 @@ function createBackend(overrides = {}) {
       let closed = false;
       const reader = Object.freeze({
         version: PROJECT_ROOT_READER_VERSION,
+        inspectEntry({ relativePath }) {
+          if (closed) throw Object.assign(new Error('closed'), { code: 'LEASE_CLOSED' });
+          state.events.push(`inspect:${relativePath}`);
+          return Object.freeze({
+            found: false,
+            kind: null,
+            bytes: null,
+            mode: null,
+            mtimeMs: null,
+            contentDigest: null,
+            linkTarget: null,
+            entryIdentityDigest: null,
+          });
+        },
         list({ relativePath }) {
           if (closed) throw Object.assign(new Error('closed'), { code: 'LEASE_CLOSED' });
           state.events.push(`list:${relativePath}`);

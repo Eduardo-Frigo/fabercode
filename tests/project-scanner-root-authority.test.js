@@ -33,6 +33,18 @@ function createReader(tree, events, overrides = {}) {
 
   return Object.freeze({
     version: PROJECT_ROOT_READER_VERSION,
+    inspectEntry() {
+      return Object.freeze({
+        found: false,
+        kind: null,
+        bytes: null,
+        mode: null,
+        mtimeMs: null,
+        contentDigest: null,
+        linkTarget: null,
+        entryIdentityDigest: null,
+      });
+    },
     list({ relativePath, maxEntries }) {
       events.push(`list:${relativePath}`);
       if (typeof overrides.list === 'function') {
