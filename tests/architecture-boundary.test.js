@@ -521,6 +521,65 @@ function assertProductToolchainUsesExecutionBoundary() {
   );
 }
 
+function assertExecutionWorkspaceBoundary() {
+  const mainSource = read('main.js');
+  const contractSource = read('main/capabilities/execution_workspace_contract.js');
+  const registrySource = read('main/capabilities/execution_workspace_registry.js');
+  const sandboxContractSource = read('main/capabilities/sandbox_backend_contract.js');
+  const verifiedExecutionSource = read('main/services/project_verified_execution_service.js');
+
+  for (const [relativePath, source] of [
+    ['main/capabilities/execution_workspace_contract.js', contractSource],
+    ['main/capabilities/execution_workspace_registry.js', registrySource],
+  ]) {
+    assertDoesNotMatch(
+      source,
+      /require\(['"](?:electron|child_process|fs)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(/,
+      `${relativePath} must remain a data/ownership boundary without filesystem, process, or IPC authority`
+    );
+    assertDoesNotMatch(
+      source,
+      /\bproviderFactory\b/,
+      `${relativePath} must not activate a workspace provider`
+    );
+  }
+
+  for (const guarantee of [
+    'exclusive_source_binding',
+    'private_workspace_root',
+    'source_root_not_mutated',
+    'rollback_by_discard',
+    'physical_source_identity',
+    'physical_workspace_identity',
+  ]) {
+    assert.ok(
+      contractSource.includes(guarantee),
+      `the execution workspace contract must require ${guarantee}`
+    );
+  }
+
+  assertDoesNotMatch(
+    registrySource,
+    /\bregister\s*\(|process\.platform|sandbox_backend_registry/,
+    'workspace ownership must use one immutable backend and must stay separate from process sandbox selection'
+  );
+  assertDoesNotMatch(
+    mainSource,
+    /execution_workspace_(?:contract|registry)|createExecutionWorkspaceRegistry/,
+    'production must remain fail-closed until an enforced isolated workspace provider exists'
+  );
+  assertDoesNotMatch(
+    sandboxContractSource,
+    /execution_workspace_(?:contract|registry)|createExecutionWorkspaceRegistry/,
+    'process sandbox and workspace ownership must remain separate authorities'
+  );
+  assertDoesNotMatch(
+    verifiedExecutionSource,
+    /execution_workspace_(?:contract|registry)|createExecutionWorkspaceRegistry/,
+    'the legacy temporary copy must not be promoted as an enforced execution workspace provider'
+  );
+}
+
 assertRendererBoundary();
 assertPreloadBoundary();
 assertCortexBoundary();
@@ -528,6 +587,7 @@ assertMainBoundary();
 assertAgentRuntimeBoundary();
 assertProjectCapabilityBoundary();
 assertAssistantHarnessCompositionBoundary();
+assertExecutionWorkspaceBoundary();
 assertProductToolchainUsesExecutionBoundary();
 
 console.log('architecture-boundary.test.js: ok');
