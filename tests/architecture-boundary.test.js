@@ -536,6 +536,10 @@ function assertExecutionWorkspaceBoundary() {
   const isolationProviderFactorySource = read(
     'main/services/execution_isolation_provider_factory.js'
   );
+  const processSupervisorContractSource = read(
+    'main/capabilities/process_supervisor_contract.js'
+  );
+  const processSupervisorSource = read('main/agent_runtime/execution/process_supervisor.js');
   const projectScannerSource = read('main/services/project_scanner.js');
   const transactionalDeleteSource = read(
     'main/services/transactional_filesystem_delete_service.js'
@@ -549,6 +553,7 @@ function assertExecutionWorkspaceBoundary() {
     ['main/capabilities/execution_workspace_registry.js', registrySource],
     ['main/capabilities/project_root_authority_contract.js', rootAuthorityContractSource],
     ['main/capabilities/project_root_authority_registry.js', rootAuthorityRegistrySource],
+    ['main/capabilities/process_supervisor_contract.js', processSupervisorContractSource],
   ]) {
     assertDoesNotMatch(
       source,
@@ -621,6 +626,58 @@ function assertExecutionWorkspaceBoundary() {
     mainSource,
     /execution_isolation_(?:runtime_config|provider_factory)|createExecutionIsolationProviderSelection/,
     'production must not activate portable isolation until a bundled attested provider exists'
+  );
+
+  assertDoesNotMatch(
+    processSupervisorSource,
+    /require\(['"](?:electron|child_process|fs)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|command_runner|project_terminal|project_preview/,
+    'the portable process supervisor must own lifecycle only through its injected backend'
+  );
+  for (const guarantee of [
+    'workspace_root_bound',
+    'physical_cwd_revalidation',
+    'network_default_deny',
+    'process_tree_termination',
+    'bounded_cursor_output',
+    'orphan_reaping',
+    'execution_identity_binding',
+  ]) {
+    assert.ok(
+      processSupervisorContractSource.includes(guarantee),
+      `the portable process supervisor contract must require ${guarantee}`
+    );
+  }
+  assert.ok(
+    processSupervisorContractSource.includes(
+      'sandboxRequest.rootPath !== workspaceLease.workspaceRootPath'
+    )
+      && processSupervisorContractSource.includes(
+        'sandboxRequest.realRootPath !== workspaceLease.workspaceRealRootPath'
+      )
+      && processSupervisorContractSource.includes('value.tempRoots.length !== 0')
+      && processSupervisorContractSource.includes('value.cacheRoots.length !== 0'),
+    'process execution must bind to the isolated workspace and deny unauthorised external roots'
+  );
+  assert.ok(
+    processSupervisorSource.includes('function exec(input)')
+      && processSupervisorSource.includes('function read(input)')
+      && processSupervisorSource.includes('function wait(input)')
+      && processSupervisorSource.includes('function stop(input)')
+      && processSupervisorSource.includes("reasonCode: 'SUPERVISOR_DISPOSED'")
+      && processSupervisorSource.indexOf('const pendingStops =')
+        < processSupervisorSource.indexOf("'dispose',", processSupervisorSource.indexOf('const pendingStops =')),
+    'the supervisor must expose cursor lifecycle operations and stop active trees before backend disposal'
+  );
+  assert.ok(
+    processSupervisorSource.includes('request.workspaceAuthorityDigest')
+      && processSupervisorSource.includes('PROCESS_SUPERVISOR_REASONS.AUTHORITY_MISMATCH')
+      && processSupervisorSource.includes('PROCESS_SUPERVISOR_REASONS.STATE_REGRESSION'),
+    'read/wait/stop must retain workspace authority and monotonic process state'
+  );
+  assertDoesNotMatch(
+    mainSource,
+    /agent_runtime\/execution\/process_supervisor|createProcessSupervisor\s*\(/,
+    'production must keep the process supervisor unwired until a bundled portable backend exists'
   );
 
   for (const guarantee of [
