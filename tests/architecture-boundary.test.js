@@ -524,6 +524,7 @@ function assertProductToolchainUsesExecutionBoundary() {
 function assertExecutionWorkspaceBoundary() {
   const mainSource = read('main.js');
   const coordinatorSource = read('main/agent_runtime/assistant_execution_coordinator.js');
+  const recoverySource = read('main/services/agentic_delete_recovery_service.js');
   const contractSource = read('main/capabilities/execution_workspace_contract.js');
   const registrySource = read('main/capabilities/execution_workspace_registry.js');
   const rootAuthorityContractSource = read('main/capabilities/project_root_authority_contract.js');
@@ -595,6 +596,34 @@ function assertExecutionWorkspaceBoundary() {
       && coordinatorRemovalSource.indexOf('releaseProjectRootLeaseConfirmed')
         < coordinatorRemovalSource.indexOf('revokeBindingConfirmed'),
     'execution cleanup must close mutation workflows, then the root, then job authority'
+  );
+
+  assert.ok(
+    recoverySource.includes('acquireRecoveryRootLease(')
+      && recoverySource.includes("purpose: 'recovery'")
+      && recoverySource.includes('expectedPhysicalRootIdentityDigest'),
+    'delete recovery must pin the reauthorized physical root before replay'
+  );
+  const recoveryCleanupStart = recoverySource.indexOf('    } finally {',
+    recoverySource.indexOf('  function recoverJob(input = {}) {'));
+  const recoveryCleanupEnd = recoverySource.indexOf(
+    '  function diagnostics()',
+    recoveryCleanupStart
+  );
+  assert.ok(
+    recoveryCleanupStart >= 0 && recoveryCleanupEnd > recoveryCleanupStart,
+    'the recovery cleanup boundary must remain inspectable'
+  );
+  const recoveryCleanupSource = recoverySource.slice(
+    recoveryCleanupStart,
+    recoveryCleanupEnd
+  );
+  assert.ok(
+    recoveryCleanupSource.indexOf('releaseRecoveryRootLease')
+      < recoveryCleanupSource.indexOf('authority.revoke()')
+      && recoveryCleanupSource.indexOf('authority.revoke()')
+        < recoveryCleanupSource.indexOf('finishAttempt('),
+    'recovery must close the root, revoke ephemeral authority, then seal and audit'
   );
 
   assertDoesNotMatch(

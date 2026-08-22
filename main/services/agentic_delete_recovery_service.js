@@ -1,6 +1,11 @@
 'use strict';
 
 const {
+  PROJECT_ROOT_AUTHORITY_LEASE_VERSION,
+  PROJECT_ROOT_READER_VERSION,
+  createProjectRootPhysicalIdentityDigest,
+} = require('../capabilities/project_root_authority_contract');
+const {
   createCapabilityDelegationBinding,
 } = require('../capabilities/capability_delegation_contracts');
 
@@ -20,6 +25,7 @@ const OPTION_KEYS = Object.freeze([
   'getAuthorizedJobById',
   'authorizeProjectBinding',
   'createTransactionalRuntime',
+  'projectRootAuthority',
   'audit',
   'maxTrackedJobs',
 ]);
@@ -61,6 +67,7 @@ const TERMINAL_RESULT_KEYS = Object.freeze([
 const SAFE_JOB_ID = /^job-[A-Za-z0-9._-]{1,180}$/;
 const SAFE_PHASE = /^[a-z][a-z0-9_:-]{0,79}$/;
 const SHA256_DIGEST = /^sha256:[a-f0-9]{64}$/;
+const SAFE_ROOT_LEASE_ID = /^[A-Za-z0-9._:@-]{1,256}$/;
 const FAILED_TERMINAL_PHASES = new Set([
   'failed',
   'runtime_interrupted',
@@ -88,6 +95,9 @@ const RECOVERY_ERROR_CODES = Object.freeze({
   JOB_NOT_FOUND: 'JOB_NOT_FOUND',
   JOB_NOT_TERMINAL: 'JOB_NOT_TERMINAL',
   PROJECT_UNAVAILABLE: 'PROJECT_UNAVAILABLE',
+  PROJECT_ROOT_AUTHORITY_FAILED: 'PROJECT_ROOT_AUTHORITY_FAILED',
+  PROJECT_ROOT_CLEANUP_FAILED: 'PROJECT_ROOT_CLEANUP_FAILED',
+  AUTHORITY_UNHEALTHY: 'AUTHORITY_UNHEALTHY',
   RECOVERY_BUSY: 'RECOVERY_BUSY',
   RECOVERY_FAILED: 'RECOVERY_FAILED',
   RECOVERY_UNKNOWN: 'RECOVERY_UNKNOWN',
@@ -292,6 +302,30 @@ function createAgenticDeleteRecoveryService(options = {}) {
   const authorizeProjectBinding = optionFields.get('authorizeProjectBinding');
   const createTransactionalRuntime = optionFields.get('createTransactionalRuntime');
   const audit = optionFields.has('audit') ? optionFields.get('audit') : () => {};
+  const projectRootAuthorityEnabled = optionFields.has('projectRootAuthority');
+  const projectRootAuthority = projectRootAuthorityEnabled
+    ? optionFields.get('projectRootAuthority')
+    : null;
+  let acquireProjectRootLease = null;
+  let releaseProjectRootLease = null;
+  if (projectRootAuthorityEnabled) {
+    if (!projectRootAuthority
+      || typeof projectRootAuthority !== 'object'
+      || !Object.isFrozen(projectRootAuthority)) {
+      throw new TypeError('projectRootAuthority must be a frozen authority object');
+    }
+    const rootAuthorityFields = inspectDataRecord(projectRootAuthority);
+    acquireProjectRootLease = rootAuthorityFields
+      ? rootAuthorityFields.get('acquire')
+      : null;
+    releaseProjectRootLease = rootAuthorityFields
+      ? rootAuthorityFields.get('release')
+      : null;
+    if (typeof acquireProjectRootLease !== 'function'
+      || typeof releaseProjectRootLease !== 'function') {
+      throw new TypeError('projectRootAuthority.acquire and release are required');
+    }
+  }
   for (const [name, callback] of [
     ['getAuthorizedJobById', getAuthorizedJobById],
     ['authorizeProjectBinding', authorizeProjectBinding],
@@ -317,6 +351,8 @@ function createAgenticDeleteRecoveryService(options = {}) {
   let deniedJobs = 0;
   let failedJobs = 0;
   let reentrantAttempts = 0;
+  let authorityHealthy = true;
+  let rootCleanupFailures = 0;
 
   function safeAudit(status, disposition, errorCode) {
     try {
@@ -382,6 +418,167 @@ function createAgenticDeleteRecoveryService(options = {}) {
       realRootPath: binding.realRootPath,
       physicalIdentity,
     });
+  }
+
+  function validateRecoveryRootLease(value, binding, expectedPhysicalRootIdentityDigest) {
+    if (!value || typeof value !== 'object' || !Object.isFrozen(value)) {
+      throw new TypeError('recovery project-root lease must be frozen');
+    }
+    const leaseKeys = [
+      'version',
+      'leaseId',
+      'jobId',
+      'projectId',
+      'purpose',
+      'physicalRootIdentityDigest',
+      'authorityDigest',
+      'reader',
+      'close',
+    ];
+    const fields = inspectDataRecord(value, {
+      allowedKeys: leaseKeys,
+      requiredKeys: leaseKeys,
+    });
+    if (!fields
+      || fields.get('version') !== PROJECT_ROOT_AUTHORITY_LEASE_VERSION
+      || typeof fields.get('leaseId') !== 'string'
+      || !SAFE_ROOT_LEASE_ID.test(fields.get('leaseId'))
+      || fields.get('jobId') !== binding.jobId
+      || fields.get('projectId') !== binding.projectId
+      || fields.get('purpose') !== 'recovery'
+      || fields.get('physicalRootIdentityDigest') !== expectedPhysicalRootIdentityDigest
+      || typeof fields.get('authorityDigest') !== 'string'
+      || !SHA256_DIGEST.test(fields.get('authorityDigest'))
+      || typeof fields.get('close') !== 'function') {
+      throw new TypeError('recovery project-root lease does not match its binding');
+    }
+    const reader = fields.get('reader');
+    if (!reader || typeof reader !== 'object' || !Object.isFrozen(reader)) {
+      throw new TypeError('recovery project-root reader must be frozen');
+    }
+    const readerFields = inspectDataRecord(reader, {
+      allowedKeys: ['version', 'list', 'readFile'],
+      requiredKeys: ['version', 'list', 'readFile'],
+    });
+    if (!readerFields
+      || readerFields.get('version') !== PROJECT_ROOT_READER_VERSION
+      || typeof readerFields.get('list') !== 'function'
+      || typeof readerFields.get('readFile') !== 'function') {
+      throw new TypeError('recovery project-root reader is invalid');
+    }
+    return value;
+  }
+
+  function acquireRecoveryRootLease(attempt, binding, physicalIdentity, epoch) {
+    if (!projectRootAuthorityEnabled) return Object.freeze({ ok: true });
+    if (!authorityHealthy) {
+      return Object.freeze({
+        ok: false,
+        errorCode: RECOVERY_ERROR_CODES.AUTHORITY_UNHEALTHY,
+      });
+    }
+    let expectedPhysicalRootIdentityDigest;
+    try {
+      expectedPhysicalRootIdentityDigest = createProjectRootPhysicalIdentityDigest(
+        physicalIdentity
+      );
+    } catch {
+      return Object.freeze({
+        ok: false,
+        errorCode: RECOVERY_ERROR_CODES.PROJECT_ROOT_AUTHORITY_FAILED,
+      });
+    }
+    let raw;
+    try {
+      raw = Reflect.apply(acquireProjectRootLease, projectRootAuthority, [{
+        binding,
+        expectedPhysicalRootIdentityDigest,
+        purpose: 'recovery',
+      }]);
+    } catch {
+      return Object.freeze({
+        ok: false,
+        errorCode: RECOVERY_ERROR_CODES.PROJECT_ROOT_AUTHORITY_FAILED,
+      });
+    }
+    if (absorbNativePromise(raw)) {
+      return Object.freeze({
+        ok: false,
+        errorCode: RECOVERY_ERROR_CODES.PROJECT_ROOT_AUTHORITY_FAILED,
+      });
+    }
+    const rawFields = inspectDataRecord(raw);
+    if (!rawFields || !Object.isFrozen(raw) || rawFields.has('then')) {
+      authorityHealthy = false;
+      return Object.freeze({
+        ok: false,
+        errorCode: RECOVERY_ERROR_CODES.PROJECT_ROOT_AUTHORITY_FAILED,
+      });
+    }
+    if (rawFields.get('ok') !== true) {
+      return Object.freeze({
+        ok: false,
+        errorCode: interferenceGeneration === epoch && activeRecovery === attempt
+          ? RECOVERY_ERROR_CODES.PROJECT_ROOT_AUTHORITY_FAILED
+          : RECOVERY_ERROR_CODES.RECOVERY_BUSY,
+      });
+    }
+    try {
+      const successFields = inspectDataRecord(raw, {
+        allowedKeys: ['ok', 'lease', 'idempotent'],
+        requiredKeys: ['ok', 'lease', 'idempotent'],
+      });
+      if (!successFields || typeof successFields.get('idempotent') !== 'boolean') {
+        throw new TypeError('recovery project-root acquire success is malformed');
+      }
+      attempt.rootLease = validateRecoveryRootLease(
+        successFields.get('lease'),
+        binding,
+        expectedPhysicalRootIdentityDigest
+      );
+    } catch {
+      authorityHealthy = false;
+      return Object.freeze({
+        ok: false,
+        errorCode: RECOVERY_ERROR_CODES.PROJECT_ROOT_AUTHORITY_FAILED,
+      });
+    }
+    if (interferenceGeneration !== epoch || activeRecovery !== attempt) {
+      return Object.freeze({ ok: false, errorCode: RECOVERY_ERROR_CODES.RECOVERY_BUSY });
+    }
+    return Object.freeze({ ok: true });
+  }
+
+  function releaseRecoveryRootLease(attempt, binding, epoch) {
+    if (!attempt.rootLease) return true;
+    const lease = attempt.rootLease;
+    let raw;
+    try {
+      raw = Reflect.apply(releaseProjectRootLease, projectRootAuthority, [{
+        binding,
+        leaseId: lease.leaseId,
+      }]);
+    } catch {
+      raw = null;
+    }
+    const returnedNativePromise = absorbNativePromise(raw);
+    const fields = returnedNativePromise ? null : inspectDataRecord(raw, {
+      allowedKeys: ['ok', 'closed', 'idempotent'],
+      requiredKeys: ['ok', 'closed', 'idempotent'],
+    });
+    if (!fields
+      || !Object.isFrozen(raw)
+      || fields.get('ok') !== true
+      || fields.get('closed') !== true
+      || typeof fields.get('idempotent') !== 'boolean'
+      || interferenceGeneration !== epoch
+      || activeRecovery !== attempt) {
+      authorityHealthy = false;
+      rootCleanupFailures += 1;
+      return false;
+    }
+    attempt.rootLease = null;
+    return true;
   }
 
   function readMatchingPersistedSnapshot(expected, epoch) {
@@ -529,11 +726,14 @@ function createAgenticDeleteRecoveryService(options = {}) {
       interferenceGeneration += 1;
       return denied(RECOVERY_ERROR_CODES.RECOVERY_BUSY);
     }
+    if (!authorityHealthy) {
+      return denied(RECOVERY_ERROR_CODES.AUTHORITY_UNHEALTHY);
+    }
     if (attempts.size >= maxTrackedJobs) {
       return denied(RECOVERY_ERROR_CODES.CAPACITY_EXCEEDED);
     }
 
-    const attempt = { state: 'active', result: null };
+    const attempt = { state: 'active', result: null, rootLease: null, binding: null };
     attempts.set(jobId, attempt);
     interferenceGeneration += 1;
     const epoch = interferenceGeneration;
@@ -554,6 +754,17 @@ function createAgenticDeleteRecoveryService(options = {}) {
       const initialRoot = authorizeRootSnapshot(normalized.binding, null, epoch);
       if (!initialRoot) {
         result = denied(RECOVERY_ERROR_CODES.PROJECT_UNAVAILABLE);
+        return result;
+      }
+      attempt.binding = normalized.binding;
+      const rootLeaseDecision = acquireRecoveryRootLease(
+        attempt,
+        normalized.binding,
+        initialRoot.physicalIdentity,
+        epoch
+      );
+      if (!rootLeaseDecision.ok) {
+        result = denied(rootLeaseDecision.errorCode);
         return result;
       }
       authority = buildRecoveryAuthority(
@@ -638,12 +849,26 @@ function createAgenticDeleteRecoveryService(options = {}) {
       result = failed(RECOVERY_ERROR_CODES.RECOVERY_FAILED);
       return result;
     } finally {
+      let rootCleanupFailed = false;
+      if (attempt.rootLease
+        && (!attempt.binding
+          || !releaseRecoveryRootLease(attempt, attempt.binding, epoch))) {
+        rootCleanupFailed = true;
+        result = failed(
+          RECOVERY_ERROR_CODES.PROJECT_ROOT_CLEANUP_FAILED,
+          result && result.disposition
+        );
+      }
       if (authority) authority.revoke();
       try {
-        finishAttempt(attempt, result || failed(RECOVERY_ERROR_CODES.RECOVERY_FAILED));
+        result = finishAttempt(
+          attempt,
+          result || failed(RECOVERY_ERROR_CODES.RECOVERY_FAILED)
+        );
       } finally {
         activeRecovery = null;
       }
+      if (rootCleanupFailed) return result;
     }
   }
 
@@ -660,6 +885,9 @@ function createAgenticDeleteRecoveryService(options = {}) {
       maxAuthorityUses: MAX_AUTHORITY_USES_PER_RECOVERY,
       authorityBoundary: 'main_process_only',
       defaultDecision: 'deny',
+      authorityHealthy,
+      projectRootAuthority: projectRootAuthorityEnabled ? 'enabled' : 'disabled',
+      rootCleanupFailures,
     });
   }
 
