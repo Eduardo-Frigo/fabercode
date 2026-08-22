@@ -435,11 +435,12 @@ function assertAssistantHarnessCompositionBoundary() {
     if ([
       'main/services/agentic_delete_mutation_backend_factory.js',
       'main/services/anchored_mutation_backend_adapter.js',
+      'main/services/execution_isolation_provider_factory.js',
     ].includes(relativePath)) continue;
     assertDoesNotMatch(
       source,
       /\bproviderFactory\b|createAnchoredMutationBackendAdapter|require\(['"][^'"]*anchored_mutation_backend_adapter['"]\)/,
-      `${relativePath} must not activate or bypass the sealed mutation provider seam before phase 2.4`
+      `${relativePath} must not activate or bypass a sealed native-provider seam`
     );
   }
   assertDoesNotMatch(
@@ -529,6 +530,12 @@ function assertExecutionWorkspaceBoundary() {
   const registrySource = read('main/capabilities/execution_workspace_registry.js');
   const rootAuthorityContractSource = read('main/capabilities/project_root_authority_contract.js');
   const rootAuthorityRegistrySource = read('main/capabilities/project_root_authority_registry.js');
+  const isolationRuntimeConfigSource = read(
+    'main/runtime/execution_isolation_runtime_config.js'
+  );
+  const isolationProviderFactorySource = read(
+    'main/services/execution_isolation_provider_factory.js'
+  );
   const projectScannerSource = read('main/services/project_scanner.js');
   const transactionalDeleteSource = read(
     'main/services/transactional_filesystem_delete_service.js'
@@ -554,6 +561,67 @@ function assertExecutionWorkspaceBoundary() {
       `${relativePath} must not activate a workspace provider`
     );
   }
+
+  assertDoesNotMatch(
+    `${isolationRuntimeConfigSource}\n${isolationProviderFactorySource}`,
+    /require\(['"](?:electron|child_process|fs)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\.node\b/,
+    'portable isolation selection must remain a data-only seam without process, filesystem, IPC, or addon loading authority'
+  );
+  assertDoesNotMatch(
+    `${isolationRuntimeConfigSource}\n${isolationProviderFactorySource}`,
+    /FABER_EXECUTION_ISOLATION_(?:PROVIDER|ADDON)_PATH/,
+    'portable isolation selection must not accept a provider path from the environment'
+  );
+  assert.ok(
+    isolationRuntimeConfigSource.includes("'FABER_EXECUTION_ISOLATION_MODE'")
+      && isolationRuntimeConfigSource.includes("'FABER_EXECUTION_ISOLATION_KILL_SWITCH'")
+      && isolationRuntimeConfigSource.includes("mode: 'disabled'")
+      && isolationRuntimeConfigSource.includes('killSwitch: true'),
+    'portable isolation runtime config must default to disabled behind an active kill switch'
+  );
+  assert.ok(
+    isolationProviderFactorySource.includes(
+      "'portable-execution-isolation-provider.v1'"
+    )
+      && isolationProviderFactorySource.includes(
+        "'portable-execution-isolation-attestation.v1'"
+      )
+      && isolationProviderFactorySource.includes('executionWorkspaceBackend')
+      && isolationProviderFactorySource.includes('projectRootAuthorityBackend')
+      && isolationProviderFactorySource.includes('assertExecutionWorkspaceBackend')
+      && isolationProviderFactorySource.includes('assertProjectRootAuthorityBackend'),
+    'one sealed portable provider must supply both workspace and pinned-root backends'
+  );
+  for (const attestedGuarantee of [
+    'sharedPhysicalRootAuthority',
+    'sourceIdentityCompareAndSwap',
+    'handleRelativeProjectAccess',
+    'privateWorkspaceMaterialization',
+    'rollbackByDiscard',
+  ]) {
+    assert.ok(
+      isolationProviderFactorySource.includes(attestedGuarantee),
+      `portable provider attestation must bind ${attestedGuarantee}`
+    );
+  }
+  assert.ok(
+    isolationProviderFactorySource.includes('canonicalSha256Digest(core)')
+      && isolationProviderFactorySource.includes(
+        "unsupportedSelection('BACKENDS_NOT_ENFORCED'"
+      )
+      && isolationProviderFactorySource.includes('absorbNativePromise(rawProbe)'),
+    'portable provider activation must verify a canonical attestation and two synchronous enforced probes'
+  );
+  assertDoesNotMatch(
+    isolationProviderFactorySource,
+    /captureOwnMethod\((?:workspaceBackend|rootBackend),\s*['"]dispose['"]\)/,
+    'backend facades must release the one shared provider instead of independently closing physical authority'
+  );
+  assertDoesNotMatch(
+    mainSource,
+    /execution_isolation_(?:runtime_config|provider_factory)|createExecutionIsolationProviderSelection/,
+    'production must not activate portable isolation until a bundled attested provider exists'
+  );
 
   for (const guarantee of [
     'pinned_physical_root',
