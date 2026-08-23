@@ -9,12 +9,25 @@ const {
   absorbNativePromise,
 } = require('../capabilities/execution_workspace_contract');
 const {
-  PORTABLE_ISOLATION_HELPER_DISTRIBUTION,
   PORTABLE_ISOLATION_HELPER_PRIVATE_TRANSPORT_KIND,
   assertPortableIsolationHelperLaunchRequest,
   createPortableIsolationHelperBundleDescriptor,
   createPortableIsolationHelperLaunchReceipt,
 } = require('../capabilities/portable_isolation_helper_launcher_contract');
+const {
+  PORTABLE_ISOLATION_HELPER_APPLICATION_ID,
+  PORTABLE_ISOLATION_HELPER_BUILD_ID,
+  PORTABLE_ISOLATION_HELPER_BUNDLE_ID,
+  PORTABLE_ISOLATION_HELPER_DISTRIBUTION,
+  PORTABLE_ISOLATION_HELPER_PLATFORM_SIGNATURE_RECEIPT_VERSION,
+  PORTABLE_ISOLATION_HELPER_PLATFORM_SIGNATURE_REQUEST_VERSION,
+  PORTABLE_ISOLATION_HELPER_PLATFORM_SIGNATURE_VERIFIER_VERSION,
+  PORTABLE_ISOLATION_HELPER_RESOURCE_NAME,
+  assertPortableIsolationHelperDistributionAttestation,
+} = require('../capabilities/portable_isolation_helper_distribution_attestation_contract');
+const {
+  immutableSnapshot,
+} = require('../capabilities/capability_delegation_contracts');
 const {
   canonicalSha256Digest,
 } = require('../capabilities/transactional_delete_contracts');
@@ -28,27 +41,24 @@ const PORTABLE_ISOLATION_HELPER_HOST_LAUNCH_RESULT_VERSION =
   'portable-isolation-helper-host-launch-result.v1';
 const PORTABLE_ISOLATION_HELPER_HOST_LAUNCHER_DISPOSE_RECEIPT_VERSION =
   'portable-isolation-helper-host-launcher-dispose-receipt.v1';
-const PORTABLE_ISOLATION_HELPER_PLATFORM_SIGNATURE_VERIFIER_VERSION =
-  'portable-isolation-helper-platform-signature-verifier.v1';
-const PORTABLE_ISOLATION_HELPER_PLATFORM_SIGNATURE_REQUEST_VERSION =
-  'portable-isolation-helper-platform-signature-request.v1';
-const PORTABLE_ISOLATION_HELPER_PLATFORM_SIGNATURE_RECEIPT_VERSION =
-  'portable-isolation-helper-platform-signature-receipt.v1';
 
-const BUNDLE_ID = 'faber-portable-isolation-helper';
-const HELPER_BUILD_ID = 'portable-helper-bootstrap-1';
 const RESOURCE_DIRECTORY_NAME = 'portable-isolation-helper';
 const RESOURCE_ENTRY_NAME = 'utility_entry.js';
+const RESOURCE_ATTESTATION_NAME = 'distribution_attestation.json';
 const SERVICE_NAME = 'Faber Portable Isolation Helper';
 const MAX_RESOURCE_BYTES = 1024 * 1024;
+const MAX_ATTESTATION_BYTES = 32 * 1024;
 const SUPPORTED_PLATFORMS = new Set(['darwin', 'linux', 'win32']);
 const SUPPORTED_ARCHITECTURES = new Set(['arm64', 'x64']);
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
+const SAFE_VERSION = /^[0-9]+[.][0-9]+[.][0-9]+(?:[-+][A-Za-z0-9.-]+)?$/;
 const OPTION_KEYS = Object.freeze([
   'resourcesPath',
   'packaged',
   'platform',
   'architecture',
+  'applicationVersion',
+  'electronVersion',
   'signatureVerifier',
   'forkUtilityProcess',
   'channelTimeoutMs',
@@ -148,6 +158,13 @@ function normalizeSignatureVerifier(value) {
   });
 }
 
+function normalizeVersion(value) {
+  if (typeof value !== 'string' || !SAFE_VERSION.test(value)) {
+    throw hostError('HOST_OPTIONS_INVALID');
+  }
+  return value;
+}
+
 function normalizeOptions(value) {
   const fields = exactOwnFields(
     value,
@@ -171,6 +188,8 @@ function normalizeOptions(value) {
     packaged: fields.get('packaged'),
     platform: fields.get('platform'),
     architecture: fields.get('architecture'),
+    applicationVersion: normalizeVersion(fields.get('applicationVersion')),
+    electronVersion: normalizeVersion(fields.get('electronVersion')),
     signatureVerifier: normalizeSignatureVerifier(fields.get('signatureVerifier')),
     forkUtilityProcess: fields.get('forkUtilityProcess'),
     channelTimeoutMs: fields.get('channelTimeoutMs'),
@@ -216,48 +235,44 @@ function pathWithin(rootPath, candidatePath) {
   );
 }
 
-function inspectResource(resourcesPath) {
-  const bundleDirectory = path.join(resourcesPath, RESOURCE_DIRECTORY_NAME);
-  const entryPath = path.join(bundleDirectory, RESOURCE_ENTRY_NAME);
-  let rootRealPath;
-  let bundleRealPath;
-  let entryRealPath;
-  let bundleStat;
-  let entryStat;
+function inspectFixedFile({
+  rootRealPath,
+  bundleRealPath,
+  bundleDirectory,
+  fileName,
+  maxBytes,
+}) {
+  const filePath = path.join(bundleDirectory, fileName);
+  let fileRealPath;
+  let fileStat;
   try {
-    rootRealPath = fs.realpathSync(resourcesPath);
-    bundleStat = fs.lstatSync(bundleDirectory);
-    entryStat = fs.lstatSync(entryPath);
-    bundleRealPath = fs.realpathSync(bundleDirectory);
-    entryRealPath = fs.realpathSync(entryPath);
+    fileStat = fs.lstatSync(filePath);
+    fileRealPath = fs.realpathSync(filePath);
   } catch (error) {
     absorbNativePromise(error);
     throw hostError('HOST_RESOURCE_INVALID');
   }
-  const expectedBundleRealPath = path.join(rootRealPath, RESOURCE_DIRECTORY_NAME);
-  const expectedEntryRealPath = path.join(expectedBundleRealPath, RESOURCE_ENTRY_NAME);
-  if (!bundleStat.isDirectory() || bundleStat.isSymbolicLink()
-    || !entryStat.isFile() || entryStat.isSymbolicLink()
-    || Number(entryStat.nlink) !== 1
-    || Number(entryStat.size) < 1
-    || Number(entryStat.size) > MAX_RESOURCE_BYTES
-    || bundleRealPath !== expectedBundleRealPath
-    || entryRealPath !== expectedEntryRealPath
-    || !pathWithin(rootRealPath, entryRealPath)) {
+  const expectedRealPath = path.join(bundleRealPath, fileName);
+  if (!fileStat.isFile() || fileStat.isSymbolicLink()
+    || Number(fileStat.nlink) !== 1
+    || Number(fileStat.size) < 1
+    || Number(fileStat.size) > maxBytes
+    || fileRealPath !== expectedRealPath
+    || !pathWithin(rootRealPath, fileRealPath)) {
     throw hostError('HOST_RESOURCE_INVALID');
   }
 
   let descriptor;
   let before;
   let after;
-  let bytes;
+  let contents;
   try {
     const noFollow = typeof fs.constants.O_NOFOLLOW === 'number'
       ? fs.constants.O_NOFOLLOW
       : 0;
-    descriptor = fs.openSync(entryPath, fs.constants.O_RDONLY | noFollow);
+    descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
     before = fs.fstatSync(descriptor);
-    bytes = fs.readFileSync(descriptor);
+    contents = fs.readFileSync(descriptor);
     after = fs.fstatSync(descriptor);
   } catch (error) {
     absorbNativePromise(error);
@@ -271,23 +286,95 @@ function inspectResource(resourcesPath) {
       }
     }
   }
-  const lstatIdentity = statIdentity(entryStat);
+  const lstatIdentity = statIdentity(fileStat);
   const beforeIdentity = statIdentity(before);
   const afterIdentity = statIdentity(after);
   if (!sameIdentity(lstatIdentity, beforeIdentity)
     || !sameIdentity(beforeIdentity, afterIdentity)
-    || !Buffer.isBuffer(bytes)
-    || bytes.length !== beforeIdentity.size
-    || bytes.length < 1
-    || bytes.length > MAX_RESOURCE_BYTES) {
+    || !Buffer.isBuffer(contents)
+    || contents.length !== beforeIdentity.size
+    || contents.length < 1
+    || contents.length > maxBytes) {
     throw hostError('HOST_RESOURCE_INVALID');
   }
   return Object.freeze({
-    bundleDirectory,
-    entryPath,
-    resourceDigest: sha256Bytes(bytes),
-    resourceBytes: bytes.length,
+    filePath,
+    digest: sha256Bytes(contents),
+    bytes: contents.length,
     identity: beforeIdentity,
+    contents,
+  });
+}
+
+function parseDistributionAttestation(contents) {
+  let json;
+  let parsed;
+  let attestation;
+  try {
+    json = new util.TextDecoder('utf-8', { fatal: true }).decode(contents);
+    if (!json.endsWith('\n') || json.slice(0, -1).includes('\n')) {
+      throw hostError('HOST_RESOURCE_INVALID');
+    }
+    parsed = JSON.parse(json.slice(0, -1));
+    attestation = assertPortableIsolationHelperDistributionAttestation(
+      immutableSnapshot(parsed)
+    );
+    if (`${JSON.stringify(attestation)}\n` !== json) {
+      throw hostError('HOST_RESOURCE_INVALID');
+    }
+  } catch (error) {
+    absorbNativePromise(error);
+    if (error instanceof PortableIsolationHelperHostLauncherError) throw error;
+    throw hostError('HOST_RESOURCE_INVALID');
+  }
+  return attestation;
+}
+
+function inspectResource(resourcesPath) {
+  const bundleDirectory = path.join(resourcesPath, RESOURCE_DIRECTORY_NAME);
+  let rootRealPath;
+  let bundleRealPath;
+  let bundleStat;
+  try {
+    rootRealPath = fs.realpathSync(resourcesPath);
+    bundleStat = fs.lstatSync(bundleDirectory);
+    bundleRealPath = fs.realpathSync(bundleDirectory);
+  } catch (error) {
+    absorbNativePromise(error);
+    throw hostError('HOST_RESOURCE_INVALID');
+  }
+  const expectedBundleRealPath = path.join(rootRealPath, RESOURCE_DIRECTORY_NAME);
+  if (!bundleStat.isDirectory() || bundleStat.isSymbolicLink()
+    || bundleRealPath !== expectedBundleRealPath
+    || !pathWithin(rootRealPath, bundleRealPath)) {
+    throw hostError('HOST_RESOURCE_INVALID');
+  }
+  const entry = inspectFixedFile({
+    rootRealPath,
+    bundleRealPath,
+    bundleDirectory,
+    fileName: RESOURCE_ENTRY_NAME,
+    maxBytes: MAX_RESOURCE_BYTES,
+  });
+  const attestationFile = inspectFixedFile({
+    rootRealPath,
+    bundleRealPath,
+    bundleDirectory,
+    fileName: RESOURCE_ATTESTATION_NAME,
+    maxBytes: MAX_ATTESTATION_BYTES,
+  });
+  const attestation = parseDistributionAttestation(attestationFile.contents);
+  return Object.freeze({
+    bundleDirectory,
+    entryPath: entry.filePath,
+    resourceDigest: entry.digest,
+    resourceBytes: entry.bytes,
+    identity: entry.identity,
+    attestationPath: attestationFile.filePath,
+    attestationDigest: attestationFile.digest,
+    attestationBytes: attestationFile.bytes,
+    attestationIdentity: attestationFile.identity,
+    attestation,
   });
 }
 
@@ -295,7 +382,12 @@ function sameResource(left, right) {
   return left.entryPath === right.entryPath
     && left.resourceDigest === right.resourceDigest
     && left.resourceBytes === right.resourceBytes
-    && sameIdentity(left.identity, right.identity);
+    && sameIdentity(left.identity, right.identity)
+    && left.attestationPath === right.attestationPath
+    && left.attestationDigest === right.attestationDigest
+    && left.attestationBytes === right.attestationBytes
+    && left.attestation.manifestDigest === right.attestation.manifestDigest
+    && sameIdentity(left.attestationIdentity, right.attestationIdentity);
 }
 
 function settledOutcome(value) {
@@ -320,17 +412,22 @@ function settledOutcome(value) {
   });
 }
 
-function signatureRequest(resource, platform, architecture) {
+function signatureRequest(resource, options) {
   return Object.freeze({
     version: PORTABLE_ISOLATION_HELPER_PLATFORM_SIGNATURE_REQUEST_VERSION,
     distribution: PORTABLE_ISOLATION_HELPER_DISTRIBUTION,
-    bundleId: BUNDLE_ID,
-    helperBuildId: HELPER_BUILD_ID,
-    platform,
-    architecture,
+    applicationId: PORTABLE_ISOLATION_HELPER_APPLICATION_ID,
+    applicationVersion: options.applicationVersion,
+    electronVersion: options.electronVersion,
+    bundleId: PORTABLE_ISOLATION_HELPER_BUNDLE_ID,
+    helperBuildId: PORTABLE_ISOLATION_HELPER_BUILD_ID,
+    platform: options.platform,
+    architecture: options.architecture,
     resourcePath: resource.entryPath,
+    resourceName: PORTABLE_ISOLATION_HELPER_RESOURCE_NAME,
     resourceDigest: resource.resourceDigest,
     resourceBytes: resource.resourceBytes,
+    attestation: resource.attestation,
   });
 }
 
@@ -359,17 +456,22 @@ function normalizeSignatureReceipt(value, request) {
   });
 }
 
-function bundleIdentityDigest(resource, signature, platform, architecture) {
+function bundleIdentityDigest(resource, signature, options) {
   return canonicalSha256Digest({
     version: 'portable-isolation-helper-host-bundle-identity.v1',
     distribution: PORTABLE_ISOLATION_HELPER_DISTRIBUTION,
     transport: PORTABLE_ISOLATION_HELPER_PRIVATE_TRANSPORT_KIND,
-    bundleId: BUNDLE_ID,
-    helperBuildId: HELPER_BUILD_ID,
-    platform,
-    architecture,
+    applicationId: PORTABLE_ISOLATION_HELPER_APPLICATION_ID,
+    applicationVersion: options.applicationVersion,
+    electronVersion: options.electronVersion,
+    bundleId: PORTABLE_ISOLATION_HELPER_BUNDLE_ID,
+    helperBuildId: PORTABLE_ISOLATION_HELPER_BUILD_ID,
+    platform: options.platform,
+    architecture: options.architecture,
     resourceDigest: resource.resourceDigest,
     resourceBytes: resource.resourceBytes,
+    attestationDigest: resource.attestationDigest,
+    manifestDigest: resource.attestation.manifestDigest,
     signatureIdentityDigest: signature.signatureIdentityDigest,
   });
 }
@@ -419,11 +521,7 @@ function createPortableIsolationHelperHostLauncher(options = {}) {
     inspectionPromise = Promise.resolve().then(() => {
       if (disposeRequested) throw hostError('HOST_DISPOSED');
       const before = inspectResource(normalized.resourcesPath);
-      const request = signatureRequest(
-        before,
-        normalized.platform,
-        normalized.architecture
-      );
+      const request = signatureRequest(before, normalized);
       let rawReceipt;
       try {
         rawReceipt = Reflect.apply(
@@ -445,13 +543,12 @@ function createPortableIsolationHelperHostLauncher(options = {}) {
         inspectedResource = after;
         signatureVerified = true;
         descriptor = createPortableIsolationHelperBundleDescriptor({
-          bundleId: BUNDLE_ID,
-          helperBuildId: HELPER_BUILD_ID,
+          bundleId: PORTABLE_ISOLATION_HELPER_BUNDLE_ID,
+          helperBuildId: PORTABLE_ISOLATION_HELPER_BUILD_ID,
           bundleIdentityDigest: bundleIdentityDigest(
             after,
             signature,
-            normalized.platform,
-            normalized.architecture
+            normalized
           ),
           platform: {
             os: normalized.platform,

@@ -548,6 +548,12 @@ function assertExecutionWorkspaceBoundary() {
   const portableIsolationHelperPrivateTransportContractSource = read(
     'main/capabilities/portable_isolation_helper_private_transport_contract.js'
   );
+  const portableIsolationHelperDistributionAttestationContractSource = read(
+    'main/capabilities/portable_isolation_helper_distribution_attestation_contract.js'
+  );
+  const portableIsolationHelperDistributionVerifierSource = read(
+    'main/services/portable_isolation_helper_distribution_verifier.js'
+  );
   const portableIsolationHelperClientSource = read(
     'main/services/portable_isolation_helper_client.js'
   );
@@ -565,6 +571,9 @@ function assertExecutionWorkspaceBoundary() {
   );
   const portableIsolationHelperBootstrapSource = read(
     'main/portable_isolation_helper/utility_entry.js'
+  );
+  const portableIsolationHelperDistributionAttestationSource = read(
+    'main/portable_isolation_helper/distribution_attestation.json'
   );
   const packageConfig = JSON.parse(read('package.json'));
   const processSupervisorSource = read('main/agent_runtime/execution/process_supervisor.js');
@@ -593,6 +602,14 @@ function assertExecutionWorkspaceBoundary() {
     [
       'main/capabilities/portable_isolation_helper_private_transport_contract.js',
       portableIsolationHelperPrivateTransportContractSource,
+    ],
+    [
+      'main/capabilities/portable_isolation_helper_distribution_attestation_contract.js',
+      portableIsolationHelperDistributionAttestationContractSource,
+    ],
+    [
+      'main/services/portable_isolation_helper_distribution_verifier.js',
+      portableIsolationHelperDistributionVerifierSource,
     ],
     [
       'main/services/portable_isolation_helper_client.js',
@@ -764,9 +781,37 @@ function assertExecutionWorkspaceBoundary() {
     'helper sessions must be bundle-bound, digest-chained, exclusive, sanitize failures, and prove zero live authority at shutdown'
   );
   assertDoesNotMatch(
-    `${portableIsolationHelperLauncherContractSource}\n${portableIsolationHelperPrivateTransportContractSource}\n${portableIsolationHelperPrivateTransportSource}`,
+    `${portableIsolationHelperLauncherContractSource}\n${portableIsolationHelperPrivateTransportContractSource}\n${portableIsolationHelperDistributionAttestationContractSource}\n${portableIsolationHelperDistributionVerifierSource}\n${portableIsolationHelperPrivateTransportSource}`,
     /require\(['"](?:electron|child_process|fs|path|net|tls|http|https|worker_threads|module)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\bprocess\.env\b|\b__dirname\b|\bimport\s*\(|\b(?:binary|executable|helper|provider)Path\b/,
-    'portable helper launch and framing foundations must not own host launch, filesystem, network, IPC, dynamic-loading, environment, or injected-path authority'
+    'portable helper launch, distribution, and framing foundations must not own host launch, filesystem, network, IPC, dynamic-loading, environment, or injected-path authority'
+  );
+  assert.ok(
+    portableIsolationHelperDistributionAttestationContractSource.includes(
+      "'portable-isolation-helper-distribution-manifest.v1'"
+    )
+      && portableIsolationHelperDistributionAttestationContractSource.includes(
+        "'portable-isolation-helper-distribution-attestation.v1'"
+      )
+      && portableIsolationHelperDistributionAttestationContractSource.includes(
+        "'ed25519'"
+      )
+      && portableIsolationHelperDistributionAttestationContractSource.includes(
+        'portableIsolationHelperDistributionSigningPayload'
+      )
+      && portableIsolationHelperDistributionVerifierSource.includes('crypto.verify')
+      && portableIsolationHelperDistributionVerifierSource.includes(
+        "asymmetricKeyType !== 'ed25519'"
+      )
+      && portableIsolationHelperDistributionVerifierSource.includes(
+        'canonicalSha256Digest'
+      )
+      && portableIsolationHelperDistributionVerifierSource.includes(
+        'DISTRIBUTION_TRUST_REJECTED'
+      )
+      && portableIsolationHelperDistributionVerifierSource.includes(
+        'DISTRIBUTION_ATTESTATION_MISMATCH'
+      ),
+    'distribution trust must be canonical, Ed25519-only, platform-and-architecture-bound, digest-bound, and fail closed'
   );
   assert.ok(
     portableIsolationHelperLauncherContractSource.includes(
@@ -904,6 +949,9 @@ function assertExecutionWorkspaceBoundary() {
         "const RESOURCE_ENTRY_NAME = 'utility_entry.js'"
       )
       && portableIsolationHelperHostLauncherSource.includes(
+        "const RESOURCE_ATTESTATION_NAME = 'distribution_attestation.json'"
+      )
+      && portableIsolationHelperHostLauncherSource.includes(
         'HOST_PACKAGED_APP_REQUIRED'
       )
       && portableIsolationHelperHostLauncherSource.includes(
@@ -911,13 +959,21 @@ function assertExecutionWorkspaceBoundary() {
       )
       && portableIsolationHelperHostLauncherSource.includes('fs.constants.O_NOFOLLOW')
       && portableIsolationHelperHostLauncherSource.includes(
+        "new util.TextDecoder('utf-8', { fatal: true })"
+      )
+      && portableIsolationHelperHostLauncherSource.includes(
+        'assertPortableIsolationHelperDistributionAttestation'
+      )
+      && portableIsolationHelperHostLauncherSource.includes('attestationDigest')
+      && portableIsolationHelperHostLauncherSource.includes('manifestDigest')
+      && portableIsolationHelperHostLauncherSource.includes(
         'sameResource(before, after)'
       )
       && portableIsolationHelperHostLauncherSource.includes(
         'openPortableIsolationHelperUtilityChannel'
       )
       && portableIsolationHelperHostLauncherSource.includes('disposeRequested'),
-    'the sole host authority must resolve one fixed packaged resource, verify its physical identity and platform signature, bind one utility channel, and close in-flight launches'
+    'the sole host authority must resolve the fixed helper plus its canonical attestation, verify both physical identities and the release signature, bind one utility channel, and close in-flight launches'
   );
   assertDoesNotMatch(
     portableIsolationHelperBootstrapSource,
@@ -936,9 +992,11 @@ function assertExecutionWorkspaceBoundary() {
       && JSON.stringify(packageConfig.build.extraResources) === JSON.stringify([{
         from: 'main/portable_isolation_helper',
         to: 'portable-isolation-helper',
-        filter: ['utility_entry.js'],
-      }]),
-    'the helper bootstrap must ship at one fixed extraResource location outside the application ASAR'
+        filter: ['utility_entry.js', 'distribution_attestation.json'],
+      }])
+      && portableIsolationHelperDistributionAttestationSource
+        === '{"status":"unconfigured_release_attestation"}\n',
+    'the helper and fail-closed release-attestation placeholder must ship together at one fixed extraResource location outside the application ASAR'
   );
   assertDoesNotMatch(
     portableIsolationHelperClientSource,
@@ -1025,8 +1083,8 @@ function assertExecutionWorkspaceBoundary() {
   }
   assertDoesNotMatch(
     `${mainSource}\n${isolationProviderFactorySource}`,
-    /portable_isolation_helper_(?:protocol|launcher_contract|private_transport_contract|client|private_transport|provider_adapter|utility_channel|host_launcher)|(?:createPortableIsolationHelper(?:SessionController|Client|PrivateTransport|ProviderAdapter|HostLauncher)|openPortableIsolationHelperUtilityChannel)/,
-    'the helper foundations, fixed host launcher, and private utility channel must remain unwired until a concrete platform signature verifier and enforced portable isolation runtime exist'
+    /portable_isolation_helper_(?:protocol|launcher_contract|private_transport_contract|distribution_attestation_contract|client|private_transport|distribution_verifier|provider_adapter|utility_channel|host_launcher)|(?:createPortableIsolationHelper(?:SessionController|Client|PrivateTransport|DistributionTrustedKey|PlatformSignatureVerifier|ProviderAdapter|HostLauncher)|openPortableIsolationHelperUtilityChannel)/,
+    'the helper foundations, release verifier, fixed host launcher, and private utility channel must remain unwired until a pinned production trust root and enforced portable isolation runtime exist'
   );
 
   assertDoesNotMatch(

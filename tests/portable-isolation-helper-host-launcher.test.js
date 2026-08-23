@@ -1,11 +1,24 @@
 'use strict';
 
 const assert = require('assert');
+const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const {
+  immutableSnapshot,
+} = require('../main/capabilities/capability_delegation_contracts');
+const {
+  createPortableIsolationHelperDistributionAttestation,
+  createPortableIsolationHelperDistributionManifest,
+  portableIsolationHelperDistributionSigningPayload,
+} = require('../main/capabilities/portable_isolation_helper_distribution_attestation_contract');
+const {
+  createPortableIsolationHelperDistributionTrustedKey,
+  createPortableIsolationHelperPlatformSignatureVerifier,
+} = require('../main/services/portable_isolation_helper_distribution_verifier');
 const {
   PORTABLE_ISOLATION_HELPER_LAUNCH_RECEIPT_VERSION,
   createPortableIsolationHelperLaunchRequest,
@@ -35,6 +48,7 @@ const {
 } = require('../main/services/portable_isolation_helper_host_launcher');
 
 const digest = (character) => `sha256:${character.repeat(64)}`;
+const sha256 = (bytes) => `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
 const tempDirectories = [];
 
 function tempDirectory() {
@@ -43,13 +57,50 @@ function tempDirectory() {
   return value;
 }
 
-function resourceFixture() {
+function serializedAttestation(attestation) {
+  return `${JSON.stringify(immutableSnapshot(attestation))}\n`;
+}
+
+function writeAttestation(attestationPath, attestation) {
+  fs.writeFileSync(attestationPath, serializedAttestation(attestation), 'utf8');
+}
+
+function resourceFixture({
+  privateKey = null,
+  keyId = 'faber-release-test-1',
+} = {}) {
   const resourcesPath = tempDirectory();
   const bundleDirectory = path.join(resourcesPath, 'portable-isolation-helper');
   const entryPath = path.join(bundleDirectory, 'utility_entry.js');
+  const attestationPath = path.join(bundleDirectory, 'distribution_attestation.json');
+  const entryBytes = Buffer.from("'use strict';\n// signed helper fixture\n", 'utf8');
   fs.mkdirSync(bundleDirectory, { recursive: true });
-  fs.writeFileSync(entryPath, "'use strict';\n// signed helper fixture\n", 'utf8');
-  return { resourcesPath, bundleDirectory, entryPath };
+  fs.writeFileSync(entryPath, entryBytes);
+  const manifest = createPortableIsolationHelperDistributionManifest({
+    applicationId: 'com.faber.code',
+    applicationVersion: '0.1.3',
+    electronVersion: '42.1.0',
+    bundleId: 'faber-portable-isolation-helper',
+    helperBuildId: 'portable-helper-bootstrap-1',
+    platform: 'darwin',
+    architecture: 'arm64',
+    resourceName: 'utility_entry.js',
+    resourceDigest: sha256(entryBytes),
+    resourceBytes: entryBytes.length,
+    keyId,
+  });
+  const signatureBase64 = privateKey
+    ? crypto.sign(null, Buffer.from(
+      portableIsolationHelperDistributionSigningPayload(manifest),
+      'utf8'
+    ), privateKey).toString('base64')
+    : Buffer.alloc(64).toString('base64');
+  const attestation = createPortableIsolationHelperDistributionAttestation({
+    manifest,
+    signatureBase64,
+  });
+  writeAttestation(attestationPath, attestation);
+  return { resourcesPath, bundleDirectory, entryPath, attestationPath, attestation };
 }
 
 function deferred() {
@@ -139,7 +190,12 @@ function signatureVerifier(overrides = {}) {
   return { state, verifier };
 }
 
-function launcherHarness({ fixture = resourceFixture(), verifierOverrides = {}, options = {} } = {}) {
+function launcherHarness({
+  fixture = resourceFixture(),
+  verifier = null,
+  verifierOverrides = {},
+  options = {},
+} = {}) {
   const signature = signatureVerifier(verifierOverrides);
   const state = { forks: [], processes: [] };
   const forkUtilityProcess = (modulePath, args, forkOptions) => {
@@ -154,7 +210,9 @@ function launcherHarness({ fixture = resourceFixture(), verifierOverrides = {}, 
     packaged: options.packaged === undefined ? true : options.packaged,
     platform: options.platform || 'darwin',
     architecture: options.architecture || 'arm64',
-    signatureVerifier: signature.verifier,
+    applicationVersion: options.applicationVersion || '0.1.3',
+    electronVersion: options.electronVersion || '42.1.0',
+    signatureVerifier: verifier || signature.verifier,
     forkUtilityProcess,
     channelTimeoutMs: 100,
   });
@@ -188,6 +246,20 @@ function launcherHarness({ fixture = resourceFixture(), verifierOverrides = {}, 
     assert.strictEqual(signatureRequest.resourcePath, success.fixture.entryPath);
     assert.strictEqual(signatureRequest.distribution, 'application_bundle');
     assert.ok(Object.isFrozen(signatureRequest));
+    assert.deepStrictEqual(Object.keys(signatureRequest).sort(), [
+      'applicationId', 'applicationVersion', 'architecture', 'attestation',
+      'bundleId', 'distribution', 'electronVersion', 'helperBuildId',
+      'platform', 'resourceBytes', 'resourceDigest', 'resourceName',
+      'resourcePath', 'version',
+    ].sort());
+    assert.strictEqual(signatureRequest.applicationId, 'com.faber.code');
+    assert.strictEqual(signatureRequest.applicationVersion, '0.1.3');
+    assert.strictEqual(signatureRequest.electronVersion, '42.1.0');
+    assert.strictEqual(signatureRequest.resourceName, 'utility_entry.js');
+    assert.deepStrictEqual(signatureRequest.attestation, success.fixture.attestation);
+    assert.ok(Object.isFrozen(signatureRequest.attestation));
+    assert.ok(Object.isFrozen(signatureRequest.attestation.manifest));
+    assert.notStrictEqual(signatureRequest.attestation, success.fixture.attestation);
 
     const request = createPortableIsolationHelperLaunchRequest({
       requestId: 'portable-host-launch-1',
@@ -348,6 +420,33 @@ function launcherHarness({ fixture = resourceFixture(), verifierOverrides = {}, 
     await expectRejectCode(unsigned.launcher.inspect(), 'HOST_SIGNATURE_REJECTED');
     assert.strictEqual(unsigned.state.forks.length, 0);
 
+    const releaseKeys = crypto.generateKeyPairSync('ed25519');
+    const publicKeyDer = releaseKeys.publicKey.export({ format: 'der', type: 'spki' });
+    const trustedKey = createPortableIsolationHelperDistributionTrustedKey({
+      keyId: 'faber-release-integration-1',
+      platform: 'darwin',
+      architecture: 'arm64',
+      publicKeySpkiDerBase64: publicKeyDer.toString('base64'),
+    });
+    const signedFixture = resourceFixture({
+      privateKey: releaseKeys.privateKey,
+      keyId: trustedKey.keyId,
+    });
+    const concreteVerifier = createPortableIsolationHelperPlatformSignatureVerifier({
+      trustedKeys: Object.freeze([trustedKey]),
+    });
+    const concretelyVerified = launcherHarness({
+      fixture: signedFixture,
+      verifier: concreteVerifier,
+    });
+    const concreteDescriptor = await concretelyVerified.launcher.inspect();
+    assert.strictEqual(concreteDescriptor.platform.signatureVerification, 'platform_verified');
+    assert.match(
+      concreteDescriptor.platform.signatureIdentityDigest,
+      /^sha256:[a-f0-9]{64}$/
+    );
+    assert.strictEqual(concretelyVerified.state.forks.length, 0);
+
     const changed = launcherHarness({
       verifierOverrides: {
         verify(request) {
@@ -367,6 +466,42 @@ function launcherHarness({ fixture = resourceFixture(), verifierOverrides = {}, 
     await expectRejectCode(changed.launcher.inspect(), 'HOST_RESOURCE_CHANGED');
     assert.strictEqual(changed.state.forks.length, 0);
 
+    const changedAttestationFixture = resourceFixture();
+    const changedAttestation = launcherHarness({
+      fixture: changedAttestationFixture,
+      verifierOverrides: {
+        verify(request) {
+          writeAttestation(
+            changedAttestationFixture.attestationPath,
+            createPortableIsolationHelperDistributionAttestation({
+              manifest: request.attestation.manifest,
+              signatureBase64: Buffer.alloc(64, 1).toString('base64'),
+            })
+          );
+          return Object.freeze({
+            version: PORTABLE_ISOLATION_HELPER_PLATFORM_SIGNATURE_RECEIPT_VERSION,
+            verified: true,
+            distribution: 'application_bundle',
+            platform: request.platform,
+            architecture: request.architecture,
+            resourceDigest: request.resourceDigest,
+            signatureIdentityDigest: digest('d'),
+          });
+        },
+      },
+    });
+    await expectRejectCode(
+      changedAttestation.launcher.inspect(),
+      'HOST_RESOURCE_CHANGED'
+    );
+    assert.strictEqual(changedAttestation.state.forks.length, 0);
+
+    const invalidAttestationFixture = resourceFixture();
+    fs.writeFileSync(invalidAttestationFixture.attestationPath, '{}\n', 'utf8');
+    const invalidAttestation = launcherHarness({ fixture: invalidAttestationFixture });
+    await expectRejectCode(invalidAttestation.launcher.inspect(), 'HOST_RESOURCE_INVALID');
+    assert.strictEqual(invalidAttestation.signature.state.requests.length, 0);
+
     const symlinkFixture = resourceFixture();
     const target = path.join(symlinkFixture.bundleDirectory, 'target.js');
     fs.renameSync(symlinkFixture.entryPath, target);
@@ -374,6 +509,14 @@ function launcherHarness({ fixture = resourceFixture(), verifierOverrides = {}, 
     const symlinked = launcherHarness({ fixture: symlinkFixture });
     await expectRejectCode(symlinked.launcher.inspect(), 'HOST_RESOURCE_INVALID');
     assert.strictEqual(symlinked.signature.state.requests.length, 0);
+
+    const attestationSymlinkFixture = resourceFixture();
+    const attestationTarget = path.join(attestationSymlinkFixture.bundleDirectory, 'target.json');
+    fs.renameSync(attestationSymlinkFixture.attestationPath, attestationTarget);
+    fs.symlinkSync(attestationTarget, attestationSymlinkFixture.attestationPath);
+    const attestationSymlinked = launcherHarness({ fixture: attestationSymlinkFixture });
+    await expectRejectCode(attestationSymlinked.launcher.inspect(), 'HOST_RESOURCE_INVALID');
+    assert.strictEqual(attestationSymlinked.signature.state.requests.length, 0);
 
     const mismatch = launcherHarness();
     const legitimate = await mismatch.launcher.inspect();
@@ -420,6 +563,8 @@ function launcherHarness({ fixture = resourceFixture(), verifierOverrides = {}, 
       packaged: true,
       platform: 'darwin',
       architecture: 'arm64',
+      applicationVersion: '0.1.3',
+      electronVersion: '42.1.0',
       signatureVerifier: signatureVerifier().verifier,
       forkUtilityProcess() {},
       channelTimeoutMs: 100,
@@ -446,8 +591,16 @@ function launcherHarness({ fixture = resourceFixture(), verifierOverrides = {}, 
     assert.deepStrictEqual(packageJson.build.extraResources, [{
       from: 'main/portable_isolation_helper',
       to: 'portable-isolation-helper',
-      filter: ['utility_entry.js'],
+      filter: ['utility_entry.js', 'distribution_attestation.json'],
     }]);
+    const unconfiguredAttestationSource = fs.readFileSync(
+      path.join(__dirname, '..', 'main', 'portable_isolation_helper', 'distribution_attestation.json'),
+      'utf8'
+    );
+    assert.strictEqual(
+      unconfiguredAttestationSource,
+      '{"status":"unconfigured_release_attestation"}\n'
+    );
     const bootstrapSource = fs.readFileSync(
       path.join(__dirname, '..', 'main', 'portable_isolation_helper', 'utility_entry.js'),
       'utf8'
