@@ -24,13 +24,19 @@ const {
 const {
   PROCESS_SUPERVISOR_VERSION,
 } = require('../agent_runtime/execution/process_supervisor');
+const {
+  EXECUTION_ISOLATION_JOB_PROCESS_GATEWAY_DISPOSE_RECEIPT_VERSION,
+  createExecutionIsolationJobProcessGateway,
+} = require('./execution_isolation_job_process_gateway');
 
 const EXECUTION_ISOLATION_JOB_SESSION_SERVICE_VERSION =
-  'execution-isolation-job-session-service.v1';
+  'execution-isolation-job-session-service.v2';
 const EXECUTION_ISOLATION_JOB_SESSION_VERSION =
-  'execution-isolation-job-session.v1';
+  'execution-isolation-job-session.v2';
 const EXECUTION_ISOLATION_JOB_SESSION_DISPOSE_RECEIPT_VERSION =
-  'execution-isolation-job-session-dispose-receipt.v1';
+  'execution-isolation-job-session-dispose-receipt.v2';
+const EXECUTION_ISOLATION_JOB_SESSION_CLOSE_RECEIPT_VERSION =
+  'execution-isolation-job-session-close-receipt.v1';
 
 const DEFAULT_MAX_ACTIVE_SESSIONS = 64;
 const HARD_MAX_ACTIVE_SESSIONS = 1_024;
@@ -51,6 +57,7 @@ const EXECUTION_ISOLATION_JOB_SESSION_REASONS = Object.freeze({
   DISPOSED: 'EXECUTION_ISOLATION_SESSION_SERVICE_DISPOSED',
   INVALID_INPUT: 'EXECUTION_ISOLATION_SESSION_INVALID_INPUT',
   PROCESS_UNAVAILABLE: 'EXECUTION_ISOLATION_PROCESS_UNAVAILABLE',
+  PROCESS_GATEWAY_FAILED: 'EXECUTION_ISOLATION_PROCESS_GATEWAY_FAILED',
   ROOT_ACQUIRE_FAILED: 'EXECUTION_ISOLATION_ROOT_ACQUIRE_FAILED',
   SESSION_CLOSED: 'EXECUTION_ISOLATION_SESSION_CLOSED',
   SESSION_MISMATCH: 'EXECUTION_ISOLATION_SESSION_MISMATCH',
@@ -275,6 +282,27 @@ function successfulRootRelease(outcome) {
     && typeof fields.get('idempotent') === 'boolean');
 }
 
+function successfulProcessGatewayDispose(outcome) {
+  if (!outcome.ok || !Object.isFrozen(outcome.value)) return false;
+  const fields = exactOwnDataFields(outcome.value, [
+    'version',
+    'ok',
+    'disposed',
+    'active',
+    'terminal',
+    'quarantined',
+  ]);
+  return Boolean(fields
+    && fields.get('version')
+      === EXECUTION_ISOLATION_JOB_PROCESS_GATEWAY_DISPOSE_RECEIPT_VERSION
+    && fields.get('ok') === true
+    && fields.get('disposed') === true
+    && fields.get('active') === 0
+    && Number.isSafeInteger(fields.get('terminal'))
+    && fields.get('terminal') >= 0
+    && fields.get('quarantined') === 0);
+}
+
 function captureDependencies(options) {
   const optionFields = exactOwnDataFields(options, [
     'executionWorkspaceRegistry',
@@ -339,7 +367,11 @@ function captureDependencies(options) {
     || Object.is(maxActiveSessions, -0)) {
     throw new TypeError('Invalid execution isolation job session capacity');
   }
-  return Object.freeze({ ...captured, maxActiveSessions });
+  return Object.freeze({
+    ...captured,
+    processSupervisor: process,
+    maxActiveSessions,
+  });
 }
 
 function createExecutionIsolationJobSessionService(options = {}) {
@@ -415,7 +447,60 @@ function createExecutionIsolationJobSessionService(options = {}) {
     });
   }
 
+  async function releaseProcessGateway(record) {
+    if (!record.processGatewayDispose) return true;
+    const outcome = await invokeCaptured(record.processGatewayDispose);
+    return successfulProcessGatewayDispose(outcome);
+  }
+
+  function invokeProcessGateway(record, name, input) {
+    if (record.closeRequested || ['closing', 'closed'].includes(record.state)) {
+      return Promise.resolve(denied(
+        EXECUTION_ISOLATION_JOB_SESSION_REASONS.SESSION_CLOSED
+      ));
+    }
+    if (record.state !== 'active') {
+      return Promise.resolve(denied(
+        EXECUTION_ISOLATION_JOB_SESSION_REASONS.SESSION_UNHEALTHY
+      ));
+    }
+    const captured = record.processGatewayMethods
+      && record.processGatewayMethods[name];
+    if (!captured) {
+      return Promise.resolve(denied(
+        EXECUTION_ISOLATION_JOB_SESSION_REASONS.PROCESS_GATEWAY_FAILED
+      ));
+    }
+    let raw;
+    try {
+      raw = Reflect.apply(captured.method, captured.receiver, [input]);
+    } catch (error) {
+      preflightDataGraph(error);
+      return Promise.resolve(denied(
+        EXECUTION_ISOLATION_JOB_SESSION_REASONS.PROCESS_GATEWAY_FAILED
+      ));
+    }
+    if (!util.types.isPromise(raw)) {
+      preflightDataGraph(raw);
+      return Promise.resolve(denied(
+        EXECUTION_ISOLATION_JOB_SESSION_REASONS.PROCESS_GATEWAY_FAILED
+      ));
+    }
+    return raw;
+  }
+
   function sessionDiagnostics(record) {
+    let processes = null;
+    const captured = record.processGatewayMethods
+      && record.processGatewayMethods.diagnostics;
+    if (captured) {
+      try {
+        processes = Reflect.apply(captured.method, captured.receiver, []);
+      } catch (error) {
+        preflightDataGraph(error);
+        processes = null;
+      }
+    }
     return Object.freeze({
       version: EXECUTION_ISOLATION_JOB_SESSION_VERSION,
       jobId: record.input.binding.jobId,
@@ -424,6 +509,7 @@ function createExecutionIsolationJobSessionService(options = {}) {
       processIsolationState: processState,
       rootAuthorityHeld: Boolean(record.rootLease),
       workspaceAuthorityHeld: Boolean(record.workspaceLease),
+      processes,
     });
   }
 
@@ -437,14 +523,23 @@ function createExecutionIsolationJobSessionService(options = {}) {
       }
       if (record.state === 'closed') return record.closeReceipt;
       record.state = 'closing';
-      const cleanup = await releaseAuthorities(record);
+      const processesStopped = await releaseProcessGateway(record);
+      const cleanup = processesStopped
+        ? await releaseAuthorities(record)
+        : Object.freeze({
+          workspaceRolledBack: false,
+          rootReleased: false,
+          clean: false,
+        });
       const receipt = Object.freeze({
-        ok: cleanup.clean,
-        closed: cleanup.clean,
+        version: EXECUTION_ISOLATION_JOB_SESSION_CLOSE_RECEIPT_VERSION,
+        ok: processesStopped && cleanup.clean,
+        closed: processesStopped && cleanup.clean,
+        processesStopped,
         workspaceRolledBack: cleanup.workspaceRolledBack,
         rootReleased: cleanup.rootReleased,
       });
-      if (cleanup.clean) {
+      if (processesStopped && cleanup.clean) {
         record.state = 'closed';
         if (record.wasActive) closedCount += 1;
         record.closeReceipt = receipt;
@@ -463,6 +558,18 @@ function createExecutionIsolationJobSessionService(options = {}) {
       version: EXECUTION_ISOLATION_JOB_SESSION_VERSION,
       jobId: record.input.binding.jobId,
       projectId: record.input.binding.projectId,
+      exec(input) {
+        return invokeProcessGateway(record, 'exec', input);
+      },
+      read(input) {
+        return invokeProcessGateway(record, 'read', input);
+      },
+      wait(input) {
+        return invokeProcessGateway(record, 'wait', input);
+      },
+      stop(input) {
+        return invokeProcessGateway(record, 'stop', input);
+      },
       diagnostics() {
         return sessionDiagnostics(record);
       },
@@ -555,6 +662,37 @@ function createExecutionIsolationJobSessionService(options = {}) {
       );
     }
     record.workspaceLease = workspaceLease;
+    let processGateway;
+    let processGatewayMethods;
+    try {
+      processGateway = createExecutionIsolationJobProcessGateway({
+        binding: record.input.binding,
+        workspaceLease,
+        processSupervisor: dependencies.processSupervisor,
+      });
+      processGatewayMethods = Object.freeze(Object.fromEntries(
+        ['exec', 'read', 'wait', 'stop', 'diagnostics', 'dispose'].map((name) => {
+          const captured = captureOwnMethod(processGateway, name);
+          if (!captured) {
+            throw new TypeError('Invalid execution isolation process gateway');
+          }
+          return [name, captured];
+        })
+      ));
+    } catch (error) {
+      preflightDataGraph(error);
+      const cleanup = await releaseAuthorities(record);
+      return failOpen(
+        record,
+        cleanup.clean
+          ? EXECUTION_ISOLATION_JOB_SESSION_REASONS.PROCESS_GATEWAY_FAILED
+          : EXECUTION_ISOLATION_JOB_SESSION_REASONS.SESSION_UNHEALTHY,
+        { retain: !cleanup.clean }
+      );
+    }
+    record.processGateway = processGateway;
+    record.processGatewayMethods = processGatewayMethods;
+    record.processGatewayDispose = processGatewayMethods.dispose;
     record.session = createSessionFacade(record);
     record.wasActive = true;
     record.state = 'active';
@@ -627,6 +765,9 @@ function createExecutionIsolationJobSessionService(options = {}) {
       closeRequested: false,
       rootLease: null,
       workspaceLease: null,
+      processGateway: null,
+      processGatewayMethods: null,
+      processGatewayDispose: null,
       session: null,
       wasActive: false,
     };
@@ -720,6 +861,7 @@ function createExecutionIsolationJobSessionService(options = {}) {
 }
 
 module.exports = {
+  EXECUTION_ISOLATION_JOB_SESSION_CLOSE_RECEIPT_VERSION,
   EXECUTION_ISOLATION_JOB_SESSION_DISPOSE_RECEIPT_VERSION,
   EXECUTION_ISOLATION_JOB_SESSION_REASONS,
   EXECUTION_ISOLATION_JOB_SESSION_SERVICE_VERSION,

@@ -543,6 +543,9 @@ function assertExecutionWorkspaceBoundary() {
   const isolationJobSessionSource = read(
     'main/services/execution_isolation_job_session_service.js'
   );
+  const isolationJobProcessGatewaySource = read(
+    'main/services/execution_isolation_job_process_gateway.js'
+  );
   const processSupervisorContractSource = read(
     'main/capabilities/process_supervisor_contract.js'
   );
@@ -643,6 +646,10 @@ function assertExecutionWorkspaceBoundary() {
       isolationJobSessionSource,
     ],
     [
+      'main/services/execution_isolation_job_process_gateway.js',
+      isolationJobProcessGatewaySource,
+    ],
+    [
       'main/capabilities/portable_isolation_helper_protocol.js',
       portableIsolationHelperProtocolSource,
     ],
@@ -704,12 +711,12 @@ function assertExecutionWorkspaceBoundary() {
   }
 
   assertDoesNotMatch(
-    `${isolationRuntimeConfigSource}\n${isolationProviderFactorySource}\n${isolationRuntimeServicesSource}\n${isolationJobSessionSource}`,
+    `${isolationRuntimeConfigSource}\n${isolationProviderFactorySource}\n${isolationRuntimeServicesSource}\n${isolationJobSessionSource}\n${isolationJobProcessGatewaySource}`,
     /require\(['"](?:electron|child_process|fs)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\.node\b/,
     'portable isolation selection must remain a data-only seam without process, filesystem, IPC, or addon loading authority'
   );
   assertDoesNotMatch(
-    `${isolationRuntimeConfigSource}\n${isolationProviderFactorySource}\n${isolationRuntimeServicesSource}\n${isolationJobSessionSource}`,
+    `${isolationRuntimeConfigSource}\n${isolationProviderFactorySource}\n${isolationRuntimeServicesSource}\n${isolationJobSessionSource}\n${isolationJobProcessGatewaySource}`,
     /FABER_EXECUTION_ISOLATION_(?:PROVIDER|ADDON)_PATH/,
     'portable isolation selection must not accept a provider path from the environment'
   );
@@ -808,7 +815,32 @@ function assertExecutionWorkspaceBoundary() {
   assertDoesNotMatch(
     isolationJobSessionSource,
     /createSandboxExecutionRequest|createProcessSupervisorExecRequest|dependencies\.processExec|\bcommand\b/,
-    'A3.20 job sessions must not expose or execute commands before the process gateway checkpoint'
+    'job-session lifecycle ownership must delegate command construction and execution to the process gateway'
+  );
+  assert.ok(
+    isolationJobProcessGatewaySource.includes('createSandboxExecutionRequest')
+      && isolationJobProcessGatewaySource.includes(
+        'createProcessSupervisorExecRequest'
+      )
+      && isolationJobProcessGatewaySource.includes('processExec:')
+      && isolationJobProcessGatewaySource.includes(
+        'workspaceLease: dependencies.workspaceLease'
+      )
+      && isolationJobProcessGatewaySource.includes(
+        'rootPath: dependencies.workspaceLease.workspaceRootPath'
+      )
+      && isolationJobProcessGatewaySource.includes(
+        'realRootPath: dependencies.workspaceLease.workspaceRealRootPath'
+      ),
+    'the process gateway must retarget broker-authorized requests and bind supervisor authority to the private workspace lease'
+  );
+  assert.ok(
+    isolationJobSessionSource.indexOf(
+      'const processesStopped = await releaseProcessGateway(record);'
+    ) < isolationJobSessionSource.indexOf(
+      '? await releaseAuthorities(record)'
+    ),
+    'job-session close must confirm process-tree shutdown before workspace rollback and root release'
   );
   assert.ok(
     mainSource.includes(
@@ -823,11 +855,20 @@ function assertExecutionWorkspaceBoundary() {
     false,
     'main must receive job sessions only through the runtime-services boundary'
   );
+  assert.strictEqual(
+    mainSource.includes('execution_isolation_job_process_gateway'),
+    false,
+    'main must not bypass job sessions to reach the process gateway'
+  );
   assert.ok(
+    packageConfig.scripts['test:execution-workspace'].includes(
+      'execution-isolation-job-process-gateway.test.js'
+    )
+      &&
     packageConfig.scripts['test:execution-workspace'].includes(
       'execution-isolation-job-session-service.test.js'
     ),
-    'the aggregate execution-workspace gate must run job-session lifecycle tests'
+    'the aggregate execution-workspace gate must run process-gateway and job-session lifecycle tests'
   );
   assertDoesNotMatch(
     isolationProviderFactorySource,

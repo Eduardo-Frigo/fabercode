@@ -15,12 +15,19 @@ const {
   createProjectRootAuthorityAcquireRequest,
 } = require('../main/capabilities/project_root_authority_contract');
 const {
+  SANDBOX_COMMAND_KINDS,
+  createSandboxExecutionRequest,
+} = require('../main/capabilities/sandbox_backend_contract');
+const {
   PROCESS_SUPERVISOR_BACKEND_VERSION,
   PROCESS_SUPERVISOR_REQUIRED_GUARANTEES,
   PROCESS_SUPERVISOR_STATES,
+  createProcessSupervisorExecReceipt,
   createProcessSupervisorProbeResult,
+  createProcessSupervisorStopReceipt,
 } = require('../main/capabilities/process_supervisor_contract');
 const {
+  EXECUTION_ISOLATION_JOB_SESSION_CLOSE_RECEIPT_VERSION,
   EXECUTION_ISOLATION_JOB_SESSION_DISPOSE_RECEIPT_VERSION,
   EXECUTION_ISOLATION_JOB_SESSION_REASONS,
   EXECUTION_ISOLATION_JOB_SESSION_SERVICE_VERSION,
@@ -74,6 +81,7 @@ function dependencyHarness({
   workspaceDenied = false,
   rootReleaseFails = false,
   workspaceRollbackFails = false,
+  processStopFails = false,
 } = {}) {
   const state = {
     events: [],
@@ -82,6 +90,9 @@ function dependencyHarness({
     workspaceAcquires: 0,
     workspaceRollbacks: 0,
     processProbes: 0,
+    processExecs: 0,
+    processStops: 0,
+    processExecutions: new Map(),
   };
   const rootLeases = new Map();
   const workspaceLeases = new Map();
@@ -206,10 +217,49 @@ function dependencyHarness({
       state.processProbes += 1;
       return Promise.resolve(processProbe);
     },
-    exec() { throw new Error('job sessions do not execute processes yet'); },
+    exec(request) {
+      state.events.push(`process:exec:${request.executionId}`);
+      state.processExecs += 1;
+      const snapshot = Object.freeze({
+        status: 'running',
+        revision: 1,
+        exitCode: null,
+        signal: null,
+        timedOut: false,
+        stopped: false,
+        availableFromCursor: 0,
+        outputCursor: 0,
+      });
+      state.processExecutions.set(request.executionId, snapshot);
+      return Promise.resolve(createProcessSupervisorExecReceipt({
+        request,
+        ...snapshot,
+      }));
+    },
     read() { throw new Error('job sessions do not read processes yet'); },
     wait() { throw new Error('job sessions do not wait for processes yet'); },
-    stop() { throw new Error('job sessions do not stop processes yet'); },
+    stop(request) {
+      state.events.push(`process:stop:${request.executionId}`);
+      state.processStops += 1;
+      if (processStopFails) {
+        return Promise.reject(new Error('process stop failed'));
+      }
+      const current = state.processExecutions.get(request.executionId);
+      const snapshot = Object.freeze({
+        ...current,
+        status: 'stopped',
+        revision: current.revision + 1,
+        signal: 'SIGTERM',
+        stopped: true,
+      });
+      state.processExecutions.set(request.executionId, snapshot);
+      return Promise.resolve(createProcessSupervisorStopReceipt({
+        request,
+        ...snapshot,
+        treeTerminated: true,
+        idempotent: false,
+      }));
+    },
     diagnostics() {
       return Object.freeze({
         version: 'process-supervisor.v1',
@@ -269,6 +319,10 @@ async function main() {
     'version',
     'jobId',
     'projectId',
+    'exec',
+    'read',
+    'wait',
+    'stop',
     'diagnostics',
     'close',
   ]);
@@ -282,6 +336,23 @@ async function main() {
     'root:acquire:job-a',
     'workspace:acquire:job-a',
   ]);
+  const executionStarted = await opened.session.exec(Object.freeze({
+    sandboxRequest: createSandboxExecutionRequest({
+      executionId: 'execution-a',
+      requestId: 'request-a',
+      grantId: 'grant-a',
+      rootPath: openInput.binding.canonicalRootPath,
+      realRootPath: openInput.binding.realRootPath,
+      command: {
+        kind: SANDBOX_COMMAND_KINDS.EXECUTABLE,
+        executable: 'node',
+        args: ['--version'],
+      },
+      timeoutMs: 10_000,
+    }),
+  }));
+  assert.strictEqual(executionStarted.ok, true);
+  assert.strictEqual(successHarness.state.processExecs, 1);
 
   const reopened = await service.open(openInput);
   assert.strictEqual(reopened.ok, true);
@@ -292,16 +363,20 @@ async function main() {
 
   const closeReceipt = await opened.session.close();
   assert.deepStrictEqual(closeReceipt, {
+    version: EXECUTION_ISOLATION_JOB_SESSION_CLOSE_RECEIPT_VERSION,
     ok: true,
     closed: true,
+    processesStopped: true,
     workspaceRolledBack: true,
     rootReleased: true,
   });
   assert.strictEqual(await opened.session.close(), closeReceipt);
-  assert.deepStrictEqual(successHarness.state.events.slice(-2), [
+  assert.deepStrictEqual(successHarness.state.events.slice(-3), [
+    'process:stop:execution-a',
     'workspace:rollback:job-a',
     'root:release:job-a',
   ]);
+  assert.strictEqual(successHarness.state.processStops, 1);
   assert.strictEqual(service.diagnostics().active, 0);
   assert.strictEqual(service.diagnostics().closed, 1);
   assert.strictEqual(
@@ -328,8 +403,10 @@ async function main() {
     code: EXECUTION_ISOLATION_JOB_SESSION_REASONS.SESSION_CLOSED,
   });
   assert.deepStrictEqual(await racingClosePromise, {
+    version: EXECUTION_ISOLATION_JOB_SESSION_CLOSE_RECEIPT_VERSION,
     ok: true,
     closed: true,
+    processesStopped: true,
     workspaceRolledBack: true,
     rootReleased: true,
   });
@@ -339,6 +416,33 @@ async function main() {
   });
   assert.strictEqual(closeDuringOpenService.diagnostics().active, 0);
   assert.strictEqual((await closeDuringOpenService.dispose()).ok, true);
+
+  const closeVersusExecHarness = dependencyHarness();
+  const closeVersusExecService = createService(closeVersusExecHarness);
+  const closeVersusExecOpened = await closeVersusExecService.open(openInput);
+  assert.strictEqual(closeVersusExecOpened.ok, true);
+  const closeVersusExecPromise = closeVersusExecOpened.session.close();
+  assert.deepStrictEqual(await closeVersusExecOpened.session.exec(Object.freeze({
+    sandboxRequest: createSandboxExecutionRequest({
+      executionId: 'execution-after-close-request',
+      requestId: 'request-after-close-request',
+      grantId: 'grant-after-close-request',
+      rootPath: openInput.binding.canonicalRootPath,
+      realRootPath: openInput.binding.realRootPath,
+      command: {
+        kind: SANDBOX_COMMAND_KINDS.EXECUTABLE,
+        executable: 'node',
+        args: ['--version'],
+      },
+      timeoutMs: 10_000,
+    }),
+  })), {
+    ok: false,
+    code: EXECUTION_ISOLATION_JOB_SESSION_REASONS.SESSION_CLOSED,
+  });
+  assert.strictEqual((await closeVersusExecPromise).ok, true);
+  assert.strictEqual(closeVersusExecHarness.state.processExecs, 0);
+  assert.strictEqual((await closeVersusExecService.dispose()).ok, true);
 
   const workspaceFailureHarness = dependencyHarness({ workspaceDenied: true });
   const workspaceFailureService = createService(workspaceFailureHarness);
@@ -390,13 +494,49 @@ async function main() {
   const rootCleanupOpened = await rootCleanupFailureService.open(openInput);
   assert.strictEqual(rootCleanupOpened.ok, true);
   assert.deepStrictEqual(await rootCleanupOpened.session.close(), {
+    version: EXECUTION_ISOLATION_JOB_SESSION_CLOSE_RECEIPT_VERSION,
     ok: false,
     closed: false,
+    processesStopped: true,
     workspaceRolledBack: true,
     rootReleased: false,
   });
   assert.strictEqual(rootCleanupFailureService.diagnostics().quarantined, 1);
   assert.strictEqual((await rootCleanupFailureService.dispose()).ok, false);
+
+  const processCleanupFailureHarness = dependencyHarness({
+    processStopFails: true,
+  });
+  const processCleanupFailureService = createService(processCleanupFailureHarness);
+  const processCleanupOpened = await processCleanupFailureService.open(openInput);
+  assert.strictEqual(processCleanupOpened.ok, true);
+  assert.strictEqual((await processCleanupOpened.session.exec(Object.freeze({
+    sandboxRequest: createSandboxExecutionRequest({
+      executionId: 'execution-cleanup-failure',
+      requestId: 'request-cleanup-failure',
+      grantId: 'grant-cleanup-failure',
+      rootPath: openInput.binding.canonicalRootPath,
+      realRootPath: openInput.binding.realRootPath,
+      command: {
+        kind: SANDBOX_COMMAND_KINDS.EXECUTABLE,
+        executable: 'node',
+        args: ['--version'],
+      },
+      timeoutMs: 10_000,
+    }),
+  }))).ok, true);
+  assert.deepStrictEqual(await processCleanupOpened.session.close(), {
+    version: EXECUTION_ISOLATION_JOB_SESSION_CLOSE_RECEIPT_VERSION,
+    ok: false,
+    closed: false,
+    processesStopped: false,
+    workspaceRolledBack: false,
+    rootReleased: false,
+  });
+  assert.strictEqual(processCleanupFailureService.diagnostics().quarantined, 1);
+  assert.strictEqual(processCleanupFailureHarness.state.workspaceRollbacks, 0);
+  assert.strictEqual(processCleanupFailureHarness.state.rootReleases, 0);
+  assert.strictEqual((await processCleanupFailureService.dispose()).ok, false);
 
   const drainingHarness = dependencyHarness();
   const drainingService = createService(drainingHarness, { maxActiveSessions: 2 });

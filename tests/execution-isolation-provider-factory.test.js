@@ -26,11 +26,17 @@ const {
   canonicalSha256Digest,
 } = require('../main/capabilities/transactional_delete_contracts');
 const {
+  SANDBOX_COMMAND_KINDS,
+  createSandboxExecutionRequest,
+} = require('../main/capabilities/sandbox_backend_contract');
+const {
   PROCESS_SUPERVISOR_BACKEND_VERSION,
   PROCESS_SUPERVISOR_REQUIRED_GUARANTEES,
   PROCESS_SUPERVISOR_STATES,
   createProcessSupervisorDisposeReceipt,
+  createProcessSupervisorExecReceipt,
   createProcessSupervisorProbeResult,
+  createProcessSupervisorStopReceipt,
 } = require('../main/capabilities/process_supervisor_contract');
 const {
   EXECUTION_ISOLATION_RUNTIME_CONFIG_VERSION,
@@ -166,6 +172,10 @@ function providerHarness({
     workspaceProbes: 0,
     rootProbes: 0,
     processProbes: 0,
+    processExecs: 0,
+    processStops: 0,
+    processExecutions: new Map(),
+    lastProcessRequest: null,
     workspaceAcquires: 0,
     workspaceDiscards: 0,
     rootAcquires: 0,
@@ -248,10 +258,44 @@ function providerHarness({
       state.processProbes += 1;
       return processProbe;
     },
-    exec() { throw new Error('process exec is outside the provider factory test'); },
+    exec(request) {
+      state.processExecs += 1;
+      state.lastProcessRequest = request;
+      state.lifecycleEvents.push('process:exec');
+      const snapshot = Object.freeze({
+        status: 'running',
+        revision: 1,
+        exitCode: null,
+        signal: null,
+        timedOut: false,
+        stopped: false,
+        availableFromCursor: 0,
+        outputCursor: 0,
+      });
+      state.processExecutions.set(request.executionId, snapshot);
+      return createProcessSupervisorExecReceipt({ request, ...snapshot });
+    },
     read() { throw new Error('process read is outside the provider factory test'); },
     wait() { throw new Error('process wait is outside the provider factory test'); },
-    stop() { throw new Error('process stop is outside the provider factory test'); },
+    stop(request) {
+      state.processStops += 1;
+      state.lifecycleEvents.push('process:stop');
+      const current = state.processExecutions.get(request.executionId);
+      const snapshot = Object.freeze({
+        ...current,
+        status: 'stopped',
+        revision: current.revision + 1,
+        signal: 'SIGTERM',
+        stopped: true,
+      });
+      state.processExecutions.set(request.executionId, snapshot);
+      return createProcessSupervisorStopReceipt({
+        request,
+        ...snapshot,
+        treeTerminated: true,
+        idempotent: false,
+      });
+    },
     dispose() {
       state.processBackendDisposals += 1;
       state.lifecycleEvents.push('process:dispose');
@@ -631,6 +675,31 @@ async function main() {
   assert.strictEqual(registryHarness.state.rootProbes, 1);
   assert.strictEqual(registryHarness.state.processProbes, 1);
   assert.strictEqual(runtimeServices.diagnostics().jobSessions.active, 1);
+  const registryExecution = await registrySessionOpen.session.exec(Object.freeze({
+    sandboxRequest: createSandboxExecutionRequest({
+      executionId: 'registry-execution-a',
+      requestId: 'registry-request-a',
+      grantId: 'registry-grant-a',
+      rootPath: binding().canonicalRootPath,
+      realRootPath: binding().realRootPath,
+      command: {
+        kind: SANDBOX_COMMAND_KINDS.EXECUTABLE,
+        executable: 'node',
+        args: ['--version'],
+      },
+      timeoutMs: 10_000,
+    }),
+  }));
+  assert.strictEqual(registryExecution.ok, true);
+  assert.strictEqual(registryHarness.state.processExecs, 1);
+  assert.strictEqual(
+    registryHarness.state.lastProcessRequest.sandboxRequest.rootPath,
+    '/workspace/faber-jobs/job-a'
+  );
+  assert.strictEqual(
+    registryHarness.state.lastProcessRequest.sandboxRequest.realRootPath,
+    '/private/workspace/faber-jobs/job-a'
+  );
 
   const runtimeDisposeReceipt = await runtimeServices.dispose();
   assert.deepStrictEqual(runtimeDisposeReceipt, {
@@ -645,6 +714,8 @@ async function main() {
   });
   assert.strictEqual(await runtimeServices.dispose(), runtimeDisposeReceipt);
   assert.deepStrictEqual(registryHarness.state.lifecycleEvents, [
+    'process:exec',
+    'process:stop',
     'workspace:discard',
     'root:close',
     'process:dispose',
@@ -653,6 +724,7 @@ async function main() {
   assert.strictEqual(runtimeServices.diagnostics().state, 'disposed');
   assert.strictEqual(registryHarness.state.providerDisposals, 1);
   assert.strictEqual(registryHarness.state.processBackendDisposals, 1);
+  assert.strictEqual(registryHarness.state.processStops, 1);
   await registrySelection.dispose();
   assert.strictEqual(registryHarness.state.providerDisposals, 1);
   assert.strictEqual(registryHarness.state.workspaceBackendDisposals, 0);

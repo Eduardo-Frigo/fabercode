@@ -30,9 +30,9 @@ const {
 } = require('./execution_isolation_job_session_service');
 
 const EXECUTION_ISOLATION_RUNTIME_SERVICES_VERSION =
-  'execution-isolation-runtime-services.v2';
+  'execution-isolation-runtime-services.v3';
 const EXECUTION_ISOLATION_RUNTIME_SERVICES_DISPOSE_RECEIPT_VERSION =
-  'execution-isolation-runtime-services-dispose-receipt.v2';
+  'execution-isolation-runtime-services-dispose-receipt.v3';
 
 const SELECTION_KEYS = Object.freeze([
   'version',
