@@ -24,11 +24,15 @@ const {
 const {
   EXECUTION_ISOLATION_PROVIDER_FACTORY_VERSION,
 } = require('./execution_isolation_provider_factory');
+const {
+  EXECUTION_ISOLATION_JOB_SESSION_DISPOSE_RECEIPT_VERSION,
+  createExecutionIsolationJobSessionService,
+} = require('./execution_isolation_job_session_service');
 
 const EXECUTION_ISOLATION_RUNTIME_SERVICES_VERSION =
-  'execution-isolation-runtime-services.v1';
+  'execution-isolation-runtime-services.v2';
 const EXECUTION_ISOLATION_RUNTIME_SERVICES_DISPOSE_RECEIPT_VERSION =
-  'execution-isolation-runtime-services-dispose-receipt.v1';
+  'execution-isolation-runtime-services-dispose-receipt.v2';
 
 const SELECTION_KEYS = Object.freeze([
   'version',
@@ -204,6 +208,26 @@ function cleanSelectionReceipt(outcome) {
     && fields.get('disposed') === true);
 }
 
+function cleanJobSessionsReceipt(outcome) {
+  if (!outcome.ok) return false;
+  const fields = exactOwnDataFields(outcome.value, [
+    'version',
+    'ok',
+    'disposed',
+    'active',
+    'closed',
+    'quarantined',
+  ]);
+  return Boolean(fields
+    && fields.get('version') === EXECUTION_ISOLATION_JOB_SESSION_DISPOSE_RECEIPT_VERSION
+    && fields.get('ok') === true
+    && fields.get('disposed') === true
+    && fields.get('active') === 0
+    && Number.isSafeInteger(fields.get('closed'))
+    && fields.get('closed') >= 0
+    && fields.get('quarantined') === 0);
+}
+
 function createExecutionIsolationRuntimeServices(options = {}) {
   const optionFields = exactOwnDataFields(options, ['selection'], ['selection']);
   if (!optionFields) {
@@ -216,6 +240,7 @@ function createExecutionIsolationRuntimeServices(options = {}) {
   let executionWorkspaceRegistry;
   let projectRootAuthorityRegistry;
   let processSupervisor;
+  let jobSessionService;
   try {
     executionWorkspaceRegistry = createExecutionWorkspaceRegistry({
       backend: selection.executionWorkspaceBackend,
@@ -226,6 +251,11 @@ function createExecutionIsolationRuntimeServices(options = {}) {
     processSupervisor = createProcessSupervisor({
       backend: selection.processSupervisorBackend,
     });
+    jobSessionService = createExecutionIsolationJobSessionService({
+      executionWorkspaceRegistry,
+      projectRootAuthorityRegistry,
+      processSupervisor,
+    });
   } catch (error) {
     preflightDataGraph(error);
     invokeCaptured(selection.dispose);
@@ -233,6 +263,7 @@ function createExecutionIsolationRuntimeServices(options = {}) {
   }
 
   const disposeProcessSupervisor = captureOwnMethod(processSupervisor, 'dispose');
+  const disposeJobSessions = captureOwnMethod(jobSessionService, 'dispose');
   const disposeExecutionWorkspace = captureOwnMethod(
     executionWorkspaceRegistry,
     'dispose'
@@ -241,7 +272,7 @@ function createExecutionIsolationRuntimeServices(options = {}) {
     projectRootAuthorityRegistry,
     'dispose'
   );
-  if (!disposeProcessSupervisor || !disposeExecutionWorkspace
+  if (!disposeJobSessions || !disposeProcessSupervisor || !disposeExecutionWorkspace
     || !disposeProjectRootAuthority) {
     invokeCaptured(selection.dispose);
     throw new TypeError('Execution isolation runtime services composition failed');
@@ -260,6 +291,7 @@ function createExecutionIsolationRuntimeServices(options = {}) {
       executionWorkspace: executionWorkspaceRegistry.diagnostics(),
       projectRootAuthority: projectRootAuthorityRegistry.diagnostics(),
       processSupervisor: processSupervisor.diagnostics(),
+      jobSessions: jobSessionService.diagnostics(),
     });
   }
 
@@ -268,10 +300,12 @@ function createExecutionIsolationRuntimeServices(options = {}) {
     if (disposePromise) return disposePromise;
     state = 'disposing';
     disposePromise = Promise.resolve().then(async () => {
+      const jobSessionsOutcome = await invokeCaptured(disposeJobSessions);
       const processOutcome = await invokeCaptured(disposeProcessSupervisor);
       const workspaceOutcome = await invokeCaptured(disposeExecutionWorkspace);
       const rootOutcome = await invokeCaptured(disposeProjectRootAuthority);
       const selectionOutcome = await invokeCaptured(selection.dispose);
+      const jobSessionsDisposed = cleanJobSessionsReceipt(jobSessionsOutcome);
       const processSupervisorDisposed = cleanProcessSupervisorReceipt(processOutcome);
       const executionWorkspaceDisposed = cleanRegistryReceipt(workspaceOutcome);
       const projectRootAuthorityDisposed = cleanRegistryReceipt(rootOutcome);
@@ -279,10 +313,12 @@ function createExecutionIsolationRuntimeServices(options = {}) {
       disposeReceipt = Object.freeze({
         version: EXECUTION_ISOLATION_RUNTIME_SERVICES_DISPOSE_RECEIPT_VERSION,
         disposed: true,
-        zeroOrphanShutdownConfirmed: processSupervisorDisposed
+        zeroOrphanShutdownConfirmed: jobSessionsDisposed
+          && processSupervisorDisposed
           && executionWorkspaceDisposed
           && projectRootAuthorityDisposed
           && selectionDisposed,
+        jobSessionsDisposed,
         processSupervisorDisposed,
         executionWorkspaceDisposed,
         projectRootAuthorityDisposed,
@@ -300,6 +336,7 @@ function createExecutionIsolationRuntimeServices(options = {}) {
     executionWorkspaceRegistry,
     projectRootAuthorityRegistry,
     processSupervisor,
+    jobSessionService,
     diagnostics,
     dispose,
   });

@@ -613,34 +613,31 @@ async function main() {
     'executionWorkspaceRegistry',
     'projectRootAuthorityRegistry',
     'processSupervisor',
+    'jobSessionService',
     'diagnostics',
     'dispose',
   ]);
   assert.strictEqual(runtimeServices.diagnostics().state, 'ready');
-  const { executionWorkspaceRegistry: workspaceRegistry } = runtimeServices;
-  const { projectRootAuthorityRegistry: rootRegistry } = runtimeServices;
-  const { processSupervisor } = runtimeServices;
-  const registryRootAcquire = await rootRegistry.acquire({
-    binding: binding(),
-    expectedPhysicalRootIdentityDigest: digest('b'),
-    purpose: 'execution',
-  });
-  assert.strictEqual(registryRootAcquire.ok, true);
-  const registryWorkspaceAcquire = await workspaceRegistry.acquire({
+  const registrySessionOpen = await runtimeServices.jobSessionService.open({
     binding: binding(),
     sourceRootIdentityDigest: digest('b'),
   });
-  assert.strictEqual(registryWorkspaceAcquire.ok, true);
+  assert.strictEqual(
+    registrySessionOpen.ok,
+    true,
+    JSON.stringify(registrySessionOpen)
+  );
   assert.strictEqual(registryHarness.state.workspaceProbes, 1);
   assert.strictEqual(registryHarness.state.rootProbes, 1);
-  assert.strictEqual((await processSupervisor.probe()).state, 'enforced');
   assert.strictEqual(registryHarness.state.processProbes, 1);
+  assert.strictEqual(runtimeServices.diagnostics().jobSessions.active, 1);
 
   const runtimeDisposeReceipt = await runtimeServices.dispose();
   assert.deepStrictEqual(runtimeDisposeReceipt, {
     version: EXECUTION_ISOLATION_RUNTIME_SERVICES_DISPOSE_RECEIPT_VERSION,
     disposed: true,
     zeroOrphanShutdownConfirmed: true,
+    jobSessionsDisposed: true,
     processSupervisorDisposed: true,
     executionWorkspaceDisposed: true,
     projectRootAuthorityDisposed: true,
@@ -648,9 +645,9 @@ async function main() {
   });
   assert.strictEqual(await runtimeServices.dispose(), runtimeDisposeReceipt);
   assert.deepStrictEqual(registryHarness.state.lifecycleEvents, [
-    'process:dispose',
     'workspace:discard',
     'root:close',
+    'process:dispose',
     'provider:dispose',
   ]);
   assert.strictEqual(runtimeServices.diagnostics().state, 'disposed');
