@@ -857,7 +857,9 @@ function rootContext(request, operationRequest) {
     mainSource + '\n' + utilityEntrySource,
     /portable_isolation_helper_backend_dispatcher|createPortableIsolationHelperBackendDispatcher/
   );
-  assert.match(utilityEntrySource, /HELPER_RUNTIME_UNAVAILABLE/);
+  assert.match(utilityEntrySource, /createPortableIsolationHelperPhysicalRuntime/);
+  assert.match(utilityEntrySource, /assertPortableIsolationHelperPrivateFrame/);
+  assert.doesNotMatch(utilityEntrySource, /HELPER_RUNTIME_UNAVAILABLE/);
 
   console.log('portable isolation helper backend dispatcher tests passed');
 })().catch((error) => {

@@ -142,7 +142,7 @@ function binding() {
   const runtime = createPortableIsolationHelperRuntimeSession({
     identity: Object.freeze({
       helperId: 'faber-portable-isolation-helper',
-      helperBuildId: 'portable-helper-bootstrap-1',
+      helperBuildId: 'portable-helper-runtime-1',
       bundleIdentityDigest: digest('b'),
       executionWorkspaceBackendId: activation.executionWorkspaceBackendId,
       projectRootAuthorityBackendId:

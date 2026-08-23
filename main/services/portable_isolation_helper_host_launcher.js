@@ -683,6 +683,17 @@ function createPortableIsolationHelperHostLauncher(options = {}) {
       }
       return openPortableIsolationHelperUtilityChannel({
         utilityProcess,
+        runtimeBinding: Object.freeze({
+          helperId: descriptor.bundleId,
+          helperBuildId: descriptor.helperBuildId,
+          bundleIdentityDigest: descriptor.bundleIdentityDigest,
+          platform: Object.freeze({
+            os: descriptor.platform.os,
+            architecture: descriptor.platform.architecture,
+            signatureVerification:
+              descriptor.platform.signatureVerification,
+          }),
+        }),
         channelBindingDigest,
         timeoutMs: normalized.channelTimeoutMs,
       }).then((channel) => {

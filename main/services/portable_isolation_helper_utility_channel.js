@@ -7,6 +7,15 @@ const {
   preflightDataGraph,
 } = require('../capabilities/execution_workspace_contract');
 const {
+  immutableSnapshot,
+} = require('../capabilities/capability_delegation_contracts');
+const {
+  PORTABLE_ISOLATION_HELPER_BUILD_ID,
+  PORTABLE_ISOLATION_HELPER_BUNDLE_ID,
+} = require(
+  '../capabilities/portable_isolation_helper_distribution_attestation_contract'
+);
+const {
   PORTABLE_ISOLATION_HELPER_PRIVATE_CHANNEL_ABORT_RECEIPT_VERSION,
   PORTABLE_ISOLATION_HELPER_PRIVATE_CHANNEL_ABORT_REQUEST_VERSION,
   PORTABLE_ISOLATION_HELPER_PRIVATE_CHANNEL_DISPOSE_RECEIPT_VERSION,
@@ -16,12 +25,13 @@ const {
 
 const PORTABLE_ISOLATION_HELPER_UTILITY_WIRE_VERSION =
   'portable-isolation-helper-utility-wire.v1';
-const PORTABLE_ISOLATION_HELPER_BOOTSTRAP_VERSION =
-  'portable-isolation-helper-bootstrap.v1';
+const PORTABLE_ISOLATION_HELPER_RUNTIME_VERSION =
+  'portable-isolation-helper-runtime.v1';
 
 const OPTION_KEYS = Object.freeze([
   'utilityProcess',
   'channelBindingDigest',
+  'runtimeBinding',
   'timeoutMs',
 ]);
 const PROCESS_METHODS = Object.freeze(['on', 'removeListener', 'postMessage', 'kill']);
@@ -62,8 +72,16 @@ const WIRE_KEYS_BY_KIND = Object.freeze({
 const CLIENT_ABORT_KEYS = Object.freeze([
   'version', 'reasonCode', 'channelBindingDigest',
 ]);
+const RUNTIME_BINDING_KEYS = Object.freeze([
+  'helperId', 'helperBuildId', 'bundleIdentityDigest', 'platform',
+]);
+const RUNTIME_PLATFORM_KEYS = Object.freeze([
+  'os', 'architecture', 'signatureVerification',
+]);
 const SAFE_REASON_CODE = /^[A-Z][A-Z0-9_]{0,79}$/;
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
+const SUPPORTED_PLATFORMS = new Set(['darwin', 'linux', 'win32']);
+const SUPPORTED_ARCHITECTURES = new Set(['arm64', 'x64']);
 const MIN_TIMEOUT_MS = 10;
 const MAX_TIMEOUT_MS = 30_000;
 const CONFIRMED_ABORT_RECEIPT = Object.freeze({
@@ -226,6 +244,40 @@ function normalizeTimeout(value) {
   return value;
 }
 
+function normalizeRuntimeBinding(value) {
+  const fields = exactDataFields(
+    value,
+    RUNTIME_BINDING_KEYS,
+    RUNTIME_BINDING_KEYS,
+    'UTILITY_CHANNEL_OPTIONS_INVALID'
+  );
+  const platform = exactDataFields(
+    fields.get('platform'),
+    RUNTIME_PLATFORM_KEYS,
+    RUNTIME_PLATFORM_KEYS,
+    'UTILITY_CHANNEL_OPTIONS_INVALID'
+  );
+  if (fields.get('helperId') !== PORTABLE_ISOLATION_HELPER_BUNDLE_ID
+    || fields.get('helperBuildId') !== PORTABLE_ISOLATION_HELPER_BUILD_ID
+    || typeof fields.get('bundleIdentityDigest') !== 'string'
+    || !DIGEST.test(fields.get('bundleIdentityDigest'))
+    || !SUPPORTED_PLATFORMS.has(platform.get('os'))
+    || !SUPPORTED_ARCHITECTURES.has(platform.get('architecture'))
+    || platform.get('signatureVerification') !== 'platform_verified') {
+    throw channelError('UTILITY_CHANNEL_OPTIONS_INVALID');
+  }
+  return immutableSnapshot({
+    helperId: fields.get('helperId'),
+    helperBuildId: fields.get('helperBuildId'),
+    bundleIdentityDigest: fields.get('bundleIdentityDigest'),
+    platform: {
+      os: platform.get('os'),
+      architecture: platform.get('architecture'),
+      signatureVerification: platform.get('signatureVerification'),
+    },
+  });
+}
+
 function invoke(captured, args) {
   return Reflect.apply(captured.method, captured.receiver, args);
 }
@@ -323,6 +375,7 @@ function openPortableIsolationHelperUtilityChannel(options = {}) {
   let endpoint;
   let channelBindingDigest;
   let timeoutMs;
+  let runtimeBinding;
   try {
     fields = optionFields(options);
     endpoint = normalizeUtilityProcess(fields.get('utilityProcess'));
@@ -330,6 +383,7 @@ function openPortableIsolationHelperUtilityChannel(options = {}) {
       fields.get('channelBindingDigest'),
       'UTILITY_CHANNEL_OPTIONS_INVALID'
     );
+    runtimeBinding = normalizeRuntimeBinding(fields.get('runtimeBinding'));
     timeoutMs = normalizeTimeout(fields.get('timeoutMs'));
   } catch (error) {
     absorbNativePromise(error);
@@ -434,14 +488,15 @@ function openPortableIsolationHelperUtilityChannel(options = {}) {
     if (state !== 'opening') return;
     state = 'binding';
     post(
-      wireMessage('bind', channelBindingDigest),
+      wireMessage('bind', channelBindingDigest, { runtimeBinding }),
       'UTILITY_CHANNEL_OPEN_FAILED'
     );
   }
 
   function acceptBound(fields) {
     if (state !== 'binding'
-      || fields.get('helperRuntimeVersion') !== PORTABLE_ISOLATION_HELPER_BOOTSTRAP_VERSION) {
+      || fields.get('helperRuntimeVersion')
+        !== PORTABLE_ISOLATION_HELPER_RUNTIME_VERSION) {
       throw channelError('UTILITY_CHANNEL_MESSAGE_REJECTED');
     }
     if (openTimer) clearTimeout(openTimer);
@@ -457,7 +512,7 @@ function openPortableIsolationHelperUtilityChannel(options = {}) {
     const pending = exchangePending;
     let responseFrame;
     try {
-      responseFrame = fields.get('frame');
+      responseFrame = immutableSnapshot(fields.get('frame'));
       assertPortableIsolationHelperPrivateFrame(responseFrame, {
         direction: 'response',
         sequence: pending.requestFrame.sequence,
@@ -466,9 +521,6 @@ function openPortableIsolationHelperUtilityChannel(options = {}) {
       });
     } catch (error) {
       absorbNativePromise(error);
-      throw channelError('UTILITY_CHANNEL_MESSAGE_REJECTED');
-    }
-    if (!Object.isFrozen(responseFrame)) {
       throw channelError('UTILITY_CHANNEL_MESSAGE_REJECTED');
     }
     exchangePending = null;
@@ -679,7 +731,7 @@ function openPortableIsolationHelperUtilityChannel(options = {}) {
 }
 
 module.exports = {
-  PORTABLE_ISOLATION_HELPER_BOOTSTRAP_VERSION,
+  PORTABLE_ISOLATION_HELPER_RUNTIME_VERSION,
   PORTABLE_ISOLATION_HELPER_UTILITY_WIRE_VERSION,
   PortableIsolationHelperUtilityChannelError,
   openPortableIsolationHelperUtilityChannel,

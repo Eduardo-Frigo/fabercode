@@ -34,6 +34,11 @@ const {
   createPortableIsolationHelperAfterPackHook,
 } = afterPackModule;
 
+const PROJECT_ROOT_PATH = path.resolve(__dirname, '..');
+const UTILITY_ENTRY_SOURCE_PATH = path.join(
+  PROJECT_ROOT_PATH,
+  'main/portable_isolation_helper/utility_entry.js'
+);
 const tempDirectories = [];
 
 function tempDirectory() {
@@ -70,7 +75,7 @@ function fixture() {
   const resourcePath = path.join(bundleDirectory, 'utility_entry.js');
   const attestationPath = path.join(bundleDirectory, 'distribution_attestation.json');
   fs.mkdirSync(bundleDirectory, { recursive: true });
-  fs.writeFileSync(resourcePath, "'use strict';\n// afterPack helper\n", 'utf8');
+  fs.copyFileSync(UTILITY_ENTRY_SOURCE_PATH, resourcePath);
   fs.writeFileSync(
     attestationPath,
     '{"status":"unconfigured_release_attestation"}\n',
@@ -81,6 +86,7 @@ function fixture() {
     electronPlatformName: 'darwin',
     arch: 3,
     packager: Object.freeze({
+      projectDir: PROJECT_ROOT_PATH,
       appInfo: Object.freeze({
         id: 'com.faber.code',
         version: '0.1.3',
@@ -131,6 +137,10 @@ function electronBuilderShapedContext(packed) {
       this.info = Object.freeze({
         framework: Object.freeze({ version: '42.1.0' }),
       });
+    }
+
+    get projectDir() {
+      return PROJECT_ROOT_PATH;
     }
 
     getResourcesDir(value) {
@@ -225,6 +235,17 @@ async function expectCode(action, code) {
     assert.strictEqual(attestationStat.nlink, 1);
 
     const resourceBytes = fs.readFileSync(packed.resourcePath);
+    const resourceSource = resourceBytes.toString('utf8');
+    assert.ok(resourceBytes.length > 300 * 1024 && resourceBytes.length < 1024 * 1024);
+    assert.match(resourceSource, /const __faberFactories = Object\.freeze/);
+    assert.match(resourceSource, /portable-execution-workspace-backend\.v1/);
+    assert.match(resourceSource, /portable-project-root-authority-backend\.v1/);
+    assert.match(resourceSource, /portable-process-supervisor-backend\.v1/);
+    assert.strictEqual(resourceSource.includes(PROJECT_ROOT_PATH), false);
+    assert.strictEqual(
+      `sha256:${crypto.createHash('sha256').update(resourceBytes).digest('hex')}`,
+      receipt.resourceDigest
+    );
     const verifier = createPortableIsolationHelperPlatformSignatureVerifier({
       trustedKeys: Object.freeze([keys.trustedKey]),
     });
@@ -235,7 +256,7 @@ async function expectCode(action, code) {
       applicationVersion: '0.1.3',
       electronVersion: '42.1.0',
       bundleId: 'faber-portable-isolation-helper',
-      helperBuildId: 'portable-helper-bootstrap-1',
+      helperBuildId: 'portable-helper-runtime-1',
       platform: 'darwin',
       architecture: 'arm64',
       resourcePath: packed.resourcePath,
@@ -256,6 +277,10 @@ async function expectCode(action, code) {
     const wrongKeys = keyMaterial('faber-portable-helper-release-wrong');
     const wrongPrivateKeyFixture = fixture();
     const placeholder = fs.readFileSync(wrongPrivateKeyFixture.attestationPath, 'utf8');
+    const sourcePlaceholder = fs.readFileSync(
+      wrongPrivateKeyFixture.resourcePath,
+      'utf8'
+    );
     const wrongPrivateKeyHook = createPortableIsolationHelperAfterPackHook({
       trustedKeys: Object.freeze([keys.trustedKey]),
       environment: environment(keys, {
@@ -271,6 +296,10 @@ async function expectCode(action, code) {
       fs.readFileSync(wrongPrivateKeyFixture.attestationPath, 'utf8'),
       placeholder
     );
+    assert.strictEqual(
+      fs.readFileSync(wrongPrivateKeyFixture.resourcePath, 'utf8'),
+      sourcePlaceholder
+    );
 
     const missingSecretFixture = fixture();
     const missingSecretHook = createPortableIsolationHelperAfterPackHook({
@@ -283,6 +312,21 @@ async function expectCode(action, code) {
     );
     assert.strictEqual(
       fs.readFileSync(missingSecretFixture.attestationPath, 'utf8'),
+      placeholder
+    );
+    assert.strictEqual(
+      fs.readFileSync(missingSecretFixture.resourcePath, 'utf8'),
+      sourcePlaceholder
+    );
+
+    const tamperedSourceFixture = fixture();
+    fs.appendFileSync(tamperedSourceFixture.resourcePath, '// swapped packaging input\n');
+    await expectCode(
+      () => hook.afterPack(tamperedSourceFixture.context),
+      'RELEASE_RESOURCE_INVALID'
+    );
+    assert.strictEqual(
+      fs.readFileSync(tamperedSourceFixture.attestationPath, 'utf8'),
       placeholder
     );
 
@@ -377,6 +421,7 @@ async function expectCode(action, code) {
       /require\(['"](?:electron|child_process|net|tls|http|https|worker_threads|module)['"]\)|\bspawn\s*\(|\bexecFile\s*\(|\bimport\s*\(/
     );
     assert.match(hookSource, /packager\.getResourcesDir/);
+    assert.match(hookSource, /packager\.projectDir/);
     assert.match(hookSource, /fs\.constants\.O_NOFOLLOW/);
     assert.match(hookSource, /fs\.constants\.O_EXCL/);
     assert.match(hookSource, /fs\.fsyncSync/);
@@ -385,6 +430,7 @@ async function expectCode(action, code) {
       hookSource,
       /FABER_PORTABLE_ISOLATION_HELPER_RELEASE_PRIVATE_KEY_PKCS8_DER_BASE64/
     );
+    assert.match(hookSource, /createPortableIsolationHelperBundleBuilder/);
     assert.doesNotMatch(hookSource, /console\.|PRIVATE_KEY.*(?:message|error)/);
 
     const trustSource = fs.readFileSync(path.join(

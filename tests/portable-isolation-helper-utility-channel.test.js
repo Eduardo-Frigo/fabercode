@@ -18,6 +18,19 @@ const {
 
 const digest = (character) => `sha256:${character.repeat(64)}`;
 
+function runtimeBinding() {
+  return Object.freeze({
+    helperId: 'faber-portable-isolation-helper',
+    helperBuildId: 'portable-helper-runtime-1',
+    bundleIdentityDigest: digest('b'),
+    platform: Object.freeze({
+      os: 'darwin',
+      architecture: 'arm64',
+      signatureVerification: 'platform_verified',
+    }),
+  });
+}
+
 function deferred() {
   let resolve;
   let reject;
@@ -63,7 +76,7 @@ class FakeUtilityProcess extends EventEmitter {
         version: PORTABLE_ISOLATION_HELPER_UTILITY_WIRE_VERSION,
         kind: 'bound',
         channelBindingDigest: this.state.binding,
-        helperRuntimeVersion: 'portable-isolation-helper-bootstrap.v1',
+        helperRuntimeVersion: 'portable-isolation-helper-runtime.v1',
       })));
       return;
     }
@@ -131,7 +144,7 @@ class SynchronousSpawnUtilityProcess extends FakeUtilityProcess {
         version: PORTABLE_ISOLATION_HELPER_UTILITY_WIRE_VERSION,
         kind: 'bound',
         channelBindingDigest: this.state.binding,
-        helperRuntimeVersion: 'portable-isolation-helper-bootstrap.v1',
+        helperRuntimeVersion: 'portable-isolation-helper-runtime.v1',
       }));
     } else if (message.kind === 'dispose') {
       this.emit('message', Object.freeze({
@@ -159,6 +172,7 @@ async function openHarness(overrides = {}, timeoutMs = 100) {
   const channel = await openPortableIsolationHelperUtilityChannel({
     utilityProcess,
     channelBindingDigest: digest('a'),
+    runtimeBinding: runtimeBinding(),
     timeoutMs,
   });
   return { channel, utilityProcess };
@@ -177,6 +191,7 @@ async function openHarness(overrides = {}, timeoutMs = 100) {
     version: PORTABLE_ISOLATION_HELPER_UTILITY_WIRE_VERSION,
     kind: 'bind',
     channelBindingDigest: digest('a'),
+    runtimeBinding: runtimeBinding(),
   }));
   assert.ok(Object.isFrozen(opened.utilityProcess.state.messages[0]));
 
@@ -197,7 +212,7 @@ async function openHarness(overrides = {}, timeoutMs = 100) {
           version: PORTABLE_ISOLATION_HELPER_UTILITY_WIRE_VERSION,
           kind: 'bound',
           channelBindingDigest: utilityProcess.state.binding,
-          helperRuntimeVersion: 'portable-isolation-helper-bootstrap.v1',
+          helperRuntimeVersion: 'portable-isolation-helper-runtime.v1',
         })));
       } else if (message.kind === 'exchange') {
         pendingResponse.promise.then(() => utilityProcess.emit('message', Object.freeze({
@@ -231,7 +246,7 @@ async function openHarness(overrides = {}, timeoutMs = 100) {
           version: PORTABLE_ISOLATION_HELPER_UTILITY_WIRE_VERSION,
           kind: 'bound',
           channelBindingDigest: utilityProcess.state.binding,
-          helperRuntimeVersion: 'portable-isolation-helper-bootstrap.v1',
+          helperRuntimeVersion: 'portable-isolation-helper-runtime.v1',
         })));
       } else if (message.kind === 'exchange') {
         setImmediate(() => utilityProcess.emit('message', Object.freeze({
@@ -266,7 +281,7 @@ async function openHarness(overrides = {}, timeoutMs = 100) {
           version: PORTABLE_ISOLATION_HELPER_UTILITY_WIRE_VERSION,
           kind: 'bound',
           channelBindingDigest: utilityProcess.state.binding,
-          helperRuntimeVersion: 'portable-isolation-helper-bootstrap.v1',
+          helperRuntimeVersion: 'portable-isolation-helper-runtime.v1',
         })));
       } else if (message.kind === 'exchange') {
         setImmediate(() => utilityProcess.emit('message', accessorMessage));
@@ -288,7 +303,7 @@ async function openHarness(overrides = {}, timeoutMs = 100) {
           version: PORTABLE_ISOLATION_HELPER_UTILITY_WIRE_VERSION,
           kind: 'bound',
           channelBindingDigest: utilityProcess.state.binding,
-          helperRuntimeVersion: 'portable-isolation-helper-bootstrap.v1',
+          helperRuntimeVersion: 'portable-isolation-helper-runtime.v1',
         })));
       } else if (message.kind === 'abort') {
         setImmediate(() => utilityProcess.emit('message', Object.freeze({
@@ -338,7 +353,7 @@ async function openHarness(overrides = {}, timeoutMs = 100) {
           version: PORTABLE_ISOLATION_HELPER_UTILITY_WIRE_VERSION,
           kind: 'bound',
           channelBindingDigest: utilityProcess.state.binding,
-          helperRuntimeVersion: 'portable-isolation-helper-bootstrap.v1',
+          helperRuntimeVersion: 'portable-isolation-helper-runtime.v1',
         })));
       } else if (message.kind === 'dispose') {
         setImmediate(() => utilityProcess.emit('message', Object.freeze({
@@ -361,7 +376,7 @@ async function openHarness(overrides = {}, timeoutMs = 100) {
           version: PORTABLE_ISOLATION_HELPER_UTILITY_WIRE_VERSION,
           kind: 'bound',
           channelBindingDigest: utilityProcess.state.binding,
-          helperRuntimeVersion: 'portable-isolation-helper-bootstrap.v1',
+          helperRuntimeVersion: 'portable-isolation-helper-runtime.v1',
         })));
       } else if (message.kind === 'exchange') {
         setImmediate(() => utilityProcess.emit('exit', 9));
@@ -374,6 +389,7 @@ async function openHarness(overrides = {}, timeoutMs = 100) {
   const synchronousChannel = await openPortableIsolationHelperUtilityChannel({
     utilityProcess: synchronousProcess,
     channelBindingDigest: digest('a'),
+    runtimeBinding: runtimeBinding(),
     timeoutMs: 20,
   });
   assert.strictEqual(synchronousChannel.version, PORTABLE_ISOLATION_HELPER_PRIVATE_CHANNEL_VERSION);
@@ -402,6 +418,7 @@ async function openHarness(overrides = {}, timeoutMs = 100) {
     openPortableIsolationHelperUtilityChannel({
       utilityProcess: partiallyAttached,
       channelBindingDigest: digest('a'),
+      runtimeBinding: runtimeBinding(),
       timeoutMs: 20,
     }),
     'UTILITY_CHANNEL_PROCESS_INVALID'
@@ -416,11 +433,35 @@ async function openHarness(overrides = {}, timeoutMs = 100) {
     openPortableIsolationHelperUtilityChannel({
       utilityProcess: neverSpawns,
       channelBindingDigest: digest('a'),
+      runtimeBinding: runtimeBinding(),
       timeoutMs: 20,
     }),
     'UTILITY_CHANNEL_OPEN_TIMEOUT'
   );
   assert.strictEqual(neverSpawns.state.killed, 1);
+
+  let digestCoercionTouched = false;
+  const invalidBindingProcess = new FakeUtilityProcess({ neverSpawns: true });
+  await expectRejectCode(
+    openPortableIsolationHelperUtilityChannel({
+      utilityProcess: invalidBindingProcess,
+      channelBindingDigest: digest('a'),
+      runtimeBinding: {
+        ...runtimeBinding(),
+        bundleIdentityDigest: {
+          toString() {
+            digestCoercionTouched = true;
+            return digest('b');
+          },
+        },
+      },
+      timeoutMs: 20,
+    }),
+    'UTILITY_CHANNEL_OPTIONS_INVALID'
+  );
+  assert.strictEqual(digestCoercionTouched, false);
+  assert.strictEqual(invalidBindingProcess.listenerCount('spawn'), 0);
+  assert.strictEqual(invalidBindingProcess.state.killed, 0);
 
   const invalidProcess = Object.freeze({
     on() {},
@@ -433,6 +474,7 @@ async function openHarness(overrides = {}, timeoutMs = 100) {
     openPortableIsolationHelperUtilityChannel({
       utilityProcess: invalidProcess,
       channelBindingDigest: digest('a'),
+      runtimeBinding: runtimeBinding(),
       timeoutMs: 20,
     }),
     'UTILITY_CHANNEL_PROCESS_INVALID'

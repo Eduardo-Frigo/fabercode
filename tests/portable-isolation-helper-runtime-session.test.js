@@ -38,7 +38,7 @@ const nonce = (character) => character.repeat(64);
 function identity(overrides = {}) {
   return Object.freeze({
     helperId: 'faber-portable-isolation-helper',
-    helperBuildId: 'portable-helper-bootstrap-1',
+    helperBuildId: 'portable-helper-runtime-1',
     bundleIdentityDigest: digest('b'),
     executionWorkspaceBackendId: 'portable-private-workspace',
     projectRootAuthorityBackendId: 'portable-project-root-authority',
@@ -512,7 +512,7 @@ async function expectCode(action, code) {
   assert.match(sessionSource, /RUNTIME_OPERATION_ERRORS\.has/);
 
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  const bootstrapSource = fs.readFileSync(path.join(
+  const utilityEntrySource = fs.readFileSync(path.join(
     __dirname,
     '..',
     'main',
@@ -520,10 +520,12 @@ async function expectCode(action, code) {
     'utility_entry.js'
   ), 'utf8');
   assert.doesNotMatch(
-    `${mainSource}\n${bootstrapSource}`,
+    `${mainSource}\n${utilityEntrySource}`,
     /portable_isolation_helper_runtime_session|createPortableIsolationHelperRuntimeSession/
   );
-  assert.match(bootstrapSource, /HELPER_RUNTIME_UNAVAILABLE/);
+  assert.match(utilityEntrySource, /createPortableIsolationHelperPhysicalRuntime/);
+  assert.match(utilityEntrySource, /assertPortableIsolationHelperPrivateFrame/);
+  assert.doesNotMatch(utilityEntrySource, /HELPER_RUNTIME_UNAVAILABLE/);
 
   console.log('portable isolation helper runtime session tests passed');
 })().catch((error) => {

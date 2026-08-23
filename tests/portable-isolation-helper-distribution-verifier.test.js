@@ -51,7 +51,7 @@ function manifest(overrides = {}) {
     applicationVersion: '0.1.3',
     electronVersion: '42.1.0',
     bundleId: 'faber-portable-isolation-helper',
-    helperBuildId: 'portable-helper-bootstrap-1',
+    helperBuildId: 'portable-helper-runtime-1',
     platform: 'darwin',
     architecture: 'arm64',
     resourceName: 'utility_entry.js',

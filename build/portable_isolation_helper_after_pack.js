@@ -16,6 +16,10 @@ const {
   PortableIsolationHelperReleaseAttestationBuildError,
   createPortableIsolationHelperReleaseAttestationBuilder,
 } = require('./portable_isolation_helper_release_attestation_builder');
+const {
+  PortableIsolationHelperBundleBuilderError,
+  createPortableIsolationHelperBundleBuilder,
+} = require('./portable_isolation_helper_bundle_builder');
 
 const FABER_PORTABLE_ISOLATION_HELPER_RELEASE_KEY_ID_ENV =
   'FABER_PORTABLE_ISOLATION_HELPER_RELEASE_KEY_ID';
@@ -166,6 +170,7 @@ function normalizePackContext(context) {
   let applicationId;
   let applicationVersion;
   let electronVersion;
+  let projectRootPath;
   try {
     if (typeof packager.getResourcesDir !== 'function') {
       fail('RELEASE_PACK_CONTEXT_INVALID');
@@ -174,6 +179,7 @@ function normalizePackContext(context) {
     applicationId = packager.appInfo.id;
     applicationVersion = packager.appInfo.version;
     electronVersion = packager.info.framework.version;
+    projectRootPath = packager.projectDir;
   } catch (error) {
     if (error instanceof PortableIsolationHelperAfterPackError) throw error;
     fail('RELEASE_PACK_CONTEXT_INVALID');
@@ -181,10 +187,19 @@ function normalizePackContext(context) {
   if (typeof resourcesPath !== 'string' || !path.isAbsolute(resourcesPath)
     || applicationId !== PORTABLE_ISOLATION_HELPER_APPLICATION_ID
     || typeof applicationVersion !== 'string'
-    || typeof electronVersion !== 'string') fail('RELEASE_PACK_CONTEXT_INVALID');
+    || typeof electronVersion !== 'string'
+    || typeof projectRootPath !== 'string' || !projectRootPath
+    || projectRootPath !== projectRootPath.trim()
+    || projectRootPath.includes('\0') || !path.isAbsolute(projectRootPath)) {
+    fail('RELEASE_PACK_CONTEXT_INVALID');
+  }
   const normalizedAppOutDir = path.resolve(appOutDir);
   const normalizedResourcesPath = path.resolve(resourcesPath);
+  const normalizedProjectRootPath = path.resolve(projectRootPath);
   if (!containedPath(normalizedAppOutDir, normalizedResourcesPath)) {
+    fail('RELEASE_PACK_CONTEXT_INVALID');
+  }
+  if (normalizedProjectRootPath === path.parse(normalizedProjectRootPath).root) {
     fail('RELEASE_PACK_CONTEXT_INVALID');
   }
   return Object.freeze({
@@ -195,6 +210,7 @@ function normalizePackContext(context) {
     electronVersion,
     platform,
     architecture: ARCHITECTURES.get(rawArchitecture),
+    projectRootPath: normalizedProjectRootPath,
   });
 }
 
@@ -234,6 +250,10 @@ function inspectContainedDirectoryTree(parentPath, directoryPath) {
     if (error instanceof PortableIsolationHelperAfterPackError) throw error;
     fail('RELEASE_RESOURCE_INVALID');
   }
+}
+
+function sha256(bytes) {
+  return `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
 }
 
 function inspectResource(resourcePath, expectedContent) {
@@ -287,11 +307,11 @@ function assertUnchangedTarget(targetPath, inspected) {
   }
 }
 
-function atomicReplace(targetPath, serialized, inspectedTarget) {
+function atomicReplace(targetPath, contents, inspectedTarget, temporaryLabel, failureCode) {
   const parent = path.dirname(targetPath);
   const temporaryPath = path.join(
     parent,
-    `.distribution-attestation-${crypto.randomBytes(16).toString('hex')}.tmp`
+    `.${temporaryLabel}-${crypto.randomBytes(16).toString('hex')}.tmp`
   );
   let descriptor;
   let temporaryCreated = false;
@@ -304,7 +324,7 @@ function atomicReplace(targetPath, serialized, inspectedTarget) {
     );
     temporaryCreated = true;
     fs.fchmodSync(descriptor, 0o600);
-    fs.writeFileSync(descriptor, serialized, 'utf8');
+    fs.writeFileSync(descriptor, contents);
     fs.fsyncSync(descriptor);
     fs.closeSync(descriptor);
     descriptor = undefined;
@@ -313,7 +333,7 @@ function atomicReplace(targetPath, serialized, inspectedTarget) {
     temporaryCreated = false;
   } catch (error) {
     if (error instanceof PortableIsolationHelperAfterPackError) throw error;
-    fail('RELEASE_ATTESTATION_WRITE_FAILED');
+    fail(failureCode);
   } finally {
     if (descriptor !== undefined) {
       try { fs.closeSync(descriptor); } catch { /* best effort */ }
@@ -354,47 +374,87 @@ function createPortableIsolationHelperAfterPackHook(options = {}) {
     }
     const resource = inspectResource(resourcePath);
     const target = inspectResource(attestationPath, UNCONFIGURED_ATTESTATION);
-    let result;
+    let bundleBytes = null;
+    let installedResource = null;
     try {
-      const credentials = signingCredentials(normalized.environment);
-      result = normalized.builder.sign(Object.freeze({
-        version: PORTABLE_ISOLATION_HELPER_RELEASE_ATTESTATION_SIGN_REQUEST_VERSION,
+      let bundle;
+      try {
+        bundle = createPortableIsolationHelperBundleBuilder({
+          projectRootPath: pack.projectRootPath,
+        }).build();
+      } catch (error) {
+        if (error instanceof PortableIsolationHelperBundleBuilderError) {
+          fail('RELEASE_BUNDLE_BUILD_FAILED');
+        }
+        fail('RELEASE_BUNDLE_BUILD_FAILED');
+      }
+      if (sha256(resource.bytes) !== bundle.entrySourceDigest) {
+        fail('RELEASE_RESOURCE_INVALID');
+      }
+      bundleBytes = Buffer.from(bundle.bundleSource, 'utf8');
+      let result;
+      try {
+        const credentials = signingCredentials(normalized.environment);
+        result = normalized.builder.sign(Object.freeze({
+          version: PORTABLE_ISOLATION_HELPER_RELEASE_ATTESTATION_SIGN_REQUEST_VERSION,
+          applicationId: pack.applicationId,
+          applicationVersion: pack.applicationVersion,
+          electronVersion: pack.electronVersion,
+          bundleId: PORTABLE_ISOLATION_HELPER_BUNDLE_ID,
+          helperBuildId: PORTABLE_ISOLATION_HELPER_BUILD_ID,
+          platform: pack.platform,
+          architecture: pack.architecture,
+          resourceName: PORTABLE_ISOLATION_HELPER_RESOURCE_NAME,
+          resourceBytes: bundleBytes,
+          keyId: credentials.keyId,
+          privateKeyPkcs8DerBase64: credentials.encodedKey,
+        }));
+      } catch (error) {
+        if (error instanceof PortableIsolationHelperAfterPackError) throw error;
+        if (error instanceof PortableIsolationHelperReleaseAttestationBuildError) {
+          fail(error.code);
+        }
+        fail('RELEASE_SIGNING_FAILED');
+      }
+      atomicReplace(
+        resourcePath,
+        bundleBytes,
+        resource,
+        'portable-helper-bundle',
+        'RELEASE_RESOURCE_WRITE_FAILED'
+      );
+      installedResource = inspectResource(resourcePath);
+      if (installedResource.bytes.length !== bundle.bundleBytes
+        || sha256(installedResource.bytes) !== bundle.bundleDigest
+        || result.resourceDigest !== bundle.bundleDigest) {
+        fail('RELEASE_RESOURCE_INVALID');
+      }
+      atomicReplace(
+        attestationPath,
+        result.serializedAttestation,
+        target,
+        'distribution-attestation',
+        'RELEASE_ATTESTATION_WRITE_FAILED'
+      );
+      return Object.freeze({
+        version: PORTABLE_ISOLATION_HELPER_AFTER_PACK_RECEIPT_VERSION,
+        signed: true,
         applicationId: pack.applicationId,
         applicationVersion: pack.applicationVersion,
         electronVersion: pack.electronVersion,
-        bundleId: PORTABLE_ISOLATION_HELPER_BUNDLE_ID,
-        helperBuildId: PORTABLE_ISOLATION_HELPER_BUILD_ID,
         platform: pack.platform,
         architecture: pack.architecture,
-        resourceName: PORTABLE_ISOLATION_HELPER_RESOURCE_NAME,
-        resourceBytes: resource.bytes,
-        keyId: credentials.keyId,
-        privateKeyPkcs8DerBase64: credentials.encodedKey,
-      }));
-    } catch (error) {
-      if (error instanceof PortableIsolationHelperAfterPackError) throw error;
-      if (error instanceof PortableIsolationHelperReleaseAttestationBuildError) {
-        fail(error.code);
-      }
-      fail('RELEASE_SIGNING_FAILED');
+        keyId: result.attestation.manifest.keyId,
+        resourceDigest: result.resourceDigest,
+        manifestDigest: result.attestation.manifestDigest,
+        publicKeyDigest: result.publicKeyDigest,
+      });
     } finally {
       resource.bytes.fill(0);
       target.bytes.fill(0);
+      if (bundleBytes) bundleBytes.fill(0);
+      if (installedResource) installedResource.bytes.fill(0);
     }
-    atomicReplace(attestationPath, result.serializedAttestation, target);
-    return Object.freeze({
-      version: PORTABLE_ISOLATION_HELPER_AFTER_PACK_RECEIPT_VERSION,
-      signed: true,
-      applicationId: pack.applicationId,
-      applicationVersion: pack.applicationVersion,
-      electronVersion: pack.electronVersion,
-      platform: pack.platform,
-      architecture: pack.architecture,
-      keyId: result.attestation.manifest.keyId,
-      resourceDigest: result.resourceDigest,
-      manifestDigest: result.attestation.manifestDigest,
-      publicKeyDigest: result.publicKeyDigest,
-    });
   }
 
   return Object.freeze({

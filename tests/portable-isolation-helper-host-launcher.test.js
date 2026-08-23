@@ -81,7 +81,7 @@ function resourceFixture({
     applicationVersion: '0.1.3',
     electronVersion: '42.1.0',
     bundleId: 'faber-portable-isolation-helper',
-    helperBuildId: 'portable-helper-bootstrap-1',
+    helperBuildId: 'portable-helper-runtime-1',
     platform: 'darwin',
     architecture: 'arm64',
     resourceName: 'utility_entry.js',
@@ -139,7 +139,7 @@ class FakeUtilityProcess extends EventEmitter {
         version: PORTABLE_ISOLATION_HELPER_UTILITY_WIRE_VERSION,
         kind: 'bound',
         channelBindingDigest: this.binding,
-        helperRuntimeVersion: 'portable-isolation-helper-bootstrap.v1',
+        helperRuntimeVersion: 'portable-isolation-helper-runtime.v1',
       })));
     } else if (message.kind === 'abort') {
       setImmediate(() => this.emit('message', Object.freeze({
@@ -230,7 +230,7 @@ function launcherHarness({
     );
     const descriptor = await success.launcher.inspect();
     assert.strictEqual(descriptor.bundleId, 'faber-portable-isolation-helper');
-    assert.strictEqual(descriptor.helperBuildId, 'portable-helper-bootstrap-1');
+    assert.strictEqual(descriptor.helperBuildId, 'portable-helper-runtime-1');
     assert.match(descriptor.bundleIdentityDigest, /^sha256:[a-f0-9]{64}$/);
     assert.strictEqual(descriptor.platform.os, 'darwin');
     assert.strictEqual(descriptor.platform.architecture, 'arm64');
@@ -293,6 +293,17 @@ function launcherHarness({
       result.launchReceipt.channelBindingDigest,
       success.state.processes[0].binding
     );
+    assert.deepStrictEqual(success.state.processes[0].messages[0].runtimeBinding, {
+      helperId: descriptor.bundleId,
+      helperBuildId: descriptor.helperBuildId,
+      bundleIdentityDigest: descriptor.bundleIdentityDigest,
+      platform: {
+        os: descriptor.platform.os,
+        architecture: descriptor.platform.architecture,
+        signatureVerification: descriptor.platform.signatureVerification,
+      },
+    });
+    assert.ok(Object.isFrozen(success.state.processes[0].messages[0].runtimeBinding));
     assert.deepStrictEqual(success.launcher.diagnostics(), Object.freeze({
       version: PORTABLE_ISOLATION_HELPER_HOST_LAUNCHER_VERSION,
       state: 'active',

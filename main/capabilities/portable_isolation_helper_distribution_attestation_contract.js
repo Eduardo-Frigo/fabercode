@@ -28,7 +28,7 @@ const PORTABLE_ISOLATION_HELPER_PLATFORM_SIGNATURE_RECEIPT_VERSION =
 const PORTABLE_ISOLATION_HELPER_DISTRIBUTION = 'application_bundle';
 const PORTABLE_ISOLATION_HELPER_APPLICATION_ID = 'com.faber.code';
 const PORTABLE_ISOLATION_HELPER_BUNDLE_ID = 'faber-portable-isolation-helper';
-const PORTABLE_ISOLATION_HELPER_BUILD_ID = 'portable-helper-bootstrap-1';
+const PORTABLE_ISOLATION_HELPER_BUILD_ID = 'portable-helper-runtime-1';
 const PORTABLE_ISOLATION_HELPER_RESOURCE_NAME = 'utility_entry.js';
 const SIGNING_DOMAIN = 'faber.portable-isolation-helper.distribution-signature.v1';
 
