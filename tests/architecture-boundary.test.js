@@ -572,6 +572,9 @@ function assertExecutionWorkspaceBoundary() {
   const portableExecutionWorkspaceBackendSource = read(
     'main/services/portable_isolation_helper_execution_workspace_backend.js'
   );
+  const portableProjectRootAuthorityBackendSource = read(
+    'main/services/portable_isolation_helper_project_root_authority_backend.js'
+  );
   const portableIsolationHelperPrivateTransportSource = read(
     'main/services/portable_isolation_helper_private_transport.js'
   );
@@ -922,10 +925,64 @@ function assertExecutionWorkspaceBoundary() {
     /require\(['"](?:electron|child_process|net|tls|http|https|worker_threads|module)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\bprocess\.env\b|\b__dirname\b|\bimport\s*\(|fs\.rmSync/,
     'the physical workspace backend may own local filesystem authority but no process, network, IPC, environment, or dynamic-loading authority'
   );
+  assert.ok(
+    portableProjectRootAuthorityBackendSource.includes(
+      "'portable-project-root-authority-backend.v1'"
+    )
+      && portableProjectRootAuthorityBackendSource.includes(
+        'createProjectRootPhysicalIdentityDigest'
+      )
+      && portableProjectRootAuthorityBackendSource.includes(
+        'PROJECT_ROOT_AUTHORITY_REQUIRED_GUARANTEES'
+      )
+      && portableProjectRootAuthorityBackendSource.includes(
+        'ownersBySourceIdentity'
+      )
+      && portableProjectRootAuthorityBackendSource.includes('fs.opendirSync')
+      && portableProjectRootAuthorityBackendSource.includes(
+        'fs.constants.O_EXCL'
+      )
+      && portableProjectRootAuthorityBackendSource.includes('fs.readSync')
+      && portableProjectRootAuthorityBackendSource.includes(
+        'PROJECT_ROOT_SOURCE_IDENTITY_MISMATCH'
+      )
+      && portableProjectRootAuthorityBackendSource.includes(
+        'PROJECT_ROOT_ARCHIVE_IDENTITY_CHANGED'
+      )
+      && portableProjectRootAuthorityBackendSource.includes(
+        'acceptIncompleteArchive'
+      ),
+    'the physical project-root backend must pin one source, seal a private descriptor-backed snapshot, keep links inert, and authenticate both normal and partial cleanup'
+  );
+  const portableProjectRootReaderStart =
+    portableProjectRootAuthorityBackendSource.indexOf('function createReader');
+  const portableProjectRootReaderEnd =
+    portableProjectRootAuthorityBackendSource.indexOf(
+      'function createLease',
+      portableProjectRootReaderStart
+    );
+  assert.ok(
+    portableProjectRootReaderStart >= 0
+      && portableProjectRootReaderEnd > portableProjectRootReaderStart,
+    'the physical project-root reader boundary must remain inspectable'
+  );
+  assertDoesNotMatch(
+    portableProjectRootAuthorityBackendSource.slice(
+      portableProjectRootReaderStart,
+      portableProjectRootReaderEnd
+    ),
+    /lstatSync|openSync|opendirSync|readlinkSync|realpathSync|statSync/,
+    'the sealed project-root reader must never reopen the source snapshot by pathname'
+  );
+  assertDoesNotMatch(
+    portableProjectRootAuthorityBackendSource,
+    /require\(['"](?:electron|child_process|net|tls|http|https|worker_threads|module)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\bprocess\.env\b|\b__dirname\b|\bimport\s*\(|fs\.rmSync/,
+    'the physical project-root backend may own local filesystem authority but no process, network, IPC, environment, or dynamic-loading authority'
+  );
   assertDoesNotMatch(
     `${mainSource}\n${portableIsolationHelperBootstrapSource}`,
-    /portable_isolation_helper_execution_workspace_backend|createPortableExecutionWorkspaceBackend/,
-    'the first physical workspace backend must remain unwired until pinned root and process backends complete the portable helper'
+    /portable_isolation_helper_(?:execution_workspace|project_root_authority)_backend|createPortable(?:ExecutionWorkspace|ProjectRootAuthority)Backend/,
+    'the physical workspace and project-root backends must remain unwired until the process backend completes the portable helper'
   );
   const helperExtraResource = packageConfig.build.extraResources.find(
     (entry) => entry && entry.to === 'portable-isolation-helper'
@@ -1052,12 +1109,15 @@ function assertExecutionWorkspaceBoundary() {
         'portable-execution-workspace-backend.test.js'
       )
       && packageConfig.scripts['test:portable-isolation-helper-runtime'].includes(
+        'portable-project-root-authority-backend.test.js'
+      )
+      && packageConfig.scripts['test:portable-isolation-helper-runtime'].includes(
         'portable-isolation-helper-backend-dispatcher.test.js'
       )
       && packageConfig.scripts['test:execution-workspace'].includes(
         'npm run test:portable-isolation-helper-release'
       ),
-    'the aggregate execution-workspace gate must run physical workspace, helper dispatcher/runtime, release signing, and packaging tests'
+    'the aggregate execution-workspace gate must run physical workspace/root, helper dispatcher/runtime, release signing, and packaging tests'
   );
   assert.ok(
     portableIsolationHelperLauncherContractSource.includes(
