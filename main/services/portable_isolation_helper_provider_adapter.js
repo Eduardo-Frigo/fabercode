@@ -64,6 +64,14 @@ const {
   canonicalSha256Digest,
 } = require('../capabilities/transactional_delete_contracts');
 const {
+  PORTABLE_ISOLATION_BACKEND_REQUEST_VERSION,
+  PORTABLE_ISOLATION_BACKEND_RESPONSE_VERSION,
+  PORTABLE_ISOLATION_ROOT_LEASE_DESCRIPTOR_VERSION,
+  assertPortableIsolationHelperBackendResponse,
+  assertPortableIsolationHelperRootLeaseDescriptor,
+  createPortableIsolationHelperBackendRequest,
+} = require('../capabilities/portable_isolation_helper_backend_contract');
+const {
   PORTABLE_ISOLATION_HELPER_CLIENT_DISPOSE_RECEIPT_VERSION,
   PORTABLE_ISOLATION_HELPER_CLIENT_VERSION,
 } = require('./portable_isolation_helper_client');
@@ -78,12 +86,6 @@ const PORTABLE_ISOLATION_HELPER_PROVIDER_CANDIDATE_VERSION =
   'portable-isolation-helper-provider-candidate.v2';
 const PORTABLE_ISOLATION_HELPER_PROVIDER_ADAPTER_DISPOSE_RECEIPT_VERSION =
   'portable-isolation-helper-provider-adapter-dispose-receipt.v1';
-const PORTABLE_ISOLATION_ROOT_LEASE_DESCRIPTOR_VERSION =
-  'portable-isolation-root-lease-descriptor.v1';
-const PORTABLE_ISOLATION_BACKEND_REQUEST_VERSION =
-  'portable-isolation-backend-request.v1';
-const PORTABLE_ISOLATION_BACKEND_RESPONSE_VERSION =
-  'portable-isolation-backend-response.v1';
 
 const MAX_QUEUED_EXCHANGES = 1_024;
 const OPTION_KEYS = Object.freeze(['client']);
@@ -94,16 +96,6 @@ const CLIENT_KEYS = Object.freeze([
   'quarantine',
   'diagnostics',
   'dispose',
-]);
-const BACKEND_RESPONSE_KEYS = Object.freeze(['version', 'backendId', 'result']);
-const ROOT_DESCRIPTOR_KEYS = Object.freeze([
-  'version',
-  'leaseId',
-  'jobId',
-  'projectId',
-  'purpose',
-  'physicalRootIdentityDigest',
-  'authorityDigest',
 ]);
 const CLIENT_DISPOSE_KEYS = Object.freeze([
   'version',
@@ -323,14 +315,6 @@ function normalizeHandshake(value) {
   });
 }
 
-function backendRequest(backendId, input) {
-  return immutableSnapshot({
-    version: PORTABLE_ISOLATION_BACKEND_REQUEST_VERSION,
-    backendId,
-    input,
-  });
-}
-
 function normalizeBackendResponse(value, expectedBackendId) {
   try {
     return Object.freeze({
@@ -340,37 +324,37 @@ function normalizeBackendResponse(value, expectedBackendId) {
   } catch (error) {
     preflightDataGraph(error);
   }
-  const fields = exactDataFields(
-    value,
-    BACKEND_RESPONSE_KEYS,
-    BACKEND_RESPONSE_KEYS,
-    'ADAPTER_RESPONSE_INVALID'
-  );
-  if (fields.get('version') !== PORTABLE_ISOLATION_BACKEND_RESPONSE_VERSION
-    || fields.get('backendId') !== expectedBackendId) {
+  let response;
+  try {
+    response = assertPortableIsolationHelperBackendResponse(value);
+  } catch (error) {
+    absorbNativePromise(error);
     throw adapterError('ADAPTER_RESPONSE_INVALID');
   }
-  return Object.freeze({ failure: null, result: fields.get('result') });
+  if (response.backendId !== expectedBackendId) {
+    throw adapterError('ADAPTER_RESPONSE_INVALID');
+  }
+  return Object.freeze({ failure: null, result: response.result });
 }
 
 function normalizeRootDescriptor(value, request) {
-  const fields = exactDataFields(
-    value,
-    ROOT_DESCRIPTOR_KEYS,
-    ROOT_DESCRIPTOR_KEYS,
-    'ADAPTER_RESPONSE_INVALID'
-  );
-  if (fields.get('version') !== PORTABLE_ISOLATION_ROOT_LEASE_DESCRIPTOR_VERSION
-    || fields.get('leaseId') !== request.leaseId
-    || fields.get('jobId') !== request.binding.jobId
-    || fields.get('projectId') !== request.binding.projectId
-    || fields.get('purpose') !== request.purpose
-    || fields.get('physicalRootIdentityDigest')
-      !== request.expectedPhysicalRootIdentityDigest
-    || fields.get('authorityDigest') !== request.authorityDigest) {
+  let descriptor;
+  try {
+    descriptor = assertPortableIsolationHelperRootLeaseDescriptor(value);
+  } catch (error) {
+    absorbNativePromise(error);
     throw adapterError('ADAPTER_RESPONSE_INVALID');
   }
-  return immutableSnapshot(Object.fromEntries(fields));
+  if (descriptor.leaseId !== request.leaseId
+    || descriptor.jobId !== request.binding.jobId
+    || descriptor.projectId !== request.binding.projectId
+    || descriptor.purpose !== request.purpose
+    || descriptor.physicalRootIdentityDigest
+      !== request.expectedPhysicalRootIdentityDigest
+    || descriptor.authorityDigest !== request.authorityDigest) {
+    throw adapterError('ADAPTER_RESPONSE_INVALID');
+  }
+  return descriptor;
 }
 
 function providerAttestation(handshake) {
@@ -564,7 +548,9 @@ function createPortableIsolationHelperProviderAdapter(options = {}) {
       return Promise.reject(adapterError('ADAPTER_QUEUE_CAPACITY_EXCEEDED'));
     }
     let payload;
-    try { payload = backendRequest(backendId, input); } catch (error) {
+    try {
+      payload = createPortableIsolationHelperBackendRequest({ backendId, input });
+    } catch (error) {
       absorbNativePromise(error);
       return Promise.reject(adapterError('ADAPTER_REQUEST_INVALID'));
     }
