@@ -5,6 +5,7 @@ const crypto = require('crypto');
 
 const {
   PROJECT_ROOT_AUTHORITY_BACKEND_VERSION,
+  PROJECT_ROOT_AUTHORITY_LEASE_VERSION,
   PROJECT_ROOT_AUTHORITY_REQUIRED_GUARANTEES,
   PROJECT_ROOT_AUTHORITY_STATES,
   PROJECT_ROOT_READER_VERSION,
@@ -111,7 +112,7 @@ function createBackend(overrides = {}) {
         },
       });
       const lease = Object.freeze({
-        version: 'project-root-authority-lease.v1',
+        version: PROJECT_ROOT_AUTHORITY_LEASE_VERSION,
         leaseId: request.leaseId,
         jobId: request.binding.jobId,
         projectId: request.binding.projectId,
@@ -141,6 +142,8 @@ function createBackend(overrides = {}) {
   return { backend, state };
 }
 
+async function main() {
+
 {
   const harness = createBackend();
   const authority = createProjectRootAuthorityRegistry({
@@ -148,31 +151,31 @@ function createBackend(overrides = {}) {
     leaseIdFactory: deterministicLeaseIds(),
     maxActiveLeases: 4,
   });
-  const acquired = authority.acquire(acquireInput());
+  const acquired = await authority.acquire(acquireInput());
   assert.strictEqual(acquired.ok, true);
   assert.strictEqual(acquired.lease.leaseId, 'project-root-lease-1');
-  assert.deepStrictEqual(acquired.lease.reader.list({ relativePath: '', maxEntries: 20 }), {
+  assert.deepStrictEqual(await acquired.lease.reader.list({ relativePath: '', maxEntries: 20 }), {
     entries: [{ name: 'package.json', kind: 'file' }],
     truncated: false,
   });
-  const read = acquired.lease.reader.readFile({ relativePath: 'package.json', maxBytes: 1024 });
+  const read = await acquired.lease.reader.readFile({ relativePath: 'package.json', maxBytes: 1024 });
   assert.strictEqual(Buffer.from(read.contentBase64, 'base64').toString('utf8'), '{"dependencies":{"next":"1"}}');
   assert.strictEqual(harness.state.probes, 1);
 
-  const duplicate = authority.acquire(acquireInput());
+  const duplicate = await authority.acquire(acquireInput());
   assert.strictEqual(duplicate.ok, true);
   assert.strictEqual(duplicate.lease, acquired.lease);
   assert.strictEqual(duplicate.idempotent, true);
   assert.strictEqual(harness.state.acquires, 1);
 
-  const receipt = acquired.lease.close();
+  const receipt = await acquired.lease.close();
   assert.strictEqual(receipt.closed, true);
-  assert.deepStrictEqual(authority.release({
+  assert.deepStrictEqual(await authority.release({
     binding: binding(),
     leaseId: acquired.lease.leaseId,
   }), { ok: true, closed: true, idempotent: true });
-  assert.throws(
-    () => acquired.lease.reader.list({ relativePath: '', maxEntries: 20 }),
+  await assert.rejects(
+    acquired.lease.reader.list({ relativePath: '', maxEntries: 20 }),
     /closed|inactive/i
   );
   assert.strictEqual(harness.state.closes, 1);
@@ -194,8 +197,8 @@ function createBackend(overrides = {}) {
     backend: harness.backend,
     leaseIdFactory: deterministicLeaseIds(),
   });
-  assert.strictEqual(authority.acquire(acquireInput()).ok, true);
-  assert.deepStrictEqual(authority.acquire(acquireInput('job-b', digest('b'), {
+  assert.strictEqual((await authority.acquire(acquireInput())).ok, true);
+  assert.deepStrictEqual(await authority.acquire(acquireInput('job-b', digest('b'), {
     binding: binding('job-b', {
       projectId: 'project-b',
       canonicalRootPath: '/workspace/project-a/nested',
@@ -215,8 +218,8 @@ function createBackend(overrides = {}) {
     leaseIdFactory: deterministicLeaseIds(),
     maxActiveLeases: 1,
   });
-  assert.strictEqual(authority.acquire(acquireInput()).ok, true);
-  assert.deepStrictEqual(authority.acquire(acquireInput('job-b', digest('c'), {
+  assert.strictEqual((await authority.acquire(acquireInput())).ok, true);
+  assert.deepStrictEqual(await authority.acquire(acquireInput('job-b', digest('c'), {
     binding: binding('job-b', {
       projectId: 'project-b',
       canonicalRootPath: '/workspace/project-b',
@@ -238,7 +241,7 @@ function createBackend(overrides = {}) {
     backend: harness.backend,
     leaseIdFactory: deterministicLeaseIds(),
   });
-  assert.deepStrictEqual(authority.acquire(acquireInput()), {
+  assert.deepStrictEqual(await authority.acquire(acquireInput()), {
     ok: false,
     code: PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.BACKEND_REJECTED,
   });
@@ -260,9 +263,9 @@ function createBackend(overrides = {}) {
     backend: harness.backend,
     leaseIdFactory: deterministicLeaseIds(),
   });
-  const acquired = authority.acquire(acquireInput());
+  const acquired = await authority.acquire(acquireInput());
   assert.strictEqual(acquired.ok, true);
-  assert.deepStrictEqual(authority.release({
+  assert.deepStrictEqual(await authority.release({
     binding: binding(),
     leaseId: acquired.lease.leaseId,
   }), {
@@ -292,11 +295,11 @@ function createBackend(overrides = {}) {
     backend: harness.backend,
     leaseIdFactory: deterministicLeaseIds(),
   });
-  const acquired = authority.acquire(acquireInput());
+  const acquired = await authority.acquire(acquireInput());
   assert.strictEqual(acquired.ok, true);
-  assert.throws(
-    () => acquired.lease.reader.list({ relativePath: '', maxEntries: 20 }),
-    /invalid|entry|component/i
+  await assert.rejects(
+    acquired.lease.reader.list({ relativePath: '', maxEntries: 20 }),
+    /reader\.list|failed/i
   );
   assert.strictEqual(authority.diagnostics().healthy, false);
   assert.strictEqual(authority.diagnostics().quarantined, 1);
@@ -315,8 +318,8 @@ function createBackend(overrides = {}) {
     backend: harness.backend,
     leaseIdFactory: deterministicLeaseIds(),
   });
-  assert.strictEqual(authority.acquire(acquireInput()).ok, true);
-  assert.deepStrictEqual(nested, {
+  assert.strictEqual((await authority.acquire(acquireInput())).ok, true);
+  assert.deepStrictEqual(await nested, {
     ok: false,
     code: PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.REENTRANT_CALL,
   });
@@ -333,8 +336,8 @@ function createBackend(overrides = {}) {
       return 'project-root-lease-reentrant-id';
     },
   });
-  assert.strictEqual(authority.acquire(acquireInput()).ok, true);
-  assert.deepStrictEqual(nested, {
+  assert.strictEqual((await authority.acquire(acquireInput())).ok, true);
+  assert.deepStrictEqual(await nested, {
     ok: false,
     code: PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.REENTRANT_CALL,
   });
@@ -347,17 +350,23 @@ function createBackend(overrides = {}) {
     backend: harness.backend,
     leaseIdFactory: deterministicLeaseIds(),
   });
-  assert.strictEqual(authority.acquire(acquireInput()).ok, true);
-  assert.deepStrictEqual(authority.dispose(), {
+  assert.strictEqual((await authority.acquire(acquireInput())).ok, true);
+  assert.deepStrictEqual(await authority.dispose(), {
     ok: true,
     disposed: true,
     quarantined: 0,
   });
   assert.deepStrictEqual(harness.state.events.slice(-2), ['close:job-a', 'dispose']);
-  assert.deepStrictEqual(authority.acquire(acquireInput()), {
+  assert.deepStrictEqual(await authority.acquire(acquireInput()), {
     ok: false,
     code: PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.DISPOSED,
   });
 }
 
 console.log('project-root-authority-registry.test.js: ok');
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

@@ -4,9 +4,11 @@ const assert = require('assert');
 
 const {
   PROJECT_ROOT_AUTHORITY_BACKEND_VERSION,
+  PROJECT_ROOT_AUTHORITY_LEASE_VERSION,
   PROJECT_ROOT_AUTHORITY_GUARANTEES,
   PROJECT_ROOT_AUTHORITY_REQUIRED_GUARANTEES,
   PROJECT_ROOT_AUTHORITY_STATES,
+  PROJECT_ROOT_READER_VERSION,
   assertProjectRootAuthorityBackend,
   assertProjectRootAuthorityLease,
   createProjectRootAuthorityAcquireRequest,
@@ -32,7 +34,7 @@ function binding(overrides = {}) {
 
 function reader(overrides = {}) {
   return Object.freeze({
-    version: 'project-root-reader.v2',
+    version: PROJECT_ROOT_READER_VERSION,
     inspectEntry() {
       return Object.freeze({
         found: false,
@@ -61,6 +63,8 @@ function reader(overrides = {}) {
     ...overrides,
   });
 }
+
+async function main() {
 
 const request = createProjectRootAuthorityAcquireRequest({
   leaseId: 'root-lease-a',
@@ -100,7 +104,7 @@ assert.throws(
 
 const rootReader = reader();
 const lease = assertProjectRootAuthorityLease(Object.freeze({
-  version: 'project-root-authority-lease.v1',
+  version: PROJECT_ROOT_AUTHORITY_LEASE_VERSION,
   leaseId: request.leaseId,
   jobId: request.binding.jobId,
   projectId: request.binding.projectId,
@@ -123,29 +127,40 @@ assert.throws(
   /identity|binding/i
 );
 
-assert.throws(
-  () => assertProjectRootAuthorityLease(Object.freeze({
+const asyncCloseLease = assertProjectRootAuthorityLease(Object.freeze({
     ...lease,
     close: async () => createProjectRootAuthorityCloseReceipt({ request, closed: true }),
-  }), request),
-  /close|function/i
-);
+}), request);
+assert.strictEqual((await asyncCloseLease.close()).closed, true);
 
 const backend = assertProjectRootAuthorityBackend(Object.freeze({
   version: PROJECT_ROOT_AUTHORITY_BACKEND_VERSION,
   id: 'test-project-root-authority',
   probe() { return enforcedProbe; },
-  acquire() { return lease; },
-  dispose() { return Object.freeze({ ok: true, disposed: true }); },
+  async acquire() { return lease; },
+  async dispose() { return Object.freeze({ ok: true, disposed: true }); },
 }));
 assert.strictEqual(backend.id, 'test-project-root-authority');
+assert.strictEqual(await backend.acquire(request), lease);
+
+assert.throws(
+  () => assertProjectRootAuthorityBackend(Object.freeze({
+    version: PROJECT_ROOT_AUTHORITY_BACKEND_VERSION,
+    id: 'async-probe-project-root-authority',
+    async probe() { return enforcedProbe; },
+    async acquire() { return lease; },
+    async dispose() { return Object.freeze({ ok: true, disposed: true }); },
+  })),
+  /probe|function/i
+);
 
 const unsupported = createUnsupportedProjectRootAuthorityBackend();
 assert.strictEqual(
   unsupported.probe().state,
   PROJECT_ROOT_AUTHORITY_STATES.UNAVAILABLE
 );
-assert.throws(() => unsupported.acquire(request), /unavailable/i);
+await assert.rejects(unsupported.acquire(request), /unavailable/i);
+assert.deepStrictEqual(await unsupported.dispose(), { ok: true, disposed: true });
 
 assert.throws(
   () => createProjectRootAuthorityAcquireRequest({
@@ -169,3 +184,9 @@ assert.throws(
 );
 
 console.log('project-root-authority-contract.test.js: ok');
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

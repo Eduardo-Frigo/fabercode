@@ -18,7 +18,6 @@ const {
 const {
   PORTABLE_ISOLATION_BACKEND_REQUEST_VERSION,
   PORTABLE_ISOLATION_BACKEND_RESPONSE_VERSION,
-  PORTABLE_ISOLATION_HELPER_PROVIDER_ACTIVATION_BLOCK_REASON,
   PORTABLE_ISOLATION_HELPER_PROVIDER_ADAPTER_DISPOSE_RECEIPT_VERSION,
   PORTABLE_ISOLATION_HELPER_PROVIDER_ADAPTER_VERSION,
   PORTABLE_ISOLATION_HELPER_PROVIDER_CANDIDATE_VERSION,
@@ -308,11 +307,7 @@ async function main() {
   );
   assert.strictEqual(
     PORTABLE_ISOLATION_HELPER_PROVIDER_CANDIDATE_VERSION,
-    'portable-isolation-helper-provider-candidate.v1'
-  );
-  assert.strictEqual(
-    PORTABLE_ISOLATION_HELPER_PROVIDER_ACTIVATION_BLOCK_REASON,
-    'ASYNC_ROOT_AUTHORITY_CONTRACT_REQUIRED'
+    'portable-isolation-helper-provider-candidate.v2'
   );
 
   const harness = transportHarness();
@@ -334,6 +329,7 @@ async function main() {
     'version',
     'activationReady',
     'activationBlockReason',
+    'provider',
     'providerVersion',
     'buildId',
     'executionWorkspaceBackend',
@@ -343,14 +339,28 @@ async function main() {
     'dispose',
   ]);
   assert.strictEqual(candidate.version, PORTABLE_ISOLATION_HELPER_PROVIDER_CANDIDATE_VERSION);
-  assert.strictEqual(candidate.activationReady, false);
-  assert.strictEqual(
-    candidate.activationBlockReason,
-    PORTABLE_ISOLATION_HELPER_PROVIDER_ACTIVATION_BLOCK_REASON
-  );
+  assert.strictEqual(candidate.activationReady, true);
+  assert.strictEqual(candidate.activationBlockReason, null);
   assert.strictEqual(candidate.providerVersion, PORTABLE_EXECUTION_ISOLATION_PROVIDER_VERSION);
   assert.strictEqual(candidate.buildId, 'portable-helper-build-1');
   assert.strictEqual(Object.isFrozen(candidate), true);
+  assert.strictEqual(Object.isFrozen(candidate.provider), true);
+  assert.deepStrictEqual(Reflect.ownKeys(candidate.provider), [
+    'providerVersion',
+    'buildId',
+    'executionWorkspaceBackend',
+    'projectRootAuthorityBackend',
+    'processSupervisorBackend',
+    'isolationAttestation',
+    'dispose',
+  ]);
+  for (const field of [
+    'providerVersion', 'buildId', 'executionWorkspaceBackend',
+    'projectRootAuthorityBackend', 'processSupervisorBackend',
+    'isolationAttestation', 'dispose',
+  ]) {
+    assert.strictEqual(candidate.provider[field], candidate[field]);
+  }
 
   const workspaceBackend = assertExecutionWorkspaceBackend(
     candidate.executionWorkspaceBackend

@@ -530,17 +530,12 @@ function createRevocableBackends({
     },
     acquire(input) {
       if (!rootActive) return unavailable.projectRootAuthorityBackend.acquire(input);
-      let result;
       try {
-        result = Reflect.apply(rootAcquire.method, rootAcquire.receiver, [input]);
+        return Reflect.apply(rootAcquire.method, rootAcquire.receiver, [input]);
       } catch (error) {
         preflightDataGraph(error);
         throw error;
       }
-      if (absorbNativePromise(result)) {
-        throw new TypeError('project-root authority acquire must remain synchronous');
-      }
-      return result;
     },
     dispose(input) {
       preflightDataGraph(input);

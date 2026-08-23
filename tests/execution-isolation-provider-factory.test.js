@@ -221,7 +221,7 @@ function providerHarness({
       state.rootProbes += 1;
       return rootProbe;
     },
-    acquire(request) {
+    async acquire(request) {
       state.rootAcquires += 1;
       return Object.freeze({
         version: PROJECT_ROOT_AUTHORITY_LEASE_VERSION,
@@ -232,7 +232,7 @@ function providerHarness({
         physicalRootIdentityDigest: request.expectedPhysicalRootIdentityDigest,
         authorityDigest: request.authorityDigest,
         reader: createReader(),
-        close() {
+        async close() {
           return createProjectRootAuthorityCloseReceipt({ request, closed: true });
         },
       });
@@ -402,9 +402,9 @@ async function main() {
     lease: workspaceLease,
   });
   assert.strictEqual(selection.executionWorkspaceBackend.discard(discardRequest).discarded, true);
-  const acquiredRoot = selection.projectRootAuthorityBackend.acquire(rootRequest());
+  const acquiredRoot = await selection.projectRootAuthorityBackend.acquire(rootRequest());
   assert.strictEqual(acquiredRoot.reader.version, PROJECT_ROOT_READER_VERSION);
-  assert.strictEqual(acquiredRoot.close().closed, true);
+  assert.strictEqual((await acquiredRoot.close()).closed, true);
   assert.strictEqual(validHarness.state.workspaceAcquires, 1);
   assert.strictEqual(validHarness.state.workspaceDiscards, 1);
   assert.strictEqual(validHarness.state.rootAcquires, 1);
@@ -416,8 +416,8 @@ async function main() {
   assert.strictEqual(selection.projectRootAuthorityBackend.probe().state, 'unavailable');
   assert.strictEqual(selection.executionWorkspaceBackend.probe().state, 'enforced');
   assert.strictEqual(validHarness.state.providerDisposals, 0);
-  assert.throws(
-    () => selection.projectRootAuthorityBackend.acquire(rootRequest()),
+  await assert.rejects(
+    selection.projectRootAuthorityBackend.acquire(rootRequest()),
     (error) => error && error.code === 'PROJECT_ROOT_AUTHORITY_UNAVAILABLE'
   );
 
@@ -462,7 +462,10 @@ async function main() {
   assert.strictEqual(forceSelection.projectRootAuthorityBackend.probe().state, 'unavailable');
   assert.strictEqual((await forceSelection.processSupervisorBackend.probe()).state, 'unavailable');
   assert.throws(() => forceSelection.executionWorkspaceBackend.discard({}), /unavailable/i);
-  assert.throws(() => forceSelection.projectRootAuthorityBackend.acquire({}), /unavailable/i);
+  await assert.rejects(
+    forceSelection.projectRootAuthorityBackend.acquire({}),
+    /unavailable/i
+  );
   await assert.rejects(
     forceSelection.processSupervisorBackend.exec(Object.freeze({})),
     (error) => error && error.code === 'PROCESS_SUPERVISOR_UNAVAILABLE'
@@ -610,7 +613,7 @@ async function main() {
   const processSupervisor = createProcessSupervisor({
     backend: registrySelection.processSupervisorBackend,
   });
-  const registryRootAcquire = rootRegistry.acquire({
+  const registryRootAcquire = await rootRegistry.acquire({
     binding: binding(),
     expectedPhysicalRootIdentityDigest: digest('b'),
     purpose: 'execution',
@@ -626,11 +629,11 @@ async function main() {
   assert.strictEqual((await processSupervisor.probe()).state, 'enforced');
   assert.strictEqual(registryHarness.state.processProbes, 1);
 
-  assert.strictEqual(rootRegistry.release({
+  assert.strictEqual((await rootRegistry.release({
     binding: binding(),
     leaseId: registryRootAcquire.lease.leaseId,
-  }).ok, true);
-  assert.strictEqual(rootRegistry.dispose().ok, true);
+  })).ok, true);
+  assert.strictEqual((await rootRegistry.dispose()).ok, true);
   assert.strictEqual(registryHarness.state.providerDisposals, 0);
   assert.strictEqual((await workspaceRegistry.rollback({
     binding: binding(),

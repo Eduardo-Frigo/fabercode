@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const path = require('path');
 
 const {
+  PROJECT_ROOT_AUTHORITY_LEASE_VERSION,
   PROJECT_ROOT_READER_VERSION,
 } = require('../main/capabilities/project_root_authority_contract');
 const { createProjectScanner } = require('../main/services/project_scanner');
@@ -82,7 +83,7 @@ function createReader(tree, events, overrides = {}) {
 
 function lease(reader, purpose = 'project_scan') {
   return Object.freeze({
-    version: 'project-root-authority-lease.v1',
+    version: PROJECT_ROOT_AUTHORITY_LEASE_VERSION,
     leaseId: 'root-lease-a',
     jobId: 'job-a',
     projectId: 'project-a',

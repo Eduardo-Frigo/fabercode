@@ -11,14 +11,14 @@ const {
   preflightDataGraph,
 } = require('./execution_workspace_contract');
 
-const PROJECT_ROOT_AUTHORITY_BACKEND_VERSION = 'project-root-authority-backend.v1';
+const PROJECT_ROOT_AUTHORITY_BACKEND_VERSION = 'project-root-authority-backend.v2';
 const PROJECT_ROOT_AUTHORITY_PROBE_VERSION = 'project-root-authority-probe.v1';
 const PROJECT_ROOT_AUTHORITY_ACQUIRE_REQUEST_VERSION =
   'project-root-authority-acquire-request.v1';
-const PROJECT_ROOT_AUTHORITY_LEASE_VERSION = 'project-root-authority-lease.v1';
+const PROJECT_ROOT_AUTHORITY_LEASE_VERSION = 'project-root-authority-lease.v2';
 const PROJECT_ROOT_AUTHORITY_CLOSE_RECEIPT_VERSION =
   'project-root-authority-close-receipt.v1';
-const PROJECT_ROOT_READER_VERSION = 'project-root-reader.v2';
+const PROJECT_ROOT_READER_VERSION = 'project-root-reader.v3';
 const PROJECT_ROOT_PHYSICAL_IDENTITY_VERSION =
   'project-root-physical-identity.v1';
 
@@ -205,10 +205,11 @@ function normalizeEntryName(value, fieldName) {
   return value;
 }
 
-function assertSynchronousMethod(value, fieldName) {
+function assertAuthorityMethod(value, fieldName, { synchronous = false } = {}) {
   if (typeof value !== 'function' || util.types.isProxy(value)
-    || util.types.isAsyncFunction(value) || util.types.isGeneratorFunction(value)) {
-    throw new TypeError(`${fieldName} must be a synchronous function`);
+    || util.types.isGeneratorFunction(value)
+    || (synchronous && util.types.isAsyncFunction(value))) {
+    throw new TypeError(`${fieldName} must be an inspectable function`);
   }
   let keys;
   try { keys = Reflect.ownKeys(value); } catch (error) {
@@ -555,9 +556,9 @@ function assertProjectRootReader(value) {
   if (!fields || fields.get('version') !== PROJECT_ROOT_READER_VERSION || !Object.isFrozen(value)) {
     throw new TypeError('Invalid project-root reader');
   }
-  assertSynchronousMethod(fields.get('list'), 'project-root reader.list');
-  assertSynchronousMethod(fields.get('readFile'), 'project-root reader.readFile');
-  assertSynchronousMethod(fields.get('inspectEntry'), 'project-root reader.inspectEntry');
+  assertAuthorityMethod(fields.get('list'), 'project-root reader.list');
+  assertAuthorityMethod(fields.get('readFile'), 'project-root reader.readFile');
+  assertAuthorityMethod(fields.get('inspectEntry'), 'project-root reader.inspectEntry');
   return value;
 }
 
@@ -585,7 +586,7 @@ function assertProjectRootAuthorityLease(value, expectedRequest) {
     throw new TypeError('Invalid project-root authority lease binding');
   }
   assertProjectRootReader(fields.get('reader'));
-  assertSynchronousMethod(fields.get('close'), 'project-root authority lease.close');
+  assertAuthorityMethod(fields.get('close'), 'project-root authority lease.close');
   return value;
 }
 
@@ -630,9 +631,11 @@ function assertProjectRootAuthorityBackend(value) {
     throw new TypeError('Invalid project-root authority backend');
   }
   normalizeIdentifier(fields.get('id'), 'project-root authority backend id');
-  for (const method of ['probe', 'acquire', 'dispose']) {
-    assertSynchronousMethod(fields.get(method), `project-root authority backend.${method}`);
-  }
+  assertAuthorityMethod(fields.get('probe'), 'project-root authority backend.probe', {
+    synchronous: true,
+  });
+  assertAuthorityMethod(fields.get('acquire'), 'project-root authority backend.acquire');
+  assertAuthorityMethod(fields.get('dispose'), 'project-root authority backend.dispose');
   return value;
 }
 
@@ -660,11 +663,11 @@ function createUnsupportedProjectRootAuthorityBackend(options = {}) {
     },
     acquire(input) {
       preflightDataGraph(input);
-      throw new ProjectRootAuthorityUnavailableError(reasonCode);
+      return Promise.reject(new ProjectRootAuthorityUnavailableError(reasonCode));
     },
     dispose(input) {
       preflightDataGraph(input);
-      return Object.freeze({ ok: true, disposed: true });
+      return Promise.resolve(Object.freeze({ ok: true, disposed: true }));
     },
   });
 }

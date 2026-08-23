@@ -18,13 +18,26 @@ const digest = (character) => `sha256:${character.repeat(64)}`;
 
 function deferred() {
   let resolve;
-  const promise = new Promise((resolvePromise) => { resolve = resolvePromise; });
-  return { promise, resolve };
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
+async function waitForEvent(events, expected) {
+  for (let attempt = 0; attempt < 20 && !events.includes(expected); attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.ok(events.includes(expected), `timed out waiting for ${expected}`);
 }
 
 function createHarness({
+  acquireGate = null,
   executeAction: executeOverride = null,
   refreshProjectFromRootLease: refreshOverride = null,
+  releaseGate = null,
   releaseResult = null,
 } = {}) {
   const events = [];
@@ -45,7 +58,7 @@ function createHarness({
 
   const rootReader = Object.freeze({
     version: PROJECT_ROOT_READER_VERSION,
-    inspectEntry() {
+    async inspectEntry() {
       return Object.freeze({
         found: false,
         kind: null,
@@ -57,8 +70,10 @@ function createHarness({
         entryIdentityDigest: null,
       });
     },
-    list() { return Object.freeze({ entries: Object.freeze([]), truncated: false }); },
-    readFile() {
+    async list() {
+      return Object.freeze({ entries: Object.freeze([]), truncated: false });
+    },
+    async readFile() {
       return Object.freeze({ found: false, contentBase64: null, contentDigest: null });
     },
   });
@@ -123,10 +138,11 @@ function createHarness({
   });
 
   const projectRootAuthority = Object.freeze({
-    acquire({ binding, expectedPhysicalRootIdentityDigest, purpose }) {
+    async acquire({ binding, expectedPhysicalRootIdentityDigest, purpose }) {
       events.push('root_acquire');
       assert.strictEqual(expectedPhysicalRootIdentityDigest, physicalRootIdentityDigest);
       assert.strictEqual(purpose, 'execution');
+      if (acquireGate) await acquireGate.promise;
       rootActive = true;
       rootLease = Object.freeze({
         version: PROJECT_ROOT_AUTHORITY_LEASE_VERSION,
@@ -137,15 +153,16 @@ function createHarness({
         physicalRootIdentityDigest,
         authorityDigest: digest('c'),
         reader: rootReader,
-        close() { throw new Error('coordinator must release through the authority registry'); },
+        async close() { throw new Error('coordinator must release through the authority registry'); },
       });
       return Object.freeze({ ok: true, lease: rootLease, idempotent: false });
     },
-    release({ binding, leaseId }) {
+    async release({ binding, leaseId }) {
       events.push('root_release');
       assert.strictEqual(rootActive, true);
       assert.strictEqual(binding.jobId, rootLease.jobId);
       assert.strictEqual(leaseId, rootLease.leaseId);
+      if (releaseGate) await releaseGate.promise;
       if (releaseResult) return releaseResult;
       rootActive = false;
       return Object.freeze({ ok: true, closed: true, idempotent: false });
@@ -173,7 +190,7 @@ function createHarness({
     return { ok: true, job };
   }
 
-  const refresh = refreshOverride || ((projectInfo, lease) => {
+  const refresh = refreshOverride || (async (projectInfo, lease) => {
     events.push('scan');
     assert.strictEqual(rootActive, true);
     assert.strictEqual(lease, rootLease);
@@ -271,7 +288,7 @@ async function run() {
   ]);
 
   const scanFailure = createHarness({
-    refreshProjectFromRootLease() {
+    async refreshProjectFromRootLease() {
       scanFailure.events.push('scan');
       throw new Error('injected scan failure');
     },
@@ -284,6 +301,33 @@ async function run() {
   );
   assert.strictEqual(scanFailure.isRootActive(), false);
   assert.deepStrictEqual(scanFailure.events.slice(-3), [
+    'release_barrier',
+    'root_release',
+    'authority_revoke',
+  ]);
+
+  const acquireGate = deferred();
+  const pendingAcquire = createHarness({ acquireGate });
+  const pendingAcquireJobId = await pendingAcquire.createReadyJob();
+  const acquireExecution = pendingAcquire.coordinator.execute({ jobId: pendingAcquireJobId });
+  await waitForEvent(pendingAcquire.events, 'root_acquire');
+  assert.strictEqual(pendingAcquire.isRootActive(), false);
+  assert.deepStrictEqual(pendingAcquire.coordinator.revokeJob({ jobId: pendingAcquireJobId }), {
+    ok: true,
+    revoked: false,
+    deferred: true,
+  });
+  assert.strictEqual(
+    pendingAcquire.coordinator.clear().code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING
+  );
+  acquireGate.resolve();
+  assert.strictEqual(
+    (await acquireExecution).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
+  );
+  assert.strictEqual(pendingAcquire.isRootActive(), false);
+  assert.deepStrictEqual(pendingAcquire.events.slice(-3), [
     'release_barrier',
     'root_release',
     'authority_revoke',
@@ -322,6 +366,33 @@ async function run() {
   assert.strictEqual(pendingHarness.isRootActive(), false);
   assert.deepStrictEqual(pendingHarness.events.slice(-3), [
     'release_barrier',
+    'root_release',
+    'authority_revoke',
+  ]);
+
+  const releaseGate = deferred();
+  const pendingRelease = createHarness({ releaseGate });
+  const pendingReleaseJobId = await pendingRelease.createReadyJob();
+  const releaseExecution = pendingRelease.coordinator.execute({ jobId: pendingReleaseJobId });
+  await waitForEvent(pendingRelease.events, 'root_release');
+  assert.strictEqual(pendingRelease.isRootActive(), true);
+  assert.deepStrictEqual(pendingRelease.coordinator.revokeJob({ jobId: pendingReleaseJobId }), {
+    ok: true,
+    revoked: false,
+    deferred: true,
+  });
+  assert.strictEqual(
+    pendingRelease.coordinator.clear().code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING
+  );
+  assert.strictEqual(pendingRelease.events.includes('authority_revoke'), false);
+  releaseGate.resolve();
+  assert.strictEqual(
+    (await releaseExecution).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
+  );
+  assert.strictEqual(pendingRelease.isRootActive(), false);
+  assert.deepStrictEqual(pendingRelease.events.slice(-2), [
     'root_release',
     'authority_revoke',
   ]);

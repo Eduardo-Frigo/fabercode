@@ -1,6 +1,7 @@
 'use strict';
 
 const { AsyncLocalStorage } = require('async_hooks');
+const util = require('util');
 const {
   PROJECT_ROOT_AUTHORITY_LEASE_VERSION,
   PROJECT_ROOT_READER_VERSION,
@@ -237,6 +238,21 @@ function deny(code, message = 'A operação foi rejeitada pelo coordenador.') {
 
 function isSynchronousResult(value) {
   return !(value && typeof value.then === 'function');
+}
+
+function observeNativeAsyncResult(value, fieldName) {
+  if (!util.types.isPromise(value)) {
+    return Promise.resolve(Object.freeze({ value }));
+  }
+  return new Promise((resolve, reject) => {
+    const onFulfilled = (result) => resolve(Object.freeze({ value: result }));
+    const onRejected = () => reject(new TypeError(`${fieldName} failed`));
+    try {
+      Reflect.apply(Promise.prototype.then, value, [onFulfilled, onRejected]);
+    } catch {
+      reject(new TypeError(`${fieldName} failed`));
+    }
+  });
 }
 
 function callBestEffort(callback, ...args) {
@@ -733,6 +749,7 @@ function createAssistantExecutionCoordinator(options = {}) {
 
   function releaseProjectRootLeaseConfirmed(record) {
     if (!record.projectRootLease) return record.projectRootLeaseInUse !== true;
+    if (record.projectRootReleasePromise) return record.projectRootReleasePromise;
     if (!projectRootAuthorityEnabled
       || record.projectRootLeaseInUse
       || record.projectRootReleaseInProgress) {
@@ -742,37 +759,52 @@ function createAssistantExecutionCoordinator(options = {}) {
     const lease = record.projectRootLease;
     const observedGeneration = generation;
     record.projectRootReleaseInProgress = true;
-    let result;
+    let raw;
     try {
-      result = Reflect.apply(releaseProjectRootLease, projectRootAuthority, [{
+      raw = Reflect.apply(releaseProjectRootLease, projectRootAuthority, [{
         binding: record.binding,
         leaseId: lease.leaseId,
       }]);
-      if (!isSynchronousResult(result) || !Object.isFrozen(result)) {
-        throw new TypeError('project-root release must be synchronous and frozen');
-      }
-      const resultFields = dataFields(result, 'project-root release result');
-      if (resultFields.size !== 3
-        || resultFields.get('ok') !== true
-        || resultFields.get('closed') !== true
-        || typeof resultFields.get('idempotent') !== 'boolean') {
-        throw new TypeError('project-root release was not confirmed');
-      }
-      if (!authorityHealthy
-        || generation !== observedGeneration
-        || recordsByJobId.get(record.jobId) !== record
-        || record.projectRootLease !== lease
-        || record.projectRootReleaseInProgress !== true) {
-        throw new TypeError('project-root release re-entered coordinator lifecycle');
-      }
     } catch {
       record.projectRootReleaseInProgress = false;
       poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
       return false;
     }
-    record.projectRootReleaseInProgress = false;
-    record.projectRootLease = null;
-    return true;
+    const rejectRelease = () => {
+      record.projectRootReleaseInProgress = false;
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
+    };
+    record.projectRootReleasePromise = observeNativeAsyncResult(
+      raw,
+      'project-root release'
+    ).then(({ value: result }) => {
+      try {
+        if (!Object.isFrozen(result)) {
+          throw new TypeError('project-root release must be frozen');
+        }
+        const resultFields = dataFields(result, 'project-root release result');
+        if (resultFields.size !== 3
+          || resultFields.get('ok') !== true
+          || resultFields.get('closed') !== true
+          || typeof resultFields.get('idempotent') !== 'boolean') {
+          throw new TypeError('project-root release was not confirmed');
+        }
+        if (!authorityHealthy
+          || generation !== observedGeneration
+          || recordsByJobId.get(record.jobId) !== record
+          || record.projectRootLease !== lease
+          || record.projectRootReleaseInProgress !== true) {
+          throw new TypeError('project-root release re-entered coordinator lifecycle');
+        }
+      } catch {
+        return rejectRelease();
+      }
+      record.projectRootReleaseInProgress = false;
+      record.projectRootLease = null;
+      return true;
+    }, rejectRelease);
+    return record.projectRootReleasePromise;
   }
 
   function revokeSubmissionConfirmed(submissionId) {
@@ -797,7 +829,11 @@ function createAssistantExecutionCoordinator(options = {}) {
       return false;
     }
     if (!releaseBarrierConfirmed(record, reason, terminalStatus)) return false;
-    if (!releaseProjectRootLeaseConfirmed(record)) return false;
+    const rootReleased = releaseProjectRootLeaseConfirmed(record);
+    if (!isSynchronousResult(rootReleased) || rootReleased !== true) {
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
+    }
     if (!removeLocalRecord(record, reason)) return false;
     return revokeBindingConfirmed(record.binding);
   }
@@ -805,6 +841,25 @@ function createAssistantExecutionCoordinator(options = {}) {
   function failPlanningRecord(record, reason, terminalStatus = null) {
     if (!record || recordsByJobId.get(record.jobId) !== record) return true;
     const cleaned = removeRecord(record, reason, terminalStatus);
+    callBestEffort(onPlanningFailure, record.jobId, reason);
+    return cleaned;
+  }
+
+  async function removeExecutionRecord(record, reason, terminalStatus = null) {
+    if (!authorityHealthy || clearing) return false;
+    if (record && record.projectRootLeaseInUse) {
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
+    }
+    if (!releaseBarrierConfirmed(record, reason, terminalStatus)) return false;
+    if (await releaseProjectRootLeaseConfirmed(record) !== true) return false;
+    if (!removeLocalRecord(record, reason)) return false;
+    return revokeBindingConfirmed(record.binding);
+  }
+
+  async function failExecutionRecord(record, reason, terminalStatus = null) {
+    if (!record || recordsByJobId.get(record.jobId) !== record) return true;
+    const cleaned = await removeExecutionRecord(record, reason, terminalStatus);
     callBestEffort(onPlanningFailure, record.jobId, reason);
     return cleaned;
   }
@@ -1087,6 +1142,7 @@ function createAssistantExecutionCoordinator(options = {}) {
         projectRootLease: null,
         projectRootLeaseInUse: false,
         projectRootReleaseInProgress: false,
+        projectRootReleasePromise: null,
         rootRevocationRequested: false,
       };
       if (!scopeIsCurrent(scope)) {
@@ -1472,15 +1528,15 @@ function createAssistantExecutionCoordinator(options = {}) {
     });
   }
 
-  function finishProjectRootPreparation(record, code, terminalStatus = 'failed') {
+  async function finishProjectRootPreparation(record, code, terminalStatus = 'failed') {
     record.projectRootLeaseInUse = false;
-    if (!authorityHealthy || !failPlanningRecord(record, code, terminalStatus)) {
+    if (!authorityHealthy || !await failExecutionRecord(record, code, terminalStatus)) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
     }
     return deny(code);
   }
 
-  function prepareProjectRootExecution(record, observedGeneration, observedVersion) {
+  async function prepareProjectRootExecution(record, observedGeneration, observedVersion) {
     if (!projectRootAuthorityEnabled) {
       return Object.freeze({ ok: true, project: record.project });
     }
@@ -1524,11 +1580,15 @@ function createAssistantExecutionCoordinator(options = {}) {
     record.projectRootLeaseInUse = true;
     let acquired;
     try {
-      acquired = Reflect.apply(acquireProjectRootLease, projectRootAuthority, [{
+      const rawAcquire = Reflect.apply(acquireProjectRootLease, projectRootAuthority, [{
         binding: record.binding,
         expectedPhysicalRootIdentityDigest: physicalRootIdentityDigest,
         purpose: 'execution',
       }]);
+      ({ value: acquired } = await observeNativeAsyncResult(
+        rawAcquire,
+        'project-root acquire'
+      ));
     } catch {
       const code = record.rootRevocationRequested
         ? ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
@@ -1542,9 +1602,7 @@ function createAssistantExecutionCoordinator(options = {}) {
 
     let acquiredFields;
     try {
-      if (!isSynchronousResult(acquired) || !Object.isFrozen(acquired)) {
-        throw new TypeError('project-root acquire must be synchronous and frozen');
-      }
+      if (!Object.isFrozen(acquired)) throw new TypeError('project-root acquire must be frozen');
       acquiredFields = dataFields(acquired, 'project-root acquire result');
     } catch {
       record.projectRootLeaseInUse = false;
@@ -1591,13 +1649,14 @@ function createAssistantExecutionCoordinator(options = {}) {
 
     let refreshedProject;
     try {
-      refreshedProject = refreshProjectFromRootLease(
+      const rawRefresh = refreshProjectFromRootLease(
         cloneForOutput(record.project),
         record.projectRootLease,
       );
-      if (!isSynchronousResult(refreshedProject)) {
-        throw new TypeError('refreshProjectFromRootLease must be synchronous');
-      }
+      ({ value: refreshedProject } = await observeNativeAsyncResult(
+        rawRefresh,
+        'refreshProjectFromRootLease'
+      ));
       if (record.rootRevocationRequested) {
         return finishProjectRootPreparation(
           record,
@@ -1695,7 +1754,7 @@ function createAssistantExecutionCoordinator(options = {}) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
     }
 
-    const preparedRoot = prepareProjectRootExecution(
+    const preparedRoot = await prepareProjectRootExecution(
       record,
       observedGeneration,
       observedVersion,
@@ -1715,10 +1774,11 @@ function createAssistantExecutionCoordinator(options = {}) {
         || record.state !== 'executing') {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
-      const revocationRequested = record.rootRevocationRequested;
-      record.state = 'executed';
-      record.version += 1;
-      record.abortController = null;
+      if (!projectRootAuthorityEnabled) {
+        record.state = 'executed';
+        record.version += 1;
+        record.abortController = null;
+      }
       let publicOutput;
       try {
         const sanitized = immutableJsonSnapshot(output, {
@@ -1730,17 +1790,17 @@ function createAssistantExecutionCoordinator(options = {}) {
       } catch {
         publicOutput = deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.OUTPUT_INVALID);
       }
-      const terminalStatus = revocationRequested
+      const terminalStatus = record.rootRevocationRequested
         ? (record.terminalObserved || 'cancelled')
         : (record.terminalObserved
           || (isPlainRecord(publicOutput) && publicOutput.ok === false ? 'failed' : 'completed'));
-      const removalReason = revocationRequested
+      const removalReason = record.rootRevocationRequested
         ? ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
         : 'job_terminal';
-      if (!removeRecord(record, removalReason, terminalStatus)) {
+      if (!await removeExecutionRecord(record, removalReason, terminalStatus)) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
       }
-      if (revocationRequested) {
+      if (record.rootRevocationRequested) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
       return publicOutput;
@@ -1752,7 +1812,7 @@ function createAssistantExecutionCoordinator(options = {}) {
       const failureCode = record.rootRevocationRequested
         ? ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
         : ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_FAILED;
-      if (!failPlanningRecord(
+      if (!await failExecutionRecord(
         record,
         failureCode,
         record.rootRevocationRequested ? (record.terminalObserved || 'cancelled') : 'failed',
@@ -1860,7 +1920,11 @@ function createAssistantExecutionCoordinator(options = {}) {
       }
     }
     for (const record of records) {
-      if (!releaseProjectRootLeaseConfirmed(record)) {
+      const rootReleased = releaseProjectRootLeaseConfirmed(record);
+      if (!isSynchronousResult(rootReleased) || rootReleased !== true) {
+        if (isSynchronousResult(rootReleased)) {
+          poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+        }
         clearing = false;
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
       }

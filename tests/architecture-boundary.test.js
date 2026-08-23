@@ -646,6 +646,11 @@ function assertExecutionWorkspaceBoundary() {
   );
   assertDoesNotMatch(
     isolationProviderFactorySource,
+    /project-root authority acquire must remain synchronous|absorbNativePromise\(result\)/,
+    'portable root acquisition must preserve the provider native Promise for the async registry'
+  );
+  assertDoesNotMatch(
+    isolationProviderFactorySource,
     /captureOwnMethod\((?:workspaceBackend|rootBackend),\s*['"]dispose['"]\)/,
     'backend facades must release the one shared provider instead of independently closing physical authority'
   );
@@ -761,12 +766,11 @@ function assertExecutionWorkspaceBoundary() {
   );
   assert.ok(
     portableIsolationHelperProviderAdapterSource.includes(
-      "'portable-isolation-helper-provider-candidate.v1'"
+      "'portable-isolation-helper-provider-candidate.v2'"
     )
-      && portableIsolationHelperProviderAdapterSource.includes('activationReady: false')
-      && portableIsolationHelperProviderAdapterSource.includes(
-        "'ASYNC_ROOT_AUTHORITY_CONTRACT_REQUIRED'"
-      )
+      && portableIsolationHelperProviderAdapterSource.includes('activationReady: true')
+      && portableIsolationHelperProviderAdapterSource.includes('activationBlockReason: null')
+      && portableIsolationHelperProviderAdapterSource.includes('const provider = Object.freeze({')
       && portableIsolationHelperProviderAdapterSource.includes(
         'MAX_QUEUED_EXCHANGES = 1_024'
       )
@@ -793,7 +797,7 @@ function assertExecutionWorkspaceBoundary() {
       && portableIsolationHelperProviderAdapterSource.includes(
         'canonicalSha256Digest(capabilityCore)'
       ),
-    'the provider candidate must stay activation-blocked, revalidate its handshake, serialize bounded work, preserve pending authority, quarantine invalid domains, reap processes, and bind one attestation'
+    'the provider candidate must expose one exact activatable facade, revalidate its handshake, serialize bounded work, preserve pending authority, quarantine invalid domains, reap processes, and bind one attestation'
   );
   for (const operationName of [
     'WORKSPACE_ACQUIRE', 'WORKSPACE_DISCARD',
@@ -810,7 +814,7 @@ function assertExecutionWorkspaceBoundary() {
   assertDoesNotMatch(
     `${mainSource}\n${isolationProviderFactorySource}`,
     /portable_isolation_helper_(?:protocol|client|provider_adapter)|createPortableIsolationHelper(?:SessionController|Client|ProviderAdapter)/,
-    'the helper protocol, client, and provider candidate must remain unwired until async root authority, a bundled launcher, and private transport exist'
+    'the helper protocol, client, and provider candidate must remain unwired until a bundled launcher and private transport exist'
   );
 
   assertDoesNotMatch(

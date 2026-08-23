@@ -9,7 +9,6 @@ const {
 const {
   MAX_QUEUED_EXCHANGES,
   PORTABLE_ISOLATION_BACKEND_RESPONSE_VERSION,
-  PORTABLE_ISOLATION_HELPER_PROVIDER_ACTIVATION_BLOCK_REASON,
   createPortableIsolationHelperProviderAdapter,
 } = require('../main/services/portable_isolation_helper_provider_adapter');
 const {
@@ -24,7 +23,11 @@ const {
 } = require('../main/capabilities/execution_workspace_contract');
 const {
   createProjectRootAuthorityAcquireRequest,
+  createProjectRootAuthorityCloseReceipt,
 } = require('../main/capabilities/project_root_authority_contract');
+const {
+  createProjectRootAuthorityRegistry,
+} = require('../main/capabilities/project_root_authority_registry');
 const {
   createProcessSupervisorExecReceipt,
   createProcessSupervisorExecRequest,
@@ -538,31 +541,87 @@ async function assertReentrancyFlushesQuarantineAndDisposal() {
   assert.strictEqual(adapter.diagnostics().state, 'closed_unconfirmed');
 }
 
-async function assertCandidateCannotActivateEarly() {
+async function assertCandidateExposesExactActivatableProvider() {
   const harness = clientHarness({
-    onExchange() {
-      return Promise.reject(new Error('not expected'));
+    onExchange(request) {
+      const input = request.payload.input;
+      if (request.operation === PORTABLE_ISOLATION_HELPER_OPERATIONS.ROOT_ACQUIRE) {
+        return Promise.resolve(backendResponse(
+          request.payload.backendId,
+          rootDescriptor(input)
+        ));
+      }
+      if (request.operation === PORTABLE_ISOLATION_HELPER_OPERATIONS.ROOT_CLOSE) {
+        return Promise.resolve(backendResponse(
+          request.payload.backendId,
+          createProjectRootAuthorityCloseReceipt({
+            request: input.request,
+            closed: true,
+          })
+        ));
+      }
+      return Promise.reject(new Error('unexpected activation exchange'));
     },
   });
   const adapter = createPortableIsolationHelperProviderAdapter({ client: harness.client });
   const candidate = await adapter.connect();
-  assert.strictEqual(candidate.activationReady, false);
-  assert.strictEqual(
-    candidate.activationBlockReason,
-    PORTABLE_ISOLATION_HELPER_PROVIDER_ACTIVATION_BLOCK_REASON
-  );
+  assert.strictEqual(candidate.activationReady, true);
+  assert.strictEqual(candidate.activationBlockReason, null);
+  assert.strictEqual(Object.isFrozen(candidate.provider), true);
   const selection = createExecutionIsolationProviderSelection({
     config: Object.freeze({
       version: EXECUTION_ISOLATION_RUNTIME_CONFIG_VERSION,
       mode: 'enabled',
       killSwitch: false,
     }),
-    providerFactory: () => candidate,
+    providerFactory: () => candidate.provider,
   });
-  assert.strictEqual(selection.diagnostics.status, 'unsupported');
-  assert.strictEqual(selection.diagnostics.reasonCode, 'PROVIDER_REJECTED');
+  assert.strictEqual(selection.diagnostics.status, 'enforced');
+  assert.strictEqual(selection.diagnostics.reasonCode, 'ENFORCED');
+  const rootRegistry = createProjectRootAuthorityRegistry({
+    backend: selection.projectRootAuthorityBackend,
+    leaseIdFactory: () => 'root-lease-activation',
+  });
+  const acquired = await rootRegistry.acquire({
+    binding: binding('activation'),
+    expectedPhysicalRootIdentityDigest: digest('d'),
+    purpose: 'project_scan',
+  });
+  assert.strictEqual(acquired.ok, true);
+  assert.deepStrictEqual(await rootRegistry.release({
+    binding: binding('activation'),
+    leaseId: acquired.lease.leaseId,
+  }), {
+    ok: true,
+    closed: true,
+    idempotent: false,
+  });
+  assert.deepStrictEqual(await rootRegistry.dispose(), {
+    ok: true,
+    disposed: true,
+    quarantined: 0,
+  });
+  await selection.dispose();
   await candidate.dispose();
   assert.strictEqual(harness.state.disposeCalls, 1);
+
+  const wrapperHarness = clientHarness();
+  const wrapperAdapter = createPortableIsolationHelperProviderAdapter({
+    client: wrapperHarness.client,
+  });
+  const wrapperCandidate = await wrapperAdapter.connect();
+  const rejectedWrapper = createExecutionIsolationProviderSelection({
+    config: Object.freeze({
+      version: EXECUTION_ISOLATION_RUNTIME_CONFIG_VERSION,
+      mode: 'enabled',
+      killSwitch: false,
+    }),
+    providerFactory: () => wrapperCandidate,
+  });
+  assert.strictEqual(rejectedWrapper.diagnostics.status, 'unsupported');
+  assert.strictEqual(rejectedWrapper.diagnostics.reasonCode, 'PROVIDER_REJECTED');
+  await wrapperCandidate.dispose();
+  assert.strictEqual(wrapperHarness.state.disposeCalls, 1);
 }
 
 async function main() {
@@ -575,7 +634,7 @@ async function main() {
   await assertDomainFailureQuarantinesAndRejectsQueue();
   await assertProcessDisposeWaitsAndReapsPendingExec();
   await assertReentrancyFlushesQuarantineAndDisposal();
-  await assertCandidateCannotActivateEarly();
+  await assertCandidateExposesExactActivatableProvider();
   console.log('portable isolation helper provider adapter hardening tests passed');
 }
 

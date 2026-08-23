@@ -75,7 +75,7 @@ const {
 const PORTABLE_ISOLATION_HELPER_PROVIDER_ADAPTER_VERSION =
   'portable-isolation-helper-provider-adapter.v1';
 const PORTABLE_ISOLATION_HELPER_PROVIDER_CANDIDATE_VERSION =
-  'portable-isolation-helper-provider-candidate.v1';
+  'portable-isolation-helper-provider-candidate.v2';
 const PORTABLE_ISOLATION_HELPER_PROVIDER_ADAPTER_DISPOSE_RECEIPT_VERSION =
   'portable-isolation-helper-provider-adapter-dispose-receipt.v1';
 const PORTABLE_ISOLATION_ROOT_LEASE_DESCRIPTOR_VERSION =
@@ -84,8 +84,6 @@ const PORTABLE_ISOLATION_BACKEND_REQUEST_VERSION =
   'portable-isolation-backend-request.v1';
 const PORTABLE_ISOLATION_BACKEND_RESPONSE_VERSION =
   'portable-isolation-backend-response.v1';
-const PORTABLE_ISOLATION_HELPER_PROVIDER_ACTIVATION_BLOCK_REASON =
-  'ASYNC_ROOT_AUTHORITY_CONTRACT_REQUIRED';
 
 const MAX_QUEUED_EXCHANGES = 1_024;
 const OPTION_KEYS = Object.freeze(['client']);
@@ -1040,10 +1038,7 @@ function createPortableIsolationHelperProviderAdapter(options = {}) {
     const projectRootAuthorityBackend = createRootBackend(handshake);
     const processSupervisorBackend = createProcessBackend(handshake);
     const isolationAttestation = providerAttestation(handshake);
-    return Object.freeze({
-      version: PORTABLE_ISOLATION_HELPER_PROVIDER_CANDIDATE_VERSION,
-      activationReady: false,
-      activationBlockReason: PORTABLE_ISOLATION_HELPER_PROVIDER_ACTIVATION_BLOCK_REASON,
+    const provider = Object.freeze({
       providerVersion: PORTABLE_EXECUTION_ISOLATION_PROVIDER_VERSION,
       buildId: handshake.helperBuildId,
       executionWorkspaceBackend,
@@ -1051,6 +1046,19 @@ function createPortableIsolationHelperProviderAdapter(options = {}) {
       processSupervisorBackend,
       isolationAttestation,
       dispose,
+    });
+    return Object.freeze({
+      version: PORTABLE_ISOLATION_HELPER_PROVIDER_CANDIDATE_VERSION,
+      activationReady: true,
+      activationBlockReason: null,
+      provider,
+      providerVersion: provider.providerVersion,
+      buildId: provider.buildId,
+      executionWorkspaceBackend: provider.executionWorkspaceBackend,
+      projectRootAuthorityBackend: provider.projectRootAuthorityBackend,
+      processSupervisorBackend: provider.processSupervisorBackend,
+      isolationAttestation: provider.isolationAttestation,
+      dispose: provider.dispose,
     });
   }
 
@@ -1189,7 +1197,6 @@ module.exports = {
   MAX_QUEUED_EXCHANGES,
   PORTABLE_ISOLATION_BACKEND_REQUEST_VERSION,
   PORTABLE_ISOLATION_BACKEND_RESPONSE_VERSION,
-  PORTABLE_ISOLATION_HELPER_PROVIDER_ACTIVATION_BLOCK_REASON,
   PORTABLE_ISOLATION_HELPER_PROVIDER_ADAPTER_DISPOSE_RECEIPT_VERSION,
   PORTABLE_ISOLATION_HELPER_PROVIDER_ADAPTER_VERSION,
   PORTABLE_ISOLATION_HELPER_PROVIDER_CANDIDATE_VERSION,

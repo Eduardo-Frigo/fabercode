@@ -30,7 +30,7 @@ const {
   preflightDataGraph,
 } = require('./execution_workspace_contract');
 
-const PROJECT_ROOT_AUTHORITY_REGISTRY_VERSION = 'project-root-authority-registry.v1';
+const PROJECT_ROOT_AUTHORITY_REGISTRY_VERSION = 'project-root-authority-registry.v2';
 const DEFAULT_MAX_ACTIVE_LEASES = 64;
 const HARD_MAX_ACTIVE_LEASES = 1_024;
 const LEASE_ID_ATTEMPTS = 4;
@@ -63,6 +63,14 @@ const BINDING_KEYS = Object.freeze([
 
 function denied(code) {
   return Object.freeze({ ok: false, code });
+}
+
+function createDeferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return Object.freeze({ promise, resolve });
 }
 
 function exactDataFields(value, allowedKeys, requiredKeys = allowedKeys) {
@@ -207,24 +215,72 @@ function createProjectRootAuthorityRegistry(options = {}) {
   let callDepth = 0;
   let closedCount = 0;
   let disposed = false;
+  let disposeRequested = false;
+  let disposePromise = null;
+  let disposeResult = null;
   let healthy = true;
 
-  function invokeProvider(receiver, method, args, fieldName) {
+  function invokeSynchronousProvider(receiver, method, args, fieldName) {
     let value;
     callDepth += 1;
     try {
       value = Reflect.apply(method, receiver, args);
     } catch (error) {
       preflightDataGraph(error);
-      throw error;
+      throw new TypeError(`${fieldName} failed`);
     } finally {
       callDepth -= 1;
     }
     if (util.types.isPromise(value)) {
       preflightDataGraph(value);
-      throw new TypeError(`${fieldName} must be synchronous`);
+      throw new TypeError(`${fieldName} must remain synchronous`);
     }
     return value;
+  }
+
+  function invokeAsyncProvider(receiver, method, args, normalizeResult, fieldName) {
+    let raw;
+    callDepth += 1;
+    try {
+      raw = Reflect.apply(method, receiver, args);
+    } catch (error) {
+      preflightDataGraph(error);
+      return Promise.reject(new TypeError(`${fieldName} failed`));
+    } finally {
+      callDepth -= 1;
+    }
+
+    const normalize = (value) => {
+      try {
+        return normalizeResult(value);
+      } catch (error) {
+        preflightDataGraph(error);
+        throw new TypeError(`${fieldName} returned invalid data`);
+      }
+    };
+    if (!util.types.isPromise(raw)) {
+      try {
+        return Promise.resolve(normalize(raw));
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
+    return new Promise((resolve, reject) => {
+      const onFulfilled = (value) => {
+        try { resolve(normalize(value)); } catch (error) { reject(error); }
+      };
+      const onRejected = (error) => {
+        preflightDataGraph(error);
+        reject(new TypeError(`${fieldName} promise rejected`));
+      };
+      try {
+        Reflect.apply(Promise.prototype.then, raw, [onFulfilled, onRejected]);
+      } catch (error) {
+        preflightDataGraph(raw);
+        preflightDataGraph(error);
+        reject(new TypeError(`${fieldName} promise was invalid`));
+      }
+    });
   }
 
   function readBackendProbe() {
@@ -232,7 +288,7 @@ function createProjectRootAuthorityRegistry(options = {}) {
     if (callDepth > 0) return null;
     try {
       backendProbe = assertProjectRootAuthorityProbeResult(
-        invokeProvider(backend, backend.probe, [], 'backend.probe')
+        invokeSynchronousProvider(backend, backend.probe, [], 'backend.probe')
       );
       backendState = backendProbe.state;
       if (backendProbe.state === PROJECT_ROOT_AUTHORITY_STATES.ENFORCED
@@ -256,7 +312,8 @@ function createProjectRootAuthorityRegistry(options = {}) {
   }
 
   function assertRecordReadable(record) {
-    if (!healthy || disposed || recordsByJobId.get(record.input.binding.jobId) !== record
+    if (!healthy || disposeRequested || disposed
+      || recordsByJobId.get(record.input.binding.jobId) !== record
       || record.state !== 'active') {
       const error = new Error('Project-root authority lease is closed or inactive');
       error.code = PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.AUTHORITY_UNHEALTHY;
@@ -269,6 +326,32 @@ function createProjectRootAuthorityRegistry(options = {}) {
     }
   }
 
+  function beginReaderOperation(record, providerReader, method, request, normalize, label) {
+    try { assertRecordReadable(record); } catch (error) { return Promise.reject(error); }
+    const operation = invokeAsyncProvider(
+      providerReader,
+      method,
+      [request],
+      (value) => normalize(value, request),
+      label
+    );
+    let tracked;
+    tracked = operation.then(
+      (value) => {
+        record.pendingOperations.delete(tracked);
+        return value;
+      },
+      (error) => {
+        preflightDataGraph(error);
+        record.pendingOperations.delete(tracked);
+        poisonRecord(record);
+        throw new TypeError(`Project-root authority ${label} failed`);
+      }
+    );
+    record.pendingOperations.add(tracked);
+    return tracked;
+  }
+
   function createReaderFacade(record, providerReader) {
     const listMethod = Object.getOwnPropertyDescriptor(providerReader, 'list').value;
     const readFileMethod = Object.getOwnPropertyDescriptor(providerReader, 'readFile').value;
@@ -276,98 +359,116 @@ function createProjectRootAuthorityRegistry(options = {}) {
     return Object.freeze({
       version: PROJECT_ROOT_READER_VERSION,
       inspectEntry(input) {
-        const request = createProjectRootEntryInspectionRequest(input);
-        assertRecordReadable(record);
-        let result;
-        try {
-          result = invokeProvider(
-            providerReader,
-            inspectEntryMethod,
-            [request],
-            'reader.inspectEntry'
-          );
-        } catch (error) {
+        let request;
+        try { request = createProjectRootEntryInspectionRequest(input); } catch (error) {
           preflightDataGraph(error);
-          throw error;
+          return Promise.reject(new TypeError('Invalid project-root inspection request'));
         }
-        try {
-          return assertProjectRootEntryInspectionResult(result, request);
-        } catch (error) {
-          poisonRecord(record);
-          throw new TypeError(
-            'Project-root authority reader returned an invalid inspection result'
-          );
-        }
+        return beginReaderOperation(
+          record,
+          providerReader,
+          inspectEntryMethod,
+          request,
+          assertProjectRootEntryInspectionResult,
+          'reader.inspectEntry'
+        );
       },
       list(input) {
-        const request = createProjectRootListRequest(input);
-        assertRecordReadable(record);
-        let result;
-        try {
-          result = invokeProvider(providerReader, listMethod, [request], 'reader.list');
-        } catch (error) {
+        let request;
+        try { request = createProjectRootListRequest(input); } catch (error) {
           preflightDataGraph(error);
-          throw error;
+          return Promise.reject(new TypeError('Invalid project-root list request'));
         }
-        try {
-          return assertProjectRootListResult(result, request);
-        } catch (error) {
-          poisonRecord(record);
-          throw new TypeError('Project-root authority reader returned an invalid list result');
-        }
+        return beginReaderOperation(
+          record,
+          providerReader,
+          listMethod,
+          request,
+          assertProjectRootListResult,
+          'reader.list'
+        );
       },
       readFile(input) {
-        const request = createProjectRootReadFileRequest(input);
-        assertRecordReadable(record);
-        let result;
-        try {
-          result = invokeProvider(providerReader, readFileMethod, [request], 'reader.readFile');
-        } catch (error) {
+        let request;
+        try { request = createProjectRootReadFileRequest(input); } catch (error) {
           preflightDataGraph(error);
-          throw error;
+          return Promise.reject(new TypeError('Invalid project-root read request'));
         }
-        try {
-          return assertProjectRootReadFileResult(result, request);
-        } catch (error) {
-          poisonRecord(record);
-          throw new TypeError('Project-root authority reader returned an invalid read result');
-        }
+        return beginReaderOperation(
+          record,
+          providerReader,
+          readFileMethod,
+          request,
+          assertProjectRootReadFileResult,
+          'reader.readFile'
+        );
       },
     });
   }
 
   function closeRecord(record) {
     if (record.state === 'closed') {
-      return Object.freeze({ ok: true, receipt: record.closeReceipt, idempotent: true });
+      return Promise.resolve(Object.freeze({
+        ok: true,
+        receipt: record.closeReceipt,
+        idempotent: true,
+      }));
     }
-    if (record.state !== 'active' || callDepth > 0) {
-      return denied(callDepth > 0
-        ? PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.REENTRANT_CALL
-        : PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.AUTHORITY_UNHEALTHY);
+    if (record.closePromise) return record.closePromise;
+    if (callDepth > 0) {
+      return Promise.resolve(denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.REENTRANT_CALL));
     }
-    let receipt;
-    try {
-      const result = invokeProvider(
-        record.providerLease,
-        record.providerClose,
-        [],
-        'lease.close'
+    record.closeRequested = true;
+    const deferred = createDeferred();
+    record.closePromise = deferred.promise;
+    queueMicrotask(() => {
+      const acquisition = record.state === 'allocating'
+        ? record.acquirePromise
+        : Promise.resolve();
+      acquisition.then(() => {
+        if (!record.providerLease || !record.providerClose
+          || !['active', 'quarantined', 'closing'].includes(record.state)) {
+          return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.CLOSE_FAILED);
+        }
+        record.state = 'closing';
+        return Promise.allSettled([...record.pendingOperations]).then(() => (
+          invokeAsyncProvider(
+            record.providerLease,
+            record.providerClose,
+            [],
+            (value) => assertProjectRootAuthorityCloseReceipt(value, record.request),
+            'lease.close'
+          ).then((receipt) => Object.freeze({
+            ok: true,
+            receipt,
+            idempotent: false,
+          }))
+        ));
+      }).then(
+        (result) => {
+          if (!result.ok) {
+            poisonRecord(record);
+            deferred.resolve(result);
+            return;
+          }
+          record.state = 'closed';
+          record.closeReceipt = result.receipt;
+          closedCount += 1;
+          recordsByJobId.delete(record.input.binding.jobId);
+          closedByLeaseId.set(record.request.leaseId, Object.freeze({
+            binding: record.input.binding,
+            receipt: result.receipt,
+          }));
+          deferred.resolve(result);
+        },
+        (error) => {
+          preflightDataGraph(error);
+          poisonRecord(record);
+          deferred.resolve(denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.CLOSE_FAILED));
+        }
       );
-      receipt = assertProjectRootAuthorityCloseReceipt(result, record.request);
-    } catch (error) {
-      preflightDataGraph(error);
-      poisonRecord(record);
-      return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.CLOSE_FAILED);
-    }
-    record.state = 'closed';
-    record.closeReceipt = receipt;
-    closedCount += 1;
-    recordsByJobId.delete(record.input.binding.jobId);
-    closedByLeaseId.set(record.request.leaseId, Object.freeze({
-      binding: record.input.binding,
-      receipt,
-    }));
-    return Object.freeze({ ok: true, receipt, idempotent: false });
+    });
+    return record.closePromise;
   }
 
   function createLeaseFacade(record, providerLease) {
@@ -382,13 +483,16 @@ function createProjectRootAuthorityRegistry(options = {}) {
       authorityDigest: record.request.authorityDigest,
       reader,
       close() {
-        const result = closeRecord(record);
-        if (!result.ok) {
-          const error = new Error('Project-root authority lease did not close');
-          error.code = result.code;
-          throw error;
-        }
-        return result.receipt;
+        if (record.facadeClosePromise) return record.facadeClosePromise;
+        record.facadeClosePromise = closeRecord(record).then((result) => {
+          if (!result.ok) {
+            const error = new Error('Project-root authority lease did not close');
+            error.code = result.code;
+            throw error;
+          }
+          return result.receipt;
+        });
+        return record.facadeClosePromise;
       },
     });
     return assertProjectRootAuthorityLease(lease, record.request);
@@ -417,99 +521,206 @@ function createProjectRootAuthorityRegistry(options = {}) {
     return null;
   }
 
+  function releaseUnstartedRecord(record) {
+    record.state = 'released';
+    if (recordsByJobId.get(record.input.binding.jobId) === record) {
+      recordsByJobId.delete(record.input.binding.jobId);
+    }
+  }
+
+  function beginAcquire(record) {
+    queueMicrotask(() => {
+      const probe = readBackendProbe();
+      if (!probe) {
+        releaseUnstartedRecord(record);
+        record.resolveAcquire(denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.BACKEND_REJECTED));
+        return;
+      }
+      if (probe.state !== PROJECT_ROOT_AUTHORITY_STATES.ENFORCED) {
+        releaseUnstartedRecord(record);
+        record.resolveAcquire(denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.UNAVAILABLE));
+        return;
+      }
+      record.providerStarted = true;
+      invokeAsyncProvider(
+        backend,
+        backend.acquire,
+        [record.request],
+        (value) => assertProjectRootAuthorityLease(value, record.request),
+        'backend.acquire'
+      ).then(
+        (providerLease) => {
+          record.providerLease = providerLease;
+          record.providerClose = Object.getOwnPropertyDescriptor(providerLease, 'close').value;
+          try {
+            record.lease = createLeaseFacade(record, providerLease);
+          } catch (error) {
+            preflightDataGraph(error);
+            poisonRecord(record);
+            record.resolveAcquire(denied(
+              PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.BACKEND_REJECTED
+            ));
+            return;
+          }
+          record.state = 'active';
+          if (disposeRequested) {
+            record.resolveAcquire(denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.DISPOSED));
+            closeRecord(record);
+            return;
+          }
+          record.resolveAcquire(Object.freeze({
+            ok: true,
+            lease: record.lease,
+            idempotent: false,
+          }));
+          if (record.closeRequested) closeRecord(record);
+        },
+        (error) => {
+          preflightDataGraph(error);
+          poisonRecord(record);
+          record.resolveAcquire(denied(
+            PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.BACKEND_REJECTED
+          ));
+        }
+      ).catch((error) => {
+        preflightDataGraph(error);
+        poisonRecord(record);
+        record.resolveAcquire(denied(
+          PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.BACKEND_REJECTED
+        ));
+      });
+    });
+  }
+
   function acquire(input) {
-    if (callDepth > 0) return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.REENTRANT_CALL);
-    if (disposed) return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.DISPOSED);
-    if (!healthy) return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.AUTHORITY_UNHEALTHY);
     const normalized = normalizeAcquireInput(input);
-    if (!normalized) return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.INVALID_REQUEST);
+    if (!normalized) {
+      return Promise.resolve(denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.INVALID_REQUEST));
+    }
+    if (callDepth > 0) {
+      return Promise.resolve(denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.REENTRANT_CALL));
+    }
+    if (disposeRequested || disposed) {
+      return Promise.resolve(denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.DISPOSED));
+    }
+    if (!healthy) {
+      return Promise.resolve(denied(
+        PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.AUTHORITY_UNHEALTHY
+      ));
+    }
     const existing = recordsByJobId.get(normalized.binding.jobId);
     if (existing) {
-      if (existing.state === 'active' && acquireInputsMatch(existing.input, normalized)) {
-        return Object.freeze({ ok: true, lease: existing.lease, idempotent: true });
+      if (!acquireInputsMatch(existing.input, normalized)) {
+        return Promise.resolve(denied(
+          PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.LEASE_MISMATCH
+        ));
       }
-      return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.LEASE_MISMATCH);
+      if (existing.state === 'allocating') return existing.acquirePromise;
+      if (existing.state === 'active') {
+        return Promise.resolve(Object.freeze({
+          ok: true,
+          lease: existing.lease,
+          idempotent: true,
+        }));
+      }
+      return Promise.resolve(denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.ROOT_BUSY));
     }
     const occupied = [...recordsByJobId.values()].filter(
-      (record) => record.state === 'active' || record.state === 'quarantined'
+      (record) => ['allocating', 'active', 'closing', 'quarantined'].includes(record.state)
     );
     if (occupied.length >= maxActiveLeases) {
-      return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.CAPACITY_EXCEEDED);
+      return Promise.resolve(denied(
+        PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.CAPACITY_EXCEEDED
+      ));
     }
     if (occupied.some((record) => rootOverlaps(record.input, normalized))) {
-      return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.ROOT_BUSY);
+      return Promise.resolve(denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.ROOT_BUSY));
     }
-    const probe = readBackendProbe();
-    if (!probe) return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.BACKEND_REJECTED);
-    if (probe.state !== PROJECT_ROOT_AUTHORITY_STATES.ENFORCED) {
-      return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.UNAVAILABLE);
-    }
-    const leaseId = nextLeaseId();
-    if (!leaseId) return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.LEASE_ID_UNAVAILABLE);
-    const request = createProjectRootAuthorityAcquireRequest({
-      leaseId,
-      binding: normalized.binding,
-      expectedPhysicalRootIdentityDigest: normalized.expectedPhysicalRootIdentityDigest,
-      purpose: normalized.purpose,
-    });
-    let providerLease;
-    try {
-      providerLease = assertProjectRootAuthorityLease(
-        invokeProvider(backend, backend.acquire, [request], 'backend.acquire'),
-        request
-      );
-    } catch (error) {
-      preflightDataGraph(error);
-      healthy = false;
-      return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.BACKEND_REJECTED);
-    }
+    const deferred = createDeferred();
     const record = {
+      acquirePromise: deferred.promise,
+      closePromise: null,
       closeReceipt: null,
+      closeRequested: false,
+      facadeClosePromise: null,
       input: normalized,
       lease: null,
-      providerClose: Object.getOwnPropertyDescriptor(providerLease, 'close').value,
-      providerLease,
-      request,
-      state: 'active',
+      pendingOperations: new Set(),
+      providerClose: null,
+      providerLease: null,
+      providerStarted: false,
+      releasePromise: null,
+      request: null,
+      resolveAcquire: deferred.resolve,
+      state: 'allocating',
     };
+    recordsByJobId.set(normalized.binding.jobId, record);
+    const leaseId = nextLeaseId();
+    if (!leaseId) {
+      releaseUnstartedRecord(record);
+      record.resolveAcquire(denied(
+        PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.LEASE_ID_UNAVAILABLE
+      ));
+      return record.acquirePromise;
+    }
     try {
-      record.lease = createLeaseFacade(record, providerLease);
+      record.request = createProjectRootAuthorityAcquireRequest({
+        leaseId,
+        binding: normalized.binding,
+        expectedPhysicalRootIdentityDigest: normalized.expectedPhysicalRootIdentityDigest,
+        purpose: normalized.purpose,
+      });
     } catch (error) {
       preflightDataGraph(error);
-      healthy = false;
-      return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.BACKEND_REJECTED);
+      releaseUnstartedRecord(record);
+      record.resolveAcquire(denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.INVALID_REQUEST));
+      return record.acquirePromise;
     }
-    recordsByJobId.set(normalized.binding.jobId, record);
-    return Object.freeze({ ok: true, lease: record.lease, idempotent: false });
+    beginAcquire(record);
+    return record.acquirePromise;
   }
 
   function release(input) {
-    if (callDepth > 0) return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.REENTRANT_CALL);
     const normalized = normalizeReleaseInput(input);
-    if (!normalized) return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.INVALID_REQUEST);
+    if (!normalized) {
+      return Promise.resolve(denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.INVALID_REQUEST));
+    }
+    if (callDepth > 0) {
+      return Promise.resolve(denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.REENTRANT_CALL));
+    }
     const closed = closedByLeaseId.get(normalized.leaseId);
     if (closed) {
       if (!bindingsMatch(closed.binding, normalized.binding)) {
-        return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.LEASE_MISMATCH);
+        return Promise.resolve(denied(
+          PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.LEASE_MISMATCH
+        ));
       }
-      return Object.freeze({ ok: true, closed: true, idempotent: true });
+      return Promise.resolve(Object.freeze({ ok: true, closed: true, idempotent: true }));
     }
     const record = recordsByJobId.get(normalized.binding.jobId);
-    if (!record) return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.LEASE_NOT_FOUND);
-    if (!bindingsMatch(record.input.binding, normalized.binding)
-      || record.request.leaseId !== normalized.leaseId) {
-      return denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.LEASE_MISMATCH);
+    if (!record) {
+      return Promise.resolve(denied(PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.LEASE_NOT_FOUND));
     }
-    const result = closeRecord(record);
-    if (!result.ok) return result;
-    return Object.freeze({ ok: true, closed: true, idempotent: result.idempotent });
+    if (!bindingsMatch(record.input.binding, normalized.binding)
+      || !record.request || record.request.leaseId !== normalized.leaseId) {
+      return Promise.resolve(denied(
+        PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.LEASE_MISMATCH
+      ));
+    }
+    if (record.releasePromise) return record.releasePromise;
+    record.releasePromise = closeRecord(record).then((result) => (
+      result.ok
+        ? Object.freeze({ ok: true, closed: true, idempotent: result.idempotent })
+        : result
+    ));
+    return record.releasePromise;
   }
 
   function diagnostics() {
     let active = 0;
     let quarantined = 0;
     for (const record of recordsByJobId.values()) {
-      if (record.state === 'active') active += 1;
+      if (['allocating', 'active', 'closing'].includes(record.state)) active += 1;
       if (record.state === 'quarantined') quarantined += 1;
     }
     return Object.freeze({
@@ -526,49 +737,74 @@ function createProjectRootAuthorityRegistry(options = {}) {
 
   function dispose() {
     if (callDepth > 0) {
-      return Object.freeze({
+      return Promise.resolve(Object.freeze({
         ok: false,
         disposed: false,
         quarantined: diagnostics().quarantined,
         code: PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.REENTRANT_CALL,
-      });
+      }));
     }
-    if (disposed) {
-      return Object.freeze({
-        ok: true,
-        disposed: true,
-        quarantined: diagnostics().quarantined,
-      });
-    }
-    let failed = false;
-    for (const record of [...recordsByJobId.values()]) {
-      if (record.state === 'active' && !closeRecord(record).ok) failed = true;
-    }
-    let backendDisposed = false;
-    try {
-      const result = invokeProvider(backend, backend.dispose, [], 'backend.dispose');
-      const fields = exactDataFields(result, ['ok', 'disposed']);
-      backendDisposed = Boolean(fields
-        && fields.get('ok') === true
-        && fields.get('disposed') === true);
-    } catch (error) {
+    if (disposePromise) return disposePromise;
+    if (disposeResult) return Promise.resolve(disposeResult);
+    disposeRequested = true;
+    const records = [...recordsByJobId.values()];
+    disposePromise = Promise.all(records.map((record) => (
+      closeRecord(record).then((result) => result.ok)
+    ))).then((closedResults) => invokeAsyncProvider(
+      backend,
+      backend.dispose,
+      [],
+      (value) => {
+        const fields = exactDataFields(value, ['ok', 'disposed']);
+        if (!fields || fields.get('ok') !== true || fields.get('disposed') !== true) {
+          throw new TypeError('Invalid backend dispose receipt');
+        }
+        return true;
+      },
+      'backend.dispose'
+    ).then(
+      () => {
+        disposed = true;
+        const quarantined = diagnostics().quarantined;
+        const failed = closedResults.some((closed) => !closed) || quarantined > 0;
+        disposeResult = failed
+          ? Object.freeze({
+            ok: false,
+            disposed: true,
+            quarantined,
+            code: PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.CLOSE_FAILED,
+          })
+          : Object.freeze({ ok: true, disposed: true, quarantined: 0 });
+        disposePromise = null;
+        return disposeResult;
+      },
+      (error) => {
+        preflightDataGraph(error);
+        healthy = false;
+        const quarantined = diagnostics().quarantined;
+        disposeResult = Object.freeze({
+          ok: false,
+          disposed: false,
+          quarantined,
+          code: PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.CLOSE_FAILED,
+        });
+        disposePromise = null;
+        return disposeResult;
+      }
+    )).catch((error) => {
       preflightDataGraph(error);
-    }
-    if (!backendDisposed) {
       healthy = false;
-      failed = true;
-    }
-    disposed = backendDisposed;
-    const quarantined = diagnostics().quarantined;
-    if (failed || quarantined > 0) {
-      return Object.freeze({
+      const quarantined = diagnostics().quarantined;
+      disposeResult = Object.freeze({
         ok: false,
-        disposed,
+        disposed: false,
         quarantined,
         code: PROJECT_ROOT_AUTHORITY_REGISTRY_REASONS.CLOSE_FAILED,
       });
-    }
-    return Object.freeze({ ok: true, disposed: true, quarantined: 0 });
+      disposePromise = null;
+      return disposeResult;
+    });
+    return disposePromise;
   }
 
   return Object.freeze({ acquire, diagnostics, dispose, release });

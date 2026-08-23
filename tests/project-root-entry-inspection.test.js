@@ -16,7 +16,7 @@ const digestBytes = (value) => `sha256:${crypto.createHash('sha256')
   .update(Buffer.from(value, 'utf8'))
   .digest('hex')}`;
 
-assert.strictEqual(PROJECT_ROOT_READER_VERSION, 'project-root-reader.v2');
+assert.strictEqual(PROJECT_ROOT_READER_VERSION, 'project-root-reader.v3');
 
 const request = createProjectRootEntryInspectionRequest({
   relativePath: 'src/app.js',
@@ -162,9 +162,9 @@ assert.throws(
   })),
   /reader|inspectEntry/i
 );
-assert.throws(
-  () => assertProjectRootReader(reader({ inspectEntry: async () => file })),
-  /inspectEntry|synchronous/i
+assert.strictEqual(
+  assertProjectRootReader(reader({ inspectEntry: async () => file })).version,
+  PROJECT_ROOT_READER_VERSION
 );
 assert.throws(
   () => assertProjectRootReader(reader({ inspectEntry: new Proxy(() => file, {}) })),
