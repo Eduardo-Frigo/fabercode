@@ -557,6 +557,16 @@ function assertExecutionWorkspaceBoundary() {
   const portableIsolationHelperPrivateTransportSource = read(
     'main/services/portable_isolation_helper_private_transport.js'
   );
+  const portableIsolationHelperUtilityChannelSource = read(
+    'main/services/portable_isolation_helper_utility_channel.js'
+  );
+  const portableIsolationHelperHostLauncherSource = read(
+    'main/services/portable_isolation_helper_host_launcher.js'
+  );
+  const portableIsolationHelperBootstrapSource = read(
+    'main/portable_isolation_helper/utility_entry.js'
+  );
+  const packageConfig = JSON.parse(read('package.json'));
   const processSupervisorSource = read('main/agent_runtime/execution/process_supervisor.js');
   const projectScannerSource = read('main/services/project_scanner.js');
   const transactionalDeleteSource = read(
@@ -595,6 +605,10 @@ function assertExecutionWorkspaceBoundary() {
     [
       'main/services/portable_isolation_helper_private_transport.js',
       portableIsolationHelperPrivateTransportSource,
+    ],
+    [
+      'main/services/portable_isolation_helper_utility_channel.js',
+      portableIsolationHelperUtilityChannelSource,
     ],
   ]) {
     assertDoesNotMatch(
@@ -840,6 +854,93 @@ function assertExecutionWorkspaceBoundary() {
     'private helper transport must accept only an attested frozen channel, serialize one exchange, bind the handshake bundle, reject reentrancy, and require zero-orphan termination proof'
   );
   assertDoesNotMatch(
+    portableIsolationHelperUtilityChannelSource,
+    /require\(['"](?:electron|child_process|fs|path|net|tls|http|https|worker_threads|module)['"]\)|\bipcRenderer\b|\bipcMain\b|\bprocess\.env\b|\b__dirname\b|\bimport\s*\(/,
+    'the utility channel must own only an injected UtilityProcess endpoint and data-only framed messages'
+  );
+  assert.ok(
+    portableIsolationHelperUtilityChannelSource.includes(
+      "'portable-isolation-helper-utility-wire.v1'"
+    )
+      && portableIsolationHelperUtilityChannelSource.includes(
+        'normalizeUtilityProcess'
+      )
+      && portableIsolationHelperUtilityChannelSource.includes(
+        'channelBindingDigest'
+      )
+      && portableIsolationHelperUtilityChannelSource.includes(
+        'processTreeTerminated'
+      )
+      && portableIsolationHelperUtilityChannelSource.includes('helperExited')
+      && portableIsolationHelperUtilityChannelSource.includes('attachedListeners')
+      && portableIsolationHelperUtilityChannelSource.includes(
+        "['active', 'aborted', 'aborting']"
+      )
+      && ['binaryPath', 'executablePath', 'helperPath', 'providerPath'].every(
+        (forbiddenKey) => portableIsolationHelperUtilityChannelSource.includes(
+          `'${forbiddenKey}'`
+        )
+      ),
+    'the utility channel must bind one private endpoint, clean listeners, support abort-plus-close, and prove clean process exit'
+  );
+  assertDoesNotMatch(
+    portableIsolationHelperHostLauncherSource,
+    /require\(['"](?:electron|child_process|net|tls|http|https|worker_threads|module)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\bprocess\.env\b|\b__dirname\b|\bimport\s*\(/,
+    'the host launcher must receive only the fixed Electron utility-process fork primitive and must not gain shell, network, IPC, environment, or dynamic-loading authority'
+  );
+  assertDoesNotMatch(
+    portableIsolationHelperHostLauncherSource,
+    /['"](?:binaryPath|executablePath|helperPath|providerPath)['"]/,
+    'the host launcher must not accept a caller-selected helper executable path'
+  );
+  assert.ok(
+    portableIsolationHelperHostLauncherSource.includes("require('crypto')")
+      && portableIsolationHelperHostLauncherSource.includes("require('fs')")
+      && portableIsolationHelperHostLauncherSource.includes("require('path')")
+      && portableIsolationHelperHostLauncherSource.includes(
+        "const RESOURCE_DIRECTORY_NAME = 'portable-isolation-helper'"
+      )
+      && portableIsolationHelperHostLauncherSource.includes(
+        "const RESOURCE_ENTRY_NAME = 'utility_entry.js'"
+      )
+      && portableIsolationHelperHostLauncherSource.includes(
+        'HOST_PACKAGED_APP_REQUIRED'
+      )
+      && portableIsolationHelperHostLauncherSource.includes(
+        'PORTABLE_ISOLATION_HELPER_PLATFORM_SIGNATURE_VERIFIER_VERSION'
+      )
+      && portableIsolationHelperHostLauncherSource.includes('fs.constants.O_NOFOLLOW')
+      && portableIsolationHelperHostLauncherSource.includes(
+        'sameResource(before, after)'
+      )
+      && portableIsolationHelperHostLauncherSource.includes(
+        'openPortableIsolationHelperUtilityChannel'
+      )
+      && portableIsolationHelperHostLauncherSource.includes('disposeRequested'),
+    'the sole host authority must resolve one fixed packaged resource, verify its physical identity and platform signature, bind one utility channel, and close in-flight launches'
+  );
+  assertDoesNotMatch(
+    portableIsolationHelperBootstrapSource,
+    /\brequire\s*\(|\bprocess\.env\b|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\bimport\s*\(/,
+    'the packaged helper bootstrap must remain self-contained and unable to load host, filesystem, shell, network, or dynamic modules'
+  );
+  assert.ok(
+    portableIsolationHelperBootstrapSource.includes('process.parentPort')
+      && portableIsolationHelperBootstrapSource.includes('HELPER_RUNTIME_UNAVAILABLE')
+      && portableIsolationHelperBootstrapSource.includes('processTreeTerminated')
+      && portableIsolationHelperBootstrapSource.includes('dispose_ready'),
+    'the bootstrap must bind only its parent port and fail closed until the portable isolation runtime lands'
+  );
+  assert.ok(
+    packageConfig.build.files.includes('!main/portable_isolation_helper/**/*')
+      && JSON.stringify(packageConfig.build.extraResources) === JSON.stringify([{
+        from: 'main/portable_isolation_helper',
+        to: 'portable-isolation-helper',
+        filter: ['utility_entry.js'],
+      }]),
+    'the helper bootstrap must ship at one fixed extraResource location outside the application ASAR'
+  );
+  assertDoesNotMatch(
     portableIsolationHelperClientSource,
     /require\(['"](?:electron|child_process|fs|path|net|tls|http|https|worker_threads|module)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\bprocess\.env\b|\b__dirname\b|\bimport\s*\(|\b(?:binary|executable|helper)Path\b/,
     'the portable helper client must conduct an injected transport without launch, filesystem, network, IPC, dynamic-loading, or binary-path authority'
@@ -924,8 +1025,8 @@ function assertExecutionWorkspaceBoundary() {
   }
   assertDoesNotMatch(
     `${mainSource}\n${isolationProviderFactorySource}`,
-    /portable_isolation_helper_(?:protocol|launcher_contract|private_transport_contract|client|private_transport|provider_adapter)|createPortableIsolationHelper(?:SessionController|Client|PrivateTransport|ProviderAdapter)/,
-    'the helper protocol, launch contracts, private framing, client, and provider candidate must remain unwired until a bundled host launch authority and platform-private channel exist'
+    /portable_isolation_helper_(?:protocol|launcher_contract|private_transport_contract|client|private_transport|provider_adapter|utility_channel|host_launcher)|(?:createPortableIsolationHelper(?:SessionController|Client|PrivateTransport|ProviderAdapter|HostLauncher)|openPortableIsolationHelperUtilityChannel)/,
+    'the helper foundations, fixed host launcher, and private utility channel must remain unwired until a concrete platform signature verifier and enforced portable isolation runtime exist'
   );
 
   assertDoesNotMatch(

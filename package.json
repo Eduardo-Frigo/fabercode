@@ -69,9 +69,10 @@
     "test:portable-isolation-helper": "node tests/portable-isolation-helper-protocol.test.js",
     "test:portable-isolation-helper-client": "node --unhandled-rejections=strict tests/portable-isolation-helper-client.test.js",
     "test:portable-isolation-helper-private-transport": "node --unhandled-rejections=strict tests/portable-isolation-helper-launcher-contract.test.js && node --unhandled-rejections=strict tests/portable-isolation-helper-private-transport.test.js",
+    "test:portable-isolation-helper-host": "node --unhandled-rejections=strict tests/portable-isolation-helper-utility-channel.test.js && node --unhandled-rejections=strict tests/portable-isolation-helper-host-launcher.test.js",
     "test:portable-isolation-helper-provider-adapter": "node --unhandled-rejections=strict tests/portable-isolation-helper-provider-adapter.test.js && node --unhandled-rejections=strict tests/portable-isolation-helper-provider-adapter-hardening.test.js",
     "test:project-root-authority-async": "node --unhandled-rejections=strict tests/project-root-authority-async-contract.test.js",
-    "test:execution-workspace": "node tests/execution-workspace-contract.test.js && node tests/execution-workspace-registry.test.js && node tests/project-root-authority-contract.test.js && node tests/project-root-entry-inspection.test.js && node tests/project-root-identity-digest.test.js && node tests/project-root-authority-registry.test.js && npm run test:project-root-authority-async && node tests/execution-isolation-runtime-config.test.js && node tests/execution-isolation-provider-factory.test.js && npm run test:portable-isolation-helper && npm run test:portable-isolation-helper-client && npm run test:portable-isolation-helper-private-transport && npm run test:portable-isolation-helper-provider-adapter && npm run test:process-supervisor",
+    "test:execution-workspace": "node tests/execution-workspace-contract.test.js && node tests/execution-workspace-registry.test.js && node tests/project-root-authority-contract.test.js && node tests/project-root-entry-inspection.test.js && node tests/project-root-identity-digest.test.js && node tests/project-root-authority-registry.test.js && npm run test:project-root-authority-async && node tests/execution-isolation-runtime-config.test.js && node tests/execution-isolation-provider-factory.test.js && npm run test:portable-isolation-helper && npm run test:portable-isolation-helper-client && npm run test:portable-isolation-helper-private-transport && npm run test:portable-isolation-helper-host && npm run test:portable-isolation-helper-provider-adapter && npm run test:process-supervisor",
     "test:native-task-consent": "node tests/native-task-consent-service.test.js",
     "test:capability-delegation": "node tests/capability-delegation-contracts.test.js && node tests/task-delegation-store.test.js && npm run test:trusted-consent && npm run test:assistant-job-authority && npm run test:native-task-consent",
     "test:transactional-delete": "node tests/transactional-delete-contracts.test.js && node tests/transactional-delete-journal-contract.test.js && node tests/anchored-filesystem-mutation-backend-contract.test.js && node tests/anchored-filesystem-mutation-namespace-contract.test.js && node tests/anchored-mutation-identity-receipt-contract.test.js && node tests/anchored-mutation-helper-protocol.test.js && node tests/anchored-mutation-backend-adapter.test.js && node tests/agentic-delete-mutation-backend-factory.test.js && node tests/anchored-mutation-runtime-config.test.js && node tests/transaction-journal-authenticator.test.js && node tests/transactional-filesystem-delete-service.test.js && node tests/transactional-delete-root-reader.test.js && node tests/transactional-delete-namespace-bootstrap.test.js && node tests/agentic-delete-recovery-service.test.js && node tests/agentic-delete-recovery-root-authority.test.js && node tests/agentic-delete-startup-recovery-service.test.js && node tests/agentic-delete-startup-recovery-integration.test.js && node tests/native-effect-approval-service.test.js && node tests/agentic-delete-broker-factory.test.js && node tests/agentic-delete-orchestrator.test.js && node tests/agentic-delete-runtime-service.test.js && node tests/transactional-delete-routing-boundary.test.js",
@@ -208,8 +209,18 @@
       ".env.example",
       "cortex/**/*",
       "main/**/*",
+      "!main/portable_isolation_helper/**/*",
       "plugins/**/*",
       "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "main/portable_isolation_helper",
+        "to": "portable-isolation-helper",
+        "filter": [
+          "utility_entry.js"
+        ]
+      }
     ],
     "mac": {
       "target": "dir",
