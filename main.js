@@ -1,4 +1,12 @@
-const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  safeStorage,
+  shell,
+  utilityProcess,
+} = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -205,10 +213,16 @@ const { createStackRegistryService } = require('./main/services/stack_registry_s
 const {
   createTransactionalFilesystemDeleteService,
 } = require('./main/services/transactional_filesystem_delete_service');
+const {
+  createProductionPortableIsolationHelperActivationRuntime,
+} = require('./main/services/portable_isolation_helper_activation_runtime');
 const { createAttachmentContextService } = require('./main/runtime/attachment_context');
 const {
   createAnchoredMutationRuntimeConfig,
 } = require('./main/runtime/anchored_mutation_runtime_config');
+const {
+  createExecutionIsolationRuntimeConfig,
+} = require('./main/runtime/execution_isolation_runtime_config');
 const { createCustomProviderProfileService } = require('./main/runtime/custom_provider_profile');
 const { buildOperationBatchDiffPreview } = require('./main/runtime/diff_preview');
 const { createFileTextUtils } = require('./main/runtime/file_text_utils');
@@ -1150,6 +1164,10 @@ let agenticDeleteStartupRecoveryHealthy = false;
 let assistantExecutionCoordinatorInstance = null;
 let assistantJobAuthorityServiceInstance = null;
 let assistantRuntimeLifecycleReason = null;
+let portableIsolationHelperActivationRuntime = null;
+let portableIsolationHelperProviderSelection = null;
+let portableIsolationHelperShutdownPromise = null;
+let portableIsolationHelperShutdownComplete = false;
 
 function rotateAgenticDeleteActorId() {
   agenticDeleteActorId = `main-process:${crypto.randomUUID()}`;
@@ -5644,8 +5662,91 @@ function createWindow() {
   return win;
 }
 
+async function initializePortableIsolationHelperActivation() {
+  const config = createExecutionIsolationRuntimeConfig({ env: process.env });
+  let runtime = null;
+  try {
+    runtime = createProductionPortableIsolationHelperActivationRuntime({
+      config,
+      resourcesPath: process.resourcesPath,
+      packaged: app.isPackaged,
+      platform: process.platform,
+      architecture: process.arch,
+      applicationVersion: app.getVersion(),
+      electronVersion: process.versions.electron,
+      forkUtilityProcess: (modulePath, args, options) => (
+        utilityProcess.fork(modulePath, args, options)
+      ),
+      channelTimeoutMs: 5_000,
+    });
+    portableIsolationHelperActivationRuntime = runtime;
+    const selection = await runtime.start();
+    if (portableIsolationHelperActivationRuntime === runtime
+      && !portableIsolationHelperShutdownPromise) {
+      portableIsolationHelperProviderSelection = selection;
+    }
+    try {
+      appendAuditEvent(
+        'assistant.portable_isolation_helper_activation',
+        runtime.diagnostics()
+      );
+    } catch { /* activation remains fail closed even if audit persistence fails */ }
+    return selection;
+  } catch {
+    portableIsolationHelperProviderSelection = null;
+    if (runtime) {
+      try { await runtime.dispose(); } catch { /* fail closed below */ }
+    }
+    if (portableIsolationHelperActivationRuntime === runtime) {
+      portableIsolationHelperActivationRuntime = null;
+    }
+    try {
+      appendAuditEvent('assistant.portable_isolation_helper_activation', {
+        state: 'blocked',
+        activationBlockReason: 'ACTIVATION_INITIALIZATION_FAILED',
+      });
+    } catch { /* initialization already failed closed */ }
+    return null;
+  }
+}
+
+function beginPortableIsolationHelperShutdown(event) {
+  const runtime = portableIsolationHelperActivationRuntime;
+  if (!runtime || portableIsolationHelperShutdownComplete) return false;
+  if (event && typeof event.preventDefault === 'function') event.preventDefault();
+  portableIsolationHelperProviderSelection = null;
+  if (portableIsolationHelperShutdownPromise) return true;
+
+  portableIsolationHelperShutdownPromise = Promise.resolve()
+    .then(() => runtime.dispose())
+    .then(
+      (receipt) => {
+        appendAuditEvent('assistant.portable_isolation_helper_shutdown', {
+          disposed: Boolean(receipt && receipt.disposed === true),
+          zeroOrphanShutdownConfirmed: Boolean(
+            receipt && receipt.zeroOrphanShutdownConfirmed === true
+          ),
+        });
+      },
+      () => {
+        appendAuditEvent('assistant.portable_isolation_helper_shutdown', {
+          disposed: false,
+          zeroOrphanShutdownConfirmed: false,
+        });
+      }
+    )
+    .finally(() => {
+      portableIsolationHelperActivationRuntime = null;
+      portableIsolationHelperShutdownComplete = true;
+      app.quit();
+    })
+    .catch(() => {});
+  return true;
+}
+
 app.whenReady().then(async () => {
   app.setName('Faber Code');
+  await initializePortableIsolationHelperActivation();
   if (platformAccountService && typeof platformAccountService.initializeSession === 'function') {
     try {
       const sessionInitialization = await platformAccountService.initializeSession();
@@ -6901,8 +7002,9 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
   clearAssistantRuntimeAuthority('app_before_quit');
+  beginPortableIsolationHelperShutdown(event);
   if (agenticDeleteMutationBackendSelection) {
     agenticDeleteMutationBackendSelection.dispose();
     agenticDeleteMutationBackendSelection = null;

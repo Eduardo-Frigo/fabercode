@@ -241,14 +241,47 @@ for (const forbiddenProductionSeam of [
 assertInOrder(
   mainSource,
   [
-    "app.on('before-quit', () => {",
+    "app.on('before-quit', (event) => {",
     "clearAssistantRuntimeAuthority('app_before_quit');",
+    'beginPortableIsolationHelperShutdown(event);',
     'if (agenticDeleteMutationBackendSelection) {',
     'agenticDeleteMutationBackendSelection.dispose();',
     'agenticDeleteMutationBackendSelection = null;',
     'platformBackendService.stop().catch(() => {});',
   ],
   'shutdown must revoke assistant authority before disposing the main-only mutation seam'
+);
+
+assertInOrder(
+  mainSource,
+  [
+    'async function initializePortableIsolationHelperActivation() {',
+    'createExecutionIsolationRuntimeConfig({ env: process.env })',
+    'createProductionPortableIsolationHelperActivationRuntime({',
+    'resourcesPath: process.resourcesPath,',
+    'packaged: app.isPackaged,',
+    'utilityProcess.fork(modulePath, args, options)',
+    'portableIsolationHelperActivationRuntime = runtime;',
+    'const selection = await runtime.start();',
+    'portableIsolationHelperProviderSelection = selection;',
+    'await initializePortableIsolationHelperActivation();',
+  ],
+  'main must activate only the production-pinned portable helper composition after Electron is ready'
+);
+
+assertInOrder(
+  mainSource,
+  [
+    'function beginPortableIsolationHelperShutdown(event) {',
+    'event.preventDefault()',
+    'portableIsolationHelperProviderSelection = null;',
+    '.then(() => runtime.dispose())',
+    'zeroOrphanShutdownConfirmed',
+    'portableIsolationHelperActivationRuntime = null;',
+    'portableIsolationHelperShutdownComplete = true;',
+    'app.quit();',
+  ],
+  'portable helper shutdown must revoke selection access, wait for zero-orphan disposal, and only then resume application quit'
 );
 
 assertInOrder(

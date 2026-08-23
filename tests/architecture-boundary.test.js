@@ -436,6 +436,7 @@ function assertAssistantHarnessCompositionBoundary() {
       'main/services/agentic_delete_mutation_backend_factory.js',
       'main/services/anchored_mutation_backend_adapter.js',
       'main/services/execution_isolation_provider_factory.js',
+      'main/services/portable_isolation_helper_activation_runtime.js',
     ].includes(relativePath)) continue;
     assertDoesNotMatch(
       source,
@@ -589,6 +590,9 @@ function assertExecutionWorkspaceBoundary() {
   );
   const portableIsolationHelperHostLauncherSource = read(
     'main/services/portable_isolation_helper_host_launcher.js'
+  );
+  const portableIsolationHelperActivationRuntimeSource = read(
+    'main/services/portable_isolation_helper_activation_runtime.js'
   );
   const portableIsolationHelperUtilityEntrySource = read(
     'main/portable_isolation_helper/utility_entry.js'
@@ -759,10 +763,21 @@ function assertExecutionWorkspaceBoundary() {
       && isolationProviderFactorySource.includes('maybeDisposeProvider()'),
     'process disposal must be captured, zero-orphan validated, reentrancy-safe, and complete before provider release'
   );
+  assert.ok(
+    mainSource.includes('createExecutionIsolationRuntimeConfig({ env: process.env })')
+      && mainSource.includes(
+        'createProductionPortableIsolationHelperActivationRuntime({'
+      )
+      && mainSource.includes('resourcesPath: process.resourcesPath,')
+      && mainSource.includes('packaged: app.isPackaged,')
+      && mainSource.includes('const selection = await runtime.start();')
+      && mainSource.includes('beginPortableIsolationHelperShutdown(event);'),
+    'production must compose only the packaged, runtime-configured, lifecycle-owned portable activation boundary'
+  );
   assertDoesNotMatch(
     mainSource,
-    /execution_isolation_(?:runtime_config|provider_factory)|createExecutionIsolationProviderSelection/,
-    'production must not activate portable isolation until a bundled attested provider exists'
+    /execution_isolation_provider_factory|createExecutionIsolationProviderSelection|portable_isolation_helper_(?:host_launcher|private_transport|client|provider_adapter|release_trust)/,
+    'main.js must not bypass the single production portable activation boundary'
   );
   assertDoesNotMatch(
     portableIsolationHelperProtocolSource,
@@ -1210,8 +1225,11 @@ function assertExecutionWorkspaceBoundary() {
       )
       && packageConfig.scripts['test:execution-workspace'].includes(
         'npm run test:portable-isolation-helper-release'
+      )
+      && packageConfig.scripts['test:execution-workspace'].includes(
+        'npm run test:portable-isolation-helper-activation'
       ),
-    'the aggregate execution-workspace gate must run all three physical backends, composed utility runtime, deterministic bundling, release signing, and packaging tests'
+    'the aggregate execution-workspace gate must run all three physical backends, composed utility runtime, deterministic bundling, release signing, packaging, and production activation tests'
   );
   assert.ok(
     portableIsolationHelperLauncherContractSource.includes(
@@ -1495,9 +1513,41 @@ function assertExecutionWorkspaceBoundary() {
     );
   }
   assertDoesNotMatch(
-    `${mainSource}\n${isolationProviderFactorySource}`,
+    mainSource,
     /portable_isolation_helper_(?:protocol|backend_contract|backend_dispatcher|execution_workspace_backend|project_root_authority_backend|process_supervisor_backend|physical_runtime|runtime_session|launcher_contract|private_transport_contract|distribution_attestation_contract|client|private_transport|distribution_verifier|provider_adapter|utility_channel|host_launcher|release_trust)|(?:createPortable(?:ExecutionWorkspace|ProjectRootAuthority|ProcessSupervisor)Backend|createPortableIsolationHelper(?:SessionController|PhysicalRuntime|RuntimeSession|BackendDispatcher|Client|PrivateTransport|DistributionTrustedKey|PlatformSignatureVerifier|ProviderAdapter|HostLauncher|ReleaseSignatureVerifier)|openPortableIsolationHelperUtilityChannel)/,
-    'the signed helper runtime now exists, but production main activation must remain suspended until a pinned public release trust root is provisioned'
+    'main.js must own only the activation boundary, never lower helper construction, trust, transport, or physical authority'
+  );
+  assert.ok(
+    portableIsolationHelperActivationRuntimeSource.includes(
+      'createPortableIsolationHelperReleaseSignatureVerifier'
+    )
+      && portableIsolationHelperActivationRuntimeSource.includes(
+        'createPortableIsolationHelperHostLauncher'
+      )
+      && portableIsolationHelperActivationRuntimeSource.includes(
+        'createPortableIsolationHelperPrivateTransport'
+      )
+      && portableIsolationHelperActivationRuntimeSource.includes(
+        'createPortableIsolationHelperClient'
+      )
+      && portableIsolationHelperActivationRuntimeSource.includes(
+        'createPortableIsolationHelperProviderAdapter'
+      )
+      && portableIsolationHelperActivationRuntimeSource.includes(
+        'createExecutionIsolationProviderSelection'
+      )
+      && portableIsolationHelperActivationRuntimeSource.includes(
+        'createProductionPortableIsolationHelperActivationRuntime'
+      )
+      && portableIsolationHelperActivationRuntimeSource.includes(
+        'zeroOrphanShutdownConfirmed'
+      ),
+    'one production activation boundary must bind public release trust through launch, private transport, handshake, provider selection, and zero-orphan shutdown'
+  );
+  assertDoesNotMatch(
+    portableIsolationHelperActivationRuntimeSource,
+    /process\.env|PRIVATE KEY|privateKey|providerPath|executablePath|binaryPath|require\(['"]electron['"]\)/,
+    'the activation boundary must not read mutable environment, hold secret keys, accept provider paths, or import Electron directly'
   );
 
   assertDoesNotMatch(
