@@ -32,6 +32,16 @@ const {
   canonicalSha256Digest,
 } = require('../main/capabilities/transactional_delete_contracts');
 const {
+  PROCESS_SUPERVISOR_BACKEND_VERSION,
+  PROCESS_SUPERVISOR_REQUIRED_GUARANTEES,
+  PROCESS_SUPERVISOR_STATES,
+  createProcessSupervisorDisposeReceipt,
+  createProcessSupervisorProbeResult,
+} = require('../main/capabilities/process_supervisor_contract');
+const {
+  createProcessSupervisor,
+} = require('../main/agent_runtime/execution/process_supervisor');
+const {
   EXECUTION_ISOLATION_RUNTIME_CONFIG_VERSION,
 } = require('../main/runtime/execution_isolation_runtime_config');
 const {
@@ -102,32 +112,44 @@ function createReader() {
   });
 }
 
-function attestation({ buildId, workspaceBackend, rootBackend, overrides = {} }) {
+function attestation({ buildId, workspaceBackend, rootBackend, processBackend, overrides = {} }) {
   const core = {
     providerVersion: PORTABLE_EXECUTION_ISOLATION_PROVIDER_VERSION,
     buildId,
     schemaVersion: PORTABLE_EXECUTION_ISOLATION_ATTESTATION_VERSION,
     workspaceBackendVersion: EXECUTION_WORKSPACE_BACKEND_VERSION,
     projectRootAuthorityBackendVersion: PROJECT_ROOT_AUTHORITY_BACKEND_VERSION,
+    processSupervisorBackendVersion: PROCESS_SUPERVISOR_BACKEND_VERSION,
     workspaceBackendId: workspaceBackend.id,
     projectRootAuthorityBackendId: rootBackend.id,
+    processSupervisorBackendId: processBackend.id,
     sharedPhysicalRootAuthority: true,
     sourceIdentityCompareAndSwap: true,
     handleRelativeProjectAccess: true,
     privateWorkspaceMaterialization: true,
     rollbackByDiscard: true,
+    workspaceBoundProcessExecution: true,
+    networkDefaultDeny: true,
+    processTreeTermination: true,
+    zeroOrphanProcessDisposal: true,
   };
   return Object.freeze({
     schemaVersion: core.schemaVersion,
     workspaceBackendVersion: core.workspaceBackendVersion,
     projectRootAuthorityBackendVersion: core.projectRootAuthorityBackendVersion,
+    processSupervisorBackendVersion: core.processSupervisorBackendVersion,
     workspaceBackendId: core.workspaceBackendId,
     projectRootAuthorityBackendId: core.projectRootAuthorityBackendId,
+    processSupervisorBackendId: core.processSupervisorBackendId,
     sharedPhysicalRootAuthority: core.sharedPhysicalRootAuthority,
     sourceIdentityCompareAndSwap: core.sourceIdentityCompareAndSwap,
     handleRelativeProjectAccess: core.handleRelativeProjectAccess,
     privateWorkspaceMaterialization: core.privateWorkspaceMaterialization,
     rollbackByDiscard: core.rollbackByDiscard,
+    workspaceBoundProcessExecution: core.workspaceBoundProcessExecution,
+    networkDefaultDeny: core.networkDefaultDeny,
+    processTreeTermination: core.processTreeTermination,
+    zeroOrphanProcessDisposal: core.zeroOrphanProcessDisposal,
     attestationDigest: canonicalSha256Digest(core),
     ...overrides,
   });
@@ -137,18 +159,22 @@ function providerHarness({
   buildId = 'portable-isolation-build-1',
   workspaceBackendOverride = null,
   rootBackendOverride = null,
+  processBackendOverride = null,
   attestationOverrides = {},
   providerOverrides = {},
   disposeImpl = null,
+  processDisposeImpl = null,
 } = {}) {
   const state = {
     workspaceProbes: 0,
     rootProbes: 0,
+    processProbes: 0,
     workspaceAcquires: 0,
     workspaceDiscards: 0,
     rootAcquires: 0,
     workspaceBackendDisposals: 0,
     rootBackendDisposals: 0,
+    processBackendDisposals: 0,
     providerDisposals: 0,
   };
   const workspaceProbe = createExecutionWorkspaceProbeResult({
@@ -158,6 +184,10 @@ function providerHarness({
   const rootProbe = createProjectRootAuthorityProbeResult({
     state: PROJECT_ROOT_AUTHORITY_STATES.ENFORCED,
     guarantees: PROJECT_ROOT_AUTHORITY_REQUIRED_GUARANTEES,
+  });
+  const processProbe = createProcessSupervisorProbeResult({
+    state: PROCESS_SUPERVISOR_STATES.ENFORCED,
+    guarantees: PROCESS_SUPERVISOR_REQUIRED_GUARANTEES,
   });
   const workspaceBackend = workspaceBackendOverride || Object.freeze({
     version: EXECUTION_WORKSPACE_BACKEND_VERSION,
@@ -212,15 +242,35 @@ function providerHarness({
       return Object.freeze({ ok: true, disposed: true });
     },
   });
+  const processBackend = processBackendOverride || Object.freeze({
+    version: PROCESS_SUPERVISOR_BACKEND_VERSION,
+    id: 'portable-process-supervisor',
+    probe() {
+      state.processProbes += 1;
+      return processProbe;
+    },
+    exec() { throw new Error('process exec is outside the provider factory test'); },
+    read() { throw new Error('process read is outside the provider factory test'); },
+    wait() { throw new Error('process wait is outside the provider factory test'); },
+    stop() { throw new Error('process stop is outside the provider factory test'); },
+    dispose() {
+      state.processBackendDisposals += 1;
+      return processDisposeImpl
+        ? processDisposeImpl()
+        : createProcessSupervisorDisposeReceipt({ orphaned: 0 });
+    },
+  });
   const provider = Object.freeze({
     providerVersion: PORTABLE_EXECUTION_ISOLATION_PROVIDER_VERSION,
     buildId,
     executionWorkspaceBackend: workspaceBackend,
     projectRootAuthorityBackend: rootBackend,
+    processSupervisorBackend: processBackend,
     isolationAttestation: attestation({
       buildId,
       workspaceBackend,
       rootBackend,
+      processBackend,
       overrides: attestationOverrides,
     }),
     dispose() {
@@ -229,7 +279,7 @@ function providerHarness({
     },
     ...providerOverrides,
   });
-  return { provider, state, workspaceBackend, rootBackend };
+  return { provider, state, workspaceBackend, rootBackend, processBackend };
 }
 
 function assertExactSelection(selection) {
@@ -237,6 +287,7 @@ function assertExactSelection(selection) {
     'version',
     'executionWorkspaceBackend',
     'projectRootAuthorityBackend',
+    'processSupervisorBackend',
     'diagnostics',
     'dispose',
   ]);
@@ -244,6 +295,7 @@ function assertExactSelection(selection) {
   assert.strictEqual(Object.isFrozen(selection), true);
   assert.strictEqual(Object.isFrozen(selection.executionWorkspaceBackend), true);
   assert.strictEqual(Object.isFrozen(selection.projectRootAuthorityBackend), true);
+  assert.strictEqual(Object.isFrozen(selection.processSupervisorBackend), true);
   assert.strictEqual(Object.isFrozen(selection.diagnostics), true);
   assert.deepStrictEqual(Reflect.ownKeys(selection.diagnostics), [
     'status', 'reasonCode', 'mode', 'killSwitch',
@@ -282,7 +334,12 @@ async function main() {
     selection.dispose();
   }
   assert.strictEqual(factoryCalls, 0);
-  assertUnsupported(createExecutionIsolationProviderSelection(), 'RUNTIME_DISABLED');
+  const defaultSelection = createExecutionIsolationProviderSelection();
+  assertUnsupported(defaultSelection, 'RUNTIME_DISABLED');
+  assert.strictEqual(
+    (await defaultSelection.processSupervisorBackend.probe()).state,
+    PROCESS_SUPERVISOR_STATES.UNAVAILABLE
+  );
   assertUnsupported(createExecutionIsolationProviderSelection({
     config: config(),
     providerFactory: undefined,
@@ -330,10 +387,13 @@ async function main() {
   assert.strictEqual(factoryCalls, 1);
   assert.strictEqual(validHarness.state.workspaceProbes, 1);
   assert.strictEqual(validHarness.state.rootProbes, 1);
+  assert.strictEqual(validHarness.state.processProbes, 1);
   assert.strictEqual(selection.executionWorkspaceBackend.probe().state, 'enforced');
   assert.strictEqual(selection.projectRootAuthorityBackend.probe().state, 'enforced');
+  assert.strictEqual(selection.processSupervisorBackend.probe().state, 'enforced');
   assert.strictEqual(validHarness.state.workspaceProbes, 1, 'attested probe must be cached');
   assert.strictEqual(validHarness.state.rootProbes, 1, 'attested probe must be cached');
+  assert.strictEqual(validHarness.state.processProbes, 1, 'attested probe must be cached');
 
   const workspaceAcquireRequest = workspaceRequest();
   const workspaceLease = selection.executionWorkspaceBackend.acquire(workspaceAcquireRequest);
@@ -365,8 +425,20 @@ async function main() {
     ok: true,
     disposed: true,
   });
-  assert.strictEqual(validHarness.state.providerDisposals, 1);
+  assert.strictEqual(validHarness.state.providerDisposals, 0);
   assert.strictEqual(selection.executionWorkspaceBackend.probe().state, 'unavailable');
+  assert.strictEqual(selection.processSupervisorBackend.probe().state, 'enforced');
+  assert.deepStrictEqual(await selection.processSupervisorBackend.dispose(), {
+    ok: true,
+    disposed: true,
+    orphaned: 0,
+  });
+  assert.strictEqual(validHarness.state.processBackendDisposals, 1);
+  assert.strictEqual(validHarness.state.providerDisposals, 1);
+  assert.strictEqual(
+    (await selection.processSupervisorBackend.probe()).state,
+    PROCESS_SUPERVISOR_STATES.UNAVAILABLE
+  );
   assert.throws(
     () => selection.executionWorkspaceBackend.acquire(workspaceRequest()),
     (error) => error && error.code === 'WORKSPACE_UNAVAILABLE'
@@ -382,13 +454,19 @@ async function main() {
     config: config(),
     providerFactory: () => forceHarness.provider,
   });
-  forceSelection.dispose();
-  forceSelection.dispose();
+  await forceSelection.dispose();
+  await forceSelection.dispose();
   assert.strictEqual(forceHarness.state.providerDisposals, 1);
+  assert.strictEqual(forceHarness.state.processBackendDisposals, 1);
   assert.strictEqual(forceSelection.executionWorkspaceBackend.probe().state, 'unavailable');
   assert.strictEqual(forceSelection.projectRootAuthorityBackend.probe().state, 'unavailable');
+  assert.strictEqual((await forceSelection.processSupervisorBackend.probe()).state, 'unavailable');
   assert.throws(() => forceSelection.executionWorkspaceBackend.discard({}), /unavailable/i);
   assert.throws(() => forceSelection.projectRootAuthorityBackend.acquire({}), /unavailable/i);
+  await assert.rejects(
+    forceSelection.processSupervisorBackend.exec(Object.freeze({})),
+    (error) => error && error.code === 'PROCESS_SUPERVISOR_UNAVAILABLE'
+  );
 
   const reverseHarness = providerHarness();
   const reverseSelection = createExecutionIsolationProviderSelection({
@@ -400,11 +478,122 @@ async function main() {
   assert.strictEqual(reverseSelection.executionWorkspaceBackend.probe().state, 'unavailable');
   assert.strictEqual(reverseSelection.projectRootAuthorityBackend.probe().state, 'enforced');
   reverseSelection.projectRootAuthorityBackend.dispose();
+  assert.strictEqual(reverseHarness.state.providerDisposals, 0);
+  await reverseSelection.processSupervisorBackend.dispose();
   assert.strictEqual(reverseHarness.state.providerDisposals, 1);
 
-  // The selected facades must compose with both ownership registries while
-  // retaining one provider lifecycle. Root disposal alone cannot tear down a
-  // still-active workspace consumer.
+  let resolveAsyncProcessDispose;
+  const asyncDisposeHarness = providerHarness({
+    processDisposeImpl: () => new Promise((resolve) => {
+      resolveAsyncProcessDispose = resolve;
+    }),
+  });
+  const asyncDisposeSelection = createExecutionIsolationProviderSelection({
+    config: config(),
+    providerFactory: () => asyncDisposeHarness.provider,
+  });
+  const firstAsyncDispose = asyncDisposeSelection.dispose();
+  const secondAsyncDispose = asyncDisposeSelection.dispose();
+  assert.strictEqual(firstAsyncDispose, secondAsyncDispose);
+  assert.strictEqual(asyncDisposeHarness.state.processBackendDisposals, 1);
+  assert.strictEqual(asyncDisposeHarness.state.providerDisposals, 0);
+  assert.strictEqual(asyncDisposeSelection.executionWorkspaceBackend.probe().state, 'unavailable');
+  assert.strictEqual(asyncDisposeSelection.projectRootAuthorityBackend.probe().state, 'unavailable');
+  await assert.rejects(
+    asyncDisposeSelection.processSupervisorBackend.exec(Object.freeze({})),
+    (error) => error && error.code === 'PROCESS_SUPERVISOR_UNAVAILABLE'
+  );
+  resolveAsyncProcessDispose(createProcessSupervisorDisposeReceipt({ orphaned: 0 }));
+  assert.deepStrictEqual(await firstAsyncDispose, { ok: true, disposed: true });
+  assert.strictEqual(asyncDisposeHarness.state.providerDisposals, 1);
+
+  const processFirstHarness = providerHarness();
+  const processFirstSelection = createExecutionIsolationProviderSelection({
+    config: config(),
+    providerFactory: () => processFirstHarness.provider,
+  });
+  await processFirstSelection.processSupervisorBackend.dispose();
+  assert.strictEqual(processFirstHarness.state.providerDisposals, 0);
+  processFirstSelection.executionWorkspaceBackend.dispose();
+  assert.strictEqual(processFirstHarness.state.providerDisposals, 0);
+  processFirstSelection.projectRootAuthorityBackend.dispose();
+  assert.strictEqual(processFirstHarness.state.providerDisposals, 1);
+
+  const invalidDisposeHarness = providerHarness({
+    processDisposeImpl: () => Object.freeze({ ok: true, disposed: true, orphaned: 1 }),
+  });
+  const invalidDisposeSelection = createExecutionIsolationProviderSelection({
+    config: config(),
+    providerFactory: () => invalidDisposeHarness.provider,
+  });
+  assert.deepStrictEqual(await invalidDisposeSelection.dispose(), {
+    ok: false,
+    disposed: true,
+  });
+  assert.deepStrictEqual(await invalidDisposeSelection.dispose(), {
+    ok: false,
+    disposed: true,
+  });
+  assert.strictEqual(invalidDisposeHarness.state.processBackendDisposals, 1);
+  assert.strictEqual(invalidDisposeHarness.state.providerDisposals, 1);
+
+  const rejectedDisposeHarness = providerHarness({
+    processDisposeImpl: () => Promise.reject(new Error('/private/provider disposal rejected')),
+  });
+  const rejectedDisposeSelection = createExecutionIsolationProviderSelection({
+    config: config(),
+    providerFactory: () => rejectedDisposeHarness.provider,
+  });
+  assert.deepStrictEqual(await rejectedDisposeSelection.dispose(), {
+    ok: false,
+    disposed: true,
+  });
+  assert.strictEqual(rejectedDisposeHarness.state.processBackendDisposals, 1);
+  assert.strictEqual(rejectedDisposeHarness.state.providerDisposals, 1);
+
+  let reentrantSelection;
+  const reentrantHarness = providerHarness({
+    processDisposeImpl() {
+      reentrantSelection.processSupervisorBackend.dispose();
+      return createProcessSupervisorDisposeReceipt({ orphaned: 0 });
+    },
+  });
+  reentrantSelection = createExecutionIsolationProviderSelection({
+    config: config(),
+    providerFactory: () => reentrantHarness.provider,
+  });
+  assert.deepStrictEqual(await reentrantSelection.dispose(), {
+    ok: false,
+    disposed: true,
+  });
+  assert.strictEqual(reentrantHarness.state.processBackendDisposals, 1);
+  assert.strictEqual(reentrantHarness.state.providerDisposals, 1);
+
+  let forceReentrantSelection;
+  const forceReentrantHarness = providerHarness({
+    processDisposeImpl() {
+      forceReentrantSelection.dispose();
+      return createProcessSupervisorDisposeReceipt({ orphaned: 0 });
+    },
+  });
+  forceReentrantSelection = createExecutionIsolationProviderSelection({
+    config: config(),
+    providerFactory: () => forceReentrantHarness.provider,
+  });
+  assert.deepStrictEqual(await forceReentrantSelection.dispose(), {
+    ok: false,
+    disposed: true,
+  });
+  assert.deepStrictEqual(await forceReentrantSelection.dispose(), {
+    ok: false,
+    disposed: true,
+  });
+  assert.strictEqual(forceReentrantHarness.state.processBackendDisposals, 1);
+  assert.strictEqual(forceReentrantHarness.state.providerDisposals, 1);
+
+  // The selected facades must compose with all three ownership services while
+  // retaining one provider lifecycle. Root/workspace disposal cannot tear down
+  // a still-active process supervisor consumer.
   const registryHarness = providerHarness();
   const registrySelection = createExecutionIsolationProviderSelection({
     config: config(),
@@ -417,6 +606,9 @@ async function main() {
   const workspaceRegistry = createExecutionWorkspaceRegistry({
     backend: registrySelection.executionWorkspaceBackend,
     leaseIdFactory: () => 'registry-workspace-lease-a',
+  });
+  const processSupervisor = createProcessSupervisor({
+    backend: registrySelection.processSupervisorBackend,
   });
   const registryRootAcquire = rootRegistry.acquire({
     binding: binding(),
@@ -431,6 +623,8 @@ async function main() {
   assert.strictEqual(registryWorkspaceAcquire.ok, true);
   assert.strictEqual(registryHarness.state.workspaceProbes, 1);
   assert.strictEqual(registryHarness.state.rootProbes, 1);
+  assert.strictEqual((await processSupervisor.probe()).state, 'enforced');
+  assert.strictEqual(registryHarness.state.processProbes, 1);
 
   assert.strictEqual(rootRegistry.release({
     binding: binding(),
@@ -443,8 +637,11 @@ async function main() {
     leaseId: registryWorkspaceAcquire.lease.leaseId,
   })).ok, true);
   assert.strictEqual((await workspaceRegistry.dispose()).ok, true);
+  assert.strictEqual(registryHarness.state.providerDisposals, 0);
+  assert.strictEqual((await processSupervisor.dispose()).ok, true);
   assert.strictEqual(registryHarness.state.providerDisposals, 1);
-  registrySelection.dispose();
+  assert.strictEqual(registryHarness.state.processBackendDisposals, 1);
+  await registrySelection.dispose();
   assert.strictEqual(registryHarness.state.providerDisposals, 1);
   assert.strictEqual(registryHarness.state.workspaceBackendDisposals, 0);
   assert.strictEqual(registryHarness.state.rootBackendDisposals, 0);
@@ -460,6 +657,37 @@ async function main() {
   }), 'PROVIDER_REJECTED');
   assert.strictEqual(missingWorkspaceHarness.state.providerDisposals, 1);
 
+  const missingProcessHarness = providerHarness();
+  const missingProcessProvider = Object.freeze({
+    ...missingProcessHarness.provider,
+    processSupervisorBackend: undefined,
+  });
+  assertUnsupported(createExecutionIsolationProviderSelection({
+    config: config(),
+    providerFactory: () => missingProcessProvider,
+  }), 'PROVIDER_REJECTED');
+  assert.strictEqual(missingProcessHarness.state.workspaceProbes, 0);
+  assert.strictEqual(missingProcessHarness.state.rootProbes, 0);
+  assert.strictEqual(missingProcessHarness.state.processProbes, 0);
+  assert.strictEqual(missingProcessHarness.state.providerDisposals, 1);
+
+  const extraProcessBase = providerHarness().processBackend;
+  const extraProcessBackend = Object.freeze({
+    ...extraProcessBase,
+    ambientAuthority: true,
+  });
+  const extraProcessHarness = providerHarness({
+    processBackendOverride: extraProcessBackend,
+  });
+  assertUnsupported(createExecutionIsolationProviderSelection({
+    config: config(),
+    providerFactory: () => extraProcessHarness.provider,
+  }), 'PROVIDER_REJECTED');
+  assert.strictEqual(extraProcessHarness.state.workspaceProbes, 0);
+  assert.strictEqual(extraProcessHarness.state.rootProbes, 0);
+  assert.strictEqual(extraProcessHarness.state.processProbes, 0);
+  assert.strictEqual(extraProcessHarness.state.providerDisposals, 1);
+
   const rejectedProvider = Promise.reject(new Error('async provider rejected'));
   assertUnsupported(createExecutionIsolationProviderSelection({
     config: config(),
@@ -474,12 +702,14 @@ async function main() {
   assert.strictEqual(resolvedHarness.state.providerDisposals, 1);
   assert.strictEqual(resolvedHarness.state.workspaceProbes, 0);
   assert.strictEqual(resolvedHarness.state.rootProbes, 0);
+  assert.strictEqual(resolvedHarness.state.processProbes, 0);
 
   const invalidHarnesses = [
     providerHarness({ providerOverrides: { providerVersion: 'portable-execution-isolation-provider.v0' } }),
     providerHarness({ providerOverrides: { buildId: '/tmp/provider.node' } }),
     providerHarness({ providerOverrides: { extra: true } }),
     providerHarness({ attestationOverrides: { sharedPhysicalRootAuthority: false } }),
+    providerHarness({ attestationOverrides: { zeroOrphanProcessDisposal: false } }),
     providerHarness({ attestationOverrides: { attestationDigest: digest('f') } }),
     providerHarness({ attestationOverrides: { extra: true } }),
   ];
@@ -491,6 +721,7 @@ async function main() {
     assertUnsupported(invalid, 'PROVIDER_REJECTED');
     assert.strictEqual(harness.state.workspaceProbes, 0);
     assert.strictEqual(harness.state.rootProbes, 0);
+    assert.strictEqual(harness.state.processProbes, 0);
     assert.strictEqual(harness.state.providerDisposals, 1);
     invalid.dispose();
     assert.strictEqual(harness.state.providerDisposals, 1);
@@ -547,6 +778,43 @@ async function main() {
     providerFactory: () => unavailableRootHarness.provider,
   }), 'BACKENDS_NOT_ENFORCED');
   assert.strictEqual(unavailableRootHarness.state.providerDisposals, 1);
+
+  const unavailableProcessBase = providerHarness().processBackend;
+  const unavailableProcess = Object.freeze({
+    ...unavailableProcessBase,
+    probe() {
+      return createProcessSupervisorProbeResult({
+        state: PROCESS_SUPERVISOR_STATES.UNAVAILABLE,
+        guarantees: [],
+        reasonCode: 'PORTABLE_PROVIDER_NOT_READY',
+      });
+    },
+  });
+  const unavailableProcessHarness = providerHarness({
+    processBackendOverride: unavailableProcess,
+  });
+  assertUnsupported(createExecutionIsolationProviderSelection({
+    config: config(),
+    providerFactory: () => unavailableProcessHarness.provider,
+  }), 'BACKENDS_NOT_ENFORCED');
+  assert.strictEqual(unavailableProcessHarness.state.providerDisposals, 1);
+
+  const asyncProcessBase = providerHarness().processBackend;
+  const asyncProcess = Object.freeze({
+    ...asyncProcessBase,
+    probe() {
+      return Promise.resolve(createProcessSupervisorProbeResult({
+        state: PROCESS_SUPERVISOR_STATES.ENFORCED,
+        guarantees: PROCESS_SUPERVISOR_REQUIRED_GUARANTEES,
+      }));
+    },
+  });
+  const asyncProcessHarness = providerHarness({ processBackendOverride: asyncProcess });
+  assertUnsupported(createExecutionIsolationProviderSelection({
+    config: config(),
+    providerFactory: () => asyncProcessHarness.provider,
+  }), 'BACKENDS_NOT_ENFORCED');
+  assert.strictEqual(asyncProcessHarness.state.providerDisposals, 1);
 
   const rejectedProbeBase = providerHarness().workspaceBackend;
   const rejectedProbeWorkspace = Object.freeze({

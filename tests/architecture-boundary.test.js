@@ -586,16 +586,18 @@ function assertExecutionWorkspaceBoundary() {
   );
   assert.ok(
     isolationProviderFactorySource.includes(
-      "'portable-execution-isolation-provider.v1'"
+      "'portable-execution-isolation-provider.v2'"
     )
       && isolationProviderFactorySource.includes(
-        "'portable-execution-isolation-attestation.v1'"
+        "'portable-execution-isolation-attestation.v2'"
       )
       && isolationProviderFactorySource.includes('executionWorkspaceBackend')
       && isolationProviderFactorySource.includes('projectRootAuthorityBackend')
+      && isolationProviderFactorySource.includes('processSupervisorBackend')
       && isolationProviderFactorySource.includes('assertExecutionWorkspaceBackend')
-      && isolationProviderFactorySource.includes('assertProjectRootAuthorityBackend'),
-    'one sealed portable provider must supply both workspace and pinned-root backends'
+      && isolationProviderFactorySource.includes('assertProjectRootAuthorityBackend')
+      && isolationProviderFactorySource.includes('assertProcessSupervisorBackend'),
+    'one sealed portable provider must supply workspace, pinned-root, and process backends'
   );
   for (const attestedGuarantee of [
     'sharedPhysicalRootAuthority',
@@ -603,6 +605,10 @@ function assertExecutionWorkspaceBoundary() {
     'handleRelativeProjectAccess',
     'privateWorkspaceMaterialization',
     'rollbackByDiscard',
+    'workspaceBoundProcessExecution',
+    'networkDefaultDeny',
+    'processTreeTermination',
+    'zeroOrphanProcessDisposal',
   ]) {
     assert.ok(
       isolationProviderFactorySource.includes(attestedGuarantee),
@@ -615,12 +621,20 @@ function assertExecutionWorkspaceBoundary() {
         "unsupportedSelection('BACKENDS_NOT_ENFORCED'"
       )
       && isolationProviderFactorySource.includes('absorbNativePromise(rawProbe)'),
-    'portable provider activation must verify a canonical attestation and two synchronous enforced probes'
+    'portable provider activation must verify a canonical attestation and three synchronous enforced probes'
   );
   assertDoesNotMatch(
     isolationProviderFactorySource,
     /captureOwnMethod\((?:workspaceBackend|rootBackend),\s*['"]dispose['"]\)/,
     'backend facades must release the one shared provider instead of independently closing physical authority'
+  );
+  assert.ok(
+    isolationProviderFactorySource.includes("captureOwnMethod(processBackend, 'dispose')")
+      && isolationProviderFactorySource.includes('assertProcessSupervisorDisposeReceipt(value)')
+      && isolationProviderFactorySource.includes('processDisposePending')
+      && isolationProviderFactorySource.includes('processDisposeReentered')
+      && isolationProviderFactorySource.includes('maybeDisposeProvider()'),
+    'process disposal must be captured, zero-orphan validated, reentrancy-safe, and complete before provider release'
   );
   assertDoesNotMatch(
     mainSource,

@@ -19,6 +19,14 @@ const {
   createUnsupportedProjectRootAuthorityBackend,
 } = require('../capabilities/project_root_authority_contract');
 const {
+  PROCESS_SUPERVISOR_BACKEND_VERSION,
+  PROCESS_SUPERVISOR_STATES,
+  assertProcessSupervisorBackend,
+  assertProcessSupervisorDisposeReceipt,
+  assertProcessSupervisorProbeResult,
+  createUnsupportedProcessSupervisorBackend,
+} = require('../capabilities/process_supervisor_contract');
+const {
   canonicalSha256Digest,
 } = require('../capabilities/transactional_delete_contracts');
 const {
@@ -27,18 +35,20 @@ const {
 } = require('../runtime/execution_isolation_runtime_config');
 
 const EXECUTION_ISOLATION_PROVIDER_FACTORY_VERSION =
-  'execution-isolation-provider-factory.v1';
+  'execution-isolation-provider-factory.v2';
 const PORTABLE_EXECUTION_ISOLATION_PROVIDER_VERSION =
-  'portable-execution-isolation-provider.v1';
+  'portable-execution-isolation-provider.v2';
 const PORTABLE_EXECUTION_ISOLATION_ATTESTATION_VERSION =
-  'portable-execution-isolation-attestation.v1';
+  'portable-execution-isolation-attestation.v2';
 
 const WORKSPACE_UNAVAILABLE_ID = 'faber-portable-execution-workspace-unavailable';
 const ROOT_UNAVAILABLE_ID = 'faber-portable-project-root-unavailable';
+const PROCESS_UNAVAILABLE_ID = 'faber-portable-process-supervisor-unavailable';
 const PORTABLE_PROVIDER_UNAVAILABLE = 'PORTABLE_ISOLATION_PROVIDER_UNAVAILABLE';
 const SAFE_BUILD_ID = /^[A-Za-z0-9._:@-]{1,128}$/;
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
 const DISPOSED_RECEIPT = Object.freeze({ ok: true, disposed: true });
+const FAILED_DISPOSED_RECEIPT = Object.freeze({ ok: false, disposed: true });
 const DEFAULT_CONFIG = createExecutionIsolationRuntimeConfig({ env: {} });
 
 function exactDataFields(
@@ -142,31 +152,50 @@ function disposeResolvedProviderPromise(value) {
   return true;
 }
 
-function normalizeAttestation(value, providerVersion, buildId, workspaceBackend, rootBackend) {
+function normalizeAttestation(
+  value,
+  providerVersion,
+  buildId,
+  workspaceBackend,
+  rootBackend,
+  processBackend
+) {
   const fields = exactDataFields(value, [
     'schemaVersion',
     'workspaceBackendVersion',
     'projectRootAuthorityBackendVersion',
+    'processSupervisorBackendVersion',
     'workspaceBackendId',
     'projectRootAuthorityBackendId',
+    'processSupervisorBackendId',
     'sharedPhysicalRootAuthority',
     'sourceIdentityCompareAndSwap',
     'handleRelativeProjectAccess',
     'privateWorkspaceMaterialization',
     'rollbackByDiscard',
+    'workspaceBoundProcessExecution',
+    'networkDefaultDeny',
+    'processTreeTermination',
+    'zeroOrphanProcessDisposal',
     'attestationDigest',
   ]);
   if (!fields || !Object.isFrozen(value)
     || fields.get('schemaVersion') !== PORTABLE_EXECUTION_ISOLATION_ATTESTATION_VERSION
     || fields.get('workspaceBackendVersion') !== EXECUTION_WORKSPACE_BACKEND_VERSION
     || fields.get('projectRootAuthorityBackendVersion') !== PROJECT_ROOT_AUTHORITY_BACKEND_VERSION
+    || fields.get('processSupervisorBackendVersion') !== PROCESS_SUPERVISOR_BACKEND_VERSION
     || fields.get('workspaceBackendId') !== workspaceBackend.id
     || fields.get('projectRootAuthorityBackendId') !== rootBackend.id
+    || fields.get('processSupervisorBackendId') !== processBackend.id
     || fields.get('sharedPhysicalRootAuthority') !== true
     || fields.get('sourceIdentityCompareAndSwap') !== true
     || fields.get('handleRelativeProjectAccess') !== true
     || fields.get('privateWorkspaceMaterialization') !== true
     || fields.get('rollbackByDiscard') !== true
+    || fields.get('workspaceBoundProcessExecution') !== true
+    || fields.get('networkDefaultDeny') !== true
+    || fields.get('processTreeTermination') !== true
+    || fields.get('zeroOrphanProcessDisposal') !== true
     || typeof fields.get('attestationDigest') !== 'string'
     || !DIGEST.test(fields.get('attestationDigest'))) return null;
 
@@ -176,13 +205,19 @@ function normalizeAttestation(value, providerVersion, buildId, workspaceBackend,
     schemaVersion: PORTABLE_EXECUTION_ISOLATION_ATTESTATION_VERSION,
     workspaceBackendVersion: EXECUTION_WORKSPACE_BACKEND_VERSION,
     projectRootAuthorityBackendVersion: PROJECT_ROOT_AUTHORITY_BACKEND_VERSION,
+    processSupervisorBackendVersion: PROCESS_SUPERVISOR_BACKEND_VERSION,
     workspaceBackendId: workspaceBackend.id,
     projectRootAuthorityBackendId: rootBackend.id,
+    processSupervisorBackendId: processBackend.id,
     sharedPhysicalRootAuthority: true,
     sourceIdentityCompareAndSwap: true,
     handleRelativeProjectAccess: true,
     privateWorkspaceMaterialization: true,
     rollbackByDiscard: true,
+    workspaceBoundProcessExecution: true,
+    networkDefaultDeny: true,
+    processTreeTermination: true,
+    zeroOrphanProcessDisposal: true,
   };
   return fields.get('attestationDigest') === canonicalSha256Digest(core) ? value : null;
 }
@@ -193,6 +228,7 @@ function normalizeProvider(value) {
     'buildId',
     'executionWorkspaceBackend',
     'projectRootAuthorityBackend',
+    'processSupervisorBackend',
     'isolationAttestation',
     'dispose',
   ]);
@@ -204,10 +240,13 @@ function normalizeProvider(value) {
 
   const workspaceBackend = fields.get('executionWorkspaceBackend');
   const rootBackend = fields.get('projectRootAuthorityBackend');
+  const processBackend = fields.get('processSupervisorBackend');
   try {
-    if (!Object.isFrozen(workspaceBackend) || !Object.isFrozen(rootBackend)) return null;
+    if (!Object.isFrozen(workspaceBackend) || !Object.isFrozen(rootBackend)
+      || !Object.isFrozen(processBackend)) return null;
     assertExecutionWorkspaceBackend(workspaceBackend);
     assertProjectRootAuthorityBackend(rootBackend);
+    assertProcessSupervisorBackend(processBackend);
   } catch (error) {
     preflightDataGraph(error);
     return null;
@@ -217,10 +256,11 @@ function normalizeProvider(value) {
     fields.get('providerVersion'),
     fields.get('buildId'),
     workspaceBackend,
-    rootBackend
+    rootBackend,
+    processBackend
   );
   if (!isolationAttestation) return null;
-  return Object.freeze({ workspaceBackend, rootBackend });
+  return Object.freeze({ workspaceBackend, rootBackend, processBackend });
 }
 
 function probeEnforcedBackend(backend, kind) {
@@ -234,12 +274,20 @@ function probeEnforcedBackend(backend, kind) {
     throw new TypeError(`${kind} probe failed`);
   }
   if (absorbNativePromise(rawProbe)) throw new TypeError(`${kind} async probe denied`);
-  const probe = kind === 'workspace'
-    ? assertExecutionWorkspaceProbeResult(rawProbe)
-    : assertProjectRootAuthorityProbeResult(rawProbe);
-  const enforcedState = kind === 'workspace'
-    ? EXECUTION_WORKSPACE_STATES.ENFORCED
-    : PROJECT_ROOT_AUTHORITY_STATES.ENFORCED;
+  let probe;
+  let enforcedState;
+  if (kind === 'workspace') {
+    probe = assertExecutionWorkspaceProbeResult(rawProbe);
+    enforcedState = EXECUTION_WORKSPACE_STATES.ENFORCED;
+  } else if (kind === 'root') {
+    probe = assertProjectRootAuthorityProbeResult(rawProbe);
+    enforcedState = PROJECT_ROOT_AUTHORITY_STATES.ENFORCED;
+  } else if (kind === 'process') {
+    probe = assertProcessSupervisorProbeResult(rawProbe);
+    enforcedState = PROCESS_SUPERVISOR_STATES.ENFORCED;
+  } else {
+    throw new TypeError('Unknown portable isolation backend kind');
+  }
   if (probe.state !== enforcedState) throw new TypeError(`${kind} backend is not enforced`);
   return probe;
 }
@@ -263,6 +311,10 @@ function unsupportedBackends() {
       id: ROOT_UNAVAILABLE_ID,
       reasonCode: PORTABLE_PROVIDER_UNAVAILABLE,
     }),
+    processSupervisorBackend: createUnsupportedProcessSupervisorBackend({
+      id: PROCESS_UNAVAILABLE_ID,
+      reasonCode: PORTABLE_PROVIDER_UNAVAILABLE,
+    }),
   });
 }
 
@@ -273,6 +325,7 @@ function unsupportedSelection(reasonCode, config, disposeProvider = () => DISPOS
     version: EXECUTION_ISOLATION_PROVIDER_FACTORY_VERSION,
     executionWorkspaceBackend: unavailable.executionWorkspaceBackend,
     projectRootAuthorityBackend: unavailable.projectRootAuthorityBackend,
+    processSupervisorBackend: unavailable.processSupervisorBackend,
     diagnostics: diagnostics('unsupported', reasonCode, config),
     dispose(input) {
       preflightDataGraph(input);
@@ -288,34 +341,163 @@ function unsupportedSelection(reasonCode, config, disposeProvider = () => DISPOS
 function createRevocableBackends({
   workspaceBackend,
   rootBackend,
+  processBackend,
   workspaceProbe,
   rootProbe,
+  processProbe,
   disposeProvider,
 }) {
   const unavailable = unsupportedBackends();
   const workspaceAcquire = captureOwnMethod(workspaceBackend, 'acquire');
   const workspaceDiscard = captureOwnMethod(workspaceBackend, 'discard');
   const rootAcquire = captureOwnMethod(rootBackend, 'acquire');
-  if (!workspaceAcquire || !workspaceDiscard || !rootAcquire) {
+  const processExec = captureOwnMethod(processBackend, 'exec');
+  const processRead = captureOwnMethod(processBackend, 'read');
+  const processWait = captureOwnMethod(processBackend, 'wait');
+  const processStop = captureOwnMethod(processBackend, 'stop');
+  const processDispose = captureOwnMethod(processBackend, 'dispose');
+  if (!workspaceAcquire || !workspaceDiscard || !rootAcquire
+    || !processExec || !processRead || !processWait || !processStop || !processDispose) {
     throw new TypeError('Provider backend methods became unavailable');
   }
 
   let workspaceActive = true;
   let rootActive = true;
+  let processActive = true;
+  let processDisposePending = false;
+  let processDisposeSettled = false;
+  let processDisposeReentered = false;
+  let processDisposeResult = null;
+  let processDisposePromise = null;
+  let processDisposeError = null;
+  let forceDisposePending = false;
+  let forceDisposeReentered = false;
+  let forceDisposeResult = null;
+  let forceDisposePromise = null;
+
+  function maybeDisposeProvider() {
+    if (!workspaceActive && !rootActive && !processActive && !processDisposePending) {
+      disposeProvider();
+    }
+  }
 
   function release(kind) {
     if (kind === 'workspace') workspaceActive = false;
     if (kind === 'root') rootActive = false;
-    if (!workspaceActive && !rootActive) disposeProvider();
+    maybeDisposeProvider();
     return DISPOSED_RECEIPT;
+  }
+
+  function completeProcessDispose(value) {
+    if (processDisposeReentered) {
+      return failProcessDispose(new TypeError('Process supervisor disposal reentered'));
+    }
+    processDisposePending = false;
+    processDisposeSettled = true;
+    processDisposeResult = value;
+    maybeDisposeProvider();
+    return value;
+  }
+
+  function failProcessDispose(providerError) {
+    preflightDataGraph(providerError);
+    processDisposePending = false;
+    processDisposeError = new TypeError('Process supervisor backend disposal failed');
+    maybeDisposeProvider();
+    throw processDisposeError;
+  }
+
+  function disposeProcess(input) {
+    preflightDataGraph(input);
+    if (processDisposePromise) return processDisposePromise;
+    if (processDisposeSettled) return processDisposeResult;
+    if (processDisposeError) throw processDisposeError;
+    if (processDisposePending) {
+      processDisposeReentered = true;
+      throw new TypeError('Process supervisor backend disposal is reentrant');
+    }
+    processActive = false;
+    processDisposePending = true;
+
+    let rawResult;
+    try {
+      rawResult = Reflect.apply(processDispose.method, processDispose.receiver, []);
+    } catch (providerError) {
+      return failProcessDispose(providerError);
+    }
+    if (!util.types.isPromise(rawResult)) return completeProcessDispose(rawResult);
+
+    processDisposePromise = new Promise((resolve, reject) => {
+      const onFulfilled = (value) => {
+        try { resolve(completeProcessDispose(value)); } catch (providerError) {
+          preflightDataGraph(providerError);
+          reject(processDisposeError);
+        }
+      };
+      const onRejected = (providerError) => {
+        try { failProcessDispose(providerError); } catch (safeError) { reject(safeError); }
+      };
+      try {
+        Reflect.apply(Promise.prototype.then, rawResult, [onFulfilled, onRejected]);
+      } catch (providerError) {
+        onRejected(providerError);
+      }
+    });
+    return processDisposePromise;
+  }
+
+  function finishForceDispose(value) {
+    let valid = !forceDisposeReentered;
+    try { assertProcessSupervisorDisposeReceipt(value); } catch (providerError) {
+      preflightDataGraph(providerError);
+      valid = false;
+    }
+    maybeDisposeProvider();
+    forceDisposeResult = valid ? DISPOSED_RECEIPT : FAILED_DISPOSED_RECEIPT;
+    forceDisposePending = false;
+    forceDisposePromise = null;
+    return forceDisposeResult;
   }
 
   function forceDispose(input) {
     preflightDataGraph(input);
+    if (forceDisposeResult) return forceDisposeResult;
+    if (forceDisposePromise) return forceDisposePromise;
+    if (forceDisposePending) {
+      forceDisposeReentered = true;
+      throw new TypeError('Portable isolation selection disposal is reentrant');
+    }
+    forceDisposePending = true;
     workspaceActive = false;
     rootActive = false;
-    disposeProvider();
-    return DISPOSED_RECEIPT;
+
+    let processResult;
+    try { processResult = disposeProcess(); } catch (providerError) {
+      preflightDataGraph(providerError);
+      maybeDisposeProvider();
+      forceDisposeResult = FAILED_DISPOSED_RECEIPT;
+      forceDisposePending = false;
+      return forceDisposeResult;
+    }
+    if (!util.types.isPromise(processResult)) return finishForceDispose(processResult);
+
+    forceDisposePromise = new Promise((resolve) => {
+      const onFulfilled = (value) => resolve(finishForceDispose(value));
+      const onRejected = (providerError) => {
+        preflightDataGraph(providerError);
+        maybeDisposeProvider();
+        forceDisposeResult = FAILED_DISPOSED_RECEIPT;
+        forceDisposePending = false;
+        forceDisposePromise = null;
+        resolve(forceDisposeResult);
+      };
+      try {
+        Reflect.apply(Promise.prototype.then, processResult, [onFulfilled, onRejected]);
+      } catch (providerError) {
+        onRejected(providerError);
+      }
+    });
+    return forceDisposePromise;
   }
 
   const executionWorkspaceBackend = Object.freeze({
@@ -366,11 +548,41 @@ function createRevocableBackends({
     },
   });
 
+  const processSupervisorBackend = Object.freeze({
+    version: PROCESS_SUPERVISOR_BACKEND_VERSION,
+    id: processBackend.id,
+    probe(input) {
+      preflightDataGraph(input);
+      return processActive ? processProbe : unavailable.processSupervisorBackend.probe(input);
+    },
+    exec(input) {
+      if (!processActive) return unavailable.processSupervisorBackend.exec(input);
+      return Reflect.apply(processExec.method, processExec.receiver, [input]);
+    },
+    read(input) {
+      if (!processActive) return unavailable.processSupervisorBackend.read(input);
+      return Reflect.apply(processRead.method, processRead.receiver, [input]);
+    },
+    wait(input) {
+      if (!processActive) return unavailable.processSupervisorBackend.wait(input);
+      return Reflect.apply(processWait.method, processWait.receiver, [input]);
+    },
+    stop(input) {
+      if (!processActive) return unavailable.processSupervisorBackend.stop(input);
+      return Reflect.apply(processStop.method, processStop.receiver, [input]);
+    },
+    dispose(input) {
+      return disposeProcess(input);
+    },
+  });
+
   assertExecutionWorkspaceBackend(executionWorkspaceBackend);
   assertProjectRootAuthorityBackend(projectRootAuthorityBackend);
+  assertProcessSupervisorBackend(processSupervisorBackend);
   return Object.freeze({
     executionWorkspaceBackend,
     projectRootAuthorityBackend,
+    processSupervisorBackend,
     dispose: forceDispose,
   });
 }
@@ -418,9 +630,11 @@ function createExecutionIsolationProviderSelection(options = {}) {
 
   let workspaceProbe;
   let rootProbe;
+  let processProbe;
   try {
     workspaceProbe = probeEnforcedBackend(normalized.workspaceBackend, 'workspace');
     rootProbe = probeEnforcedBackend(normalized.rootBackend, 'root');
+    processProbe = probeEnforcedBackend(normalized.processBackend, 'process');
   } catch (error) {
     preflightDataGraph(error);
     disposeProvider();
@@ -432,8 +646,10 @@ function createExecutionIsolationProviderSelection(options = {}) {
     revocable = createRevocableBackends({
       workspaceBackend: normalized.workspaceBackend,
       rootBackend: normalized.rootBackend,
+      processBackend: normalized.processBackend,
       workspaceProbe,
       rootProbe,
+      processProbe,
       disposeProvider,
     });
   } catch (error) {
@@ -446,6 +662,7 @@ function createExecutionIsolationProviderSelection(options = {}) {
     version: EXECUTION_ISOLATION_PROVIDER_FACTORY_VERSION,
     executionWorkspaceBackend: revocable.executionWorkspaceBackend,
     projectRootAuthorityBackend: revocable.projectRootAuthorityBackend,
+    processSupervisorBackend: revocable.processSupervisorBackend,
     diagnostics: diagnostics('enforced', 'ENFORCED', config),
     dispose: revocable.dispose,
   });
