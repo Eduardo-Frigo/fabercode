@@ -575,6 +575,9 @@ function assertExecutionWorkspaceBoundary() {
   const portableProjectRootAuthorityBackendSource = read(
     'main/services/portable_isolation_helper_project_root_authority_backend.js'
   );
+  const portableProcessSupervisorBackendSource = read(
+    'main/services/portable_isolation_helper_process_supervisor_backend.js'
+  );
   const portableIsolationHelperPrivateTransportSource = read(
     'main/services/portable_isolation_helper_private_transport.js'
   );
@@ -979,10 +982,41 @@ function assertExecutionWorkspaceBoundary() {
     /require\(['"](?:electron|child_process|net|tls|http|https|worker_threads|module)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\bprocess\.env\b|\b__dirname\b|\bimport\s*\(|fs\.rmSync/,
     'the physical project-root backend may own local filesystem authority but no process, network, IPC, environment, or dynamic-loading authority'
   );
+  assert.ok(
+    portableProcessSupervisorBackendSource.includes(
+      "'portable-process-supervisor-backend.v1'"
+    )
+      && portableProcessSupervisorBackendSource.includes("'/usr/bin/sandbox-exec'")
+      && portableProcessSupervisorBackendSource.includes("'(deny default)'")
+      && portableProcessSupervisorBackendSource.includes(
+        'SANDBOX_NETWORK_MODES.DISABLED'
+      )
+      && portableProcessSupervisorBackendSource.includes(
+        'createProjectRootPhysicalIdentityDigest'
+      )
+      && portableProcessSupervisorBackendSource.includes("'-DWORKSPACE_ENTRY='")
+      && portableProcessSupervisorBackendSource.includes("'-DWORKSPACE_ROOT='")
+      && portableProcessSupervisorBackendSource.includes('detached: true')
+      && portableProcessSupervisorBackendSource.includes(
+        'process.kill(-record.processGroupId'
+      )
+      && portableProcessSupervisorBackendSource.includes(
+        'MAX_RETAINED_OUTPUT_BYTES'
+      )
+      && portableProcessSupervisorBackendSource.includes('StringDecoder')
+      && portableProcessSupervisorBackendSource.includes('removeOwnedTree')
+      && portableProcessSupervisorBackendSource.includes('terminateProcessTree'),
+    'the physical process backend must pin logical and physical workspaces, apply default-deny Seatbelt, retain bounded UTF-8 output, and reap the detached process group'
+  );
+  assertDoesNotMatch(
+    portableProcessSupervisorBackendSource,
+    /\(allow network-|require\(['"](?:electron|net|tls|http|https|worker_threads|module)['"]\)|\bipcRenderer\b|\bipcMain\b|childProcess\.(?:exec|execFile)\s*\(|shell:\s*true|\bprocess\.env\b|\bimport\s*\(|process\.dlopen|\.node\b|sandboxExecutablePath/,
+    'the physical process backend may own fixed local process/filesystem authority but no network, IPC, inherited-environment, dynamic-loading, native-addon, shell expansion, or injected sandbox-path authority'
+  );
   assertDoesNotMatch(
     `${mainSource}\n${portableIsolationHelperBootstrapSource}`,
-    /portable_isolation_helper_(?:execution_workspace|project_root_authority)_backend|createPortable(?:ExecutionWorkspace|ProjectRootAuthority)Backend/,
-    'the physical workspace and project-root backends must remain unwired until the process backend completes the portable helper'
+    /portable_isolation_helper_(?:execution_workspace|project_root_authority|process_supervisor)_backend|createPortable(?:ExecutionWorkspace|ProjectRootAuthority|ProcessSupervisor)Backend/,
+    'the three physical backends must remain unwired until helper composition and signed-distribution attestation are complete'
   );
   const helperExtraResource = packageConfig.build.extraResources.find(
     (entry) => entry && entry.to === 'portable-isolation-helper'
@@ -1112,12 +1146,15 @@ function assertExecutionWorkspaceBoundary() {
         'portable-project-root-authority-backend.test.js'
       )
       && packageConfig.scripts['test:portable-isolation-helper-runtime'].includes(
+        'portable-process-supervisor-backend.test.js'
+      )
+      && packageConfig.scripts['test:portable-isolation-helper-runtime'].includes(
         'portable-isolation-helper-backend-dispatcher.test.js'
       )
       && packageConfig.scripts['test:execution-workspace'].includes(
         'npm run test:portable-isolation-helper-release'
       ),
-    'the aggregate execution-workspace gate must run physical workspace/root, helper dispatcher/runtime, release signing, and packaging tests'
+    'the aggregate execution-workspace gate must run all three physical backends, helper dispatcher/runtime, release signing, and packaging tests'
   );
   assert.ok(
     portableIsolationHelperLauncherContractSource.includes(
@@ -1389,7 +1426,7 @@ function assertExecutionWorkspaceBoundary() {
   }
   assertDoesNotMatch(
     `${mainSource}\n${isolationProviderFactorySource}`,
-    /portable_isolation_helper_(?:protocol|backend_contract|backend_dispatcher|execution_workspace_backend|runtime_session|launcher_contract|private_transport_contract|distribution_attestation_contract|client|private_transport|distribution_verifier|provider_adapter|utility_channel|host_launcher|release_trust)|(?:createPortableExecutionWorkspaceBackend|createPortableIsolationHelper(?:SessionController|RuntimeSession|BackendDispatcher|Client|PrivateTransport|DistributionTrustedKey|PlatformSignatureVerifier|ProviderAdapter|HostLauncher|ReleaseSignatureVerifier)|openPortableIsolationHelperUtilityChannel)/,
+    /portable_isolation_helper_(?:protocol|backend_contract|backend_dispatcher|execution_workspace_backend|project_root_authority_backend|process_supervisor_backend|runtime_session|launcher_contract|private_transport_contract|distribution_attestation_contract|client|private_transport|distribution_verifier|provider_adapter|utility_channel|host_launcher|release_trust)|(?:createPortable(?:ExecutionWorkspace|ProjectRootAuthority|ProcessSupervisor)Backend|createPortableIsolationHelper(?:SessionController|RuntimeSession|BackendDispatcher|Client|PrivateTransport|DistributionTrustedKey|PlatformSignatureVerifier|ProviderAdapter|HostLauncher|ReleaseSignatureVerifier)|openPortableIsolationHelperUtilityChannel)/,
     'the helper foundations, server-side runtime and backend dispatcher, build signer, production release trust, fixed host launcher, and private utility channel must remain unwired until a pinned production trust root and enforced portable isolation runtime exist'
   );
 
