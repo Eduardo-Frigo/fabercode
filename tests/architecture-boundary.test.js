@@ -542,11 +542,20 @@ function assertExecutionWorkspaceBoundary() {
   const portableIsolationHelperProtocolSource = read(
     'main/capabilities/portable_isolation_helper_protocol.js'
   );
+  const portableIsolationHelperLauncherContractSource = read(
+    'main/capabilities/portable_isolation_helper_launcher_contract.js'
+  );
+  const portableIsolationHelperPrivateTransportContractSource = read(
+    'main/capabilities/portable_isolation_helper_private_transport_contract.js'
+  );
   const portableIsolationHelperClientSource = read(
     'main/services/portable_isolation_helper_client.js'
   );
   const portableIsolationHelperProviderAdapterSource = read(
     'main/services/portable_isolation_helper_provider_adapter.js'
+  );
+  const portableIsolationHelperPrivateTransportSource = read(
+    'main/services/portable_isolation_helper_private_transport.js'
   );
   const processSupervisorSource = read('main/agent_runtime/execution/process_supervisor.js');
   const projectScannerSource = read('main/services/project_scanner.js');
@@ -568,12 +577,24 @@ function assertExecutionWorkspaceBoundary() {
       portableIsolationHelperProtocolSource,
     ],
     [
+      'main/capabilities/portable_isolation_helper_launcher_contract.js',
+      portableIsolationHelperLauncherContractSource,
+    ],
+    [
+      'main/capabilities/portable_isolation_helper_private_transport_contract.js',
+      portableIsolationHelperPrivateTransportContractSource,
+    ],
+    [
       'main/services/portable_isolation_helper_client.js',
       portableIsolationHelperClientSource,
     ],
     [
       'main/services/portable_isolation_helper_provider_adapter.js',
       portableIsolationHelperProviderAdapterSource,
+    ],
+    [
+      'main/services/portable_isolation_helper_private_transport.js',
+      portableIsolationHelperPrivateTransportSource,
     ],
   ]) {
     assertDoesNotMatch(
@@ -729,6 +750,96 @@ function assertExecutionWorkspaceBoundary() {
     'helper sessions must be bundle-bound, digest-chained, exclusive, sanitize failures, and prove zero live authority at shutdown'
   );
   assertDoesNotMatch(
+    `${portableIsolationHelperLauncherContractSource}\n${portableIsolationHelperPrivateTransportContractSource}\n${portableIsolationHelperPrivateTransportSource}`,
+    /require\(['"](?:electron|child_process|fs|path|net|tls|http|https|worker_threads|module)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\bprocess\.env\b|\b__dirname\b|\bimport\s*\(|\b(?:binary|executable|helper|provider)Path\b/,
+    'portable helper launch and framing foundations must not own host launch, filesystem, network, IPC, dynamic-loading, environment, or injected-path authority'
+  );
+  assert.ok(
+    portableIsolationHelperLauncherContractSource.includes(
+      "'portable-isolation-helper-bundle-descriptor.v1'"
+    )
+      && portableIsolationHelperLauncherContractSource.includes(
+        "'application_bundle'"
+      )
+      && portableIsolationHelperLauncherContractSource.includes(
+        "'private_framed'"
+      )
+      && portableIsolationHelperLauncherContractSource.includes(
+        "'platform_verified'"
+      )
+      && portableIsolationHelperLauncherContractSource.includes(
+        'signatureIdentityDigest'
+      )
+      && portableIsolationHelperLauncherContractSource.includes(
+        'PORTABLE_ISOLATION_HELPER_REQUIREMENTS'
+      )
+      && portableIsolationHelperLauncherContractSource.includes(
+        'descriptorDigest: canonicalSha256Digest(core)'
+      )
+      && portableIsolationHelperLauncherContractSource.includes(
+        'requestDigest: canonicalSha256Digest(core)'
+      )
+      && portableIsolationHelperLauncherContractSource.includes(
+        'receiptDigest: canonicalSha256Digest(core)'
+      )
+      && portableIsolationHelperLauncherContractSource.includes(
+        "fail('LAUNCH_RECEIPT_MISMATCH')"
+      ),
+    'portable helper launch authority must be bundle-only, platform-signature-bound, private-transport-bound, requirement-bound, and digest-correlated without exposing a helper path'
+  );
+  assert.ok(
+    portableIsolationHelperPrivateTransportContractSource.includes(
+      "'portable-isolation-helper-private-frame.v1'"
+    )
+      && portableIsolationHelperPrivateTransportContractSource.includes(
+        'PORTABLE_ISOLATION_HELPER_LIMITS.maxMessageBytes'
+      )
+      && portableIsolationHelperPrivateTransportContractSource.includes(
+        'payloadBytes'
+      )
+      && portableIsolationHelperPrivateTransportContractSource.includes(
+        'payloadDigest'
+      )
+      && portableIsolationHelperPrivateTransportContractSource.includes(
+        'requestPayloadDigest'
+      )
+      && portableIsolationHelperPrivateTransportContractSource.includes(
+        "new util.TextDecoder('utf-8', { fatal: true })"
+      )
+      && portableIsolationHelperPrivateTransportContractSource.includes(
+        "JSON.stringify(payload) !== json"
+      ),
+    'private helper frames must be byte-bounded, digest-bound, request-correlated, strict UTF-8, and canonically encoded'
+  );
+  assert.ok(
+    portableIsolationHelperPrivateTransportSource.includes(
+      'assertPortableIsolationHelperLaunchReceipt'
+    )
+      && portableIsolationHelperPrivateTransportSource.includes(
+        'Object.isFrozen(value)'
+      )
+      && portableIsolationHelperPrivateTransportSource.includes(
+        'exchangePending'
+      )
+      && portableIsolationHelperPrivateTransportSource.includes(
+        'expectedBundleIdentityDigest'
+      )
+      && portableIsolationHelperPrivateTransportSource.includes(
+        'request.payload.expectedBundleIdentityDigest'
+      )
+      && portableIsolationHelperPrivateTransportSource.includes(
+        'processTreeTerminated'
+      )
+      && portableIsolationHelperPrivateTransportSource.includes('helperExited')
+      && portableIsolationHelperPrivateTransportSource.includes(
+        "fields.get('orphaned') !== 0"
+      )
+      && portableIsolationHelperPrivateTransportSource.includes(
+        "'PRIVATE_TRANSPORT_REENTRANT'"
+      ),
+    'private helper transport must accept only an attested frozen channel, serialize one exchange, bind the handshake bundle, reject reentrancy, and require zero-orphan termination proof'
+  );
+  assertDoesNotMatch(
     portableIsolationHelperClientSource,
     /require\(['"](?:electron|child_process|fs|path|net|tls|http|https|worker_threads|module)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\bprocess\.env\b|\b__dirname\b|\bimport\s*\(|\b(?:binary|executable|helper)Path\b/,
     'the portable helper client must conduct an injected transport without launch, filesystem, network, IPC, dynamic-loading, or binary-path authority'
@@ -813,8 +924,8 @@ function assertExecutionWorkspaceBoundary() {
   }
   assertDoesNotMatch(
     `${mainSource}\n${isolationProviderFactorySource}`,
-    /portable_isolation_helper_(?:protocol|client|provider_adapter)|createPortableIsolationHelper(?:SessionController|Client|ProviderAdapter)/,
-    'the helper protocol, client, and provider candidate must remain unwired until a bundled launcher and private transport exist'
+    /portable_isolation_helper_(?:protocol|launcher_contract|private_transport_contract|client|private_transport|provider_adapter)|createPortableIsolationHelper(?:SessionController|Client|PrivateTransport|ProviderAdapter)/,
+    'the helper protocol, launch contracts, private framing, client, and provider candidate must remain unwired until a bundled host launch authority and platform-private channel exist'
   );
 
   assertDoesNotMatch(
