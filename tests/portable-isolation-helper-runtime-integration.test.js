@@ -3,15 +3,28 @@
 const assert = require('assert');
 
 const {
-  PORTABLE_ISOLATION_HELPER_OPERATIONS,
-  createPortableIsolationHelperShutdownReceipt,
-} = require('../main/capabilities/portable_isolation_helper_protocol');
-const {
+  EXECUTION_WORKSPACE_BACKEND_VERSION,
+  EXECUTION_WORKSPACE_REQUIRED_GUARANTEES,
+  EXECUTION_WORKSPACE_STATES,
   createExecutionWorkspaceAcquireRequest,
   createExecutionWorkspaceDiscardReceipt,
   createExecutionWorkspaceDiscardRequest,
   createExecutionWorkspaceLease,
+  createExecutionWorkspaceProbeResult,
 } = require('../main/capabilities/execution_workspace_contract');
+const {
+  PROJECT_ROOT_AUTHORITY_BACKEND_VERSION,
+  PROJECT_ROOT_AUTHORITY_REQUIRED_GUARANTEES,
+  PROJECT_ROOT_AUTHORITY_STATES,
+  createProjectRootAuthorityProbeResult,
+} = require('../main/capabilities/project_root_authority_contract');
+const {
+  PROCESS_SUPERVISOR_BACKEND_VERSION,
+  PROCESS_SUPERVISOR_REQUIRED_GUARANTEES,
+  PROCESS_SUPERVISOR_STATES,
+  createProcessSupervisorDisposeReceipt,
+  createProcessSupervisorProbeResult,
+} = require('../main/capabilities/process_supervisor_contract');
 const {
   PORTABLE_EXECUTION_ISOLATION_ATTESTATION_VERSION,
   PORTABLE_EXECUTION_ISOLATION_PROVIDER_VERSION,
@@ -26,9 +39,11 @@ const {
   createPortableIsolationHelperProviderAdapter,
 } = require('../main/services/portable_isolation_helper_provider_adapter');
 const {
-  PortableIsolationHelperRuntimeOperationError,
   createPortableIsolationHelperRuntimeSession,
 } = require('../main/services/portable_isolation_helper_runtime_session');
+const {
+  createPortableIsolationHelperBackendDispatcher,
+} = require('../main/services/portable_isolation_helper_backend_dispatcher');
 
 const digest = (character) => `sha256:${character.repeat(64)}`;
 
@@ -46,51 +61,101 @@ function binding() {
 
 (async () => {
   const activeWorkspaceLeases = new Set();
+  const backendEvents = [];
+  const executionWorkspaceBackend = Object.freeze({
+    version: EXECUTION_WORKSPACE_BACKEND_VERSION,
+    id: 'portable-private-workspace',
+    probe() {
+      backendEvents.push('workspace:probe');
+      return createExecutionWorkspaceProbeResult({
+        state: EXECUTION_WORKSPACE_STATES.ENFORCED,
+        guarantees: EXECUTION_WORKSPACE_REQUIRED_GUARANTEES,
+      });
+    },
+    dispose() {
+      backendEvents.push('workspace:dispose');
+      assert.strictEqual(activeWorkspaceLeases.size, 0);
+      return Object.freeze({ ok: true, disposed: true });
+    },
+    acquire(request) {
+      backendEvents.push('workspace:acquire');
+      activeWorkspaceLeases.add(request.leaseId);
+      return createExecutionWorkspaceLease({
+        request,
+        workspaceRootPath: '/workspace/faber-jobs/job-a',
+        workspaceRealRootPath: '/private/workspace/faber-jobs/job-a',
+        workspaceRootIdentityDigest: digest('c'),
+      });
+    },
+    discard(request) {
+      backendEvents.push('workspace:discard');
+      activeWorkspaceLeases.delete(request.leaseId);
+      return createExecutionWorkspaceDiscardReceipt({
+        request,
+        discarded: true,
+      });
+    },
+  });
+  const projectRootAuthorityBackend = Object.freeze({
+    version: PROJECT_ROOT_AUTHORITY_BACKEND_VERSION,
+    id: 'portable-project-root-authority',
+    probe() {
+      backendEvents.push('root:probe');
+      return createProjectRootAuthorityProbeResult({
+        state: PROJECT_ROOT_AUTHORITY_STATES.ENFORCED,
+        guarantees: PROJECT_ROOT_AUTHORITY_REQUIRED_GUARANTEES,
+      });
+    },
+    acquire() {
+      throw new Error('root acquisition is outside this integration scenario');
+    },
+    dispose() {
+      backendEvents.push('root:dispose');
+      return Object.freeze({ ok: true, disposed: true });
+    },
+  });
+  const processSupervisorBackend = Object.freeze({
+    version: PROCESS_SUPERVISOR_BACKEND_VERSION,
+    id: 'portable-process-supervisor',
+    probe() {
+      backendEvents.push('process:probe');
+      return createProcessSupervisorProbeResult({
+        state: PROCESS_SUPERVISOR_STATES.ENFORCED,
+        guarantees: PROCESS_SUPERVISOR_REQUIRED_GUARANTEES,
+      });
+    },
+    exec() { throw new Error('process exec is outside this integration scenario'); },
+    read() { throw new Error('process read is outside this integration scenario'); },
+    wait() { throw new Error('process wait is outside this integration scenario'); },
+    stop() { throw new Error('process stop is outside this integration scenario'); },
+    dispose() {
+      backendEvents.push('process:dispose');
+      return createProcessSupervisorDisposeReceipt({ orphaned: 0 });
+    },
+  });
+  const dispatcher = createPortableIsolationHelperBackendDispatcher({
+    executionWorkspaceBackend,
+    projectRootAuthorityBackend,
+    processSupervisorBackend,
+  });
+  const activation = await dispatcher.activate();
   const runtime = createPortableIsolationHelperRuntimeSession({
     identity: Object.freeze({
       helperId: 'faber-portable-isolation-helper',
       helperBuildId: 'portable-helper-bootstrap-1',
       bundleIdentityDigest: digest('b'),
-      executionWorkspaceBackendId: 'portable-private-workspace',
-      projectRootAuthorityBackendId: 'portable-project-root-authority',
-      processSupervisorBackendId: 'portable-process-supervisor',
+      executionWorkspaceBackendId: activation.executionWorkspaceBackendId,
+      projectRootAuthorityBackendId:
+        activation.projectRootAuthorityBackendId,
+      processSupervisorBackendId: activation.processSupervisorBackendId,
       platform: Object.freeze({
         os: 'darwin',
         architecture: 'arm64',
         signatureVerification: 'platform_verified',
       }),
     }),
-    dispatch(request) {
-      if (request.operation === PORTABLE_ISOLATION_HELPER_OPERATIONS.WORKSPACE_ACQUIRE) {
-        activeWorkspaceLeases.add(request.input.leaseId);
-        return createExecutionWorkspaceLease({
-          request: request.input,
-          workspaceRootPath: '/workspace/faber-jobs/job-a',
-          workspaceRealRootPath: '/private/workspace/faber-jobs/job-a',
-          workspaceRootIdentityDigest: digest('c'),
-        });
-      }
-      if (request.operation === PORTABLE_ISOLATION_HELPER_OPERATIONS.WORKSPACE_DISCARD) {
-        activeWorkspaceLeases.delete(request.input.leaseId);
-        return createExecutionWorkspaceDiscardReceipt({
-          request: request.input,
-          discarded: true,
-        });
-      }
-      throw new PortableIsolationHelperRuntimeOperationError(
-        'OPERATION_UNAVAILABLE',
-        false
-      );
-    },
-    dispose() {
-      assert.strictEqual(activeWorkspaceLeases.size, 0);
-      return createPortableIsolationHelperShutdownReceipt({
-        activeWorkspaces: 0,
-        activeRootLeases: 0,
-        activeProcesses: 0,
-        orphaned: 0,
-      });
-    },
+    dispatch: dispatcher.dispatch,
+    dispose: dispatcher.dispose,
   });
 
   const transportState = {
@@ -178,6 +243,25 @@ function binding() {
     exchanges: 3,
     pending: false,
   });
+  assert.deepStrictEqual(dispatcher.diagnostics(), {
+    version: 'portable-isolation-helper-backend-dispatcher.v1',
+    state: 'closed',
+    backendCalls: 8,
+    exchanges: 2,
+    activeWorkspaces: 0,
+    activeRootLeases: 0,
+    activeProcesses: 0,
+  });
+  assert.deepStrictEqual(backendEvents, [
+    'workspace:probe',
+    'root:probe',
+    'process:probe',
+    'workspace:acquire',
+    'workspace:discard',
+    'process:dispose',
+    'root:dispose',
+    'workspace:dispose',
+  ]);
 
   console.log('portable isolation helper runtime integration tests passed');
 })().catch((error) => {

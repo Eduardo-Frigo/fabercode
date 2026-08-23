@@ -566,6 +566,9 @@ function assertExecutionWorkspaceBoundary() {
   const portableIsolationHelperRuntimeSessionSource = read(
     'main/services/portable_isolation_helper_runtime_session.js'
   );
+  const portableIsolationHelperBackendDispatcherSource = read(
+    'main/services/portable_isolation_helper_backend_dispatcher.js'
+  );
   const portableIsolationHelperPrivateTransportSource = read(
     'main/services/portable_isolation_helper_private_transport.js'
   );
@@ -641,6 +644,10 @@ function assertExecutionWorkspaceBoundary() {
     [
       'main/services/portable_isolation_helper_runtime_session.js',
       portableIsolationHelperRuntimeSessionSource,
+    ],
+    [
+      'main/services/portable_isolation_helper_backend_dispatcher.js',
+      portableIsolationHelperBackendDispatcherSource,
     ],
     [
       'main/services/portable_isolation_helper_private_transport.js',
@@ -837,10 +844,45 @@ function assertExecutionWorkspaceBoundary() {
       ),
     'the server-side helper session must bind fresh identity, request order, response digests, sanitized failures, backend routing, and zero-authority shutdown'
   );
+  assert.ok(
+    portableIsolationHelperBackendDispatcherSource.includes(
+      "'portable-isolation-helper-backend-dispatcher.v1'"
+    )
+      && portableIsolationHelperBackendDispatcherSource.includes(
+        'EXECUTION_WORKSPACE_REQUIRED_GUARANTEES'
+      )
+      && portableIsolationHelperBackendDispatcherSource.includes(
+        'PROJECT_ROOT_AUTHORITY_REQUIRED_GUARANTEES'
+      )
+      && portableIsolationHelperBackendDispatcherSource.includes(
+        'PROCESS_SUPERVISOR_REQUIRED_GUARANTEES'
+      )
+      && portableIsolationHelperBackendDispatcherSource.includes(
+        'workspaceForProcess(request)'
+      )
+      && portableIsolationHelperBackendDispatcherSource.includes(
+        'ownsActiveProcess'
+      )
+      && portableIsolationHelperBackendDispatcherSource.includes(
+        'isPortableIsolationHelperRuntimeOperationError'
+      )
+      && portableIsolationHelperBackendDispatcherSource.includes(
+        'assertProcessSupervisorDisposeReceipt'
+      )
+      && portableIsolationHelperBackendDispatcherSource.includes(
+        'createPortableIsolationHelperShutdownReceipt'
+      ),
+    'the helper dispatcher must activate three enforced backends, bind processes to issued workspaces, block live-workspace discard, sanitize provider failures, and prove zero live authority'
+  );
   assertDoesNotMatch(
     `${portableIsolationHelperLauncherContractSource}\n${portableIsolationHelperPrivateTransportContractSource}\n${portableIsolationHelperDistributionAttestationContractSource}\n${portableIsolationHelperDistributionVerifierSource}\n${portableIsolationHelperBackendContractSource}\n${portableIsolationHelperRuntimeSessionSource}\n${portableIsolationHelperPrivateTransportSource}`,
     /require\(['"](?:electron|child_process|fs|path|net|tls|http|https|worker_threads|module)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\bprocess\.env\b|\b__dirname\b|\bimport\s*\(|\b(?:binary|executable|helper|provider)Path\b/,
     'portable helper launch, distribution, backend envelope, runtime session, and framing foundations must not own host launch, filesystem, network, IPC, dynamic-loading, environment, or injected-path authority'
+  );
+  assertDoesNotMatch(
+    portableIsolationHelperBackendDispatcherSource,
+    /require\(['"](?:electron|child_process|fs|path|net|tls|http|https|worker_threads|module)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\bprocess\.env\b|\b__dirname\b|\bimport\s*\(|\b(?:binary|executable|helper|provider)Path\b/,
+    'the helper dispatcher must receive authority only through its three captured backends'
   );
   assert.ok(
     portableIsolationHelperDistributionAttestationContractSource.includes(
@@ -955,10 +997,13 @@ function assertExecutionWorkspaceBoundary() {
     packageConfig.scripts['test:execution-workspace'].includes(
       'npm run test:portable-isolation-helper-runtime'
     )
+      && packageConfig.scripts['test:portable-isolation-helper-runtime'].includes(
+        'portable-isolation-helper-backend-dispatcher.test.js'
+      )
       && packageConfig.scripts['test:execution-workspace'].includes(
         'npm run test:portable-isolation-helper-release'
       ),
-    'the aggregate execution-workspace gate must run helper runtime, release signing, and packaging tests'
+    'the aggregate execution-workspace gate must run helper dispatcher/runtime, release signing, and packaging tests'
   );
   assert.ok(
     portableIsolationHelperLauncherContractSource.includes(
@@ -1230,8 +1275,8 @@ function assertExecutionWorkspaceBoundary() {
   }
   assertDoesNotMatch(
     `${mainSource}\n${isolationProviderFactorySource}`,
-    /portable_isolation_helper_(?:protocol|backend_contract|runtime_session|launcher_contract|private_transport_contract|distribution_attestation_contract|client|private_transport|distribution_verifier|provider_adapter|utility_channel|host_launcher|release_trust)|(?:createPortableIsolationHelper(?:SessionController|RuntimeSession|Client|PrivateTransport|DistributionTrustedKey|PlatformSignatureVerifier|ProviderAdapter|HostLauncher|ReleaseSignatureVerifier)|openPortableIsolationHelperUtilityChannel)/,
-    'the helper foundations, server-side runtime session, build signer, production release trust, fixed host launcher, and private utility channel must remain unwired until a pinned production trust root and enforced portable isolation runtime exist'
+    /portable_isolation_helper_(?:protocol|backend_contract|backend_dispatcher|runtime_session|launcher_contract|private_transport_contract|distribution_attestation_contract|client|private_transport|distribution_verifier|provider_adapter|utility_channel|host_launcher|release_trust)|(?:createPortableIsolationHelper(?:SessionController|RuntimeSession|BackendDispatcher|Client|PrivateTransport|DistributionTrustedKey|PlatformSignatureVerifier|ProviderAdapter|HostLauncher|ReleaseSignatureVerifier)|openPortableIsolationHelperUtilityChannel)/,
+    'the helper foundations, server-side runtime and backend dispatcher, build signer, production release trust, fixed host launcher, and private utility channel must remain unwired until a pinned production trust root and enforced portable isolation runtime exist'
   );
 
   assertDoesNotMatch(

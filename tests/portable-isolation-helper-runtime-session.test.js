@@ -29,6 +29,7 @@ const {
   PortableIsolationHelperRuntimeOperationError,
   PortableIsolationHelperRuntimeSessionError,
   createPortableIsolationHelperRuntimeSession,
+  isPortableIsolationHelperRuntimeOperationError,
 } = require('../main/services/portable_isolation_helper_runtime_session');
 
 const digest = (character) => `sha256:${character.repeat(64)}`;
@@ -141,6 +142,16 @@ async function expectCode(action, code) {
   );
   assert.ok(Object.isFrozen(brandedOperationError));
   assert.strictEqual(brandedOperationError.reasonCode, 'WORKSPACE_BUSY');
+  assert.strictEqual(
+    isPortableIsolationHelperRuntimeOperationError(brandedOperationError),
+    true
+  );
+  assert.strictEqual(
+    isPortableIsolationHelperRuntimeOperationError(
+      Object.create(PortableIsolationHelperRuntimeOperationError.prototype)
+    ),
+    false
+  );
   assert.deepStrictEqual(base.session.diagnostics(), {
     version: PORTABLE_ISOLATION_HELPER_RUNTIME_SESSION_VERSION,
     state: 'active',

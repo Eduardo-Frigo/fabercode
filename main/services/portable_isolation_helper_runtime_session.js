@@ -87,6 +87,10 @@ class PortableIsolationHelperRuntimeOperationError extends Error {
   }
 }
 
+function isPortableIsolationHelperRuntimeOperationError(value) {
+  return RUNTIME_OPERATION_ERRORS.has(value);
+}
+
 function runtimeError(code) {
   return new PortableIsolationHelperRuntimeSessionError(code);
 }
@@ -306,7 +310,7 @@ function createPortableIsolationHelperRuntimeSession(options = {}) {
   }
 
   function failurePayload(error) {
-    if (RUNTIME_OPERATION_ERRORS.has(error)) {
+    if (isPortableIsolationHelperRuntimeOperationError(error)) {
       return Object.freeze({
         payload: createPortableIsolationHelperFailureReceipt({
           reasonCode: error.reasonCode,
@@ -520,4 +524,5 @@ module.exports = {
   PortableIsolationHelperRuntimeOperationError,
   PortableIsolationHelperRuntimeSessionError,
   createPortableIsolationHelperRuntimeSession,
+  isPortableIsolationHelperRuntimeOperationError,
 };
