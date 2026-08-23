@@ -539,6 +539,9 @@ function assertExecutionWorkspaceBoundary() {
   const processSupervisorContractSource = read(
     'main/capabilities/process_supervisor_contract.js'
   );
+  const portableIsolationHelperProtocolSource = read(
+    'main/capabilities/portable_isolation_helper_protocol.js'
+  );
   const processSupervisorSource = read('main/agent_runtime/execution/process_supervisor.js');
   const projectScannerSource = read('main/services/project_scanner.js');
   const transactionalDeleteSource = read(
@@ -554,6 +557,10 @@ function assertExecutionWorkspaceBoundary() {
     ['main/capabilities/project_root_authority_contract.js', rootAuthorityContractSource],
     ['main/capabilities/project_root_authority_registry.js', rootAuthorityRegistrySource],
     ['main/capabilities/process_supervisor_contract.js', processSupervisorContractSource],
+    [
+      'main/capabilities/portable_isolation_helper_protocol.js',
+      portableIsolationHelperProtocolSource,
+    ],
   ]) {
     assertDoesNotMatch(
       source,
@@ -640,6 +647,72 @@ function assertExecutionWorkspaceBoundary() {
     mainSource,
     /execution_isolation_(?:runtime_config|provider_factory)|createExecutionIsolationProviderSelection/,
     'production must not activate portable isolation until a bundled attested provider exists'
+  );
+  assertDoesNotMatch(
+    portableIsolationHelperProtocolSource,
+    /require\(['"](?:electron|child_process|fs|path|net|tls|http|https|worker_threads|module)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\bprocess\.env\b|\b__dirname\b|\bimport\s*\(/,
+    'the portable helper protocol must remain data-only without launch, filesystem, network, IPC, or dynamic-loading authority'
+  );
+  for (const requirement of [
+    'bundledDistributionOnly',
+    'platformSignatureRequired',
+    'privateFramedTransport',
+    'singleSessionPerHelper',
+    'dataOnlyMessages',
+    'digestBound',
+    'sequenceBound',
+    'responseCorrelation',
+    'workspaceRootBound',
+    'physicalRootAuthority',
+    'networkDefaultDeny',
+    'processTreeTermination',
+    'boundedCursorOutput',
+    'zeroOrphanShutdown',
+    'noProviderPathInjection',
+  ]) {
+    assert.ok(
+      portableIsolationHelperProtocolSource.includes(requirement),
+      `portable helper handshake must bind ${requirement}`
+    );
+  }
+  for (const operation of [
+    'workspace.acquire',
+    'workspace.discard',
+    'root.acquire',
+    'root.list',
+    'root.read_file',
+    'root.inspect_entry',
+    'root.close',
+    'process.exec',
+    'process.read',
+    'process.wait',
+    'process.stop',
+    'provider.dispose',
+  ]) {
+    assert.ok(
+      portableIsolationHelperProtocolSource.includes(operation),
+      `portable helper protocol must enumerate ${operation}`
+    );
+  }
+  assert.ok(
+    portableIsolationHelperProtocolSource.includes('expectedBundleIdentityDigest')
+      && portableIsolationHelperProtocolSource.includes("'platform_verified'")
+      && portableIsolationHelperProtocolSource.includes('sessionBindingDigest')
+      && portableIsolationHelperProtocolSource.includes('previousResponseDigest')
+      && portableIsolationHelperProtocolSource.includes('PROTOCOL_SESSION_BUSY')
+      && portableIsolationHelperProtocolSource.includes('PROTOCOL_REQUEST_REPLAY')
+      && portableIsolationHelperProtocolSource.includes('activeWorkspaces')
+      && portableIsolationHelperProtocolSource.includes('activeRootLeases')
+      && portableIsolationHelperProtocolSource.includes('activeProcesses')
+      && portableIsolationHelperProtocolSource.includes('orphaned')
+      && portableIsolationHelperProtocolSource.includes("'portable-isolation-helper-failure.v1'")
+      && portableIsolationHelperProtocolSource.includes('assertPortableIsolationHelperFailureReceipt(response.payload)'),
+    'helper sessions must be bundle-bound, digest-chained, exclusive, sanitize failures, and prove zero live authority at shutdown'
+  );
+  assertDoesNotMatch(
+    `${mainSource}\n${isolationProviderFactorySource}`,
+    /portable_isolation_helper_protocol|createPortableIsolationHelperSessionController/,
+    'the helper protocol must remain unwired until its bundled transport adapter exists'
   );
 
   assertDoesNotMatch(
