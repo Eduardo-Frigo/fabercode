@@ -13,9 +13,6 @@ const {
   createExecutionWorkspaceProbeResult,
 } = require('../main/capabilities/execution_workspace_contract');
 const {
-  createExecutionWorkspaceRegistry,
-} = require('../main/capabilities/execution_workspace_registry');
-const {
   PROJECT_ROOT_AUTHORITY_BACKEND_VERSION,
   PROJECT_ROOT_AUTHORITY_REQUIRED_GUARANTEES,
   PROJECT_ROOT_AUTHORITY_STATES,
@@ -25,9 +22,6 @@ const {
   createProjectRootAuthorityCloseReceipt,
   createProjectRootAuthorityProbeResult,
 } = require('../main/capabilities/project_root_authority_contract');
-const {
-  createProjectRootAuthorityRegistry,
-} = require('../main/capabilities/project_root_authority_registry');
 const {
   canonicalSha256Digest,
 } = require('../main/capabilities/transactional_delete_contracts');
@@ -39,9 +33,6 @@ const {
   createProcessSupervisorProbeResult,
 } = require('../main/capabilities/process_supervisor_contract');
 const {
-  createProcessSupervisor,
-} = require('../main/agent_runtime/execution/process_supervisor');
-const {
   EXECUTION_ISOLATION_RUNTIME_CONFIG_VERSION,
 } = require('../main/runtime/execution_isolation_runtime_config');
 const {
@@ -50,6 +41,11 @@ const {
   PORTABLE_EXECUTION_ISOLATION_PROVIDER_VERSION,
   createExecutionIsolationProviderSelection,
 } = require('../main/services/execution_isolation_provider_factory');
+const {
+  EXECUTION_ISOLATION_RUNTIME_SERVICES_DISPOSE_RECEIPT_VERSION,
+  EXECUTION_ISOLATION_RUNTIME_SERVICES_VERSION,
+  createExecutionIsolationRuntimeServices,
+} = require('../main/services/execution_isolation_runtime_services');
 
 const digest = (character) => `sha256:${character.repeat(64)}`;
 
@@ -166,6 +162,7 @@ function providerHarness({
   processDisposeImpl = null,
 } = {}) {
   const state = {
+    lifecycleEvents: [],
     workspaceProbes: 0,
     rootProbes: 0,
     processProbes: 0,
@@ -207,6 +204,7 @@ function providerHarness({
     },
     discard(request) {
       state.workspaceDiscards += 1;
+      state.lifecycleEvents.push('workspace:discard');
       return createExecutionWorkspaceDiscardReceipt({ request, discarded: true });
     },
     dispose() {
@@ -233,6 +231,7 @@ function providerHarness({
         authorityDigest: request.authorityDigest,
         reader: createReader(),
         async close() {
+          state.lifecycleEvents.push('root:close');
           return createProjectRootAuthorityCloseReceipt({ request, closed: true });
         },
       });
@@ -255,6 +254,7 @@ function providerHarness({
     stop() { throw new Error('process stop is outside the provider factory test'); },
     dispose() {
       state.processBackendDisposals += 1;
+      state.lifecycleEvents.push('process:dispose');
       return processDisposeImpl
         ? processDisposeImpl()
         : createProcessSupervisorDisposeReceipt({ orphaned: 0 });
@@ -275,6 +275,7 @@ function providerHarness({
     }),
     dispose() {
       state.providerDisposals += 1;
+      state.lifecycleEvents.push('provider:dispose');
       return disposeImpl ? disposeImpl() : Object.freeze({ ok: true, disposed: true });
     },
     ...providerOverrides,
@@ -602,17 +603,23 @@ async function main() {
     config: config(),
     providerFactory: () => registryHarness.provider,
   });
-  const rootRegistry = createProjectRootAuthorityRegistry({
-    backend: registrySelection.projectRootAuthorityBackend,
-    leaseIdFactory: () => 'registry-root-lease-a',
+  const runtimeServices = createExecutionIsolationRuntimeServices({
+    selection: registrySelection,
   });
-  const workspaceRegistry = createExecutionWorkspaceRegistry({
-    backend: registrySelection.executionWorkspaceBackend,
-    leaseIdFactory: () => 'registry-workspace-lease-a',
-  });
-  const processSupervisor = createProcessSupervisor({
-    backend: registrySelection.processSupervisorBackend,
-  });
+  assert.strictEqual(Object.isFrozen(runtimeServices), true);
+  assert.strictEqual(runtimeServices.version, EXECUTION_ISOLATION_RUNTIME_SERVICES_VERSION);
+  assert.deepStrictEqual(Reflect.ownKeys(runtimeServices), [
+    'version',
+    'executionWorkspaceRegistry',
+    'projectRootAuthorityRegistry',
+    'processSupervisor',
+    'diagnostics',
+    'dispose',
+  ]);
+  assert.strictEqual(runtimeServices.diagnostics().state, 'ready');
+  const { executionWorkspaceRegistry: workspaceRegistry } = runtimeServices;
+  const { projectRootAuthorityRegistry: rootRegistry } = runtimeServices;
+  const { processSupervisor } = runtimeServices;
   const registryRootAcquire = await rootRegistry.acquire({
     binding: binding(),
     expectedPhysicalRootIdentityDigest: digest('b'),
@@ -629,25 +636,76 @@ async function main() {
   assert.strictEqual((await processSupervisor.probe()).state, 'enforced');
   assert.strictEqual(registryHarness.state.processProbes, 1);
 
-  assert.strictEqual((await rootRegistry.release({
-    binding: binding(),
-    leaseId: registryRootAcquire.lease.leaseId,
-  })).ok, true);
-  assert.strictEqual((await rootRegistry.dispose()).ok, true);
-  assert.strictEqual(registryHarness.state.providerDisposals, 0);
-  assert.strictEqual((await workspaceRegistry.rollback({
-    binding: binding(),
-    leaseId: registryWorkspaceAcquire.lease.leaseId,
-  })).ok, true);
-  assert.strictEqual((await workspaceRegistry.dispose()).ok, true);
-  assert.strictEqual(registryHarness.state.providerDisposals, 0);
-  assert.strictEqual((await processSupervisor.dispose()).ok, true);
+  const runtimeDisposeReceipt = await runtimeServices.dispose();
+  assert.deepStrictEqual(runtimeDisposeReceipt, {
+    version: EXECUTION_ISOLATION_RUNTIME_SERVICES_DISPOSE_RECEIPT_VERSION,
+    disposed: true,
+    zeroOrphanShutdownConfirmed: true,
+    processSupervisorDisposed: true,
+    executionWorkspaceDisposed: true,
+    projectRootAuthorityDisposed: true,
+    selectionDisposed: true,
+  });
+  assert.strictEqual(await runtimeServices.dispose(), runtimeDisposeReceipt);
+  assert.deepStrictEqual(registryHarness.state.lifecycleEvents, [
+    'process:dispose',
+    'workspace:discard',
+    'root:close',
+    'provider:dispose',
+  ]);
+  assert.strictEqual(runtimeServices.diagnostics().state, 'disposed');
   assert.strictEqual(registryHarness.state.providerDisposals, 1);
   assert.strictEqual(registryHarness.state.processBackendDisposals, 1);
   await registrySelection.dispose();
   assert.strictEqual(registryHarness.state.providerDisposals, 1);
   assert.strictEqual(registryHarness.state.workspaceBackendDisposals, 0);
   assert.strictEqual(registryHarness.state.rootBackendDisposals, 0);
+
+  const blockedRuntimeServices = createExecutionIsolationRuntimeServices({
+    selection: createExecutionIsolationProviderSelection(),
+  });
+  assert.strictEqual(blockedRuntimeServices.diagnostics().state, 'blocked');
+  assert.strictEqual(
+    (await blockedRuntimeServices.processSupervisor.probe()).state,
+    PROCESS_SUPERVISOR_STATES.UNAVAILABLE
+  );
+  assert.strictEqual(
+    (await blockedRuntimeServices.dispose()).zeroOrphanShutdownConfirmed,
+    true
+  );
+
+  const uncleanRuntimeHarness = providerHarness({
+    processDisposeImpl: () => Object.freeze({
+      ok: true,
+      disposed: true,
+      orphaned: 1,
+    }),
+  });
+  const uncleanRuntimeServices = createExecutionIsolationRuntimeServices({
+    selection: createExecutionIsolationProviderSelection({
+      config: config(),
+      providerFactory: () => uncleanRuntimeHarness.provider,
+    }),
+  });
+  const uncleanRuntimeReceipt = await uncleanRuntimeServices.dispose();
+  assert.strictEqual(uncleanRuntimeReceipt.zeroOrphanShutdownConfirmed, false);
+  assert.strictEqual(uncleanRuntimeReceipt.processSupervisorDisposed, false);
+  assert.strictEqual(uncleanRuntimeReceipt.executionWorkspaceDisposed, true);
+  assert.strictEqual(uncleanRuntimeReceipt.projectRootAuthorityDisposed, true);
+  assert.strictEqual(uncleanRuntimeReceipt.selectionDisposed, false);
+  assert.strictEqual(uncleanRuntimeHarness.state.providerDisposals, 1);
+
+  assert.throws(
+    () => createExecutionIsolationRuntimeServices({}),
+    /selection/i
+  );
+  assert.throws(
+    () => createExecutionIsolationRuntimeServices({
+      selection: createExecutionIsolationProviderSelection(),
+      ambientAuthority: true,
+    }),
+    /options/i
+  );
 
   const missingWorkspaceHarness = providerHarness();
   const missingWorkspaceProvider = Object.freeze({

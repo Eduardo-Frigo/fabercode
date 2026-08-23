@@ -263,25 +263,31 @@ assertInOrder(
     'utilityProcess.fork(modulePath, args, options)',
     'portableIsolationHelperActivationRuntime = runtime;',
     'const selection = await runtime.start();',
+    'const runtimeServices = createExecutionIsolationRuntimeServices({',
+    'selection,',
+    'executionIsolationRuntimeServices = runtimeServices;',
     'portableIsolationHelperProviderSelection = selection;',
     'await initializePortableIsolationHelperActivation();',
   ],
-  'main must activate only the production-pinned portable helper composition after Electron is ready'
+  'main must activate the production-pinned helper and compose one lifecycle-owned service set after Electron is ready'
 );
 
 assertInOrder(
   mainSource,
   [
     'function beginPortableIsolationHelperShutdown(event) {',
+    'const runtimeServices = executionIsolationRuntimeServices;',
     'event.preventDefault()',
     'portableIsolationHelperProviderSelection = null;',
-    '.then(() => runtime.dispose())',
+    'executionIsolationRuntimeServices = null;',
+    'await runtimeServices.dispose()',
+    'await runtime.dispose()',
     'zeroOrphanShutdownConfirmed',
     'portableIsolationHelperActivationRuntime = null;',
     'portableIsolationHelperShutdownComplete = true;',
     'app.quit();',
   ],
-  'portable helper shutdown must revoke selection access, wait for zero-orphan disposal, and only then resume application quit'
+  'portable helper shutdown must revoke access, drain services before helper authority, and only then resume application quit'
 );
 
 assertInOrder(

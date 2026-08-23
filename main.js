@@ -216,6 +216,9 @@ const {
 const {
   createProductionPortableIsolationHelperActivationRuntime,
 } = require('./main/services/portable_isolation_helper_activation_runtime');
+const {
+  createExecutionIsolationRuntimeServices,
+} = require('./main/services/execution_isolation_runtime_services');
 const { createAttachmentContextService } = require('./main/runtime/attachment_context');
 const {
   createAnchoredMutationRuntimeConfig,
@@ -1166,6 +1169,7 @@ let assistantJobAuthorityServiceInstance = null;
 let assistantRuntimeLifecycleReason = null;
 let portableIsolationHelperActivationRuntime = null;
 let portableIsolationHelperProviderSelection = null;
+let executionIsolationRuntimeServices = null;
 let portableIsolationHelperShutdownPromise = null;
 let portableIsolationHelperShutdownComplete = false;
 
@@ -5681,9 +5685,15 @@ async function initializePortableIsolationHelperActivation() {
     });
     portableIsolationHelperActivationRuntime = runtime;
     const selection = await runtime.start();
+    const runtimeServices = createExecutionIsolationRuntimeServices({
+      selection,
+    });
     if (portableIsolationHelperActivationRuntime === runtime
       && !portableIsolationHelperShutdownPromise) {
+      executionIsolationRuntimeServices = runtimeServices;
       portableIsolationHelperProviderSelection = selection;
+    } else {
+      await runtimeServices.dispose();
     }
     try {
       appendAuditEvent(
@@ -5694,6 +5704,7 @@ async function initializePortableIsolationHelperActivation() {
     return selection;
   } catch {
     portableIsolationHelperProviderSelection = null;
+    executionIsolationRuntimeServices = null;
     if (runtime) {
       try { await runtime.dispose(); } catch { /* fail closed below */ }
     }
@@ -5712,30 +5723,51 @@ async function initializePortableIsolationHelperActivation() {
 
 function beginPortableIsolationHelperShutdown(event) {
   const runtime = portableIsolationHelperActivationRuntime;
+  const runtimeServices = executionIsolationRuntimeServices;
   if (!runtime || portableIsolationHelperShutdownComplete) return false;
   if (event && typeof event.preventDefault === 'function') event.preventDefault();
   portableIsolationHelperProviderSelection = null;
+  executionIsolationRuntimeServices = null;
   if (portableIsolationHelperShutdownPromise) return true;
 
   portableIsolationHelperShutdownPromise = Promise.resolve()
-    .then(() => runtime.dispose())
-    .then(
-      (receipt) => {
-        appendAuditEvent('assistant.portable_isolation_helper_shutdown', {
-          disposed: Boolean(receipt && receipt.disposed === true),
-          zeroOrphanShutdownConfirmed: Boolean(
-            receipt && receipt.zeroOrphanShutdownConfirmed === true
-          ),
-        });
-      },
-      () => {
-        appendAuditEvent('assistant.portable_isolation_helper_shutdown', {
-          disposed: false,
-          zeroOrphanShutdownConfirmed: false,
-        });
+    .then(async () => {
+      let runtimeServicesReceipt = null;
+      let activationReceipt = null;
+      if (runtimeServices) {
+        try {
+          runtimeServicesReceipt = await runtimeServices.dispose();
+        } catch { /* activation disposal remains the final fail-closed cleanup */ }
       }
-    )
+      try {
+        activationReceipt = await runtime.dispose();
+      } catch { /* shutdown is audited as unconfirmed below */ }
+      return Object.freeze({ runtimeServicesReceipt, activationReceipt });
+    })
+    .then(({ runtimeServicesReceipt, activationReceipt }) => {
+      const runtimeServicesDisposed = !runtimeServices || Boolean(
+        runtimeServicesReceipt && runtimeServicesReceipt.disposed === true
+      );
+      const runtimeServicesZeroOrphan = !runtimeServices || Boolean(
+        runtimeServicesReceipt
+          && runtimeServicesReceipt.zeroOrphanShutdownConfirmed === true
+      );
+      const activationDisposed = Boolean(
+        activationReceipt && activationReceipt.disposed === true
+      );
+      const activationZeroOrphan = Boolean(
+        activationReceipt && activationReceipt.zeroOrphanShutdownConfirmed === true
+      );
+      appendAuditEvent('assistant.portable_isolation_helper_shutdown', {
+        disposed: runtimeServicesDisposed && activationDisposed,
+        runtimeServicesDisposed,
+        activationDisposed,
+        zeroOrphanShutdownConfirmed:
+          runtimeServicesZeroOrphan && activationZeroOrphan,
+      });
+    })
     .finally(() => {
+      executionIsolationRuntimeServices = null;
       portableIsolationHelperActivationRuntime = null;
       portableIsolationHelperShutdownComplete = true;
       app.quit();

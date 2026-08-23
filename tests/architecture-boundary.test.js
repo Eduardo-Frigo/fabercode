@@ -537,6 +537,9 @@ function assertExecutionWorkspaceBoundary() {
   const isolationProviderFactorySource = read(
     'main/services/execution_isolation_provider_factory.js'
   );
+  const isolationRuntimeServicesSource = read(
+    'main/services/execution_isolation_runtime_services.js'
+  );
   const processSupervisorContractSource = read(
     'main/capabilities/process_supervisor_contract.js'
   );
@@ -629,6 +632,10 @@ function assertExecutionWorkspaceBoundary() {
     ['main/capabilities/project_root_authority_registry.js', rootAuthorityRegistrySource],
     ['main/capabilities/process_supervisor_contract.js', processSupervisorContractSource],
     [
+      'main/services/execution_isolation_runtime_services.js',
+      isolationRuntimeServicesSource,
+    ],
+    [
       'main/capabilities/portable_isolation_helper_protocol.js',
       portableIsolationHelperProtocolSource,
     ],
@@ -690,12 +697,12 @@ function assertExecutionWorkspaceBoundary() {
   }
 
   assertDoesNotMatch(
-    `${isolationRuntimeConfigSource}\n${isolationProviderFactorySource}`,
+    `${isolationRuntimeConfigSource}\n${isolationProviderFactorySource}\n${isolationRuntimeServicesSource}`,
     /require\(['"](?:electron|child_process|fs)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\.node\b/,
     'portable isolation selection must remain a data-only seam without process, filesystem, IPC, or addon loading authority'
   );
   assertDoesNotMatch(
-    `${isolationRuntimeConfigSource}\n${isolationProviderFactorySource}`,
+    `${isolationRuntimeConfigSource}\n${isolationProviderFactorySource}\n${isolationRuntimeServicesSource}`,
     /FABER_EXECUTION_ISOLATION_(?:PROVIDER|ADDON)_PATH/,
     'portable isolation selection must not accept a provider path from the environment'
   );
@@ -744,6 +751,35 @@ function assertExecutionWorkspaceBoundary() {
       )
       && isolationProviderFactorySource.includes('absorbNativePromise(rawProbe)'),
     'portable provider activation must verify a canonical attestation and three synchronous enforced probes'
+  );
+  assert.ok(
+    isolationRuntimeServicesSource.includes('createExecutionWorkspaceRegistry')
+      && isolationRuntimeServicesSource.includes('createProjectRootAuthorityRegistry')
+      && isolationRuntimeServicesSource.includes('createProcessSupervisor')
+      && isolationRuntimeServicesSource.indexOf(
+        'await invokeCaptured(disposeProcessSupervisor)'
+      ) < isolationRuntimeServicesSource.indexOf(
+        'await invokeCaptured(disposeExecutionWorkspace)'
+      )
+      && isolationRuntimeServicesSource.indexOf(
+        'await invokeCaptured(disposeExecutionWorkspace)'
+      ) < isolationRuntimeServicesSource.indexOf(
+        'await invokeCaptured(disposeProjectRootAuthority)'
+      )
+      && isolationRuntimeServicesSource.indexOf(
+        'await invokeCaptured(disposeProjectRootAuthority)'
+      ) < isolationRuntimeServicesSource.indexOf(
+        'await invokeCaptured(selection.dispose)'
+      ),
+    'one runtime-services boundary must own all three facades and dispose process, workspace, root, then provider selection'
+  );
+  assert.ok(
+    mainSource.includes(
+      "require('./main/services/execution_isolation_runtime_services')"
+    )
+      && mainSource.includes('createExecutionIsolationRuntimeServices({')
+      && mainSource.includes('executionIsolationRuntimeServices = runtimeServices;'),
+    'production must compose the selected portable backends through one lifecycle-owned runtime-services boundary'
   );
   assertDoesNotMatch(
     isolationProviderFactorySource,
@@ -1599,7 +1635,7 @@ function assertExecutionWorkspaceBoundary() {
   assertDoesNotMatch(
     mainSource,
     /agent_runtime\/execution\/process_supervisor|createProcessSupervisor\s*\(/,
-    'production must keep the process supervisor unwired until a bundled portable backend exists'
+    'production must reach the process supervisor only through the runtime-services boundary'
   );
 
   for (const guarantee of [
@@ -1769,7 +1805,7 @@ function assertExecutionWorkspaceBoundary() {
   assertDoesNotMatch(
     mainSource,
     /project_root_authority_(?:contract|registry)|createProjectRootAuthorityRegistry/,
-    'production must keep project-root authority fail-closed until a pinned provider exists'
+    'production must reach project-root authority only through the runtime-services boundary'
   );
   for (const guarantee of [
     'exclusive_source_binding',
@@ -1793,7 +1829,7 @@ function assertExecutionWorkspaceBoundary() {
   assertDoesNotMatch(
     mainSource,
     /execution_workspace_(?:contract|registry)|createExecutionWorkspaceRegistry/,
-    'production must remain fail-closed until an enforced isolated workspace provider exists'
+    'production must reach workspace ownership only through the runtime-services boundary'
   );
   assertDoesNotMatch(
     sandboxContractSource,
