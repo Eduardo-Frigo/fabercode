@@ -542,6 +542,9 @@ function assertExecutionWorkspaceBoundary() {
   const portableIsolationHelperProtocolSource = read(
     'main/capabilities/portable_isolation_helper_protocol.js'
   );
+  const portableIsolationHelperClientSource = read(
+    'main/services/portable_isolation_helper_client.js'
+  );
   const processSupervisorSource = read('main/agent_runtime/execution/process_supervisor.js');
   const projectScannerSource = read('main/services/project_scanner.js');
   const transactionalDeleteSource = read(
@@ -560,6 +563,10 @@ function assertExecutionWorkspaceBoundary() {
     [
       'main/capabilities/portable_isolation_helper_protocol.js',
       portableIsolationHelperProtocolSource,
+    ],
+    [
+      'main/services/portable_isolation_helper_client.js',
+      portableIsolationHelperClientSource,
     ],
   ]) {
     assertDoesNotMatch(
@@ -710,9 +717,40 @@ function assertExecutionWorkspaceBoundary() {
     'helper sessions must be bundle-bound, digest-chained, exclusive, sanitize failures, and prove zero live authority at shutdown'
   );
   assertDoesNotMatch(
+    portableIsolationHelperClientSource,
+    /require\(['"](?:electron|child_process|fs|path|net|tls|http|https|worker_threads|module)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\bprocess\.env\b|\b__dirname\b|\bimport\s*\(|\b(?:binary|executable|helper)Path\b/,
+    'the portable helper client must conduct an injected transport without launch, filesystem, network, IPC, dynamic-loading, or binary-path authority'
+  );
+  assert.ok(
+    portableIsolationHelperClientSource.includes("'portable-isolation-helper-transport.v1'")
+      && portableIsolationHelperClientSource.includes('Object.isFrozen(value)')
+      && portableIsolationHelperClientSource.includes("Reflect.apply(transport[methodName]")
+      && portableIsolationHelperClientSource.includes(
+        'assertPortableIsolationHelperHandshakeResponse'
+      )
+      && portableIsolationHelperClientSource.includes(
+        'createPortableIsolationHelperSessionController'
+      )
+      && portableIsolationHelperClientSource.includes('controller.accept(outcome.value)')
+      && portableIsolationHelperClientSource.includes("'DISPOSE_INTERRUPTED'")
+      && portableIsolationHelperClientSource.includes("'closed_unconfirmed'")
+      && portableIsolationHelperClientSource.includes('helperShutdownConfirmed')
+      && portableIsolationHelperClientSource.includes('transportClosed'),
+    'the portable helper client must capture an exact frozen transport, validate every response, interrupt pending work, and distinguish confirmed shutdown from mere transport closure'
+  );
+  assert.ok(
+    portableIsolationHelperClientSource.includes(
+      "operation === PORTABLE_ISOLATION_HELPER_OPERATIONS.HANDSHAKE"
+    )
+      && portableIsolationHelperClientSource.includes(
+        "operation === PORTABLE_ISOLATION_HELPER_OPERATIONS.PROVIDER_DISPOSE"
+      ),
+    'handshake and provider disposal must remain reserved to the client lifecycle'
+  );
+  assertDoesNotMatch(
     `${mainSource}\n${isolationProviderFactorySource}`,
-    /portable_isolation_helper_protocol|createPortableIsolationHelperSessionController/,
-    'the helper protocol must remain unwired until its bundled transport adapter exists'
+    /portable_isolation_helper_(?:protocol|client)|createPortableIsolationHelper(?:SessionController|Client)/,
+    'the helper protocol client must remain unwired until its bundled launcher and private transport exist'
   );
 
   assertDoesNotMatch(
