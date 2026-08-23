@@ -545,6 +545,9 @@ function assertExecutionWorkspaceBoundary() {
   const portableIsolationHelperClientSource = read(
     'main/services/portable_isolation_helper_client.js'
   );
+  const portableIsolationHelperProviderAdapterSource = read(
+    'main/services/portable_isolation_helper_provider_adapter.js'
+  );
   const processSupervisorSource = read('main/agent_runtime/execution/process_supervisor.js');
   const projectScannerSource = read('main/services/project_scanner.js');
   const transactionalDeleteSource = read(
@@ -567,6 +570,10 @@ function assertExecutionWorkspaceBoundary() {
     [
       'main/services/portable_isolation_helper_client.js',
       portableIsolationHelperClientSource,
+    ],
+    [
+      'main/services/portable_isolation_helper_provider_adapter.js',
+      portableIsolationHelperProviderAdapterSource,
     ],
   ]) {
     assertDoesNotMatch(
@@ -748,9 +755,62 @@ function assertExecutionWorkspaceBoundary() {
     'handshake and provider disposal must remain reserved to the client lifecycle'
   );
   assertDoesNotMatch(
+    portableIsolationHelperProviderAdapterSource,
+    /require\(['"](?:electron|child_process|fs|path|net|tls|http|https|worker_threads|module)['"]\)|\bipcRenderer\b|\bipcMain\b|\bspawn\s*\(|\bexecFile\s*\(|\bprocess\.env\b|\b__dirname\b|\bimport\s*\(|\b(?:binary|executable|helper)Path\b/,
+    'the portable helper provider adapter must only translate data contracts and never gain launch, filesystem, network, IPC, dynamic-loading, or binary-path authority'
+  );
+  assert.ok(
+    portableIsolationHelperProviderAdapterSource.includes(
+      "'portable-isolation-helper-provider-candidate.v1'"
+    )
+      && portableIsolationHelperProviderAdapterSource.includes('activationReady: false')
+      && portableIsolationHelperProviderAdapterSource.includes(
+        "'ASYNC_ROOT_AUTHORITY_CONTRACT_REQUIRED'"
+      )
+      && portableIsolationHelperProviderAdapterSource.includes(
+        'MAX_QUEUED_EXCHANGES = 1_024'
+      )
+      && portableIsolationHelperProviderAdapterSource.includes(
+        'pendingWorkspaceOperations'
+      )
+      && portableIsolationHelperProviderAdapterSource.includes('pendingRootOperations')
+      && portableIsolationHelperProviderAdapterSource.includes(
+        'pendingProcessOperations'
+      )
+      && portableIsolationHelperProviderAdapterSource.includes(
+        'Promise.allSettled(pendingOperations)'
+      )
+      && portableIsolationHelperProviderAdapterSource.includes(
+        "reasonCode: 'PROVIDER_DISPOSE'"
+      )
+      && portableIsolationHelperProviderAdapterSource.includes('client.quarantine')
+      && portableIsolationHelperProviderAdapterSource.includes(
+        'canonicalSha256Digest(core)'
+      )
+      && portableIsolationHelperProviderAdapterSource.includes(
+        'PORTABLE_ISOLATION_HELPER_REQUIREMENTS'
+      )
+      && portableIsolationHelperProviderAdapterSource.includes(
+        'canonicalSha256Digest(capabilityCore)'
+      ),
+    'the provider candidate must stay activation-blocked, revalidate its handshake, serialize bounded work, preserve pending authority, quarantine invalid domains, reap processes, and bind one attestation'
+  );
+  for (const operationName of [
+    'WORKSPACE_ACQUIRE', 'WORKSPACE_DISCARD',
+    'ROOT_ACQUIRE', 'ROOT_LIST', 'ROOT_READ_FILE', 'ROOT_INSPECT_ENTRY', 'ROOT_CLOSE',
+    'PROCESS_EXEC', 'PROCESS_READ', 'PROCESS_WAIT', 'PROCESS_STOP',
+  ]) {
+    assert.ok(
+      portableIsolationHelperProviderAdapterSource.includes(
+        `PORTABLE_ISOLATION_HELPER_OPERATIONS.${operationName}`
+      ),
+      `portable helper provider adapter must map ${operationName}`
+    );
+  }
+  assertDoesNotMatch(
     `${mainSource}\n${isolationProviderFactorySource}`,
-    /portable_isolation_helper_(?:protocol|client)|createPortableIsolationHelper(?:SessionController|Client)/,
-    'the helper protocol client must remain unwired until its bundled launcher and private transport exist'
+    /portable_isolation_helper_(?:protocol|client|provider_adapter)|createPortableIsolationHelper(?:SessionController|Client|ProviderAdapter)/,
+    'the helper protocol, client, and provider candidate must remain unwired until async root authority, a bundled launcher, and private transport exist'
   );
 
   assertDoesNotMatch(

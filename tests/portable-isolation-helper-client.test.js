@@ -139,7 +139,7 @@ async function main() {
     handshake: handshake(),
   });
   assert.deepStrictEqual(Reflect.ownKeys(client), [
-    'version', 'connect', 'exchange', 'diagnostics', 'dispose',
+    'version', 'connect', 'exchange', 'quarantine', 'diagnostics', 'dispose',
   ]);
   assert.strictEqual(Object.isFrozen(client), true);
   assert.deepStrictEqual(client.diagnostics(), {
@@ -265,6 +265,39 @@ async function main() {
     () => createPortableIsolationHelperClient(rejectedOptions),
     'CLIENT_OPTIONS_INVALID'
   );
+
+  const explicitQuarantineHarness = transportHarness();
+  const explicitQuarantineClient = createPortableIsolationHelperClient({
+    transport: explicitQuarantineHarness.transport,
+    handshake: handshake(),
+  });
+  await explicitQuarantineClient.connect();
+  assert.deepStrictEqual(explicitQuarantineClient.quarantine({
+    reasonCode: 'DOMAIN_RESPONSE_REJECTED',
+  }), { ok: true, quarantined: true });
+  assert.strictEqual(explicitQuarantineClient.diagnostics().state, 'quarantined');
+  assert.strictEqual(explicitQuarantineHarness.state.aborts.length, 1);
+  assert.deepStrictEqual(explicitQuarantineClient.quarantine({
+    reasonCode: 'DOMAIN_RESPONSE_REJECTED',
+  }), { ok: true, quarantined: true });
+  assert.strictEqual(explicitQuarantineHarness.state.aborts.length, 1);
+  expectThrowCode(() => explicitQuarantineClient.quarantine({
+    reasonCode: 'DOMAIN_RESPONSE_REJECTED',
+    message: '/private/project/root',
+  }), 'CLIENT_QUARANTINE_INVALID');
+  await expectRejectCode(explicitQuarantineClient.exchange({
+    operation: PORTABLE_ISOLATION_HELPER_OPERATIONS.ROOT_LIST,
+    payload: {},
+  }), 'CLIENT_QUARANTINED');
+  assert.deepStrictEqual(await explicitQuarantineClient.dispose(), {
+    version: PORTABLE_ISOLATION_HELPER_CLIENT_DISPOSE_RECEIPT_VERSION,
+    disposed: true,
+    helperShutdownConfirmed: false,
+    transportClosed: true,
+  });
+  assert.deepStrictEqual(explicitQuarantineClient.quarantine({
+    reasonCode: 'DOMAIN_RESPONSE_REJECTED',
+  }), { ok: false, quarantined: false });
 
   const idleHarness = transportHarness();
   const idleClient = createPortableIsolationHelperClient({

@@ -38,9 +38,11 @@ const HANDSHAKE_KEYS = Object.freeze([
 ]);
 const TRANSPORT_KEYS = Object.freeze(['version', 'exchange', 'abort', 'dispose']);
 const EXCHANGE_KEYS = Object.freeze(['operation', 'payload']);
+const QUARANTINE_KEYS = Object.freeze(['reasonCode']);
 const ABORT_RECEIPT_KEYS = Object.freeze(['version', 'aborted']);
 const DISPOSE_RECEIPT_KEYS = Object.freeze(['version', 'closed']);
 const OPERATIONS = new Set(Object.values(PORTABLE_ISOLATION_HELPER_OPERATIONS));
+const SAFE_REASON_CODE = /^[A-Z][A-Z0-9_]{0,79}$/;
 
 class PortableIsolationHelperClientError extends Error {
   constructor(code) {
@@ -546,6 +548,36 @@ function createPortableIsolationHelperClient(options = {}) {
     return disposePromise;
   }
 
+  function quarantineClient(value) {
+    let fields;
+    try {
+      fields = exactDataFields(
+        value,
+        QUARANTINE_KEYS,
+        QUARANTINE_KEYS,
+        'CLIENT_QUARANTINE_INVALID'
+      );
+    } catch (error) {
+      absorbNativePromise(error);
+      throw error instanceof PortableIsolationHelperClientError
+        ? error
+        : clientError('CLIENT_QUARANTINE_INVALID');
+    }
+    const reasonCode = fields.get('reasonCode');
+    if (typeof reasonCode !== 'string' || !SAFE_REASON_CODE.test(reasonCode)) {
+      throw clientError('CLIENT_QUARANTINE_INVALID');
+    }
+    if (transportCallDepth > 0) {
+      quarantine('CLIENT_REENTRANCY', 'CLIENT_REENTRANT');
+      throw clientError('CLIENT_REENTRANT');
+    }
+    if (state === 'closed' || state === 'closed_unconfirmed' || transportClosed) {
+      return Object.freeze({ ok: false, quarantined: false });
+    }
+    quarantine(reasonCode, 'CLIENT_QUARANTINED');
+    return Object.freeze({ ok: true, quarantined: true });
+  }
+
   function diagnostics() {
     const session = controller ? controller.diagnostics() : null;
     return Object.freeze({
@@ -563,6 +595,7 @@ function createPortableIsolationHelperClient(options = {}) {
     version: PORTABLE_ISOLATION_HELPER_CLIENT_VERSION,
     connect,
     exchange,
+    quarantine: quarantineClient,
     diagnostics,
     dispose,
   });
