@@ -575,6 +575,15 @@ function assertExecutionWorkspaceBoundary() {
   const portableIsolationHelperDistributionAttestationSource = read(
     'main/portable_isolation_helper/distribution_attestation.json'
   );
+  const portableIsolationHelperReleaseAttestationBuilderSource = read(
+    'build/portable_isolation_helper_release_attestation_builder.js'
+  );
+  const portableIsolationHelperAfterPackSource = read(
+    'build/portable_isolation_helper_after_pack.js'
+  );
+  const portableIsolationHelperReleaseTrustSource = read(
+    'main/security/portable_isolation_helper_release_trust.js'
+  );
   const packageConfig = JSON.parse(read('package.json'));
   const processSupervisorSource = read('main/agent_runtime/execution/process_supervisor.js');
   const projectScannerSource = read('main/services/project_scanner.js');
@@ -812,6 +821,93 @@ function assertExecutionWorkspaceBoundary() {
         'DISTRIBUTION_ATTESTATION_MISMATCH'
       ),
     'distribution trust must be canonical, Ed25519-only, platform-and-architecture-bound, digest-bound, and fail closed'
+  );
+  assertDoesNotMatch(
+    portableIsolationHelperReleaseAttestationBuilderSource,
+    /require\(['"](?:electron|child_process|fs|path|net|tls|http|https|worker_threads|module)['"]\)|\bprocess\.env\b|\b__dirname\b|\bspawn\s*\(|\bexecFile\s*\(|\bimport\s*\(|\bconsole\./,
+    'the release attestation builder must be a pure cryptographic boundary without filesystem, process, environment, network, dynamic-loading, or logging authority'
+  );
+  assert.ok(
+    portableIsolationHelperReleaseAttestationBuilderSource.includes(
+      "require('crypto')"
+    )
+      && portableIsolationHelperReleaseAttestationBuilderSource.includes(
+        "asymmetricKeyType !== 'ed25519'"
+      )
+      && portableIsolationHelperReleaseAttestationBuilderSource.includes(
+        'portableIsolationHelperDistributionSigningPayload'
+      )
+      && portableIsolationHelperReleaseAttestationBuilderSource.includes(
+        'crypto.sign'
+      )
+      && portableIsolationHelperReleaseAttestationBuilderSource.includes(
+        'privateKeyBytes.fill(0)'
+      ),
+    'release attestation signing must be Ed25519-only, canonical, public-root-bound, and zeroize decoded secret bytes'
+  );
+  assertDoesNotMatch(
+    portableIsolationHelperReleaseTrustSource,
+    /require\(['"](?:electron|child_process|fs|path|net|tls|http|https|worker_threads|module)['"]\)|\bprocess\.env\b|\b__dirname\b|\bimport\s*\(|PRIVATE KEY|privateKey|FABER_PORTABLE_ISOLATION_HELPER_RELEASE_PRIVATE_KEY/,
+    'the production release trust root must contain public verification material only and must not read mutable runtime inputs'
+  );
+  assert.ok(
+    portableIsolationHelperReleaseTrustSource.includes(
+      "'portable-isolation-helper-release-trust.v1'"
+    )
+      && portableIsolationHelperReleaseTrustSource.includes(
+        "PORTABLE_ISOLATION_HELPER_RELEASE_TRUST_STATE = 'unconfigured'"
+      )
+      && portableIsolationHelperReleaseTrustSource.includes('Object.freeze([])')
+      && portableIsolationHelperReleaseTrustSource.includes(
+        "'RELEASE_TRUST_UNCONFIGURED'"
+      )
+      && portableIsolationHelperReleaseTrustSource.includes(
+        'createPortableIsolationHelperPlatformSignatureVerifier'
+      ),
+    'production release trust must remain explicitly unconfigured and fail closed until a public release root is provisioned'
+  );
+  assertDoesNotMatch(
+    portableIsolationHelperAfterPackSource,
+    /require\(['"](?:electron|child_process|net|tls|http|https|worker_threads|module)['"]\)|\bspawn\s*\(|\bexecFile\s*\(|\bimport\s*\(|\bconsole\./,
+    'the release hook may own only local build-time filesystem and cryptographic authority'
+  );
+  const releaseEnvironmentReferences = [
+    ...portableIsolationHelperAfterPackSource.matchAll(
+      /process\.env\[([A-Z0-9_]+)\]/g
+    ),
+  ].map((match) => match[1]).sort();
+  assert.deepStrictEqual(releaseEnvironmentReferences, [
+    'FABER_PORTABLE_ISOLATION_HELPER_RELEASE_KEY_ID_ENV',
+    'FABER_PORTABLE_ISOLATION_HELPER_RELEASE_PRIVATE_KEY_ENV',
+  ]);
+  assert.ok(
+    portableIsolationHelperAfterPackSource.includes('packager.getResourcesDir')
+      && portableIsolationHelperAfterPackSource.includes('fs.constants.O_NOFOLLOW')
+      && portableIsolationHelperAfterPackSource.includes('fs.constants.O_EXCL')
+      && portableIsolationHelperAfterPackSource.includes('fs.fsyncSync')
+      && portableIsolationHelperAfterPackSource.includes('fs.renameSync')
+      && portableIsolationHelperAfterPackSource.includes(
+        'createPortableIsolationHelperReleaseSignatureVerifier'
+      ),
+    'the afterPack hook must resolve the fixed bundle, resist link races, replace the placeholder atomically, and guard its default entry through production trust'
+  );
+  assert.strictEqual(
+    packageConfig.build.afterPack,
+    'build/portable_isolation_helper_after_pack.js'
+  );
+  assert.strictEqual(
+    packageConfig.build.files.some((entry) => (
+      entry.includes('portable_isolation_helper_after_pack')
+      || entry.includes('portable_isolation_helper_release_attestation_builder')
+    )),
+    false,
+    'release signing code must remain build-only and outside the packaged application'
+  );
+  assert.ok(
+    packageConfig.scripts['test:execution-workspace'].includes(
+      'npm run test:portable-isolation-helper-release'
+    ),
+    'the aggregate execution-workspace gate must run release signing and packaging tests'
   );
   assert.ok(
     portableIsolationHelperLauncherContractSource.includes(
@@ -1083,8 +1179,8 @@ function assertExecutionWorkspaceBoundary() {
   }
   assertDoesNotMatch(
     `${mainSource}\n${isolationProviderFactorySource}`,
-    /portable_isolation_helper_(?:protocol|launcher_contract|private_transport_contract|distribution_attestation_contract|client|private_transport|distribution_verifier|provider_adapter|utility_channel|host_launcher)|(?:createPortableIsolationHelper(?:SessionController|Client|PrivateTransport|DistributionTrustedKey|PlatformSignatureVerifier|ProviderAdapter|HostLauncher)|openPortableIsolationHelperUtilityChannel)/,
-    'the helper foundations, release verifier, fixed host launcher, and private utility channel must remain unwired until a pinned production trust root and enforced portable isolation runtime exist'
+    /portable_isolation_helper_(?:protocol|launcher_contract|private_transport_contract|distribution_attestation_contract|client|private_transport|distribution_verifier|provider_adapter|utility_channel|host_launcher|release_trust)|(?:createPortableIsolationHelper(?:SessionController|Client|PrivateTransport|DistributionTrustedKey|PlatformSignatureVerifier|ProviderAdapter|HostLauncher|ReleaseSignatureVerifier)|openPortableIsolationHelperUtilityChannel)/,
+    'the helper foundations, build signer, production release trust, fixed host launcher, and private utility channel must remain unwired until a pinned production trust root and enforced portable isolation runtime exist'
   );
 
   assertDoesNotMatch(
