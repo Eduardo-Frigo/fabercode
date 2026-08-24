@@ -19,6 +19,57 @@ function run() {
 
     assert.deepStrictEqual(service.listDiscoveries().discoveries, []);
 
+    const missingReadRoot = path.join(tempRoot, 'must-not-exist-after-read');
+    const readOnlyService = createExternalMcpDiscoveryCacheService({
+      fs,
+      path,
+      getUserDataPath: () => missingReadRoot,
+      now: () => '2026-05-27T20:20:00.000Z',
+    });
+    assert.strictEqual(fs.existsSync(missingReadRoot), false);
+    assert.deepStrictEqual(readOnlyService.listDiscoveries().discoveries, []);
+    assert.strictEqual(
+      fs.existsSync(missingReadRoot),
+      false,
+      'a cache miss on a read-only path must not create user-data directories'
+    );
+    const firstWrite = readOnlyService.setDiscovery('first-write', { tools: [] });
+    assert.strictEqual(firstWrite.ok, true);
+    assert.strictEqual(fs.existsSync(missingReadRoot), true);
+
+    const boundedRoot = path.join(tempRoot, 'bounded-cache');
+    fs.mkdirSync(boundedRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(boundedRoot, 'external-mcp-discovery-cache.json'),
+      JSON.stringify({
+        entries: {
+          oversized: {
+            serverId: 'oversized',
+            tools: [{
+              name: 'read_oversized',
+              description: 'D'.repeat(1_000),
+              permission: 'read',
+              riskLevel: 'low',
+              allowed: true,
+            }],
+          },
+        },
+      }),
+      'utf8'
+    );
+    const boundedService = createExternalMcpDiscoveryCacheService({
+      fs,
+      path,
+      getUserDataPath: () => boundedRoot,
+      maxStoreBytes: 128,
+      now: () => '2026-05-27T20:20:00.000Z',
+    });
+    assert.deepStrictEqual(
+      boundedService.listDiscoveries().discoveries,
+      [],
+      'an oversized cache file must fail closed before parsing'
+    );
+
     const saved = service.setDiscovery('DeepWiki Public', {
       discoveredAt: '2026-05-27T20:00:00.000Z',
       tools: [

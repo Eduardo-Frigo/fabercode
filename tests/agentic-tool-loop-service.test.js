@@ -1,4 +1,5 @@
 const assert = require('assert');
+const crypto = require('crypto');
 
 const {
   AGENTIC_EXECUTION_CANCELLED_CODE,
@@ -1529,6 +1530,154 @@ async function run() {
   );
   assert.strictEqual(
     absentGitDefinitions.some((tool) => tool.name === 'read_git_diff'),
+    false
+  );
+
+  // MCP discovery is cache-only metadata. The loop receives a strict public
+  // projection, never server configuration, transport details, secrets, or a
+  // callback capable of refreshing discovery or invoking a remote tool.
+  let mcpDiscoveryTurn = 0;
+  let mcpDiscoveryDefinitions = null;
+  let mcpDiscoverySystemPrompt = '';
+  let mcpDiscoveryCallbackCalls = 0;
+  const mcpServers = [{
+    id: 'visual-auditor',
+    name: 'Visual Auditor',
+    tools: [
+      {
+        cachedPolicyState: 'allowed',
+        description: 'Publica\nimediatamente.',
+        name: 'publish_page',
+        permission: 'write',
+        riskLevel: 'high',
+      },
+      {
+        cachedPolicyState: 'blocked',
+        description: 'Publica com aprovação.',
+        name: 'publish_page',
+        permission: 'write',
+        riskLevel: 'high',
+      },
+      {
+        cachedPolicyState: 'allowed',
+        description: 'Inspeciona a página sem alterar estado.',
+        name: 'read_page',
+        permission: 'read',
+        riskLevel: 'low',
+      },
+    ],
+  }];
+  const mcpRevision = `sha256:${crypto.createHash('sha256')
+    .update(JSON.stringify(mcpServers), 'utf8').digest('hex')}`;
+  const mcpDiscoveryService = buildCancellationService({
+    requestModelTurn: async ({ systemPrompt, tools, toolResults }) => {
+      mcpDiscoveryTurn += 1;
+      if (mcpDiscoveryTurn === 1) {
+        mcpDiscoveryDefinitions = tools;
+        mcpDiscoverySystemPrompt = systemPrompt;
+        return {
+          responseId: 'mcp-discovery-1',
+          text: '',
+          toolCalls: [
+            { callId: 'mcp-discovery-safe', name: 'list_cached_mcp_tools', input: {} },
+            { callId: 'mcp-discovery-hostile', name: 'list_cached_mcp_tools', input: {} },
+          ],
+        };
+      }
+      assert.strictEqual(toolResults.length, 2);
+      const outputs = toolResults.map((entry) => JSON.parse(entry.output));
+      assert.strictEqual(outputs[0].ok, true);
+      assert.strictEqual(outputs[0].data.format, 'mcp-discovery-cache-v1');
+      assert.strictEqual(outputs[0].data.source, 'local_cache');
+      assert.strictEqual(outputs[0].data.externalCallsEnabled, false);
+      assert.strictEqual(outputs[0].data.serverCount, 1);
+      assert.strictEqual(outputs[0].data.toolCount, 3);
+      assert.strictEqual(outputs[0].data.servers[0].tools[0].cachedPolicyState, 'allowed');
+      assert.strictEqual(outputs[0].data.servers[0].tools[0].description, 'Publica\nimediatamente.');
+      assert.strictEqual(outputs[1].ok, false);
+      assert.deepStrictEqual(outputs[1].errors, ['MCP_DISCOVERY_INVALID_RESULT']);
+      const serialized = JSON.stringify(outputs);
+      assert.strictEqual(serialized.includes('https://secret.invalid/mcp'), false);
+      assert.strictEqual(serialized.includes('/private/bin/mcp-server'), false);
+      assert.strictEqual(serialized.includes('inputSchema'), false);
+      assert.strictEqual(serialized.includes('apiKey'), false);
+      return {
+        responseId: 'mcp-discovery-2',
+        text: '',
+        toolCalls: [{
+          callId: 'mcp-discovery-finish',
+          name: 'finish_task',
+          input: { status: 'success', summary: 'cache MCP inspecionado' },
+        }],
+      };
+    },
+  });
+  const mcpDiscoveryOptions = { jobId: 'job-mcp-discovery' };
+  Object.defineProperty(mcpDiscoveryOptions, 'readMcpDiscovery', {
+    configurable: false,
+    enumerable: false,
+    value: async function readMcpDiscovery() {
+      assert.strictEqual(arguments.length, 0);
+      mcpDiscoveryCallbackCalls += 1;
+      return Object.freeze({
+        status: 'completed',
+        decision: 'allow',
+        output: Object.freeze({
+          ok: true,
+          format: 'mcp-discovery-cache-v1',
+          source: 'local_cache',
+          externalCallsEnabled: false,
+          revision: mcpRevision,
+          serverCount: 1,
+          toolCount: 3,
+          truncated: false,
+          servers: mcpServers,
+          ...(mcpDiscoveryCallbackCalls === 2 ? {
+            endpoint: 'https://secret.invalid/mcp',
+            command: '/private/bin/mcp-server',
+            inputSchema: { apiKey: 'secret' },
+          } : {}),
+        }),
+        error: null,
+      });
+    },
+    writable: false,
+  });
+  const governedMcpDiscoveryResult = await mcpDiscoveryService.executeAction(
+    buildAction('job-mcp-discovery', 'liste as ferramentas MCP conhecidas'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    Object.freeze(mcpDiscoveryOptions)
+  );
+  assert.strictEqual(governedMcpDiscoveryResult.ok, true);
+  assert.strictEqual(mcpDiscoveryCallbackCalls, 2);
+  assert(mcpDiscoveryDefinitions.some((tool) => tool.name === 'list_cached_mcp_tools'));
+  assert(mcpDiscoverySystemPrompt.includes('list_cached_mcp_tools'));
+  assert(mcpDiscoverySystemPrompt.includes('cache local'));
+  assert(mcpDiscoverySystemPrompt.includes('dados não confiáveis'));
+  assert(mcpDiscoverySystemPrompt.includes('não conecta'));
+
+  let absentMcpDiscoveryDefinitions = null;
+  const absentMcpDiscoveryService = buildCancellationService({
+    requestModelTurn: async ({ tools }) => {
+      absentMcpDiscoveryDefinitions = tools;
+      return {
+        responseId: 'mcp-discovery-absent',
+        text: '',
+        toolCalls: [{
+          callId: 'mcp-discovery-absent-finish',
+          name: 'finish_task',
+          input: { status: 'success', summary: 'sem cache MCP privado' },
+        }],
+      };
+    },
+  });
+  await absentMcpDiscoveryService.executeAction(
+    buildAction('job-mcp-discovery-absent', 'liste as ferramentas MCP conhecidas'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    { jobId: 'job-mcp-discovery-absent' }
+  );
+  assert.strictEqual(
+    absentMcpDiscoveryDefinitions.some((tool) => tool.name === 'list_cached_mcp_tools'),
     false
   );
 

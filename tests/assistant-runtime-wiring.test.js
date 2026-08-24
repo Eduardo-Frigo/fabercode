@@ -798,6 +798,59 @@ for (const callbackName of ['readGitHead', 'readGitDiff']) {
 assertInOrder(
   legacyExecuteSource,
   [
+    'const mcpDiscoveryBrokerFactory = agenticMcpDiscoveryBrokerFactoryInstance;',
+    'const mcpDiscoveryBinding = currentAgenticDeleteBinding(authorityBinding);',
+    'mcpDiscoveryBrokerFactory.createRoute(Object.freeze({',
+    'binding: mcpDiscoveryBinding,',
+    "Object.defineProperty(agenticExecutionOptions, 'readMcpDiscovery'",
+    'enumerable: false,',
+    'mcpDiscoveryRoute.readCached()',
+    'Object.freeze(agenticExecutionOptions)',
+  ],
+  'cached MCP metadata must enter the loop only through a private job-bound cache-only route'
+);
+const privateMcpDiscoveryCallbackStart = legacyExecuteSource.indexOf(
+  "Object.defineProperty(agenticExecutionOptions, 'readMcpDiscovery'"
+);
+assert.ok(
+  privateMcpDiscoveryCallbackStart >= 0,
+  'missing private readMcpDiscovery callback'
+);
+assert.ok(
+  legacyExecuteSource
+    .slice(privateMcpDiscoveryCallbackStart, privateMcpDiscoveryCallbackStart + 240)
+    .includes('enumerable: false'),
+  'readMcpDiscovery must remain non-enumerable'
+);
+const mcpDiscoveryRouteStart = legacyExecuteSource.indexOf(
+  'const mcpDiscoveryBrokerFactory = agenticMcpDiscoveryBrokerFactoryInstance;'
+);
+const mcpDiscoveryRouteEnd = legacyExecuteSource.indexOf(
+  'const agenticExecutionOptions = {',
+  mcpDiscoveryRouteStart
+);
+const mcpDiscoveryRouteSource = legacyExecuteSource.slice(
+  mcpDiscoveryRouteStart,
+  mcpDiscoveryRouteEnd
+);
+for (const forbiddenMcpRouteToken of [
+  'externalMcpBridge',
+  'discoverTools',
+  'callTool',
+  'endpoint',
+  'includeSecrets',
+  'serverRegistry',
+]) {
+  assert.strictEqual(
+    mcpDiscoveryRouteSource.includes(forbiddenMcpRouteToken),
+    false,
+    `the MCP cache-only route must not receive ${forbiddenMcpRouteToken}`
+  );
+}
+
+assertInOrder(
+  legacyExecuteSource,
+  [
     "readAgenticDeleteDataProperty(\n      executionContext,\n      'projectRootLease'",
     "readAgenticDeleteDataProperty(projectRootLease, 'reader')",
     'const domainReadBrokerFactory = agenticDomainReadBrokerFactoryInstance;',
@@ -893,6 +946,43 @@ assertInOrder(
   ],
   'the read-only domain broker factory must be composed before coordinated execution starts'
 );
+assertInOrder(
+  mainSource,
+  [
+    'const agenticMcpDiscoveryBrokerFactory = createAgenticMcpDiscoveryBrokerFactory({',
+    'authorizeLifecycle: authorizeAgenticDeleteLifecycle,',
+    'authorizeRoot: authorizeAgenticDeleteRoot,',
+    'authorizeEffectFrontier: authorizeAgenticDeleteEffectFrontier,',
+    'readDiscoveryCache: () => externalMcpDiscoveryCacheService.listDiscoveries(),',
+    'agenticMcpDiscoveryBrokerFactoryInstance = agenticMcpDiscoveryBrokerFactory;',
+    'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
+  ],
+  'the cache-only MCP discovery broker must be composed before coordinated execution starts'
+);
+const mcpDiscoveryCompositionStart = mainSource.indexOf(
+  'const agenticMcpDiscoveryBrokerFactory = createAgenticMcpDiscoveryBrokerFactory({'
+);
+const mcpDiscoveryCompositionEnd = mainSource.indexOf(
+  'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
+  mcpDiscoveryCompositionStart
+);
+const mcpDiscoveryCompositionSource = mainSource.slice(
+  mcpDiscoveryCompositionStart,
+  mcpDiscoveryCompositionEnd
+);
+for (const forbiddenMcpCompositionToken of [
+  'externalMcpBridgeService',
+  'externalMcpServerRegistryService',
+  'discoverTools',
+  'callTool',
+  'includeSecrets',
+]) {
+  assert.strictEqual(
+    mcpDiscoveryCompositionSource.includes(forbiddenMcpCompositionToken),
+    false,
+    `MCP discovery composition must not receive ${forbiddenMcpCompositionToken}`
+  );
+}
 
 const releaseHookSource = extractFunctionDeclaration(
   mainSource,

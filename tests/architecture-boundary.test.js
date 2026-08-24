@@ -567,6 +567,9 @@ function assertExecutionWorkspaceBoundary() {
   const agenticGitReadBrokerFactorySource = read(
     'main/services/agentic_git_read_broker_factory.js'
   );
+  const agenticMcpDiscoveryBrokerFactorySource = read(
+    'main/services/agentic_mcp_discovery_broker_factory.js'
+  );
   const brokerSandboxRegistrySource = read(
     'main/services/execution_isolation_broker_sandbox_registry.js'
   );
@@ -886,6 +889,9 @@ function assertExecutionWorkspaceBoundary() {
       && mainSource.includes(
         "require('./main/services/agentic_git_read_broker_factory')"
       )
+      && mainSource.includes(
+        "require('./main/services/agentic_mcp_discovery_broker_factory')"
+      )
       && mainSource.includes('createExecutionIsolationRuntimeServices({')
       && mainSource.includes('executionIsolationRuntimeServices = runtimeServices;'),
     'production must compose portable backends, the job-bound executor, and its broker route through one lifecycle-owned boundary'
@@ -924,9 +930,39 @@ function assertExecutionWorkspaceBoundary() {
       ),
     'agentic Git status must be a fixed read-only process capability through the generic broker and private executor'
   );
+  assert.ok(
+    agenticMcpDiscoveryBrokerFactorySource.includes('createProjectCapabilityBroker({')
+      && agenticMcpDiscoveryBrokerFactorySource.includes(
+        'kind: PROJECT_CAPABILITY_KINDS.MCP'
+      )
+      && agenticMcpDiscoveryBrokerFactorySource.includes(
+        'effects: [PROJECT_CAPABILITY_EFFECTS.FILESYSTEM_READ]'
+      )
+      && agenticMcpDiscoveryBrokerFactorySource.includes(
+        "source: 'local_cache'"
+      )
+      && agenticMcpDiscoveryBrokerFactorySource.includes(
+        'externalCallsEnabled: false'
+      )
+      && agenticMcpDiscoveryBrokerFactorySource.includes(
+        "origin: 'agentic_tool_loop'"
+      ),
+    'agentic MCP discovery must be a job-bound local-cache read through the generic broker'
+  );
+  assertDoesNotMatch(
+    agenticMcpDiscoveryBrokerFactorySource,
+    /PROJECT_CAPABILITY_EFFECTS\.(?:EXTERNAL_READ|EXTERNAL_MUTATION|NETWORK_ACCESS|PROCESS_EXECUTE|SECRET_ACCESS)/,
+    'cached MCP discovery must declare only the local filesystem-read effect'
+  );
+  assertDoesNotMatch(
+    agenticMcpDiscoveryBrokerFactorySource,
+    /external_mcp_(?:bridge|server_registry)_service|discoverTools|callTool|includeSecrets/,
+    'cached MCP discovery must not own server registry, transport, refresh, invocation, or secret access'
+  );
   for (const [label, source] of [
     ['agentic process broker factory', agenticProcessBrokerFactorySource],
     ['agentic Git read broker factory', agenticGitReadBrokerFactorySource],
+    ['agentic MCP discovery broker factory', agenticMcpDiscoveryBrokerFactorySource],
     ['execution isolation broker registry', brokerSandboxRegistrySource],
   ]) {
     assertDoesNotMatch(source, /require\(['"](?:electron|child_process)['"]\)/,
@@ -981,8 +1017,17 @@ function assertExecutionWorkspaceBoundary() {
       )
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:agentic-git-read-broker'
+      )
+      && packageConfig.scripts['test:agentic-mcp-discovery-broker'].includes(
+        'agentic-mcp-discovery-broker-factory.test.js'
+      )
+      && packageConfig.scripts['test:agentic-mcp-discovery-broker'].includes(
+        'test:mcp-discovery-cache'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:agentic-mcp-discovery-broker'
       ),
-    'aggregate gates must run gateway, session, executor, broker registry, process route, and fixed Git read tests'
+    'aggregate gates must run gateway, session, executor, broker registry, process route, fixed Git reads, and cached MCP discovery tests'
   );
   assertDoesNotMatch(
     isolationProviderFactorySource,

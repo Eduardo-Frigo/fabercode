@@ -1,4 +1,5 @@
 const EXTERNAL_MCP_DISCOVERY_CACHE_SCHEMA_VERSION = 'faber-external-mcp-discovery-cache-v1';
+const EXTERNAL_MCP_DISCOVERY_CACHE_MAX_STORE_BYTES = 8 * 1024 * 1024;
 
 function normalizeText(value = '') {
   return String(value || '').trim();
@@ -51,20 +52,53 @@ function createExternalMcpDiscoveryCacheService(dependencies = {}) {
     path,
     getUserDataPath,
     storeFileName = 'external-mcp-discovery-cache.json',
+    maxStoreBytes = EXTERNAL_MCP_DISCOVERY_CACHE_MAX_STORE_BYTES,
     now = () => new Date().toISOString(),
   } = dependencies;
+  if (!Number.isSafeInteger(maxStoreBytes) || maxStoreBytes < 1) {
+    throw new TypeError('External MCP discovery cache maxStoreBytes must be positive');
+  }
 
   function requireDependency(name, value) {
     if (!value) throw new Error(`External MCP discovery cache dependency missing: ${name}`);
   }
 
-  function getStorePath() {
+  function getStorePath({ ensureDirectory = false } = {}) {
     requireDependency('fs', fs);
     requireDependency('path', path);
     requireDependency('getUserDataPath', getUserDataPath);
     const root = getUserDataPath();
-    if (!fs.existsSync(root)) fs.mkdirSync(root, { recursive: true });
+    if (ensureDirectory && !fs.existsSync(root)) fs.mkdirSync(root, { recursive: true });
     return path.join(root, storeFileName);
+  }
+
+  function readBoundedStoreText(storePath) {
+    let descriptor = null;
+    try {
+      descriptor = fs.openSync(storePath, 'r');
+      const before = fs.fstatSync(descriptor);
+      if (!before.isFile() || !Number.isSafeInteger(before.size)
+        || before.size < 0 || before.size > maxStoreBytes) return null;
+      const content = Buffer.alloc(before.size);
+      let offset = 0;
+      while (offset < content.length) {
+        const bytesRead = fs.readSync(
+          descriptor,
+          content,
+          offset,
+          content.length - offset,
+          offset
+        );
+        if (!Number.isSafeInteger(bytesRead) || bytesRead < 1) return null;
+        offset += bytesRead;
+      }
+      const after = fs.fstatSync(descriptor);
+      if (after.dev !== before.dev || after.ino !== before.ino
+        || after.size !== before.size || after.mtimeMs !== before.mtimeMs) return null;
+      return content.toString('utf8');
+    } finally {
+      if (descriptor !== null) fs.closeSync(descriptor);
+    }
   }
 
   function readRawStore() {
@@ -77,7 +111,9 @@ function createExternalMcpDiscoveryCacheService(dependencies = {}) {
       };
     }
     try {
-      const parsed = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+      const serialized = readBoundedStoreText(storePath);
+      if (serialized === null) throw new Error('External MCP discovery cache is unreadable');
+      const parsed = JSON.parse(serialized);
       const entries = parsed && parsed.entries && typeof parsed.entries === 'object' && !Array.isArray(parsed.entries)
         ? parsed.entries
         : {};
@@ -100,7 +136,7 @@ function createExternalMcpDiscoveryCacheService(dependencies = {}) {
   }
 
   function writeRawStore(entries = {}) {
-    const storePath = getStorePath();
+    const storePath = getStorePath({ ensureDirectory: true });
     const normalizedEntries = Object.keys(entries || {}).reduce((acc, serverId) => {
       const entry = normalizeEntry(entries[serverId], serverId);
       if (entry.serverId) acc[entry.serverId] = entry;
@@ -190,6 +226,7 @@ function createExternalMcpDiscoveryCacheService(dependencies = {}) {
 }
 
 module.exports = {
+  EXTERNAL_MCP_DISCOVERY_CACHE_MAX_STORE_BYTES,
   EXTERNAL_MCP_DISCOVERY_CACHE_SCHEMA_VERSION,
   createExternalMcpDiscoveryCacheService,
 };

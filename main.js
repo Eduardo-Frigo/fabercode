@@ -214,6 +214,9 @@ const {
   createAgenticGitReadBrokerFactory,
 } = require('./main/services/agentic_git_read_broker_factory');
 const {
+  createAgenticMcpDiscoveryBrokerFactory,
+} = require('./main/services/agentic_mcp_discovery_broker_factory');
+const {
   createAgenticProcessBrokerFactory,
 } = require('./main/services/agentic_process_broker_factory');
 const {
@@ -1187,6 +1190,7 @@ let agenticDeleteMutationBackendSelection = null;
 let agenticDeleteRuntimeServiceInstance = null;
 let agenticDomainReadBrokerFactoryInstance = null;
 let agenticGitReadBrokerFactoryInstance = null;
+let agenticMcpDiscoveryBrokerFactoryInstance = null;
 let agenticProcessBrokerFactoryInstance = null;
 let agenticDeleteStartupRecoveryHealthy = false;
 let assistantExecutionCoordinatorInstance = null;
@@ -6205,10 +6209,13 @@ app.whenReady().then(async () => {
         const processBinding = currentAgenticDeleteBinding(authorityBinding);
         const gitReadBrokerFactory = agenticGitReadBrokerFactoryInstance;
         const gitReadBinding = currentAgenticDeleteBinding(authorityBinding);
+        const mcpDiscoveryBrokerFactory = agenticMcpDiscoveryBrokerFactoryInstance;
+        const mcpDiscoveryBinding = currentAgenticDeleteBinding(authorityBinding);
         const domainReadBrokerFactory = agenticDomainReadBrokerFactoryInstance;
         const domainReadBinding = currentAgenticDeleteBinding(authorityBinding);
         let processRoute = null;
         let gitReadRoute = null;
+        let mcpDiscoveryRoute = null;
         let domainReadRoute = null;
         if (processBrokerFactory && processBinding && sandboxExecutor) {
           try {
@@ -6233,6 +6240,18 @@ app.whenReady().then(async () => {
             appendAuditEvent('assistant.agentic_git_read_route_rejected', {
               jobId,
               reason: 'git_read_route_invalid',
+            });
+          }
+        }
+        if (mcpDiscoveryBrokerFactory && mcpDiscoveryBinding) {
+          try {
+            mcpDiscoveryRoute = mcpDiscoveryBrokerFactory.createRoute(Object.freeze({
+              binding: mcpDiscoveryBinding,
+            }));
+          } catch {
+            appendAuditEvent('assistant.agentic_mcp_discovery_route_rejected', {
+              jobId,
+              reason: 'mcp_discovery_route_invalid',
             });
           }
         }
@@ -6297,6 +6316,14 @@ app.whenReady().then(async () => {
             configurable: false,
             enumerable: false,
             value: () => gitReadRoute.readDiff(),
+            writable: false,
+          });
+        }
+        if (mcpDiscoveryRoute) {
+          Object.defineProperty(agenticExecutionOptions, 'readMcpDiscovery', {
+            configurable: false,
+            enumerable: false,
+            value: () => mcpDiscoveryRoute.readCached(),
             writable: false,
           });
         }
@@ -7131,6 +7158,14 @@ app.whenReady().then(async () => {
     })
     : null;
   agenticGitReadBrokerFactoryInstance = agenticGitReadBrokerFactory;
+  const agenticMcpDiscoveryBrokerFactory = createAgenticMcpDiscoveryBrokerFactory({
+    authorizeLifecycle: authorizeAgenticDeleteLifecycle,
+    authorizeRoot: authorizeAgenticDeleteRoot,
+    authorizeEffectFrontier: authorizeAgenticDeleteEffectFrontier,
+    readDiscoveryCache: () => externalMcpDiscoveryCacheService.listDiscoveries(),
+    audit: (event) => appendAuditEvent('assistant.agentic_mcp_discovery_capability', event),
+  });
+  agenticMcpDiscoveryBrokerFactoryInstance = agenticMcpDiscoveryBrokerFactory;
   const agenticDomainReadBrokerFactory = createAgenticDomainReadBrokerFactory({
     authorizeLifecycle: authorizeAgenticDeleteLifecycle,
     authorizeRoot: authorizeAgenticDeleteRoot,
