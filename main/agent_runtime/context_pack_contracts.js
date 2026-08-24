@@ -148,6 +148,7 @@ const SHA256_DIGEST = /^sha256:[a-f0-9]{64}$/;
 const PACK_ID = /^context-pack:[a-f0-9]{64}$/;
 const MAX_SUMMARY_CHARS = 65_536;
 const MAX_CITATIONS = 32;
+const SAFE_LOCATOR_PAYLOAD = /^[A-Za-z0-9._:@/+-]{1,480}$/;
 
 function exactDataFields(value, allowedKeys, requiredKeys = allowedKeys) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
@@ -232,8 +233,13 @@ function createContextPackCitation(input = {}) {
     throw new TypeError('ContextPack citation kind is invalid');
   }
   const locator = safeText(fields.get('locator'), 'ContextPack citation locator', 512);
-  if (!locator.startsWith(CITATION_SCHEMES[kind])
-    || /\s/.test(locator) || locator.includes('..')) {
+  const scheme = CITATION_SCHEMES[kind];
+  const locatorPayload = locator.startsWith(scheme) ? locator.slice(scheme.length) : '';
+  if (!SAFE_LOCATOR_PAYLOAD.test(locatorPayload)
+    || locatorPayload.startsWith('/')
+    || /^[A-Za-z]:[\\/]/.test(locatorPayload)
+    || locatorPayload.includes('..')
+    || locatorPayload.includes('://')) {
     throw new TypeError('ContextPack citation locator is invalid');
   }
   const revision = safeText(

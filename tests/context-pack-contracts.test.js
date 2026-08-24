@@ -164,6 +164,18 @@ assert.throws(() => createContextPackCitation({
   digest: digest('c'),
 }), /locator/i);
 assert.throws(() => createContextPackCitation({
+  kind: CONTEXT_PACK_CITATION_KINDS.PROJECT_FILE,
+  locator: `project-file://${['', 'private', 'example', 'private-project', 'file.js'].join('/')}`,
+  revision: '1',
+  digest: digest('c'),
+}), /locator/i);
+assert.throws(() => createContextPackCitation({
+  kind: CONTEXT_PACK_CITATION_KINDS.PROJECT_FILE,
+  locator: `project-file://${['C:', 'private-project', 'file.js'].join('/')}`,
+  revision: '1',
+  digest: digest('c'),
+}), /locator/i);
+assert.throws(() => createContextPackCitation({
   kind: CONTEXT_PACK_CITATION_KINDS.CORTEX_MEMORY,
   locator: 'cortex://memory/1',
   revision: '1',
