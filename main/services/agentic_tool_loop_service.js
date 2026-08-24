@@ -35,6 +35,9 @@ const RUN_COMMAND_MAX_ARG_LENGTH = 8192;
 const RUN_COMMAND_MAX_COMMAND_LENGTH = 4096;
 const RUN_COMMAND_MIN_TIMEOUT_MS = 1000;
 const RUN_COMMAND_MAX_TIMEOUT_MS = 600000;
+const READ_COMMAND_OUTPUT_MAX_BYTES = 1024 * 1024;
+const WAIT_COMMAND_MAX_TIMEOUT_MS = 60000;
+const PROCESS_OUTPUT_STREAMS = new Set(['stdout', 'stderr', 'system']);
 const RUN_COMMAND_PUBLIC_STATUSES = new Set([
   'running',
   'succeeded',
@@ -248,6 +251,289 @@ function sanitizeRunCommandToolResult(raw) {
   }
 }
 
+function normalizeExactProcessOperationInput(input, keys) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+    || util.types.isProxy(input)) {
+    throw new TypeError('Process operation input must be a plain data record');
+  }
+  const prototype = Object.getPrototypeOf(input);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError('Process operation input must be a plain data record');
+  }
+  const ownKeys = Reflect.ownKeys(input);
+  if (ownKeys.length !== keys.length
+    || keys.some((key) => !ownKeys.includes(key))
+    || ownKeys.some((key) => typeof key !== 'string' || !keys.includes(key))) {
+    throw new TypeError('Process operation input contains unsupported fields');
+  }
+  const values = {};
+  for (const key of ownKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (!descriptor || descriptor.enumerable !== true
+      || !Object.hasOwn(descriptor, 'value') || descriptor.value === undefined) {
+      throw new TypeError('Process operation input must contain data properties only');
+    }
+    values[key] = descriptor.value;
+  }
+  return values;
+}
+
+function boundedProcessInteger(value, {
+  minimum = 0,
+  maximum = Number.MAX_SAFE_INTEGER,
+} = {}) {
+  return Number.isSafeInteger(value) && !Object.is(value, -0)
+    && value >= minimum && value <= maximum;
+}
+
+function normalizeReadCommandOutputToolInput(input) {
+  const values = normalizeExactProcessOperationInput(input, ['cursor', 'maxBytes']);
+  if (!boundedProcessInteger(values.cursor)
+    || !boundedProcessInteger(values.maxBytes, {
+      minimum: 1,
+      maximum: READ_COMMAND_OUTPUT_MAX_BYTES,
+    })) {
+    throw new TypeError('read_command_output bounds are invalid');
+  }
+  return Object.freeze({ cursor: values.cursor, maxBytes: values.maxBytes });
+}
+
+function normalizeWaitCommandToolInput(input) {
+  const values = normalizeExactProcessOperationInput(input, ['afterRevision', 'timeoutMs']);
+  if (!boundedProcessInteger(values.afterRevision)
+    || !boundedProcessInteger(values.timeoutMs, {
+      minimum: 1,
+      maximum: WAIT_COMMAND_MAX_TIMEOUT_MS,
+    })) {
+    throw new TypeError('wait_command bounds are invalid');
+  }
+  return Object.freeze({
+    afterRevision: values.afterRevision,
+    timeoutMs: values.timeoutMs,
+  });
+}
+
+function normalizeStopCommandToolInput(input) {
+  const values = normalizeExactProcessOperationInput(input, ['expectedRevision']);
+  if (!boundedProcessInteger(values.expectedRevision, { minimum: 1 })) {
+    throw new TypeError('stop_command revision is invalid');
+  }
+  return Object.freeze({ expectedRevision: values.expectedRevision });
+}
+
+function failedProcessOperationToolResult(operation, code) {
+  return Object.freeze({
+    ok: false,
+    status: 'failed',
+    message: `A operação ${operation} do processo isolado foi negada ou falhou.`,
+    errors: Object.freeze([code]),
+    modifiedFiles: Object.freeze([]),
+    data: null,
+  });
+}
+
+function safeProcessOperationError(raw, fallback) {
+  const rawCode = ownDataValue(raw, 'code');
+  return typeof rawCode === 'string' && RUN_COMMAND_SAFE_ERROR_CODE.test(rawCode)
+    ? rawCode
+    : fallback;
+}
+
+function sanitizeProcessSnapshot(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || util.types.isProxy(raw)) {
+    return null;
+  }
+  const prototype = Object.getPrototypeOf(raw);
+  const status = ownDataValue(raw, 'status');
+  const revision = ownDataValue(raw, 'revision');
+  const exitCode = ownDataValue(raw, 'exitCode');
+  const timedOut = ownDataValue(raw, 'timedOut');
+  const stopped = ownDataValue(raw, 'stopped');
+  const availableFromCursor = ownDataValue(raw, 'availableFromCursor');
+  const outputCursor = ownDataValue(raw, 'outputCursor');
+  if ((prototype !== Object.prototype && prototype !== null)
+    || !RUN_COMMAND_PUBLIC_STATUSES.has(status)
+    || !boundedProcessInteger(revision, { minimum: 1 })
+    || (exitCode !== null && (!Number.isSafeInteger(exitCode) || Object.is(exitCode, -0)))
+    || typeof timedOut !== 'boolean' || typeof stopped !== 'boolean'
+    || !boundedProcessInteger(availableFromCursor)
+    || !boundedProcessInteger(outputCursor, { minimum: availableFromCursor })) {
+    return null;
+  }
+  return Object.freeze({
+    status,
+    revision,
+    exitCode,
+    timedOut,
+    stopped,
+    availableFromCursor,
+    outputCursor,
+  });
+}
+
+function sanitizeReadCommandOutputToolResult(raw, request) {
+  try {
+    const snapshot = sanitizeProcessSnapshot(raw);
+    if (!snapshot) {
+      return failedProcessOperationToolResult(
+        'read_command_output',
+        safeProcessOperationError(raw, 'READ_COMMAND_OUTPUT_INVALID_RESULT')
+      );
+    }
+    const cursor = ownDataValue(raw, 'cursor');
+    const nextCursor = ownDataValue(raw, 'nextCursor');
+    const truncated = ownDataValue(raw, 'truncated');
+    const eof = ownDataValue(raw, 'eof');
+    const chunks = ownDataValue(raw, 'chunks');
+    if (cursor !== request.cursor || !boundedProcessInteger(nextCursor)
+      || nextCursor < Math.max(cursor, snapshot.availableFromCursor)
+      || nextCursor > snapshot.outputCursor
+      || typeof truncated !== 'boolean'
+      || truncated !== (cursor < snapshot.availableFromCursor)
+      || typeof eof !== 'boolean'
+      || !Array.isArray(chunks) || util.types.isProxy(chunks)
+      || Object.getPrototypeOf(chunks) !== Array.prototype) {
+      return failedProcessOperationToolResult(
+        'read_command_output',
+        'READ_COMMAND_OUTPUT_INVALID_RESULT'
+      );
+    }
+    const chunkKeys = Reflect.ownKeys(chunks).filter((key) => key !== 'length');
+    if (chunkKeys.length !== chunks.length
+      || chunkKeys.some((key, index) => key !== String(index))) {
+      return failedProcessOperationToolResult(
+        'read_command_output',
+        'READ_COMMAND_OUTPUT_INVALID_RESULT'
+      );
+    }
+    let expectedCursor = Math.max(cursor, snapshot.availableFromCursor);
+    let totalBytes = 0;
+    const sanitizedChunks = [];
+    for (const key of chunkKeys) {
+      const descriptor = Object.getOwnPropertyDescriptor(chunks, key);
+      const chunk = descriptor && Object.hasOwn(descriptor, 'value')
+        ? descriptor.value
+        : null;
+      if (!descriptor || descriptor.enumerable !== true || !chunk
+        || typeof chunk !== 'object' || Array.isArray(chunk) || util.types.isProxy(chunk)
+        || (Object.getPrototypeOf(chunk) !== Object.prototype
+          && Object.getPrototypeOf(chunk) !== null)) {
+        return failedProcessOperationToolResult(
+          'read_command_output',
+          'READ_COMMAND_OUTPUT_INVALID_RESULT'
+        );
+      }
+      const startCursor = ownDataValue(chunk, 'startCursor');
+      const endCursor = ownDataValue(chunk, 'endCursor');
+      const stream = ownDataValue(chunk, 'stream');
+      const text = ownDataValue(chunk, 'text');
+      const byteLength = typeof text === 'string' ? Buffer.byteLength(text, 'utf8') : -1;
+      if (startCursor !== expectedCursor || !boundedProcessInteger(endCursor)
+        || endCursor <= startCursor || endCursor - startCursor !== byteLength
+        || !PROCESS_OUTPUT_STREAMS.has(stream)) {
+        return failedProcessOperationToolResult(
+          'read_command_output',
+          'READ_COMMAND_OUTPUT_INVALID_RESULT'
+        );
+      }
+      totalBytes += byteLength;
+      if (totalBytes > request.maxBytes) {
+        return failedProcessOperationToolResult(
+          'read_command_output',
+          'READ_COMMAND_OUTPUT_INVALID_RESULT'
+        );
+      }
+      expectedCursor = endCursor;
+      sanitizedChunks.push(Object.freeze({ startCursor, endCursor, stream, text }));
+    }
+    const terminal = processStatusIsTerminal(snapshot.status);
+    if (expectedCursor !== nextCursor
+      || (eof && (!terminal || nextCursor !== snapshot.outputCursor))) {
+      return failedProcessOperationToolResult(
+        'read_command_output',
+        'READ_COMMAND_OUTPUT_INVALID_RESULT'
+      );
+    }
+    return Object.freeze({
+      ok: true,
+      status: 'completed',
+      message: 'Saída limitada do processo isolado lida pelo cursor.',
+      errors: Object.freeze([]),
+      modifiedFiles: Object.freeze([]),
+      data: Object.freeze({
+        ...snapshot,
+        cursor,
+        nextCursor,
+        truncated,
+        chunks: Object.freeze(sanitizedChunks),
+        eof,
+      }),
+    });
+  } catch {
+    return failedProcessOperationToolResult(
+      'read_command_output',
+      'READ_COMMAND_OUTPUT_INVALID_RESULT'
+    );
+  }
+}
+
+function processStatusIsTerminal(status) {
+  return status === 'succeeded' || status === 'failed'
+    || status === 'stopped' || status === 'timed_out';
+}
+
+function sanitizeWaitCommandToolResult(raw, request) {
+  try {
+    const snapshot = sanitizeProcessSnapshot(raw);
+    const changed = ownDataValue(raw, 'changed');
+    if (!snapshot || typeof changed !== 'boolean'
+      || snapshot.revision < request.afterRevision
+      || changed !== (snapshot.revision > request.afterRevision)) {
+      return failedProcessOperationToolResult(
+        'wait_command',
+        safeProcessOperationError(raw, 'WAIT_COMMAND_INVALID_RESULT')
+      );
+    }
+    return Object.freeze({
+      ok: true,
+      status: 'completed',
+      message: 'Estado do processo isolado observado pelo broker.',
+      errors: Object.freeze([]),
+      modifiedFiles: Object.freeze([]),
+      data: Object.freeze({ ...snapshot, changed }),
+    });
+  } catch {
+    return failedProcessOperationToolResult('wait_command', 'WAIT_COMMAND_INVALID_RESULT');
+  }
+}
+
+function sanitizeStopCommandToolResult(raw, request) {
+  try {
+    const snapshot = sanitizeProcessSnapshot(raw);
+    const treeTerminated = ownDataValue(raw, 'treeTerminated');
+    const idempotent = ownDataValue(raw, 'idempotent');
+    if (!snapshot || treeTerminated !== true || typeof idempotent !== 'boolean'
+      || !processStatusIsTerminal(snapshot.status)
+      || snapshot.revision < request.expectedRevision
+      || (!idempotent && snapshot.revision <= request.expectedRevision)) {
+      return failedProcessOperationToolResult(
+        'stop_command',
+        safeProcessOperationError(raw, 'STOP_COMMAND_INVALID_RESULT')
+      );
+    }
+    return Object.freeze({
+      ok: true,
+      status: 'completed',
+      message: 'Árvore do processo isolado encerrada pelo broker.',
+      errors: Object.freeze([]),
+      modifiedFiles: Object.freeze([]),
+      data: Object.freeze({ ...snapshot, treeTerminated: true, idempotent }),
+    });
+  } catch {
+    return failedProcessOperationToolResult('stop_command', 'STOP_COMMAND_INVALID_RESULT');
+  }
+}
+
 function normalizeDeletePathsToolInput(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new TypeError('delete_paths input must be a plain data record');
@@ -392,6 +678,19 @@ function safeToolCallKey(toolName, input) {
     try {
       const normalized = normalizeDeletePathsToolInput(input);
       return `${toolName}:${JSON.stringify(normalized.paths)}`;
+    } catch {
+      return `${toolName}:invalid_input`;
+    }
+  }
+  const processOperationNormalizers = {
+    read_command_output: normalizeReadCommandOutputToolInput,
+    wait_command: normalizeWaitCommandToolInput,
+    stop_command: normalizeStopCommandToolInput,
+  };
+  if (Object.hasOwn(processOperationNormalizers, toolName)) {
+    try {
+      const normalized = processOperationNormalizers[toolName](input);
+      return `${toolName}:${JSON.stringify(normalized)}`;
     } catch {
       return `${toolName}:invalid_input`;
     }
@@ -559,6 +858,10 @@ function createAgenticToolLoopService(dependencies = {}) {
       executionContext,
       'processExecutionAvailable'
     ) === true;
+    const processControlAvailable = ownDataValue(
+      executionContext,
+      'processControlAvailable'
+    ) === true;
     return [
       'Você é o runtime agentic do Faber Code. Seu trabalho é agir como um engenheiro de software sênior direto no projeto.',
       'IMPORTANTE: Você está na fase de EXECUÇÃO. Não responda apenas com texto (ex: "Vou começar"). Você deve chamar ferramentas imediatamente.',
@@ -566,7 +869,9 @@ function createAgenticToolLoopService(dependencies = {}) {
       '1. PREFIRA EDITAR A REESCREVER: Nunca use write_file para modificar um arquivo existente inteiro. Sempre use `edit_file_fuzzy`.',
       '2. COMO USAR edit_file_fuzzy: Copie um bloco único e exato do arquivo (targetContent) e forneça a nova versão (replacementContent). O sistema ignora espaços e indentações para te ajudar a encontrar o bloco.',
       processExecutionAvailable
-        ? '3. PROCESSOS ISOLADOS: Use `run_command` somente para executáveis e argumentos explícitos dentro do sandbox do job. Rede, shell composto e preview continuam indisponíveis; nunca afirme uma validação sem evidência retornada pelas ferramentas.'
+        ? processControlAvailable
+          ? '3. PROCESSOS ISOLADOS: Use `run_command` somente para executáveis e argumentos explícitos. Acompanhe com `read_command_output` e `wait_command`; use `stop_command` para encerrar a árvore. Rede, shell composto e preview continuam indisponíveis; nunca afirme uma validação sem evidência retornada pelas ferramentas.'
+          : '3. PROCESSOS ISOLADOS: Use `run_command` somente para executáveis e argumentos explícitos dentro do sandbox do job. Rede, shell composto e preview continuam indisponíveis; nunca afirme uma validação sem evidência retornada pelas ferramentas.'
         : '3. VALIDAÇÃO HONESTA: As ferramentas atuais não executam lint, testes ou builds nem capturam preview. Nunca afirme que essas validações foram executadas; informe-as como pendentes para o usuário.',
       '4. MAPA DA APLICAÇÃO E MILESTONES: `.faber/**` é um namespace privado do runtime — nunca leia, crie ou edite arquivos nele. Ao alterar o produto, mantenha atualizados somente os documentos públicos aplicáveis em `docs/application-map/` e `docs/milestones/`; os espelhos internos são responsabilidade de serviços main-only.',
       '## Conclusão',
@@ -588,6 +893,12 @@ function createAgenticToolLoopService(dependencies = {}) {
     const executeProcess = processExecutionPolicy === AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED
       ? processCallback
       : null;
+    const readProcessCallback = optionalExecutionCallback(executionContext, 'readProcess');
+    const waitProcessCallback = optionalExecutionCallback(executionContext, 'waitProcess');
+    const stopProcessCallback = optionalExecutionCallback(executionContext, 'stopProcess');
+    const processControlAvailable = Boolean(
+      executeProcess && readProcessCallback && waitProcessCallback && stopProcessCallback
+    );
     const processSignal = typeof AbortSignal === 'function' && signal instanceof AbortSignal
       ? signal
       : null;
@@ -837,6 +1148,132 @@ function createAgenticToolLoopService(dependencies = {}) {
           return sanitizeRunCommandToolResult(rawResult);
         },
       }] : []),
+      ...(processControlAvailable ? [
+        {
+          name: 'read_command_output',
+          description: 'Lê uma faixa limitada da saída do processo isolado atual usando cursor.',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['cursor', 'maxBytes'],
+            properties: {
+              cursor: { type: 'integer', minimum: 0 },
+              maxBytes: {
+                type: 'integer',
+                minimum: 1,
+                maximum: READ_COMMAND_OUTPUT_MAX_BYTES,
+              },
+            },
+          },
+          execute: async (input = {}) => {
+            throwIfExecutionCancelled(signal, 'read_command_output:before_validation');
+            let normalized;
+            try {
+              normalized = normalizeReadCommandOutputToolInput(input);
+            } catch {
+              return failedProcessOperationToolResult(
+                'read_command_output',
+                'READ_COMMAND_OUTPUT_INVALID_INPUT'
+              );
+            }
+            throwIfExecutionCancelled(signal, 'read_command_output:before_callback');
+            let rawResult;
+            try {
+              rawResult = await readProcessCallback(normalized);
+            } catch (error) {
+              if (error instanceof AgenticExecutionCancelledError) throw error;
+              throwIfExecutionCancelled(signal, 'read_command_output:after_callback');
+              return failedProcessOperationToolResult(
+                'read_command_output',
+                'READ_COMMAND_OUTPUT_OPERATION_FAILED'
+              );
+            }
+            throwIfExecutionCancelled(signal, 'read_command_output:after_callback');
+            return sanitizeReadCommandOutputToolResult(rawResult, normalized);
+          },
+        },
+        {
+          name: 'wait_command',
+          description: 'Aguarda por tempo limitado uma mudança de revisão do processo isolado atual.',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['afterRevision', 'timeoutMs'],
+            properties: {
+              afterRevision: { type: 'integer', minimum: 0 },
+              timeoutMs: {
+                type: 'integer',
+                minimum: 1,
+                maximum: WAIT_COMMAND_MAX_TIMEOUT_MS,
+              },
+            },
+          },
+          execute: async (input = {}) => {
+            throwIfExecutionCancelled(signal, 'wait_command:before_validation');
+            let normalized;
+            try {
+              normalized = normalizeWaitCommandToolInput(input);
+            } catch {
+              return failedProcessOperationToolResult(
+                'wait_command',
+                'WAIT_COMMAND_INVALID_INPUT'
+              );
+            }
+            throwIfExecutionCancelled(signal, 'wait_command:before_callback');
+            let rawResult;
+            try {
+              rawResult = await waitProcessCallback(normalized);
+            } catch (error) {
+              if (error instanceof AgenticExecutionCancelledError) throw error;
+              throwIfExecutionCancelled(signal, 'wait_command:after_callback');
+              return failedProcessOperationToolResult(
+                'wait_command',
+                'WAIT_COMMAND_OPERATION_FAILED'
+              );
+            }
+            throwIfExecutionCancelled(signal, 'wait_command:after_callback');
+            return sanitizeWaitCommandToolResult(rawResult, normalized);
+          },
+        },
+        {
+          name: 'stop_command',
+          description: 'Encerra a árvore do processo isolado atual na revisão observada.',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['expectedRevision'],
+            properties: {
+              expectedRevision: { type: 'integer', minimum: 1 },
+            },
+          },
+          execute: async (input = {}) => {
+            throwIfExecutionCancelled(signal, 'stop_command:before_validation');
+            let normalized;
+            try {
+              normalized = normalizeStopCommandToolInput(input);
+            } catch {
+              return failedProcessOperationToolResult(
+                'stop_command',
+                'STOP_COMMAND_INVALID_INPUT'
+              );
+            }
+            throwIfExecutionCancelled(signal, 'stop_command:before_callback');
+            let rawResult;
+            try {
+              rawResult = await stopProcessCallback(normalized);
+            } catch (error) {
+              if (error instanceof AgenticExecutionCancelledError) throw error;
+              throwIfExecutionCancelled(signal, 'stop_command:after_callback');
+              return failedProcessOperationToolResult(
+                'stop_command',
+                'STOP_COMMAND_OPERATION_FAILED'
+              );
+            }
+            throwIfExecutionCancelled(signal, 'stop_command:after_callback');
+            return sanitizeStopCommandToolResult(rawResult, normalized);
+          },
+        },
+      ] : []),
       {
         name: 'finish_task',
         description: 'Encerra a execução do agente. Chame esta ferramenta quando terminar tudo ou não puder prosseguir.',
@@ -1119,13 +1556,21 @@ function createAgenticToolLoopService(dependencies = {}) {
     const deletePaths = optionalExecutionCallback(options, 'deletePaths');
     const processExecutionPolicy = ownDataValue(options, 'processExecutionPolicy');
     const executeProcess = optionalExecutionCallback(options, 'executeProcess');
+    const readProcess = optionalExecutionCallback(options, 'readProcess');
+    const waitProcess = optionalExecutionCallback(options, 'waitProcess');
+    const stopProcess = optionalExecutionCallback(options, 'stopProcess');
     const processExecutionAvailable = processExecutionPolicy
       === AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED && Boolean(executeProcess);
+    const processControlAvailable = processExecutionAvailable
+      && Boolean(readProcess && waitProcess && stopProcess);
     const tools = buildBoundTools(projectInfo, {
       signal,
       deletePaths,
       processExecutionPolicy,
       executeProcess,
+      readProcess,
+      waitProcess,
+      stopProcess,
     });
     const toolDefinitions = buildToolDefinitions(tools);
     const toolIndex = makeToolIndex(tools);
@@ -1134,7 +1579,10 @@ function createAgenticToolLoopService(dependencies = {}) {
       action.userMessage || '',
       action.attachments || []
     );
-    const systemPrompt = buildSystemPrompt(projectInfo, { processExecutionAvailable });
+    const systemPrompt = buildSystemPrompt(projectInfo, {
+      processExecutionAvailable,
+      processControlAvailable,
+    });
     const allTextParts = [];
     const modifiedFiles = new Set();
     const toolRuns = [];

@@ -513,6 +513,15 @@ async function run() {
         execute() {
           return Promise.reject(new Error('not exercised by this lifecycle test'));
         },
+        read() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
+        wait() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
+        stop() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
         close() {
           isolatedEvents.push('executor_close');
           return Promise.resolve(Object.freeze({
@@ -586,6 +595,15 @@ async function run() {
         execute() {
           return Promise.reject(new Error('stale executor must not run'));
         },
+        read() {
+          return Promise.reject(new Error('stale executor must not run'));
+        },
+        wait() {
+          return Promise.reject(new Error('stale executor must not run'));
+        },
+        stop() {
+          return Promise.reject(new Error('stale executor must not run'));
+        },
         close() {
           frontierCloseCalls += 1;
           return Promise.resolve(Object.freeze({
@@ -636,6 +654,15 @@ async function run() {
       return Object.freeze({
         version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
         execute() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
+        read() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
+        wait() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
+        stop() {
           return Promise.reject(new Error('not exercised by this lifecycle test'));
         },
         close() {
@@ -699,6 +726,15 @@ async function run() {
       return Object.freeze({
         version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
         execute() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
+        read() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
+        wait() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
+        stop() {
           return Promise.reject(new Error('not exercised by this lifecycle test'));
         },
         close() {
@@ -769,6 +805,15 @@ async function run() {
       return Object.freeze({
         version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
         execute() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
+        read() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
+        wait() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
+        stop() {
           return Promise.reject(new Error('not exercised by this lifecycle test'));
         },
         close() {

@@ -121,14 +121,16 @@ function dependencyHarness({
     opens: 0,
     closes: 0,
     execs: 0,
+    reads: 0,
+    waits: 0,
+    stops: 0,
     openInputs: [],
     execInputs: [],
+    readInputs: [],
+    waitInputs: [],
+    stopInputs: [],
+    receipts: [],
   };
-  const receipt = Object.freeze({
-    schemaVersion: 'test-process-receipt.v1',
-    status: 'running',
-    revision: 1,
-  });
   const session = Object.freeze({
     version: EXECUTION_ISOLATION_JOB_SESSION_VERSION,
     jobId: jobBinding.jobId,
@@ -137,13 +139,96 @@ function dependencyHarness({
       state.events.push('session:exec');
       state.execs += 1;
       state.execInputs.push(input);
+      const receipt = Object.freeze({
+        schemaVersion: 'test-process-receipt.v1',
+        executionId: input.sandboxRequest.executionId,
+        status: 'running',
+        revision: 1,
+        exitCode: null,
+        signal: null,
+        timedOut: false,
+        stopped: false,
+        availableFromCursor: 0,
+        outputCursor: 0,
+      });
+      state.receipts.push(receipt);
       return Promise.resolve(execDenied
         ? Object.freeze({ ok: false, code: 'PROCESS_REJECTED' })
         : Object.freeze({ ok: true, receipt }));
     },
-    read() { throw new Error('not used'); },
-    wait() { throw new Error('not used'); },
-    stop() { throw new Error('not used'); },
+    read(input) {
+      state.events.push('session:read');
+      state.reads += 1;
+      state.readInputs.push(input);
+      return Promise.resolve(Object.freeze({
+        ok: true,
+        result: Object.freeze({
+          version: 'test-process-read-result.v1',
+          executionId: input.executionId,
+          status: 'running',
+          revision: 1,
+          exitCode: null,
+          signal: null,
+          timedOut: false,
+          stopped: false,
+          cursor: input.cursor,
+          availableFromCursor: 0,
+          nextCursor: 4,
+          outputCursor: 4,
+          truncated: false,
+          chunks: Object.freeze([Object.freeze({
+            startCursor: 0,
+            endCursor: 4,
+            stream: 'stdout',
+            text: 'pass',
+          })]),
+          eof: false,
+        }),
+      }));
+    },
+    wait(input) {
+      state.events.push('session:wait');
+      state.waits += 1;
+      state.waitInputs.push(input);
+      return Promise.resolve(Object.freeze({
+        ok: true,
+        result: Object.freeze({
+          version: 'test-process-wait-result.v1',
+          executionId: input.executionId,
+          status: 'succeeded',
+          revision: input.afterRevision + 1,
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          stopped: false,
+          availableFromCursor: 0,
+          outputCursor: 4,
+          changed: true,
+        }),
+      }));
+    },
+    stop(input) {
+      state.events.push('session:stop');
+      state.stops += 1;
+      state.stopInputs.push(input);
+      return Promise.resolve(Object.freeze({
+        ok: true,
+        receipt: Object.freeze({
+          version: 'test-process-stop-receipt.v1',
+          executionId: input.executionId,
+          status: 'stopped',
+          revision: input.expectedRevision + 1,
+          exitCode: null,
+          signal: 'SIGTERM',
+          timedOut: false,
+          stopped: true,
+          availableFromCursor: 0,
+          outputCursor: 4,
+          treeTerminated: true,
+          idempotent: false,
+        }),
+      }));
+    },
     diagnostics() { return Object.freeze({ state: 'active' }); },
     close() { throw new Error('executor must close through the session service'); },
   });
@@ -194,7 +279,7 @@ function dependencyHarness({
     diagnostics() { return Object.freeze({ state: 'ready' }); },
     dispose() { throw new Error('not used'); },
   });
-  return { authorityService, jobBinding, jobSessionService, receipt, state };
+  return { authorityService, jobBinding, jobSessionService, state };
 }
 
 function createExecutor(harness) {
@@ -221,6 +306,9 @@ async function main() {
   assert.deepStrictEqual(Reflect.ownKeys(executor), [
     'version',
     'execute',
+    'read',
+    'wait',
+    'stop',
     'close',
     'diagnostics',
   ]);
@@ -228,7 +316,7 @@ async function main() {
   const request = sandboxRequest();
   const context = brokerContext();
   const output = await executor.execute(request, context);
-  assert.strictEqual(output, harness.receipt);
+  assert.strictEqual(output, harness.state.receipts[0]);
   assert.deepStrictEqual(harness.state.events, [
     'authority:1',
     'session:open',
@@ -251,7 +339,68 @@ async function main() {
     projectId: 'project-a',
     authorityChecks: 2,
     executions: 1,
+    reads: 0,
+    waits: 0,
+    stops: 0,
   }));
+
+  const processIdentity = output.executionId;
+  const readInput = Object.freeze({
+    executionId: processIdentity,
+    cursor: 0,
+    maxBytes: 4096,
+  });
+  const readResult = await executor.read(readInput);
+  assert.strictEqual(readResult.executionId, processIdentity);
+  assert.deepStrictEqual(harness.state.readInputs, [readInput]);
+
+  const waitInput = Object.freeze({
+    executionId: processIdentity,
+    afterRevision: 1,
+    timeoutMs: 1000,
+  });
+  const waitResult = await executor.wait(waitInput);
+  assert.strictEqual(waitResult.status, 'succeeded');
+  assert.deepStrictEqual(harness.state.waitInputs, [waitInput]);
+
+  const stopInput = Object.freeze({
+    executionId: processIdentity,
+    expectedRevision: 1,
+    reasonCode: 'AGENTIC_PROCESS_STOP_REQUESTED',
+  });
+  const stopResult = await executor.stop(stopInput);
+  assert.strictEqual(stopResult.treeTerminated, true);
+  assert.deepStrictEqual(harness.state.stopInputs, [stopInput]);
+  assert.deepStrictEqual(harness.state.events.slice(4), [
+    'authority:3',
+    'session:read',
+    'authority:4',
+    'session:wait',
+    'authority:5',
+    'session:stop',
+  ]);
+  assert.deepStrictEqual(executor.diagnostics(), Object.freeze({
+    version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
+    state: 'active',
+    jobId: 'job-a',
+    projectId: 'project-a',
+    authorityChecks: 5,
+    executions: 1,
+    reads: 1,
+    waits: 1,
+    stops: 1,
+  }));
+  const authorityChecksBeforeForeignRead = harness.state.authorityChecks;
+  await rejectedCode(
+    executor.read(Object.freeze({
+      executionId: `sandbox-exec:${'d'.repeat(64)}`,
+      cursor: 0,
+      maxBytes: 1024,
+    })),
+    EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.PROCESS_NOT_FOUND
+  );
+  assert.strictEqual(harness.state.authorityChecks, authorityChecksBeforeForeignRead);
+  assert.strictEqual(harness.state.reads, 1);
 
   const closed = await executor.close();
   assert.deepStrictEqual(closed, Object.freeze({
@@ -265,6 +414,10 @@ async function main() {
   assert.strictEqual(executor.diagnostics().state, 'closed');
   await rejectedCode(
     executor.execute(request, context),
+    EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.CLOSED
+  );
+  await rejectedCode(
+    executor.read(readInput),
     EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.CLOSED
   );
 
@@ -359,7 +512,7 @@ async function main() {
   });
   const integratedResult = await integratedBroker.execute(integratedRequest);
   assert.strictEqual(integratedResult.status, 'completed');
-  assert.deepStrictEqual(integratedResult.output, integratedHarness.receipt);
+  assert.deepStrictEqual(integratedResult.output, integratedHarness.state.receipts[0]);
   assert.strictEqual(directBackendExecutions, 0);
   assert.strictEqual(integratedHarness.state.execs, 1);
   assert.strictEqual(integratedHarness.state.authorityChecks, 2);
@@ -413,6 +566,30 @@ async function main() {
     EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.AUTHORITY_DENIED
   );
   assert.strictEqual(deniedHarness.state.authorityChecks, 1);
+
+  const revokedControlHarness = dependencyHarness({ denyOnAuthorityCheck: 3 });
+  const revokedControlExecutor = createExecutor(revokedControlHarness);
+  const revokedControlReceipt = await revokedControlExecutor.execute(
+    sandboxRequest(),
+    brokerContext()
+  );
+  await rejectedCode(
+    revokedControlExecutor.read(Object.freeze({
+      executionId: revokedControlReceipt.executionId,
+      cursor: 0,
+      maxBytes: 1024,
+    })),
+    EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.AUTHORITY_DENIED
+  );
+  assert.deepStrictEqual(revokedControlHarness.state.events, [
+    'authority:1',
+    'session:open',
+    'authority:2',
+    'session:exec',
+    'authority:3',
+    'session:close',
+  ]);
+  assert.strictEqual(revokedControlHarness.state.reads, 0);
 
   const asyncAuthorityHarness = dependencyHarness({ authorityReturnsPromise: true });
   await rejectedCode(

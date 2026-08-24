@@ -28,8 +28,8 @@ const {
   preflightDataGraph,
 } = require('../capabilities/execution_workspace_contract');
 
-const AGENTIC_PROCESS_BROKER_FACTORY_VERSION = 'agentic-process-broker-factory.v1';
-const AGENTIC_PROCESS_ROUTE_VERSION = 'agentic-process-route.v1';
+const AGENTIC_PROCESS_BROKER_FACTORY_VERSION = 'agentic-process-broker-factory.v2';
+const AGENTIC_PROCESS_ROUTE_VERSION = 'agentic-process-route.v2';
 const AGENTIC_PROCESS_DESCRIPTOR_VERSION = 'agentic-process-descriptor.v1';
 const PROCESS_CAPABILITY = 'process';
 const PROCESS_ACTION = 'run';
@@ -39,6 +39,15 @@ const MAX_COMMAND_LENGTH = 4_096;
 const MAX_ARGS = 128;
 const MAX_ARG_LENGTH = 8_192;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:@-]{1,256}$/;
+const BROKER_EXECUTION_ID = /^sandbox-exec:[a-f0-9]{64}$/;
+const MAX_READ_BYTES = 1024 * 1024;
+const MAX_WAIT_MS = 60_000;
+const PROCESS_STOP_REASON_CODE = 'AGENTIC_PROCESS_STOP_REQUESTED';
+const AGENTIC_PROCESS_ROUTE_REASONS = Object.freeze({
+  AUTHORITY_DENIED: 'AGENTIC_PROCESS_ROUTE_AUTHORITY_DENIED',
+  OPERATION_FAILED: 'AGENTIC_PROCESS_ROUTE_OPERATION_FAILED',
+  PROCESS_UNAVAILABLE: 'AGENTIC_PROCESS_ROUTE_PROCESS_UNAVAILABLE',
+});
 const OPTION_KEYS = Object.freeze([
   'authorizeLifecycle',
   'authorizeRoot',
@@ -56,6 +65,9 @@ const REQUIRED_OPTION_KEYS = Object.freeze([
 ]);
 const CREATE_KEYS = Object.freeze(['binding', 'sandboxExecutor']);
 const EXECUTE_KEYS = Object.freeze(['command', 'args', 'timeoutMs']);
+const READ_KEYS = Object.freeze(['cursor', 'maxBytes']);
+const WAIT_KEYS = Object.freeze(['afterRevision', 'timeoutMs']);
+const STOP_KEYS = Object.freeze(['expectedRevision']);
 const BINDING_KEYS = Object.freeze([
   'projectId',
   'canonicalRootPath',
@@ -229,6 +241,79 @@ function normalizeProcessInput(input) {
   });
 }
 
+function safeOperationInteger(value, {
+  minimum = 0,
+  maximum = Number.MAX_SAFE_INTEGER,
+} = {}) {
+  return Number.isSafeInteger(value) && !Object.is(value, -0)
+    && value >= minimum && value <= maximum;
+}
+
+function normalizeReadInput(input) {
+  const fields = exactOwnDataFields(input, READ_KEYS, READ_KEYS);
+  if (!fields || !safeOperationInteger(fields.get('cursor'))
+    || !safeOperationInteger(fields.get('maxBytes'), {
+      minimum: 1,
+      maximum: MAX_READ_BYTES,
+    })) {
+    throw new TypeError('Agentic process read input is invalid');
+  }
+  return Object.freeze({
+    cursor: fields.get('cursor'),
+    maxBytes: fields.get('maxBytes'),
+  });
+}
+
+function normalizeWaitInput(input) {
+  const fields = exactOwnDataFields(input, WAIT_KEYS, WAIT_KEYS);
+  if (!fields || !safeOperationInteger(fields.get('afterRevision'))
+    || !safeOperationInteger(fields.get('timeoutMs'), {
+      minimum: 1,
+      maximum: MAX_WAIT_MS,
+    })) {
+    throw new TypeError('Agentic process wait input is invalid');
+  }
+  return Object.freeze({
+    afterRevision: fields.get('afterRevision'),
+    timeoutMs: fields.get('timeoutMs'),
+  });
+}
+
+function normalizeStopInput(input) {
+  const fields = exactOwnDataFields(input, STOP_KEYS, STOP_KEYS);
+  if (!fields || !safeOperationInteger(fields.get('expectedRevision'), {
+    minimum: 1,
+  })) {
+    throw new TypeError('Agentic process stop input is invalid');
+  }
+  return Object.freeze({ expectedRevision: fields.get('expectedRevision') });
+}
+
+function routeFailure(code) {
+  return Object.freeze({ ok: false, code });
+}
+
+function executionIdFromBrokerResult(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || util.types.isProxy(value)
+    || dataValue(value, 'status') !== 'completed'
+    || dataValue(value, 'decision') !== 'allow') return null;
+  const output = dataValue(value, 'output');
+  const executionId = dataValue(output, 'executionId');
+  return typeof executionId === 'string' && BROKER_EXECUTION_ID.test(executionId)
+    ? executionId
+    : null;
+}
+
+function normalizeRouteOperationResult(value, executionId) {
+  const preflight = preflightDataGraph(value);
+  if (!preflight.bounded || preflight.hasNativePromise || !preflight.inspectable
+    || !value || typeof value !== 'object' || Array.isArray(value)
+    || util.types.isProxy(value) || !Object.isFrozen(value)
+    || dataValue(value, 'executionId') !== executionId) return null;
+  return value;
+}
+
 function createAgenticProcessBrokerFactory(options = {}) {
   const optionFields = exactOwnDataFields(options, OPTION_KEYS, REQUIRED_OPTION_KEYS);
   if (!optionFields) throw new TypeError('Invalid agentic process broker factory options');
@@ -269,6 +354,21 @@ function createAgenticProcessBrokerFactory(options = {}) {
       throw new TypeError('Agentic process route binding is invalid');
     }
     const sandboxExecutor = fields.get('sandboxExecutor');
+    const processRead = captureFrozenOwnMethod(
+      sandboxExecutor,
+      'read',
+      'sandboxExecutor'
+    );
+    const processWait = captureFrozenOwnMethod(
+      sandboxExecutor,
+      'wait',
+      'sandboxExecutor'
+    );
+    const processStop = captureFrozenOwnMethod(
+      sandboxExecutor,
+      'stop',
+      'sandboxExecutor'
+    );
 
     function rootAuthorization() {
       let raw;
@@ -320,6 +420,18 @@ function createAgenticProcessBrokerFactory(options = {}) {
       return Object.freeze({ authorized: true, projectSession: session });
     }
 
+    function controlAuthorized() {
+      if (!rootAuthorization() || !lifecycleAuthorization()) return false;
+      let raw;
+      try {
+        raw = authorizeEffectFrontier(binding);
+      } catch (error) {
+        preflightDataGraph(error);
+        return false;
+      }
+      return Boolean(normalizeLifecycleAuthorization(raw, binding));
+    }
+
     const descriptor = createProjectCapabilityDescriptor({
       capability: PROCESS_CAPABILITY,
       action: PROCESS_ACTION,
@@ -369,6 +481,10 @@ function createAgenticProcessBrokerFactory(options = {}) {
       now,
     });
     let requests = 0;
+    let reads = 0;
+    let waits = 0;
+    let stops = 0;
+    let currentExecutionId = null;
 
     async function execute(rawInput) {
       const payload = normalizeProcessInput(rawInput);
@@ -404,7 +520,86 @@ function createAgenticProcessBrokerFactory(options = {}) {
           correlationId: binding.jobId,
         }),
       });
-      return broker.execute(request);
+      const result = await broker.execute(request);
+      const executionId = executionIdFromBrokerResult(result);
+      if (executionId) currentExecutionId = executionId;
+      return result;
+    }
+
+    function processOperation(operation, rawInput, captured) {
+      let normalized;
+      if (operation === 'read') normalized = normalizeReadInput(rawInput);
+      if (operation === 'wait') normalized = normalizeWaitInput(rawInput);
+      if (operation === 'stop') normalized = normalizeStopInput(rawInput);
+      if (!normalized) throw new TypeError('Unsupported agentic process operation');
+      if (!currentExecutionId) {
+        return Promise.resolve(routeFailure(
+          AGENTIC_PROCESS_ROUTE_REASONS.PROCESS_UNAVAILABLE
+        ));
+      }
+      if (!controlAuthorized()) {
+        return Promise.resolve(routeFailure(
+          AGENTIC_PROCESS_ROUTE_REASONS.AUTHORITY_DENIED
+        ));
+      }
+      const executionId = currentExecutionId;
+      const operationInput = Object.freeze({
+        executionId,
+        ...normalized,
+        ...(operation === 'stop' ? { reasonCode: PROCESS_STOP_REASON_CODE } : {}),
+      });
+      let raw;
+      try {
+        // Final route frontier: the exact synchronous binding checks above are
+        // followed immediately by the captured authority-bound executor.
+        raw = Reflect.apply(captured.method, captured.receiver, [operationInput]);
+      } catch (error) {
+        preflightDataGraph(error);
+        return Promise.resolve(routeFailure(
+          AGENTIC_PROCESS_ROUTE_REASONS.OPERATION_FAILED
+        ));
+      }
+      if (!util.types.isPromise(raw)) {
+        preflightDataGraph(raw);
+        return Promise.resolve(routeFailure(
+          AGENTIC_PROCESS_ROUTE_REASONS.OPERATION_FAILED
+        ));
+      }
+      return new Promise((resolve) => {
+        const onFulfilled = (value) => {
+          const result = normalizeRouteOperationResult(value, executionId);
+          if (!result) {
+            resolve(routeFailure(AGENTIC_PROCESS_ROUTE_REASONS.OPERATION_FAILED));
+            return;
+          }
+          if (operation === 'read') reads += 1;
+          if (operation === 'wait') waits += 1;
+          if (operation === 'stop') stops += 1;
+          resolve(result);
+        };
+        const onRejected = (error) => {
+          preflightDataGraph(error);
+          resolve(routeFailure(AGENTIC_PROCESS_ROUTE_REASONS.OPERATION_FAILED));
+        };
+        try {
+          Reflect.apply(Promise.prototype.then, raw, [onFulfilled, onRejected]);
+        } catch (error) {
+          preflightDataGraph(error);
+          resolve(routeFailure(AGENTIC_PROCESS_ROUTE_REASONS.OPERATION_FAILED));
+        }
+      });
+    }
+
+    function read(input) {
+      return processOperation('read', input, processRead);
+    }
+
+    function wait(input) {
+      return processOperation('wait', input, processWait);
+    }
+
+    function stop(input) {
+      return processOperation('stop', input, processStop);
     }
 
     function diagnostics() {
@@ -413,6 +608,10 @@ function createAgenticProcessBrokerFactory(options = {}) {
         capability: PROCESS_CAPABILITY,
         action: PROCESS_ACTION,
         requests,
+        reads,
+        waits,
+        stops,
+        hasProcess: currentExecutionId !== null,
         networkMode: 'disabled',
         authorityBoundary: 'job_binding',
       });
@@ -422,6 +621,9 @@ function createAgenticProcessBrokerFactory(options = {}) {
     return Object.freeze({
       version: AGENTIC_PROCESS_ROUTE_VERSION,
       execute,
+      read,
+      wait,
+      stop,
       diagnostics,
     });
   }
@@ -444,6 +646,7 @@ function createAgenticProcessBrokerFactory(options = {}) {
 module.exports = {
   AGENTIC_PROCESS_BROKER_FACTORY_VERSION,
   AGENTIC_PROCESS_DESCRIPTOR_VERSION,
+  AGENTIC_PROCESS_ROUTE_REASONS,
   AGENTIC_PROCESS_ROUTE_VERSION,
   createAgenticProcessBrokerFactory,
 };

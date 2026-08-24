@@ -6155,6 +6155,35 @@ app.whenReady().then(async () => {
             })),
             writable: false,
           });
+          Object.defineProperty(agenticExecutionOptions, 'readProcess', {
+            configurable: false,
+            enumerable: false,
+            value: (processInput) => processRoute.read(Object.freeze({
+              cursor: readAgenticDeleteDataProperty(processInput, 'cursor'),
+              maxBytes: readAgenticDeleteDataProperty(processInput, 'maxBytes'),
+            })),
+            writable: false,
+          });
+          Object.defineProperty(agenticExecutionOptions, 'waitProcess', {
+            configurable: false,
+            enumerable: false,
+            value: (processInput) => processRoute.wait(Object.freeze({
+              afterRevision: readAgenticDeleteDataProperty(processInput, 'afterRevision'),
+              timeoutMs: readAgenticDeleteDataProperty(processInput, 'timeoutMs'),
+            })),
+            writable: false,
+          });
+          Object.defineProperty(agenticExecutionOptions, 'stopProcess', {
+            configurable: false,
+            enumerable: false,
+            value: (processInput) => processRoute.stop(Object.freeze({
+              expectedRevision: readAgenticDeleteDataProperty(
+                processInput,
+                'expectedRevision'
+              ),
+            })),
+            writable: false,
+          });
         }
         const agenticResult = await getAgenticToolLoopService().executeAction(
           initialAction,

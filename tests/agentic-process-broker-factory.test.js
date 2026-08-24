@@ -16,6 +16,7 @@ const {
 } = require('../main/capabilities/sandbox_backend_registry');
 const {
   AGENTIC_PROCESS_BROKER_FACTORY_VERSION,
+  AGENTIC_PROCESS_ROUTE_REASONS,
   AGENTIC_PROCESS_ROUTE_VERSION,
   createAgenticProcessBrokerFactory,
 } = require('../main/services/agentic_process_broker_factory');
@@ -35,6 +36,9 @@ function createHarness() {
     active: true,
     backendExecutions: 0,
     executorCalls: [],
+    readCalls: [],
+    waitCalls: [],
+    stopCalls: [],
     lifecycleChecks: 0,
     rootChecks: 0,
     effectChecks: 0,
@@ -67,6 +71,7 @@ function createHarness() {
       state.executorCalls.push(Object.freeze({ sandboxRequest, executionContext }));
       return Promise.resolve(Object.freeze({
         schemaVersion: 'process-supervisor.exec-receipt.v1',
+        executionId: sandboxRequest.executionId,
         status: 'running',
         revision: 1,
         exitCode: null,
@@ -75,6 +80,64 @@ function createHarness() {
         stopped: false,
         availableFromCursor: 0,
         outputCursor: 0,
+      }));
+    },
+    read(input) {
+      state.readCalls.push(input);
+      return Promise.resolve(Object.freeze({
+        version: 'process-supervisor-read-result.v1',
+        executionId: input.executionId,
+        status: 'running',
+        revision: 1,
+        exitCode: null,
+        signal: null,
+        timedOut: false,
+        stopped: false,
+        cursor: input.cursor,
+        availableFromCursor: 0,
+        nextCursor: 5,
+        outputCursor: 5,
+        truncated: false,
+        chunks: Object.freeze([Object.freeze({
+          startCursor: 0,
+          endCursor: 5,
+          stream: 'stdout',
+          text: 'pass\n',
+        })]),
+        eof: false,
+      }));
+    },
+    wait(input) {
+      state.waitCalls.push(input);
+      return Promise.resolve(Object.freeze({
+        version: 'process-supervisor-wait-result.v1',
+        executionId: input.executionId,
+        status: 'succeeded',
+        revision: input.afterRevision + 1,
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        stopped: false,
+        availableFromCursor: 0,
+        outputCursor: 5,
+        changed: true,
+      }));
+    },
+    stop(input) {
+      state.stopCalls.push(input);
+      return Promise.resolve(Object.freeze({
+        version: 'process-supervisor-stop-receipt.v1',
+        executionId: input.executionId,
+        status: 'stopped',
+        revision: input.expectedRevision + 1,
+        exitCode: null,
+        signal: 'SIGTERM',
+        timedOut: false,
+        stopped: true,
+        availableFromCursor: 0,
+        outputCursor: 5,
+        treeTerminated: true,
+        idempotent: false,
       }));
     },
   });
@@ -129,7 +192,14 @@ function createHarness() {
     sandboxExecutor: harness.sandboxExecutor,
   });
   assert.strictEqual(Object.isFrozen(route), true);
-  assert.deepStrictEqual(Reflect.ownKeys(route), ['version', 'execute', 'diagnostics']);
+  assert.deepStrictEqual(Reflect.ownKeys(route), [
+    'version',
+    'execute',
+    'read',
+    'wait',
+    'stop',
+    'diagnostics',
+  ]);
   assert.strictEqual(route.version, AGENTIC_PROCESS_ROUTE_VERSION);
   assert.strictEqual(JSON.stringify(route).includes('/projects/a'), false);
   assert.strictEqual(JSON.stringify(route).includes('submissionDigest'), false);
@@ -177,6 +247,83 @@ function createHarness() {
     1
   );
 
+  const internalExecutionId = result.output.executionId;
+  const readResult = await route.read({ cursor: 0, maxBytes: 4096 });
+  assert.strictEqual(readResult.executionId, internalExecutionId);
+  assert.strictEqual(readResult.chunks[0].text, 'pass\n');
+  assert.deepStrictEqual(harness.state.readCalls, [Object.freeze({
+    executionId: internalExecutionId,
+    cursor: 0,
+    maxBytes: 4096,
+  })]);
+
+  const waitResult = await route.wait({ afterRevision: 1, timeoutMs: 1000 });
+  assert.strictEqual(waitResult.changed, true);
+  assert.deepStrictEqual(harness.state.waitCalls, [Object.freeze({
+    executionId: internalExecutionId,
+    afterRevision: 1,
+    timeoutMs: 1000,
+  })]);
+
+  const stopResult = await route.stop({ expectedRevision: 1 });
+  assert.strictEqual(stopResult.treeTerminated, true);
+  assert.deepStrictEqual(harness.state.stopCalls, [Object.freeze({
+    executionId: internalExecutionId,
+    expectedRevision: 1,
+    reasonCode: 'AGENTIC_PROCESS_STOP_REQUESTED',
+  })]);
+  assert.deepStrictEqual(route.diagnostics(), Object.freeze({
+    version: AGENTIC_PROCESS_ROUTE_VERSION,
+    capability: 'process',
+    action: 'run',
+    requests: 1,
+    reads: 1,
+    waits: 1,
+    stops: 1,
+    hasProcess: true,
+    networkMode: 'disabled',
+    authorityBoundary: 'job_binding',
+  }));
+
+  const emptyRoute = harness.factory.createRoute({
+    binding,
+    sandboxExecutor: harness.sandboxExecutor,
+  });
+  assert.deepStrictEqual(
+    await emptyRoute.read({ cursor: 0, maxBytes: 1024 }),
+    Object.freeze({
+      ok: false,
+      code: AGENTIC_PROCESS_ROUTE_REASONS.PROCESS_UNAVAILABLE,
+    })
+  );
+
+  let readGetterCalls = 0;
+  const hostileReadInput = { maxBytes: 1024 };
+  Object.defineProperty(hostileReadInput, 'cursor', {
+    enumerable: true,
+    get() {
+      readGetterCalls += 1;
+      return 0;
+    },
+  });
+  assert.throws(() => route.read(hostileReadInput), TypeError);
+  assert.strictEqual(readGetterCalls, 0);
+
+  let waitProxyTrapCalls = 0;
+  const hostileWaitInput = new Proxy({
+    afterRevision: 1,
+    timeoutMs: 1000,
+  }, {
+    ownKeys(target) {
+      waitProxyTrapCalls += 1;
+      return Reflect.ownKeys(target);
+    },
+  });
+  assert.throws(() => route.wait(hostileWaitInput), TypeError);
+  assert.strictEqual(waitProxyTrapCalls, 0);
+  assert.strictEqual(harness.state.readCalls.length, 1);
+  assert.strictEqual(harness.state.waitCalls.length, 1);
+
   for (const invalid of [
     { command: 'npm test', args: 'not-an-array', timeoutMs: 1000 },
     { command: '', args: [], timeoutMs: 1000 },
@@ -212,6 +359,14 @@ function createHarness() {
   const revoked = await route.execute({ command: 'npm', args: ['test'], timeoutMs: 10_000 });
   assert.strictEqual(revoked.status, 'denied');
   assert.strictEqual(harness.state.executorCalls.length, 1);
+  assert.deepStrictEqual(
+    await route.wait({ afterRevision: 1, timeoutMs: 1000 }),
+    Object.freeze({
+      ok: false,
+      code: AGENTIC_PROCESS_ROUTE_REASONS.AUTHORITY_DENIED,
+    })
+  );
+  assert.strictEqual(harness.state.waitCalls.length, 1);
 
   assert.throws(
     () => harness.factory.createRoute({

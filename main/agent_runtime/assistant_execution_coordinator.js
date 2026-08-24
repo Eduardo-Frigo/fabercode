@@ -672,13 +672,21 @@ function createAssistantExecutionCoordinator(options = {}) {
       throw new TypeError('authorized job executor must be a frozen plain object');
     }
     const executorFields = dataFields(value, 'authorized job executor');
-    const keys = ['version', 'execute', 'close', 'diagnostics'];
+    const keys = [
+      'version',
+      'execute',
+      'read',
+      'wait',
+      'stop',
+      'close',
+      'diagnostics',
+    ];
     if (executorFields.size !== keys.length
       || keys.some((key) => !executorFields.has(key))
       || executorFields.get('version') !== EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION) {
       throw new TypeError('authorized job executor has an invalid contract');
     }
-    for (const method of ['execute', 'close', 'diagnostics']) {
+    for (const method of ['execute', 'read', 'wait', 'stop', 'close', 'diagnostics']) {
       const callback = executorFields.get(method);
       if (typeof callback !== 'function' || util.types.isProxy(callback)) {
         throw new TypeError(`authorized job executor.${method} is invalid`);

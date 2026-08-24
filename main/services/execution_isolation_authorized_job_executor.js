@@ -23,7 +23,7 @@ const {
 } = require('./execution_isolation_job_session_service');
 
 const EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION =
-  'execution-isolation-authorized-job-executor.v1';
+  'execution-isolation-authorized-job-executor.v2';
 const EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION =
   'execution-isolation-authorized-job-executor-close-receipt.v1';
 
@@ -33,6 +33,9 @@ const EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS = Object.freeze({
   CLEANUP_FAILED: 'EXECUTION_ISOLATION_JOB_CLEANUP_FAILED',
   CLOSED: 'EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSED',
   EXECUTION_FAILED: 'EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTION_FAILED',
+  PROCESS_NOT_FOUND: 'EXECUTION_ISOLATION_AUTHORIZED_PROCESS_NOT_FOUND',
+  PROCESS_OPERATION_FAILED: 'EXECUTION_ISOLATION_AUTHORIZED_PROCESS_OPERATION_FAILED',
+  PROCESS_REQUEST_INVALID: 'EXECUTION_ISOLATION_AUTHORIZED_PROCESS_REQUEST_INVALID',
   SESSION_OPEN_FAILED: 'EXECUTION_ISOLATION_AUTHORIZED_JOB_SESSION_OPEN_FAILED',
 });
 
@@ -92,6 +95,14 @@ const PROJECT_SESSION_REQUIRED_KEYS = Object.freeze([
 ]);
 const BROKER_EXECUTION_ID = /^sandbox-exec:([a-f0-9]{64})$/;
 const BROKER_GRANT_ID = /^sandbox-auth:([a-f0-9]{64})$/;
+const SAFE_REASON_CODE = /^[A-Z][A-Z0-9_]{0,79}$/;
+const MAX_READ_BYTES = 1024 * 1024;
+const MAX_WAIT_MS = 60_000;
+const PROCESS_OPERATION_KEYS = Object.freeze({
+  read: Object.freeze(['executionId', 'cursor', 'maxBytes']),
+  wait: Object.freeze(['executionId', 'afterRevision', 'timeoutMs']),
+  stop: Object.freeze(['executionId', 'expectedRevision', 'reasonCode']),
+});
 
 class ExecutionIsolationAuthorizedJobExecutorError extends Error {
   constructor(code) {
@@ -381,13 +392,18 @@ function normalizeOpenedSession(value, binding) {
     'diagnostics',
     'close',
   ]);
-  const exec = session && captureOwnMethod(session, 'exec');
+  const captured = session && Object.freeze({
+    exec: captureOwnMethod(session, 'exec'),
+    read: captureOwnMethod(session, 'read'),
+    wait: captureOwnMethod(session, 'wait'),
+    stop: captureOwnMethod(session, 'stop'),
+  });
   if (!sessionFields || !Object.isFrozen(session)
     || sessionFields.get('version') !== EXECUTION_ISOLATION_JOB_SESSION_VERSION
     || sessionFields.get('jobId') !== binding.jobId
     || sessionFields.get('projectId') !== binding.projectId
-    || !exec) return null;
-  return Object.freeze({ session, exec });
+    || !captured || Object.values(captured).some((entry) => !entry)) return null;
+  return Object.freeze({ session, ...captured });
 }
 
 function successfulSessionClose(value) {
@@ -408,15 +424,75 @@ function successfulSessionClose(value) {
     && fields.get('rootReleased') === true);
 }
 
-function normalizeExecutionReceipt(value) {
+function ownDataValue(value, key) {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')
+    || util.types.isProxy(value)) return undefined;
+  let descriptor;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(value, key);
+  } catch (error) {
+    preflightDataGraph(error);
+    return undefined;
+  }
+  return descriptor && Object.hasOwn(descriptor, 'value')
+    ? descriptor.value
+    : undefined;
+}
+
+function normalizeExecutionReceipt(value, expectedExecutionId) {
   const fields = exactOwnDataFields(value, ['ok', 'receipt']);
   if (!fields || !Object.isFrozen(value) || fields.get('ok') !== true) return null;
   const receipt = fields.get('receipt');
   const preflight = preflightDataGraph(receipt);
   if (!preflight.bounded || preflight.hasNativePromise || !preflight.inspectable
     || !receipt || typeof receipt !== 'object' || Array.isArray(receipt)
-    || util.types.isProxy(receipt) || !Object.isFrozen(receipt)) return null;
+    || util.types.isProxy(receipt) || !Object.isFrozen(receipt)
+    || ownDataValue(receipt, 'executionId') !== expectedExecutionId) return null;
   return receipt;
+}
+
+function safeOperationInteger(value, {
+  minimum = 0,
+  maximum = Number.MAX_SAFE_INTEGER,
+} = {}) {
+  return Number.isSafeInteger(value) && !Object.is(value, -0)
+    && value >= minimum && value <= maximum;
+}
+
+function normalizeProcessOperationInput(operation, value) {
+  const keys = PROCESS_OPERATION_KEYS[operation];
+  const fields = keys && exactOwnDataFields(value, keys, keys);
+  if (!fields || !Object.isFrozen(value)
+    || !BROKER_EXECUTION_ID.test(fields.get('executionId'))) return null;
+  if (operation === 'read'
+    && (!safeOperationInteger(fields.get('cursor'))
+      || !safeOperationInteger(fields.get('maxBytes'), {
+        minimum: 1,
+        maximum: MAX_READ_BYTES,
+      }))) return null;
+  if (operation === 'wait'
+    && (!safeOperationInteger(fields.get('afterRevision'))
+      || !safeOperationInteger(fields.get('timeoutMs'), {
+        minimum: 1,
+        maximum: MAX_WAIT_MS,
+      }))) return null;
+  if (operation === 'stop'
+    && (!safeOperationInteger(fields.get('expectedRevision'), { minimum: 1 })
+      || typeof fields.get('reasonCode') !== 'string'
+      || !SAFE_REASON_CODE.test(fields.get('reasonCode')))) return null;
+  return Object.freeze(Object.fromEntries(keys.map((key) => [key, fields.get(key)])));
+}
+
+function normalizeProcessOperationResult(value, successField, executionId) {
+  const fields = exactOwnDataFields(value, ['ok', successField]);
+  if (!fields || !Object.isFrozen(value) || fields.get('ok') !== true) return null;
+  const result = fields.get(successField);
+  const preflight = preflightDataGraph(result);
+  if (!preflight.bounded || preflight.hasNativePromise || !preflight.inspectable
+    || !result || typeof result !== 'object' || Array.isArray(result)
+    || util.types.isProxy(result) || !Object.isFrozen(result)
+    || ownDataValue(result, 'executionId') !== executionId) return null;
+  return result;
 }
 
 function createExecutionIsolationAuthorizedJobExecutor(options = {}) {
@@ -425,6 +501,10 @@ function createExecutionIsolationAuthorizedJobExecutor(options = {}) {
   let authorityChecks = 0;
   let authorityCheckActive = false;
   let executions = 0;
+  let reads = 0;
+  let waits = 0;
+  let stops = 0;
+  const authorizedExecutionIds = new Set();
   let sessionRecord = null;
   let sessionRootIdentityDigest = null;
   let openPromise = null;
@@ -469,6 +549,7 @@ function createExecutionIsolationAuthorizedJobExecutor(options = {}) {
     openedReservation = false;
     sessionRecord = null;
     sessionRootIdentityDigest = null;
+    authorizedExecutionIds.clear();
     return true;
   }
 
@@ -657,15 +738,96 @@ function createExecutionIsolationAuthorizedJobExecutor(options = {}) {
       if (closeRequested) {
         throw failure(EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.CLOSED);
       }
-      const receipt = outcome.ok ? normalizeExecutionReceipt(outcome.value) : null;
+      const receipt = outcome.ok
+        ? normalizeExecutionReceipt(outcome.value, sandboxRequest.executionId)
+        : null;
       if (!receipt) {
         throw failure(
           EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.EXECUTION_FAILED
         );
       }
       executions += 1;
+      authorizedExecutionIds.add(sandboxRequest.executionId);
       return receipt;
     });
+  }
+
+  function processOperation(operation, input, successField) {
+    if (state === 'revoked') {
+      return Promise.reject(failure(
+        EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.AUTHORITY_DENIED
+      ));
+    }
+    if (state === 'blocked') {
+      return Promise.reject(failure(
+        EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.SESSION_OPEN_FAILED
+      ));
+    }
+    if (closeRequested || ['closed', 'closing', 'quarantined'].includes(state)) {
+      return Promise.reject(failure(
+        EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.CLOSED
+      ));
+    }
+    const operationInput = normalizeProcessOperationInput(operation, input);
+    if (!operationInput) {
+      return Promise.reject(failure(
+        EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.PROCESS_REQUEST_INVALID
+      ));
+    }
+    if (!sessionRecord || !authorizedExecutionIds.has(operationInput.executionId)) {
+      return Promise.reject(failure(
+        EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.PROCESS_NOT_FOUND
+      ));
+    }
+    const authorization = authorizeRoot();
+    if (!authorization
+      || authorization.physicalRootIdentityDigest !== sessionRootIdentityDigest) {
+      return revokeAfterOpen(
+        EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.AUTHORITY_DENIED
+      );
+    }
+    if (closeRequested) {
+      return Promise.reject(failure(
+        EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.CLOSED
+      ));
+    }
+
+    // Final process-operation frontier: the synchronous root lease check above
+    // is followed immediately by the captured job-session method.
+    const outcomePromise = invokeNative(sessionRecord[operation], [operationInput]);
+    return outcomePromise.then((outcome) => {
+      if (closeRequested) {
+        throw failure(EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.CLOSED);
+      }
+      const result = outcome.ok
+        ? normalizeProcessOperationResult(
+          outcome.value,
+          successField,
+          operationInput.executionId
+        )
+        : null;
+      if (!result) {
+        throw failure(
+          EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.PROCESS_OPERATION_FAILED
+        );
+      }
+      if (operation === 'read') reads += 1;
+      if (operation === 'wait') waits += 1;
+      if (operation === 'stop') stops += 1;
+      return result;
+    });
+  }
+
+  function read(input) {
+    return processOperation('read', input, 'result');
+  }
+
+  function wait(input) {
+    return processOperation('wait', input, 'result');
+  }
+
+  function stop(input) {
+    return processOperation('stop', input, 'receipt');
   }
 
   function diagnostics() {
@@ -676,12 +838,18 @@ function createExecutionIsolationAuthorizedJobExecutor(options = {}) {
       projectId: dependencies.binding.projectId,
       authorityChecks,
       executions,
+      reads,
+      waits,
+      stops,
     });
   }
 
   return Object.freeze({
     version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
     execute,
+    read,
+    wait,
+    stop,
     close,
     diagnostics,
   });

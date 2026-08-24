@@ -188,6 +188,21 @@ async function run() {
               input: { command: 'npm test' },
             },
             {
+              callId: 'forged-read-command-output',
+              name: 'read_command_output',
+              input: { cursor: 0, maxBytes: 1024 },
+            },
+            {
+              callId: 'forged-wait-command',
+              name: 'wait_command',
+              input: { afterRevision: 1, timeoutMs: 1000 },
+            },
+            {
+              callId: 'forged-stop-command',
+              name: 'stop_command',
+              input: { expectedRevision: 1 },
+            },
+            {
               callId: 'forged-preview-capture',
               name: 'preview_capture',
               input: { stopAfterCapture: true },
@@ -206,11 +221,14 @@ async function run() {
         };
       }
 
-      assert.strictEqual(toolResults.length, 4);
+      assert.strictEqual(toolResults.length, 7);
       assert.match(toolResults[0].output, /Tool desconhecida: run_command/);
-      assert.match(toolResults[1].output, /Tool desconhecida: preview_capture/);
-      assert.match(toolResults[2].output, /capability allowed/);
-      assert.match(toolResults[3].output, /tool allowed/);
+      assert.match(toolResults[1].output, /Tool desconhecida: read_command_output/);
+      assert.match(toolResults[2].output, /Tool desconhecida: wait_command/);
+      assert.match(toolResults[3].output, /Tool desconhecida: stop_command/);
+      assert.match(toolResults[4].output, /Tool desconhecida: preview_capture/);
+      assert.match(toolResults[5].output, /capability allowed/);
+      assert.match(toolResults[6].output, /tool allowed/);
       return {
         responseId: 'suspended-surface-2',
         text: '',
@@ -237,6 +255,17 @@ async function run() {
     },
     writable: false,
   });
+  for (const callbackName of ['readProcess', 'waitProcess', 'stopProcess']) {
+    Object.defineProperty(suspendedExecutionOptions, callbackName, {
+      configurable: false,
+      enumerable: false,
+      value: async () => {
+        suspendedProcessCalls += 1;
+        return { ok: true };
+      },
+      writable: false,
+    });
+  }
   const suspendedSurfaceResult = await suspendedSurfaceService.executeAction(
     buildAction('job-suspended-surface', 'verifique o estado atual'),
     { id: 'project-1', rootPath: '/tmp/project' },
@@ -248,6 +277,9 @@ async function run() {
   assert(Array.isArray(suspendedSurfaceDefinitions));
   const suspendedSurfaceNames = suspendedSurfaceDefinitions.map((definition) => definition.name);
   assert.strictEqual(suspendedSurfaceNames.includes('run_command'), false);
+  assert.strictEqual(suspendedSurfaceNames.includes('read_command_output'), false);
+  assert.strictEqual(suspendedSurfaceNames.includes('wait_command'), false);
+  assert.strictEqual(suspendedSurfaceNames.includes('stop_command'), false);
   assert.strictEqual(suspendedSurfaceNames.includes('preview_capture'), false);
   assert.strictEqual(suspendedSurfaceNames.includes('read_file'), true);
   assert.strictEqual(suspendedSurfaceNames.includes('search_text'), true);
@@ -277,7 +309,11 @@ async function run() {
   let brokeredProcessDefinitions = null;
   let brokeredProcessPrompt = '';
   let brokeredProcessOutput = '';
+  let brokeredControlOutputs = [];
   let brokeredProcessTurn = 0;
+  const readProcessRequests = [];
+  const waitProcessRequests = [];
+  const stopProcessRequests = [];
   const brokeredProcessService = buildCancellationService({
     maxSteps: 3,
     requestModelTurn: async ({ systemPrompt, tools, toolResults }) => {
@@ -299,9 +335,33 @@ async function run() {
           }],
         };
       }
-      brokeredProcessOutput = toolResults[0].output;
+      if (brokeredProcessTurn === 2) {
+        brokeredProcessOutput = toolResults[0].output;
+        return {
+          responseId: 'brokered-process-2',
+          text: '',
+          toolCalls: [
+            {
+              callId: 'brokered-read-command-output',
+              name: 'read_command_output',
+              input: { cursor: 0, maxBytes: 4096 },
+            },
+            {
+              callId: 'brokered-wait-command',
+              name: 'wait_command',
+              input: { afterRevision: 1, timeoutMs: 1000 },
+            },
+            {
+              callId: 'brokered-stop-command',
+              name: 'stop_command',
+              input: { expectedRevision: 2 },
+            },
+          ],
+        };
+      }
+      brokeredControlOutputs = toolResults.map((entry) => entry.output);
       return {
-        responseId: 'brokered-process-2',
+        responseId: 'brokered-process-3',
         text: '',
         toolCalls: [{
           callId: 'finish-brokered-process',
@@ -362,6 +422,85 @@ async function run() {
     },
     writable: false,
   });
+  Object.defineProperty(brokeredProcessOptions, 'readProcess', {
+    configurable: false,
+    enumerable: false,
+    value: async (request) => {
+      readProcessRequests.push(request);
+      assert.strictEqual(Object.isFrozen(request), true);
+      assert.deepStrictEqual(Object.keys(request), ['cursor', 'maxBytes']);
+      return Object.freeze({
+        version: 'process-supervisor-read-result.v1',
+        executionId: processCallbackSecret,
+        status: 'running',
+        revision: 1,
+        exitCode: null,
+        signal: null,
+        timedOut: false,
+        stopped: false,
+        cursor: request.cursor,
+        availableFromCursor: 0,
+        nextCursor: 5,
+        outputCursor: 5,
+        truncated: false,
+        chunks: Object.freeze([Object.freeze({
+          startCursor: 0,
+          endCursor: 5,
+          stream: 'stdout',
+          text: 'pass\n',
+        })]),
+        eof: false,
+      });
+    },
+    writable: false,
+  });
+  Object.defineProperty(brokeredProcessOptions, 'waitProcess', {
+    configurable: false,
+    enumerable: false,
+    value: async (request) => {
+      waitProcessRequests.push(request);
+      assert.strictEqual(Object.isFrozen(request), true);
+      assert.deepStrictEqual(Object.keys(request), ['afterRevision', 'timeoutMs']);
+      return Object.freeze({
+        version: 'process-supervisor-wait-result.v1',
+        executionId: processCallbackSecret,
+        status: 'succeeded',
+        revision: 2,
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        stopped: false,
+        availableFromCursor: 0,
+        outputCursor: 5,
+        changed: true,
+      });
+    },
+    writable: false,
+  });
+  Object.defineProperty(brokeredProcessOptions, 'stopProcess', {
+    configurable: false,
+    enumerable: false,
+    value: async (request) => {
+      stopProcessRequests.push(request);
+      assert.strictEqual(Object.isFrozen(request), true);
+      assert.deepStrictEqual(Object.keys(request), ['expectedRevision']);
+      return Object.freeze({
+        version: 'process-supervisor-stop-receipt.v1',
+        executionId: processCallbackSecret,
+        status: 'succeeded',
+        revision: 2,
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        stopped: false,
+        availableFromCursor: 0,
+        outputCursor: 5,
+        treeTerminated: true,
+        idempotent: true,
+      });
+    },
+    writable: false,
+  });
   const brokeredProcessResult = await brokeredProcessService.executeAction(
     buildAction('job-brokered-process', 'rode os testes'),
     { id: 'project-1', rootPath: '/tmp/project' },
@@ -369,6 +508,17 @@ async function run() {
   );
   assert.strictEqual(brokeredProcessResult.ok, true);
   assert.strictEqual(processCallbackRequests.length, 1);
+  assert.deepStrictEqual(readProcessRequests, [Object.freeze({
+    cursor: 0,
+    maxBytes: 4096,
+  })]);
+  assert.deepStrictEqual(waitProcessRequests, [Object.freeze({
+    afterRevision: 1,
+    timeoutMs: 1000,
+  })]);
+  assert.deepStrictEqual(stopProcessRequests, [Object.freeze({
+    expectedRevision: 2,
+  })]);
   const runCommandDefinition = brokeredProcessDefinitions.find(
     (definition) => definition.name === 'run_command'
   );
@@ -387,11 +537,25 @@ async function run() {
   assert.strictEqual(JSON.stringify(runCommandDefinition).includes('network'), false);
   assert.strictEqual(JSON.stringify(runCommandDefinition).includes('shell'), false);
   assert.match(brokeredProcessPrompt, /run_command/);
+  for (const toolName of ['read_command_output', 'wait_command', 'stop_command']) {
+    const definition = brokeredProcessDefinitions.find((entry) => entry.name === toolName);
+    assert(definition);
+    assert.strictEqual(definition.strict, true);
+    assert.strictEqual(definition.parameters.additionalProperties, false);
+    assert.match(brokeredProcessPrompt, new RegExp(toolName));
+  }
   assert.strictEqual(brokeredProcessOutput.includes(processCallbackSecret), false);
   assert.strictEqual(brokeredProcessOutput.includes('requestDigest'), false);
   assert.strictEqual(brokeredProcessOutput.includes('binding'), false);
   assert.strictEqual(brokeredProcessOutput.includes('running'), true);
   assert.strictEqual(brokeredProcessOutput.includes('revision'), true);
+  assert.strictEqual(brokeredControlOutputs.length, 3);
+  assert(brokeredControlOutputs.every((output) => !output.includes(processCallbackSecret)));
+  assert(brokeredControlOutputs.every((output) => !output.includes('executionId')));
+  assert.strictEqual(brokeredControlOutputs[0].includes('pass\\n'), true);
+  assert.strictEqual(brokeredControlOutputs[0].includes('nextCursor'), true);
+  assert.strictEqual(brokeredControlOutputs[1].includes('changed'), true);
+  assert.strictEqual(brokeredControlOutputs[2].includes('treeTerminated'), true);
 
   // Accessors and unsupported fields are rejected before fingerprinting or
   // crossing the private callback boundary.

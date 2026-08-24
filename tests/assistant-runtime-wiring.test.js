@@ -676,10 +676,37 @@ assertInOrder(
     "command: readAgenticDeleteDataProperty(processInput, 'command')",
     "args: readAgenticDeleteDataProperty(processInput, 'args')",
     "timeoutMs: readAgenticDeleteDataProperty(processInput, 'timeoutMs')",
+    "Object.defineProperty(agenticExecutionOptions, 'readProcess'",
+    'processRoute.read(Object.freeze({',
+    "cursor: readAgenticDeleteDataProperty(processInput, 'cursor')",
+    "maxBytes: readAgenticDeleteDataProperty(processInput, 'maxBytes')",
+    "Object.defineProperty(agenticExecutionOptions, 'waitProcess'",
+    'processRoute.wait(Object.freeze({',
+    "afterRevision: readAgenticDeleteDataProperty(processInput, 'afterRevision')",
+    "timeoutMs: readAgenticDeleteDataProperty(processInput, 'timeoutMs')",
+    "Object.defineProperty(agenticExecutionOptions, 'stopProcess'",
+    'processRoute.stop(Object.freeze({',
+    'expectedRevision: readAgenticDeleteDataProperty(',
+    "'expectedRevision'",
     'Object.freeze(agenticExecutionOptions)',
   ],
-  'the private job executor must be consumed only by the exact process broker route while production remains suspended'
+  'the private job executor and its process identity must be consumed only by the exact process broker route while production remains suspended'
 );
+for (const privateProcessCallback of [
+  'executeProcess',
+  'readProcess',
+  'waitProcess',
+  'stopProcess',
+]) {
+  const callbackStart = legacyExecuteSource.indexOf(
+    `Object.defineProperty(agenticExecutionOptions, '${privateProcessCallback}'`
+  );
+  assert.ok(callbackStart >= 0, `missing private process callback: ${privateProcessCallback}`);
+  assert.ok(
+    legacyExecuteSource.slice(callbackStart, callbackStart + 220).includes('enumerable: false'),
+    `${privateProcessCallback} must remain non-enumerable`
+  );
+}
 assert.strictEqual(
   legacyExecuteSource.includes('sandboxExecutor: sandboxExecutor'),
   false,
