@@ -1,7 +1,9 @@
+const defaultCrypto = require('crypto');
 const defaultFs = require('fs');
 const defaultPath = require('path');
 
 function createApplicationMapService(dependencies = {}) {
+  const crypto = dependencies.crypto || defaultCrypto;
   const fs = dependencies.fs || defaultFs;
   const path = dependencies.path || defaultPath;
 
@@ -13,32 +15,44 @@ function createApplicationMapService(dependencies = {}) {
     return faberDir;
   }
 
-  function getMapPath(rootPath) {
-    return path.join(ensureFaberDir(rootPath), 'application-map.json');
+  function getMapPath(rootPath, { ensure = true } = {}) {
+    const faberDir = ensure ? ensureFaberDir(rootPath) : path.join(rootPath, '.faber');
+    return path.join(faberDir, 'application-map.json');
   }
 
-  function getMap(rootPath) {
-    const mapPath = getMapPath(rootPath);
+  function readApplicationMapSnapshot(rootPath) {
+    const mapPath = getMapPath(rootPath, { ensure: false });
     if (!fs.existsSync(mapPath)) {
-      return {
-        nodes: [],
-        edges: [],
-        viewport: { x: 0, y: 0, zoom: 1 },
-        updatedAt: new Date().toISOString(),
-      };
+      return { ok: true, found: false, map: null, contentDigest: null };
     }
     try {
       const content = fs.readFileSync(mapPath, 'utf8');
-      return JSON.parse(content);
-    } catch (e) {
-      console.error('Failed to parse application map JSON', e);
       return {
-        nodes: [],
-        edges: [],
-        viewport: { x: 0, y: 0, zoom: 1 },
-        updatedAt: new Date().toISOString(),
+        ok: true,
+        found: true,
+        map: JSON.parse(content),
+        contentDigest: `sha256:${crypto.createHash('sha256').update(content, 'utf8').digest('hex')}`,
+      };
+    } catch {
+      return {
+        ok: false,
+        found: true,
+        map: null,
+        contentDigest: null,
+        reason: 'invalid_application_map',
       };
     }
+  }
+
+  function getMap(rootPath) {
+    const snapshot = readApplicationMapSnapshot(rootPath);
+    if (snapshot.ok && snapshot.found) return snapshot.map;
+    return {
+      nodes: [],
+      edges: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+      updatedAt: new Date().toISOString(),
+    };
   }
 
   function saveMap(rootPath, mapData) {
@@ -200,6 +214,7 @@ function createApplicationMapService(dependencies = {}) {
 
   return {
     getMap,
+    readApplicationMapSnapshot,
     saveMap,
     upsertNode,
     removeNode,

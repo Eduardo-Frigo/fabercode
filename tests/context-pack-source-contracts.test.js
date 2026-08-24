@@ -62,6 +62,8 @@ const sourceScope = {
   jobId: 'job-1',
   conversationId: 'conversation-1',
   userId: 'user-1',
+  relativeCwd: 'src',
+  relevantFiles: ['package.json', 'src/index.js'],
 };
 
 const grant = createContextPackCollectionGrant({
@@ -86,6 +88,9 @@ assert.deepStrictEqual(Reflect.ownKeys(grant), [
 assert.strictEqual(grant.schemaVersion, CONTEXT_PACK_COLLECTION_GRANT_SCHEMA_VERSION);
 assert.strictEqual(Object.isFrozen(grant), true);
 assert.strictEqual(Object.isFrozen(grant.sourceScope), true);
+assert.strictEqual(Object.isFrozen(grant.sourceScope.relevantFiles), true);
+assert.deepStrictEqual(grant.sourceScope.relevantFiles, ['package.json', 'src/index.js']);
+assert.strictEqual(grant.sourceScope.relativeCwd, 'src');
 assert.notStrictEqual(grant.sourceScope, sourceScope);
 assert.strictEqual(assertContextPackCollectionGrant(grant), grant);
 
@@ -130,6 +135,15 @@ assert.throws(() => createContextPackCollectionGrant({
   requestId: 'request-1',
   projectId: 'project-1',
   surface: CONTEXT_PACK_SURFACES.DEVELOPMENT_EXECUTE,
+  sourceScope: { ...sourceScope, relevantFiles: ['../private.txt'] },
+  requestSection,
+  permissionsSection,
+}), /relevantFiles/i);
+assert.throws(() => createContextPackCollectionGrant({
+  authorityDigest: digest('b'),
+  requestId: 'request-1',
+  projectId: 'project-1',
+  surface: CONTEXT_PACK_SURFACES.DEVELOPMENT_EXECUTE,
   sourceScope,
   requestSection: availableSection(
     CONTEXT_PACK_SECTION_IDS.REQUEST,
@@ -147,6 +161,22 @@ const mutableScopeGrant = Object.freeze({
   sourceScope: { ...grant.sourceScope },
 });
 assert.throws(() => assertContextPackCollectionGrant(mutableScopeGrant), TypeError);
+
+let scopeGetterCalls = 0;
+const hostileScope = { ...grant.sourceScope };
+Object.defineProperty(hostileScope, 'relevantFiles', {
+  enumerable: true,
+  get() {
+    scopeGetterCalls += 1;
+    return grant.sourceScope.relevantFiles;
+  },
+});
+Object.freeze(hostileScope);
+assert.throws(() => assertContextPackCollectionGrant(Object.freeze({
+  ...grant,
+  sourceScope: hostileScope,
+})), TypeError);
+assert.strictEqual(scopeGetterCalls, 0);
 
 const read = () => Promise.resolve(null);
 const reader = createContextPackSourceReader({

@@ -11,9 +11,22 @@ async function run() {
   try {
     const milestoneService = createMilestoneService({ fs, path });
 
+    const missingSnapshot = milestoneService.readMilestonesSnapshot(tempRoot);
+    assert.deepStrictEqual(missingSnapshot, {
+      ok: true,
+      found: false,
+      format: null,
+      renderedAt: null,
+      source: null,
+      milestones: [],
+      contentDigest: null,
+    });
+    assert.strictEqual(fs.existsSync(path.join(tempRoot, '.faber')), false);
+
     // Test listMilestones (should stay empty until render creates milestones)
     const initialList = milestoneService.listMilestones(tempRoot);
     assert.strictEqual(initialList.length, 0);
+    assert.strictEqual(fs.existsSync(path.join(tempRoot, '.faber')), false);
 
     const emptyRenderRes = milestoneService.renderMilestones(tempRoot);
     assert.strictEqual(emptyRenderRes.ok, false);
@@ -40,6 +53,12 @@ async function run() {
 
     const saveInitial = milestoneService.saveMilestones(tempRoot, generatedMilestones);
     assert.strictEqual(saveInitial.ok, true);
+    const draftSnapshot = milestoneService.readMilestonesSnapshot(tempRoot);
+    assert.strictEqual(draftSnapshot.ok, true);
+    assert.strictEqual(draftSnapshot.found, true);
+    assert.strictEqual(draftSnapshot.format, 'draft');
+    assert.deepStrictEqual(draftSnapshot.milestones, generatedMilestones);
+    assert.match(draftSnapshot.contentDigest, /^sha256:[a-f0-9]{64}$/);
     assert.strictEqual(milestoneService.listMilestones(tempRoot).length, 0);
 
     // Test renderMilestones
@@ -48,6 +67,12 @@ async function run() {
 
     const renderedList = milestoneService.listMilestones(tempRoot);
     assert.strictEqual(renderedList.length, 1);
+    const renderedSnapshot = milestoneService.readMilestonesSnapshot(tempRoot);
+    assert.strictEqual(renderedSnapshot.ok, true);
+    assert.strictEqual(renderedSnapshot.found, true);
+    assert.strictEqual(renderedSnapshot.format, 'rendered');
+    assert.strictEqual(renderedSnapshot.renderedAt !== null, true);
+    assert.deepStrictEqual(renderedSnapshot.milestones, renderedList);
 
     // Test updateMilestoneStatus
     const updateRes = milestoneService.updateMilestoneStatus(tempRoot, 'milestone-1', 'active');

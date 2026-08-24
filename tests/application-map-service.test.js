@@ -12,11 +12,21 @@ async function run() {
     const mapService = createApplicationMapService({ fs, path });
     const renderService = createApplicationMapRenderService({ fs, path, mapService });
 
+    const missingSnapshot = mapService.readApplicationMapSnapshot(tempRoot);
+    assert.deepStrictEqual(missingSnapshot, {
+      ok: true,
+      found: false,
+      map: null,
+      contentDigest: null,
+    });
+    assert.strictEqual(fs.existsSync(path.join(tempRoot, '.faber')), false);
+
     // Test getMap on non-existent map (should return empty default map)
     const initialMap = mapService.getMap(tempRoot);
     assert.deepStrictEqual(initialMap.nodes, []);
     assert.deepStrictEqual(initialMap.edges, []);
     assert.deepStrictEqual(initialMap.viewport, { x: 0, y: 0, zoom: 1 });
+    assert.strictEqual(fs.existsSync(path.join(tempRoot, '.faber')), false);
 
     // Test saveMap
     const testMap = {
@@ -33,6 +43,11 @@ async function run() {
     assert.strictEqual(saveRes.ok, true);
 
     const savedMap = mapService.getMap(tempRoot);
+    const savedSnapshot = mapService.readApplicationMapSnapshot(tempRoot);
+    assert.strictEqual(savedSnapshot.ok, true);
+    assert.strictEqual(savedSnapshot.found, true);
+    assert.match(savedSnapshot.contentDigest, /^sha256:[a-f0-9]{64}$/);
+    assert.deepStrictEqual(savedSnapshot.map, savedMap);
     assert.strictEqual(savedMap.nodes.length, 2);
     assert.strictEqual(savedMap.edges.length, 1);
     assert.strictEqual(savedMap.viewport.x, 10);

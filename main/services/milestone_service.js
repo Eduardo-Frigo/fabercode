@@ -1,9 +1,11 @@
+const defaultCrypto = require('crypto');
 const defaultFs = require('fs');
 const defaultPath = require('path');
 
 const EMPTY_MILESTONES = [];
 
 function createMilestoneService(dependencies = {}) {
+  const crypto = dependencies.crypto || defaultCrypto;
   const fs = dependencies.fs || defaultFs;
   const path = dependencies.path || defaultPath;
 
@@ -15,12 +17,13 @@ function createMilestoneService(dependencies = {}) {
     return faberDir;
   }
 
-  function getMilestonesPath(rootPath) {
-    return path.join(ensureFaberDir(rootPath), 'milestones.json');
+  function getMilestonesPath(rootPath, { ensure = true } = {}) {
+    const faberDir = ensure ? ensureFaberDir(rootPath) : path.join(rootPath, '.faber');
+    return path.join(faberDir, 'milestones.json');
   }
 
   function readMilestonesFile(rootPath) {
-    const filePath = getMilestonesPath(rootPath);
+    const filePath = getMilestonesPath(rootPath, { ensure: false });
     if (!fs.existsSync(filePath)) return null;
     try {
       return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -30,15 +33,75 @@ function createMilestoneService(dependencies = {}) {
     }
   }
 
+  function readMilestonesSnapshot(rootPath) {
+    const filePath = getMilestonesPath(rootPath, { ensure: false });
+    if (!fs.existsSync(filePath)) {
+      return {
+        ok: true,
+        found: false,
+        format: null,
+        renderedAt: null,
+        source: null,
+        milestones: [],
+        contentDigest: null,
+      };
+    }
+    try {
+      const content = fs.readFileSync(filePath, 'utf8');
+      const parsed = JSON.parse(content);
+      const contentDigest = `sha256:${crypto.createHash('sha256').update(content, 'utf8').digest('hex')}`;
+      if (Array.isArray(parsed)) {
+        return {
+          ok: true,
+          found: true,
+          format: 'draft',
+          renderedAt: null,
+          source: null,
+          milestones: parsed,
+          contentDigest,
+        };
+      }
+      if (parsed && typeof parsed === 'object'
+        && parsed.renderedAt && Array.isArray(parsed.milestones)) {
+        return {
+          ok: true,
+          found: true,
+          format: 'rendered',
+          renderedAt: parsed.renderedAt,
+          source: parsed.source || null,
+          milestones: parsed.milestones,
+          contentDigest,
+        };
+      }
+      return {
+        ok: false,
+        found: true,
+        format: 'invalid',
+        renderedAt: null,
+        source: null,
+        milestones: [],
+        contentDigest,
+        reason: 'invalid_milestones_envelope',
+      };
+    } catch {
+      return {
+        ok: false,
+        found: true,
+        format: 'invalid',
+        renderedAt: null,
+        source: null,
+        milestones: [],
+        contentDigest: null,
+        reason: 'invalid_milestones_json',
+      };
+    }
+  }
+
   function listMilestones(rootPath) {
-    const rawMilestones = readMilestonesFile(rootPath);
-    if (!rawMilestones || Array.isArray(rawMilestones)) {
-      return EMPTY_MILESTONES;
-    }
-    if (!rawMilestones.renderedAt || !Array.isArray(rawMilestones.milestones)) {
-      return EMPTY_MILESTONES;
-    }
-    return rawMilestones.milestones;
+    const snapshot = readMilestonesSnapshot(rootPath);
+    return snapshot.ok && snapshot.found && snapshot.format === 'rendered'
+      ? snapshot.milestones
+      : EMPTY_MILESTONES;
   }
 
   function saveMilestones(rootPath, milestones) {
@@ -201,6 +264,7 @@ function createMilestoneService(dependencies = {}) {
 
   return {
     listMilestones,
+    readMilestonesSnapshot,
     saveMilestones,
     updateMilestoneStatus,
     updateMilestoneTask,

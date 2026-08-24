@@ -34,7 +34,17 @@ const SOURCE_SCOPE_KEYS = Object.freeze([
   'jobId',
   'conversationId',
   'userId',
+  'relativeCwd',
+  'relevantFiles',
 ]);
+const SOURCE_SCOPE_REQUIRED_KEYS = Object.freeze([
+  'projectId',
+  'rootPath',
+  'jobId',
+  'conversationId',
+  'userId',
+]);
+const MAX_RELEVANT_FILES = 32;
 
 function exactDataFields(value, allowedKeys, requiredKeys = allowedKeys) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
@@ -78,8 +88,43 @@ function nullableIdentifier(value, fieldName) {
   return value === null ? null : safeIdentifier(value, fieldName);
 }
 
+function safeRelativePath(value, fieldName, { allowEmpty = false } = {}) {
+  if (typeof value !== 'string' || value !== value.trim()
+    || value.length > 4_096 || value.includes('\0') || value.includes('\\')) {
+    throw new TypeError(`${fieldName} must be a canonical relative path`);
+  }
+  if (allowEmpty && value === '') return '';
+  if (!value || value.startsWith('/') || /^[A-Za-z]:\//.test(value)
+    || value.split('/').some((segment) => !segment || segment === '.' || segment === '..')) {
+    throw new TypeError(`${fieldName} must be a canonical relative path`);
+  }
+  return value;
+}
+
+function normalizeRelevantFiles(value) {
+  if (!Array.isArray(value) || util.types.isProxy(value)
+    || Object.getPrototypeOf(value) !== Array.prototype || value.length > MAX_RELEVANT_FILES) {
+    throw new TypeError('sourceScope.relevantFiles must be a bounded plain array');
+  }
+  const keys = Reflect.ownKeys(value).filter((key) => key !== 'length');
+  if (keys.length !== value.length || keys.some((key, index) => key !== String(index))) {
+    throw new TypeError('sourceScope.relevantFiles must be dense');
+  }
+  const paths = keys.map((key, index) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || descriptor.enumerable !== true || !Object.hasOwn(descriptor, 'value')) {
+      throw new TypeError('sourceScope.relevantFiles must contain data paths');
+    }
+    return safeRelativePath(descriptor.value, `sourceScope.relevantFiles[${index}]`);
+  });
+  if (new Set(paths).size !== paths.length) {
+    throw new TypeError('sourceScope.relevantFiles must not contain duplicates');
+  }
+  return Object.freeze(paths);
+}
+
 function normalizeSourceScope(value) {
-  const fields = exactDataFields(value, SOURCE_SCOPE_KEYS);
+  const fields = exactDataFields(value, SOURCE_SCOPE_KEYS, SOURCE_SCOPE_REQUIRED_KEYS);
   if (!fields) throw new TypeError('Invalid ContextPack source scope');
   const projectId = safeIdentifier(fields.get('projectId'), 'sourceScope.projectId');
   const rootPath = fields.get('rootPath');
@@ -99,6 +144,14 @@ function normalizeSourceScope(value) {
       'sourceScope.conversationId'
     ),
     userId: nullableIdentifier(fields.get('userId'), 'sourceScope.userId'),
+    relativeCwd: safeRelativePath(
+      fields.has('relativeCwd') ? fields.get('relativeCwd') : '',
+      'sourceScope.relativeCwd',
+      { allowEmpty: true }
+    ),
+    relevantFiles: normalizeRelevantFiles(
+      fields.has('relevantFiles') ? fields.get('relevantFiles') : []
+    ),
   });
 }
 
@@ -204,8 +257,16 @@ function assertContextPackCollectionGrant(value) {
     'permissionsSection',
   ]);
   const sourceScope = fields && fields.get('sourceScope');
+  const sourceScopeFields = exactDataFields(
+    sourceScope,
+    SOURCE_SCOPE_KEYS,
+    SOURCE_SCOPE_KEYS
+  );
+  const relevantFiles = sourceScopeFields && sourceScopeFields.get('relevantFiles');
   if (!fields || !Object.isFrozen(value)
     || util.types.isProxy(sourceScope) || !Object.isFrozen(sourceScope)
+    || !sourceScopeFields
+    || util.types.isProxy(relevantFiles) || !Object.isFrozen(relevantFiles)
     || fields.get('schemaVersion') !== CONTEXT_PACK_COLLECTION_GRANT_SCHEMA_VERSION) {
     throw new TypeError('Invalid ContextPack collection grant');
   }
