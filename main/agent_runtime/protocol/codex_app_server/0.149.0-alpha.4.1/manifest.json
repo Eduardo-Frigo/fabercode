@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "codex-app-server-generated-schema-manifest.v1",
+  "codexCliVersion": "0.149.0-alpha.4.1",
+  "versionCommand": "codex --version",
+  "generatorCommand": "codex app-server generate-json-schema --out <directory>",
+  "artifacts": [
+    {
+      "file": "codex_app_server_protocol.schemas.json",
+      "sha256": "02a4c63a638fdae4a5f6c3ad32a41a377b642c66f3abc84f6fc47c7f3d6074df",
+      "bytes": 628432,
+      "title": "CodexAppServerProtocol",
+      "definitions": 82
+    },
+    {
+      "file": "codex_app_server_protocol.v2.schemas.json",
+      "sha256": "9b3de71a5a2ffc980b792a18aa8f8dec3f85f48829560222a0264fe494b679a9",
+      "bytes": 533599,
+      "title": "CodexAppServerProtocolV2",
+      "definitions": 579
+    }
+  ]
+}
