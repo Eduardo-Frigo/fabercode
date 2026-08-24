@@ -1101,9 +1101,15 @@ async function run() {
   assert.strictEqual(aiRouterFailure.meta.providerFailure.retryable, true);
 
   let aiRouterCalls = 0;
+  let aiRouterPayload = null;
+  const contextPackPromptProjection = Object.freeze({
+    trustedPrompt: 'trusted ContextPack permissions',
+    untrustedPrompt: 'wrapped untrusted ContextPack content',
+  });
   const aiService = createService({
-    requestAiProductRouteDecision: async () => {
+    requestAiProductRouteDecision: async (payload) => {
       aiRouterCalls += 1;
+      aiRouterPayload = payload;
       return {
         decision: 'execute',
         capability: 'edit_project',
@@ -1120,8 +1126,10 @@ async function run() {
       totalFiles: 2,
     }),
     userMessage: 'melhore o hero para ficar mais profissional',
+    contextPackPromptProjection,
   });
   assert.strictEqual(aiRouterCalls, 1);
+  assert.strictEqual(aiRouterPayload.contextPackPromptProjection, contextPackPromptProjection);
   assert.strictEqual(aiEdit.decision, 'execute');
   assert.strictEqual(aiEdit.meta.reason, 'ai_product_edit_accepted');
   assert.strictEqual(aiEdit.executionMessage, 'ajustar a seção hero do projeto');

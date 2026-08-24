@@ -25,7 +25,8 @@ function assertInOrder(source, fragments, message) {
 function extractFunctionDeclaration(source, name) {
   const start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `missing function declaration: ${name}`);
-  const openingBrace = source.indexOf('{', start);
+  const parameterEnd = source.indexOf(') {', start);
+  const openingBrace = parameterEnd >= 0 ? parameterEnd + 2 : -1;
   assert.ok(openingBrace > start, `missing function body: ${name}`);
   let depth = 0;
   for (let index = openingBrace; index < source.length; index += 1) {
@@ -38,12 +39,44 @@ function extractFunctionDeclaration(source, name) {
   throw new Error(`unterminated function declaration: ${name}`);
 }
 
+for (const functionName of [
+  'requestAiProductRouteDecision',
+  'requestPersonaRouteDecision',
+  'requestDirectPersonaChat',
+]) {
+  const promptSource = extractFunctionDeclaration(mainSource, functionName);
+  assert.strictEqual(
+    (promptSource.match(/promptProjection\.trustedPrompt/g) || []).length,
+    1,
+    `${functionName} must inject the trusted ContextPack projection exactly once`
+  );
+  assert.strictEqual(
+    (promptSource.match(/promptProjection\.untrustedPrompt/g) || []).length,
+    1,
+    `${functionName} must inject the untrusted ContextPack projection exactly once`
+  );
+  assertInOrder(
+    promptSource,
+    [
+      'const systemPrompt =',
+      'promptProjection ? promptProjection.trustedPrompt :',
+      'const userPrompt =',
+      'promptProjection ? promptProjection.untrustedPrompt :',
+      "{ role: 'system', content: systemPrompt }",
+      "{ role: 'user', content: userPrompt }",
+    ],
+    `${functionName} must preserve the ContextPack trust boundary across provider roles`
+  );
+}
+
 assertInOrder(
   mainSource,
   [
-    'const handleLegacyHarnessPlan = async (payload) => {',
+    'const handleLegacyHarnessPlan = async (payload, contextPack = null) => {',
     'normalizeAuthorizedProjectInfo(payload && payload.projectInfo ? payload.projectInfo : null)',
-    'buildAssistantPlanResponse({ ...(payload || {}), projectInfo: project.projectInfo })',
+    'projectHarnessContextPackForPrompt(contextPack, project.projectInfo)',
+    'buildAssistantPlanResponse({',
+    'contextPackPromptProjection,',
   ],
   'legacy plan authorization and delegation must preserve their order'
 );
@@ -51,9 +84,11 @@ assertInOrder(
 assertInOrder(
   mainSource,
   [
-    'const handleLegacyHarnessMessage = async (payload) => {',
+    'const handleLegacyHarnessMessage = async (payload, contextPack = null) => {',
     'normalizeAuthorizedProjectInfo(payload && payload.projectInfo ? payload.projectInfo : null)',
-    'handleAssistantMessage({ ...(payload || {}), projectInfo: project.projectInfo })',
+    'projectHarnessContextPackForPrompt(contextPack, project.projectInfo)',
+    'handleAssistantMessage({',
+    'contextPackPromptProjection,',
   ],
   'legacy message authorization and delegation must preserve their order'
 );
@@ -61,7 +96,22 @@ assertInOrder(
 assertInOrder(
   mainSource,
   [
-    'const handleLegacyHarnessExecute = async (action, projectInfo, executionContext = null) => {',
+    'async function runCortexRenderRuntimePlan({',
+    'const promptProjection = normalizeContextPackPromptProjection(contextPackPromptProjection);',
+    'requestCortexBrainBriefing({',
+    'contextPackPromptProjection: promptProjection,',
+    'requestEngineOperationBatchAction({',
+    'contextPackPromptProjection: promptProjection,',
+    'runRepairValidationLoop({',
+    'contextPackPromptProjection: promptProjection,',
+  ],
+  'Cortex planning and repair prompts must keep the same validated ContextPack projection'
+);
+
+assertInOrder(
+  mainSource,
+  [
+    'const handleLegacyHarnessExecute = async (action, projectInfo, executionContext = null, contextPack = null) => {',
     'const jobId = executionContext && typeof executionContext.jobId === \'string\'',
     'const executionSignal = executionContext && executionContext.signal',
     'project = normalizeAuthorizedProjectInfo(projectInfo || null);',
@@ -72,7 +122,7 @@ assertInOrder(
 );
 
 const legacyExecuteStart = mainSource.indexOf(
-  'const handleLegacyHarnessExecute = async (action, projectInfo, executionContext = null) => {'
+  'const handleLegacyHarnessExecute = async (action, projectInfo, executionContext = null, contextPack = null) => {'
 );
 const legacyExecuteEnd = mainSource.indexOf(
   'const legacyHarnessKernel = createLegacyKernelAdapter({',

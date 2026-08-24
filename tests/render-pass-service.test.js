@@ -156,6 +156,10 @@ async function run() {
   assert.strictEqual(patchFirst.ok, false);
 
   const providerCalls = [];
+  const contextPackPromptProjection = Object.freeze({
+    trustedPrompt: 'TRUSTED CONTEXTPACK PERMISSIONS',
+    untrustedPrompt: 'UNTRUSTED CONTEXTPACK CONTENT',
+  });
   const service = createService({
     callPersonaProviderChat: async (model, messages, timeoutMs, options) => {
       providerCalls.push({ model, messages, timeoutMs, options });
@@ -219,6 +223,7 @@ async function run() {
     },
     latestDiagnostics: { issues: [] },
     executionIntent: 'init_project',
+    contextPackPromptProjection,
   });
 
   assert.strictEqual(result.ok, true);
@@ -240,6 +245,10 @@ async function run() {
   assert.ok(providerCalls[0].messages[1].content.includes('attachment text'));
   assert.ok(providerCalls[0].messages[1].content.includes('Memoria ativa de edicao'));
   assert.ok(providerCalls[0].messages[1].content.includes('CONTEUDO NAO CONFIAVEL'));
+  assert.ok(providerCalls[0].messages[0].content.includes('TRUSTED CONTEXTPACK PERMISSIONS'));
+  assert.strictEqual(providerCalls[0].messages[0].content.includes('UNTRUSTED CONTEXTPACK CONTENT'), false);
+  assert.ok(providerCalls[0].messages[1].content.includes('UNTRUSTED CONTEXTPACK CONTENT'));
+  assert.strictEqual(providerCalls[0].messages[1].content.includes('TRUSTED CONTEXTPACK PERMISSIONS'), false);
 
   const injectionProviderCalls = [];
   const injectionService = createService({

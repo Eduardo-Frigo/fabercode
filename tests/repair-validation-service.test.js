@@ -98,11 +98,20 @@ async function run() {
         ],
       },
     };
+    const contextPackPromptProjection = Object.freeze({
+      trustedPrompt: 'trusted ContextPack permissions',
+      untrustedPrompt: 'wrapped untrusted ContextPack content',
+    });
     const { checkpoints, service, statuses } = createHarness({
-      requestEngineOperationBatchAction: async ({ repairContext, workGraph: receivedWorkGraph }) => {
+      requestEngineOperationBatchAction: async ({
+        repairContext,
+        workGraph: receivedWorkGraph,
+        contextPackPromptProjection: receivedProjection,
+      }) => {
         assert.strictEqual(repairContext.failedCoverage, initialValidation);
         assert.deepStrictEqual(repairContext.failedOperations, [{ op: 'write_file', path: 'index.html' }]);
         assert.strictEqual(receivedWorkGraph.currentPassId, 'repair-pass-1');
+        assert.strictEqual(receivedProjection, contextPackPromptProjection);
         return {
           ok: true,
           action: {
@@ -130,6 +139,7 @@ async function run() {
       latestDiagnostics: { issues: [] },
       executionIntent: 'edit_project',
       jobId: 'job-1',
+      contextPackPromptProjection,
     });
 
     assert.strictEqual(result.validation.ready, true);

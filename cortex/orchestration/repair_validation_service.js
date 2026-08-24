@@ -49,6 +49,7 @@ function createCortexRepairValidationService(dependencies = {}) {
     executionIntent = 'edit_project',
     artifactContext = '',
     jobId = null,
+    contextPackPromptProjection = null,
   } = {}) {
     requireDependency('buildOperationBatchDiffPreview', buildOperationBatchDiffPreview);
     requireDependency('buildOperationBatchFingerprint', buildOperationBatchFingerprint);
@@ -133,6 +134,7 @@ function createCortexRepairValidationService(dependencies = {}) {
           latestDiagnostics,
           executionIntent,
           artifactContext,
+          contextPackPromptProjection,
           repairContext: {
             failedCoverage: currentValidation,
             failedMessage: 'validation_not_ready',

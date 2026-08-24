@@ -456,6 +456,7 @@ function createCortexBriefingService(dependencies = {}) {
     activeMemory = null,
     runtimeBudget,
     latestDiagnostics = null,
+    contextPackPromptProjection = null,
   }) {
     const defaultsAuthorized = shouldUseDefaultScaffoldConfiguration(userMessage);
     if (defaultsAuthorized && hasScaffoldIntent(userMessage)) {
@@ -519,6 +520,9 @@ function createCortexBriefingService(dependencies = {}) {
       defaultsAuthorized
         ? 'Neste pedido o usuário autorizou defaults/placeholders; portanto needsClarification deve ser false e você deve preencher lacunas com escolhas plausíveis.'
         : '',
+      contextPackPromptProjection && typeof contextPackPromptProjection.trustedPrompt === 'string'
+        ? contextPackPromptProjection.trustedPrompt
+        : '',
     ].filter(Boolean).join(' ');
 
     const userPrompt = [
@@ -561,6 +565,9 @@ ${compactPromptPart(ragContext.contextText, 1200)}`
         ? `Cortex relevante:
 ${compactPromptPart(cortexContext.contextText, 900)}`
         : 'Cortex relevante: sem entradas úteis',
+      contextPackPromptProjection && typeof contextPackPromptProjection.untrustedPrompt === 'string'
+        ? contextPackPromptProjection.untrustedPrompt
+        : null,
       'Formato JSON obrigatório:',
       '{',
       '  "brief": "resumo executivo objetivo",',

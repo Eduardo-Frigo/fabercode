@@ -164,6 +164,10 @@ async function run() {
   });
 
   assert.strictEqual(service.shouldAskCortexBriefingClarification('criar site', {}), true);
+  const contextPackPromptProjection = Object.freeze({
+    trustedPrompt: 'TRUSTED CONTEXTPACK PERMISSIONS',
+    untrustedPrompt: 'UNTRUSTED CONTEXTPACK CONTENT',
+  });
   const result = await service.requestCortexBrainBriefing({
     projectInfo: {
       rootPath: '/tmp/project',
@@ -189,6 +193,7 @@ async function run() {
       generationOptions: { num_predict: 900 },
     },
     latestDiagnostics: { issues: [] },
+    contextPackPromptProjection,
   });
 
   assert.strictEqual(result.brief, 'Brief final');
@@ -203,6 +208,10 @@ async function run() {
   assert.ok(providerCalls[0].messages[1].content.includes('project files text'));
   assert.ok(providerCalls[0].messages[1].content.includes('mempalace core text'));
   assert.ok(providerCalls[0].messages[1].content.includes('Memoria ativa: usuario prefere estrutura modular'));
+  assert.ok(providerCalls[0].messages[0].content.includes('TRUSTED CONTEXTPACK PERMISSIONS'));
+  assert.strictEqual(providerCalls[0].messages[0].content.includes('UNTRUSTED CONTEXTPACK CONTENT'), false);
+  assert.ok(providerCalls[0].messages[1].content.includes('UNTRUSTED CONTEXTPACK CONTENT'));
+  assert.strictEqual(providerCalls[0].messages[1].content.includes('TRUSTED CONTEXTPACK PERMISSIONS'), false);
 
   const defaultsResult = await service.requestCortexBrainBriefing({
     projectInfo: {

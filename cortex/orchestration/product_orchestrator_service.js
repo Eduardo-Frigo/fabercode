@@ -50,6 +50,7 @@ function createProductOrchestratorService(dependencies = {}) {
     contextHint = null,
     conversationMessages = [],
     activeMemory = null,
+    contextPackPromptProjection = null,
   } = {}) {
     const provider = getSelectedAiProvider() || 'deterministic';
     const productContract = contractService.buildCapabilityContract();
@@ -123,6 +124,7 @@ function createProductOrchestratorService(dependencies = {}) {
           productFacts,
           workingBrief,
           buildModeRoute,
+          contextPackPromptProjection,
         });
       } catch (error) {
         const providerFailure = normalizeProviderFailure(error, provider);

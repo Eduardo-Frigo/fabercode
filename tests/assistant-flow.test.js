@@ -310,6 +310,89 @@ async function run() {
   assert.strictEqual(runtimeContextHint.activeMemory, activeMemory);
   assert.ok(activeMemoryHarness.calls.checkpoints.some((entry) => entry.key === 'active_memory'));
 
+  const contextPackPromptProjection = Object.freeze({
+    schemaVersion: 'test-context-pack-prompt-projection.v1',
+    trustedPrompt: 'trusted ContextPack permissions',
+    untrustedPrompt: 'wrapped untrusted ContextPack content',
+  });
+  let productPromptProjection = null;
+  let personaPromptProjection = null;
+  let plannerPromptProjection = null;
+  const projectedExecutionHarness = createHarness({
+    resolveProductRoute: async (payload) => {
+      productPromptProjection = payload.contextPackPromptProjection;
+      return {
+        ok: true,
+        decision: 'chat',
+        response: '',
+        delegateToPersona: true,
+        meta: {
+          planner: 'product_orchestrator',
+          reason: 'requires_persona_semantics',
+          requiresPersona: true,
+        },
+      };
+    },
+    requestPersonaRouteDecision: async (payload) => {
+      personaPromptProjection = payload.contextPackPromptProjection;
+      return {
+        ok: true,
+        decision: 'execute',
+        response: 'Vou preparar.',
+        executionMessage: 'corrigir o projeto',
+        meta: { planner: 'persona_router', reason: 'persona_selected_execution' },
+      };
+    },
+    buildPlanWithCortexRuntime: async (
+      _projectInfo,
+      _userMessage,
+      _attachments,
+      _contextHint,
+      _jobId,
+      receivedProjection
+    ) => {
+      plannerPromptProjection = receivedProjection;
+      return {
+        ok: true,
+        response: 'Plano pronto.',
+        action: { type: 'execute_operation_batch', operations: [] },
+        meta: { planner: 'cortex_runtime', reason: 'operation_batch_ready' },
+      };
+    },
+  });
+  await projectedExecutionHarness.flow.handleAssistantMessage({
+    projectInfo: { id: 'project-1', rootPath: '/tmp/project' },
+    userMessage: 'corrija o projeto',
+    contextPackPromptProjection,
+  });
+  assert.strictEqual(productPromptProjection, contextPackPromptProjection);
+  assert.strictEqual(personaPromptProjection, contextPackPromptProjection);
+  assert.strictEqual(plannerPromptProjection, contextPackPromptProjection);
+
+  let directChatPromptProjection = null;
+  const projectedChatHarness = createHarness({
+    requestPersonaRouteDecision: async () => ({
+      ok: true,
+      decision: 'chat',
+      response: 'Olá.',
+      meta: { planner: 'persona_router', reason: 'persona_chat' },
+    }),
+    requestDirectPersonaChat: async (payload) => {
+      directChatPromptProjection = payload.contextPackPromptProjection;
+      return {
+        ok: true,
+        response: 'Olá com contexto.',
+        meta: { planner: 'direct_persona_chat', reason: 'direct_chat_response' },
+      };
+    },
+  });
+  await projectedChatHarness.flow.handleAssistantMessage({
+    projectInfo: { id: 'project-1', rootPath: '/tmp/project' },
+    userMessage: 'oi',
+    contextPackPromptProjection,
+  });
+  assert.strictEqual(directChatPromptProjection, contextPackPromptProjection);
+
   let chatPersonaCalled = false;
   let directChatCalled = false;
   const chatHarness = createHarness({

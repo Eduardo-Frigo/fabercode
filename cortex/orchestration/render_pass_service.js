@@ -482,6 +482,7 @@ function createCortexRenderPassService(dependencies = {}) {
     productRouteDecision = null,
     workingBrief = null,
     buildModeRoute = null,
+    contextPackPromptProjection = null,
   }) {
     requireDependency('buildRuntimeBudget', buildRuntimeBudget);
     requireDependency('callPersonaProviderChat', callPersonaProviderChat);
@@ -777,10 +778,14 @@ function createCortexRenderPassService(dependencies = {}) {
     const forgeInstructionRecovery = buildForgeMrpBlueprintFallback('forge_mrp_blueprint_before_remote_instruction_recovery');
     if (forgeInstructionRecovery) return forgeInstructionRecovery;
 
-    const systemPrompt =
-      'Você é o Executor técnico da Persona. Sua única função é produzir um plano executável de arquivos/pastas. ' +
-      'Responda SOMENTE JSON válido, sem markdown e sem texto fora do JSON. ' +
-      'A primeira letra da resposta deve ser { e a última deve ser }.';
+    const systemPrompt = [
+      'Você é o Executor técnico da Persona. Sua única função é produzir um plano executável de arquivos/pastas.',
+      'Responda SOMENTE JSON válido, sem markdown e sem texto fora do JSON.',
+      'A primeira letra da resposta deve ser { e a última deve ser }.',
+      contextPackPromptProjection && typeof contextPackPromptProjection.trustedPrompt === 'string'
+        ? contextPackPromptProjection.trustedPrompt
+        : '',
+    ].filter(Boolean).join(' ');
 
     const userPrompt = [
       `Pedido do usuário: ${compactPromptPart(userMessage, activeRuntimeBudget.maxPromptCharsPerPass)}`,
@@ -835,6 +840,9 @@ function createCortexRenderPassService(dependencies = {}) {
         : 'Contexto do Cortex para execução: indisponível',
       repairContext
         ? wrapUntrusted('Contexto de reparo do pass anterior', JSON.stringify(repairContext), 'repair_context', 1800)
+        : null,
+      contextPackPromptProjection && typeof contextPackPromptProjection.untrustedPrompt === 'string'
+        ? contextPackPromptProjection.untrustedPrompt
         : null,
       'Regras obrigatórias:',
       '- Use caminhos relativos ao root do projeto.',
@@ -915,6 +923,9 @@ function createCortexRenderPassService(dependencies = {}) {
         workGraph && workGraph.brief ? wrapUntrusted('Briefing da Persona', workGraph.brief, 'working_brief', 900) : null,
         workGraph && workGraph.acceptanceCriteria
           ? wrapUntrusted('Criterios Cortex', JSON.stringify(workGraph.acceptanceCriteria), 'acceptance_criteria', 900)
+          : null,
+        contextPackPromptProjection && typeof contextPackPromptProjection.untrustedPrompt === 'string'
+          ? contextPackPromptProjection.untrustedPrompt
           : null,
         `Gere no máximo ${compactMaxOps} operações.`,
         initMode

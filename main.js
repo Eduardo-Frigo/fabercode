@@ -126,6 +126,10 @@ const { createArtifactStoreService } = require('./main/services/artifact_store_s
 const { createCommandRunner } = require('./main/services/command_runner');
 const { createCortexRuntimeJobService } = require('./main/services/cortex_runtime_job_service');
 const { createCortexLearningPayloadService } = require('./main/services/cortex_learning_payload_service');
+const {
+  assertContextPackPromptProjection,
+  createContextPackPromptProjector,
+} = require('./main/services/context_pack_prompt_projection');
 const { createCssRuntimeRepairService } = require('./main/services/css_runtime_repair_service');
 const {
   buildCortexPexelsContractFromPersonaBrief,
@@ -1843,6 +1847,28 @@ function formatUntrustedJsonPromptSection(label, value, sourceType, maxChars = 1
   return wrapUntrustedPromptSection(label, text, { sourceType, maxChars });
 }
 
+const contextPackPromptProjector = createContextPackPromptProjector({
+  wrapUntrustedPromptSection,
+});
+
+function normalizeContextPackPromptProjection(value) {
+  return value === null || value === undefined
+    ? null
+    : assertContextPackPromptProjection(value);
+}
+
+function projectHarnessContextPackForPrompt(contextPack, projectInfo = null) {
+  if (contextPack === null || contextPack === undefined) return null;
+  const projection = contextPackPromptProjector.project(contextPack);
+  const projectId = projectInfo && typeof projectInfo.id === 'string'
+    ? projectInfo.id
+    : '';
+  if (projectId && projection.projectId !== projectId) {
+    throw new TypeError('ContextPack project does not match the authorized Harness project');
+  }
+  return projection;
+}
+
 function normalizePersonaRouteDecision(rawRoute, userMessage = '') {
   if (!rawRoute || typeof rawRoute !== 'object') return null;
   const decision = String(rawRoute.decision || rawRoute.mode || rawRoute.action || '').trim().toLowerCase();
@@ -1914,7 +1940,9 @@ async function requestAiProductRouteDecision({
   activeMemory = null,
   productContract = {},
   productFacts = {},
+  contextPackPromptProjection = null,
 } = {}) {
+  const promptProjection = normalizeContextPackPromptProjection(contextPackPromptProjection);
   const provider = getSelectedAiProvider();
   const status = await getAiRuntimeStatus().catch((error) => ({
     ok: false,
@@ -1972,7 +2000,8 @@ async function requestAiProductRouteDecision({
     'Use execute apenas quando houver uma capacidade clara do Faber Code para atender o pedido.',
     'Use clarify quando faltar informacao de produto ou quando o pedido conflitar com o estado do projeto.',
     'Use chat para conversa, pergunta conceitual ou pedido que nao exige acao em arquivos/ferramentas.',
-  ].join(' ');
+    promptProjection ? promptProjection.trustedPrompt : '',
+  ].filter(Boolean).join(' ');
 
   const userPrompt = [
     'Contrato de produto:',
@@ -1994,6 +2023,7 @@ async function requestAiProductRouteDecision({
     contextHint
       ? formatUntrustedJsonPromptSection('Contexto do runtime', contextHint, 'runtime_context', 1600)
       : 'Contexto do runtime: nenhum.',
+    promptProjection ? promptProjection.untrustedPrompt : null,
     `Anexos: ${attachmentSummary}`,
     '',
     'Formato obrigatorio:',
@@ -2053,7 +2083,9 @@ async function requestPersonaRouteDecision({
   contextHint = null,
   conversationMessages = [],
   activeMemory = null,
+  contextPackPromptProjection = null,
 }) {
+  const promptProjection = normalizeContextPackPromptProjection(contextPackPromptProjection);
   const provider = getSelectedAiProvider();
   const activeMemorySummary = activeMemory ? summarizeActiveMemory(activeMemory) : null;
   const defaultsAuthorized = shouldUseDefaultScaffoldConfiguration(userMessage);
@@ -2181,7 +2213,8 @@ async function requestPersonaRouteDecision({
     'Se escolher execute, explique brevemente o que vai analisar e defina executionMessage com o pedido técnico consolidado.',
     'Mantenha response e executionMessage curtos para evitar JSON truncado.',
     'Use português natural, acolhedor e direto; evite respostas robóticas como "vou alterar" quando nenhuma alteração foi aplicada ainda.',
-  ].join(' ');
+    promptProjection ? promptProjection.trustedPrompt : '',
+  ].filter(Boolean).join(' ');
 
   const userPrompt = [
     `Mensagem do usuário: ${String(userMessage || '').trim() || '[mensagem vazia]'}`,
@@ -2210,6 +2243,7 @@ async function requestPersonaRouteDecision({
     localDiagnosticsContext
       ? formatUntrustedPromptSection('Diagnostico local dos arquivos atuais', localDiagnosticsContext, 'local_diagnostics', 1800)
       : 'Diagnóstico local dos arquivos atuais: indisponível.',
+    promptProjection ? promptProjection.untrustedPrompt : null,
     'Formato obrigatório:',
     '{',
     '  "decision": "chat|clarify|execute",',
@@ -2313,7 +2347,9 @@ async function requestDirectPersonaChat({
   conversationMessages = [],
   activeMemory = null,
   routeDecision = null,
+  contextPackPromptProjection = null,
 } = {}) {
+  const promptProjection = normalizeContextPackPromptProjection(contextPackPromptProjection);
   const provider = getSelectedAiProvider();
   const status = await getAiRuntimeStatus().catch((error) => ({
     ok: false,
@@ -2379,7 +2415,8 @@ async function requestDirectPersonaChat({
     'Se a mensagem for conversa comum, responda normalmente.',
     'Se o pedido for técnico, explique de forma simples que o usuário pode confirmar digitando "pode executar" ou "confirmar".',
     'Mantenha a resposta curta o bastante para caber bem no chat.',
-  ].join(' ');
+    promptProjection ? promptProjection.trustedPrompt : '',
+  ].filter(Boolean).join(' ');
 
   const userPrompt = [
     `Mensagem do usuário: ${String(userMessage || '').trim() || '[mensagem vazia]'}`,
@@ -2398,7 +2435,8 @@ async function requestDirectPersonaChat({
     contextHint
       ? formatUntrustedJsonPromptSection('Contexto do runtime', contextHint, 'runtime_context', 1400)
       : 'Contexto do runtime: nenhum.',
-  ].join('\n');
+    promptProjection ? promptProjection.untrustedPrompt : null,
+  ].filter(Boolean).join('\n');
 
   try {
     const raw = await callPersonaProviderChat(
@@ -3830,7 +3868,15 @@ function validateExecutionCommand(command) {
   return { ok: true };
 }
 
-async function runCortexRenderRuntimePlan({ projectInfo, userMessage, attachments = [], contextHint = {}, jobId = null }) {
+async function runCortexRenderRuntimePlan({
+  projectInfo,
+  userMessage,
+  attachments = [],
+  contextHint = {},
+  jobId = null,
+  contextPackPromptProjection = null,
+}) {
+  const promptProjection = normalizeContextPackPromptProjection(contextPackPromptProjection);
   const runtimeSettings = getRuntimeProfileSettings();
   const runtimeBudget = await getCortexRuntimeBudget();
   if (jobId) {
@@ -4094,6 +4140,7 @@ async function runCortexRenderRuntimePlan({ projectInfo, userMessage, attachment
       activeMemory,
       runtimeBudget,
       latestDiagnostics,
+      contextPackPromptProjection: promptProjection,
     });
   } catch (error) {
     setPassStatus(workGraph, brainPass.id, 'failed', { message: error.message });
@@ -4222,6 +4269,7 @@ async function runCortexRenderRuntimePlan({ projectInfo, userMessage, attachment
       productRouteDecision: productRuntimeContract.routeDecision,
       workingBrief: productRuntimeContract.workingBrief,
       buildModeRoute: productRuntimeContract.buildModeRoute,
+      contextPackPromptProjection: promptProjection,
     });
   };
 
@@ -4261,6 +4309,7 @@ async function runCortexRenderRuntimePlan({ projectInfo, userMessage, attachment
       productRouteDecision: productRuntimeContract.routeDecision,
       workingBrief: productRuntimeContract.workingBrief,
       buildModeRoute: productRuntimeContract.buildModeRoute,
+      contextPackPromptProjection: promptProjection,
       repairContext: {
         failedCoverage: enginePlan.coverage,
         failedRaw: enginePlan.raw || '',
@@ -4384,6 +4433,7 @@ async function runCortexRenderRuntimePlan({ projectInfo, userMessage, attachment
       executionIntent,
       artifactContext,
       jobId,
+      contextPackPromptProjection: promptProjection,
     });
     enginePlan = repairValidationResult.enginePlan;
     validation = repairValidationResult.validation;
@@ -4522,11 +4572,25 @@ async function runCortexRenderRuntimePlan({ projectInfo, userMessage, attachment
   };
 }
 
-async function buildPlanWithCortexRuntime(projectInfo, userMessage, attachments = [], contextHint = {}, jobId = null) {
+async function buildPlanWithCortexRuntime(
+  projectInfo,
+  userMessage,
+  attachments = [],
+  contextHint = {},
+  jobId = null,
+  contextPackPromptProjection = null
+) {
   // Novo caminho padrão: Cortex runtime único para init/edit (Persona + Automata).
   // Sem fallback legado de orquestração.
   if (projectInfo) {
-    return runCortexRenderRuntimePlan({ projectInfo, userMessage, attachments, contextHint, jobId });
+    return runCortexRenderRuntimePlan({
+      projectInfo,
+      userMessage,
+      attachments,
+      contextHint,
+      jobId,
+      contextPackPromptProjection,
+    });
   }
   const basePlan = buildConfirmationPlan(projectInfo, userMessage, attachments);
   return {
@@ -5980,25 +6044,35 @@ app.whenReady().then(async () => {
     });
   });
 
-  const handleLegacyHarnessPlan = async (payload) => {
+  const handleLegacyHarnessPlan = async (payload, contextPack = null) => {
     if (!agenticDeleteStartupRecoveryHealthy) return assistantRecoveryRequiredResult();
     const project = normalizeAuthorizedProjectInfo(payload && payload.projectInfo ? payload.projectInfo : null);
     if (!project.ok) return project;
-    return buildAssistantPlanResponse({ ...(payload || {}), projectInfo: project.projectInfo });
+    const contextPackPromptProjection = projectHarnessContextPackForPrompt(contextPack, project.projectInfo);
+    return buildAssistantPlanResponse({
+      ...(payload || {}),
+      projectInfo: project.projectInfo,
+      contextPackPromptProjection,
+    });
   };
 
-  const handleLegacyHarnessMessage = async (payload) => {
+  const handleLegacyHarnessMessage = async (payload, contextPack = null) => {
     if (!agenticDeleteStartupRecoveryHealthy) return assistantRecoveryRequiredResult();
     const project = normalizeAuthorizedProjectInfo(payload && payload.projectInfo ? payload.projectInfo : null);
     if (!project.ok) return project;
-    return handleAssistantMessage({ ...(payload || {}), projectInfo: project.projectInfo });
+    const contextPackPromptProjection = projectHarnessContextPackForPrompt(contextPack, project.projectInfo);
+    return handleAssistantMessage({
+      ...(payload || {}),
+      projectInfo: project.projectInfo,
+      contextPackPromptProjection,
+    });
   };
 
   registerIpcHandler('tools:list', () => {
     return { ok: true, tools: getToolRegistry().list() };
   });
 
-  const handleLegacyHarnessExecute = async (action, projectInfo, executionContext = null) => {
+  const handleLegacyHarnessExecute = async (action, projectInfo, executionContext = null, contextPack = null) => {
     const jobId = executionContext && typeof executionContext.jobId === 'string'
       ? executionContext.jobId
       : null;
@@ -6048,6 +6122,7 @@ app.whenReady().then(async () => {
       return project;
     }
     projectInfo = project.projectInfo;
+    const contextPackPromptProjection = projectHarnessContextPackForPrompt(contextPack, projectInfo);
     let initialAction;
     try {
       initialAction = bindActionToAuthorizedProject(action, projectInfo);
@@ -6131,6 +6206,7 @@ app.whenReady().then(async () => {
           requestedMode,
           signal: executionSignal,
           processExecutionPolicy: ASSISTANT_PROCESS_EXECUTION_POLICY,
+          contextPackPromptProjection,
         };
         if (deleteRuntime && deleteBinding) {
           const projectLabel = getAgenticDeleteProjectLabel(deleteBinding);
@@ -6391,7 +6467,8 @@ app.whenReady().then(async () => {
                 lastReason: gateReason,
                 lastHadAction: true,
               },
-              jobId
+              jobId,
+              contextPackPromptProjection
             );
             assertJobExecutionNotCancelled(jobId, executionSignal);
 

@@ -112,6 +112,24 @@ function optionalExecutionCallback(executionContext, key) {
   return typeof callback === 'function' && !util.types.isProxy(callback) ? callback : null;
 }
 
+function readContextPackPromptProjection(executionContext) {
+  const projection = ownDataValue(executionContext, 'contextPackPromptProjection');
+  if (!projection || typeof projection !== 'object' || Array.isArray(projection)
+    || util.types.isProxy(projection) || !Object.isFrozen(projection)) {
+    return Object.freeze({ trustedPrompt: '', untrustedPrompt: '' });
+  }
+  const trustedPrompt = ownDataValue(projection, 'trustedPrompt');
+  const untrustedPrompt = ownDataValue(projection, 'untrustedPrompt');
+  return Object.freeze({
+    trustedPrompt: typeof trustedPrompt === 'string' && trustedPrompt.length <= 8_192
+      ? trustedPrompt
+      : '',
+    untrustedPrompt: typeof untrustedPrompt === 'string' && untrustedPrompt.length <= 20_000
+      ? untrustedPrompt
+      : '',
+  });
+}
+
 function normalizeRunCommandToolInput(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)
     || util.types.isProxy(input)) {
@@ -1563,6 +1581,7 @@ function createAgenticToolLoopService(dependencies = {}) {
       === AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED && Boolean(executeProcess);
     const processControlAvailable = processExecutionAvailable
       && Boolean(readProcess && waitProcess && stopProcess);
+    const contextPackPrompts = readContextPackPromptProjection(options);
     const tools = buildBoundTools(projectInfo, {
       signal,
       deletePaths,
@@ -1579,10 +1598,20 @@ function createAgenticToolLoopService(dependencies = {}) {
       action.userMessage || '',
       action.attachments || []
     );
-    const systemPrompt = buildSystemPrompt(projectInfo, {
-      processExecutionAvailable,
-      processControlAvailable,
-    });
+    if (contextPackPrompts.untrustedPrompt) {
+      const insertionIndex = Math.max(0, conversationMessages.length - 1);
+      conversationMessages.splice(insertionIndex, 0, {
+        role: 'user',
+        content: contextPackPrompts.untrustedPrompt,
+      });
+    }
+    const systemPrompt = [
+      buildSystemPrompt(projectInfo, {
+        processExecutionAvailable,
+        processControlAvailable,
+      }),
+      contextPackPrompts.trustedPrompt,
+    ].filter(Boolean).join('\n\n');
     const allTextParts = [];
     const modifiedFiles = new Set();
     const toolRuns = [];

@@ -257,7 +257,14 @@ function createPersonaOrchestrator(dependencies = {}) {
         meta: { planner: 'persona_router', reason: 'conversation_only' }
       };
     }
-    const { projectInfo, userMessage, attachments, contextHint, conversationMessages } = payload || {};
+    const {
+      projectInfo,
+      userMessage,
+      attachments,
+      contextHint,
+      conversationMessages,
+      contextPackPromptProjection,
+    } = payload || {};
     const activeMemory = await resolveRequestActiveMemory(payload, 'route');
     const enrichedContextHint = enrichContextHintWithActiveMemory(contextHint, activeMemory);
     let productRoute = null;
@@ -269,6 +276,7 @@ function createPersonaOrchestrator(dependencies = {}) {
         contextHint: enrichedContextHint,
         conversationMessages: conversationMessages || [],
         activeMemory,
+        contextPackPromptProjection: contextPackPromptProjection || null,
       });
     } catch (error) {
       appendAuditEvent('assistant.product_route_failed', {
@@ -296,6 +304,7 @@ function createPersonaOrchestrator(dependencies = {}) {
       contextHint: enrichedContextHint,
       conversationMessages: conversationMessages || [],
       activeMemory,
+      contextPackPromptProjection: contextPackPromptProjection || null,
     });
     const enrichedRouteDecision = attachDelegatedProductContextFrame(routeDecision, productRoute);
     appendAssistantRouteAudit(enrichedRouteDecision, projectInfo || null);
@@ -316,6 +325,7 @@ function createPersonaOrchestrator(dependencies = {}) {
         conversationMessages: payload.conversationMessages || [],
         activeMemory,
         routeDecision,
+        contextPackPromptProjection: payload.contextPackPromptProjection || null,
       });
       const response = result && result.response ? String(result.response).trim() : '';
       if (response) return response;
@@ -512,7 +522,15 @@ function createPersonaOrchestrator(dependencies = {}) {
 
   async function buildAssistantPlanResponse(payload = {}) {
     assertReady();
-    const { projectInfo, userMessage, attachments, contextHint, conversationMessages, jobId: requestedJobId } = payload || {};
+    const {
+      projectInfo,
+      userMessage,
+      attachments,
+      contextHint,
+      conversationMessages,
+      contextPackPromptProjection,
+      jobId: requestedJobId,
+    } = payload || {};
     const activeMemory = await resolveRequestActiveMemory(payload, 'plan');
     const enrichedContextHint = enrichContextHintWithActiveMemory(contextHint, activeMemory);
     const routeFromContext =
@@ -530,6 +548,7 @@ function createPersonaOrchestrator(dependencies = {}) {
         attachments: attachments || [],
         contextHint: enrichedContextHint,
         conversationMessages: conversationMessages || [],
+        contextPackPromptProjection: contextPackPromptProjection || null,
       });
     }
 
@@ -541,6 +560,7 @@ function createPersonaOrchestrator(dependencies = {}) {
         attachments,
         contextHint: enrichedContextHint,
         conversationMessages,
+        contextPackPromptProjection: contextPackPromptProjection || null,
       },
       activeMemory
     );
@@ -606,6 +626,7 @@ function createPersonaOrchestrator(dependencies = {}) {
           conversationMessages: conversationMessages || [],
           routeDecision,
           jobId,
+          contextPackPromptProjection: contextPackPromptProjection || null,
         });
       }
       if (!plan) {
@@ -614,7 +635,8 @@ function createPersonaOrchestrator(dependencies = {}) {
           effectiveUserMessage,
           attachments || [],
           effectiveContextHint,
-          jobId
+          jobId,
+          contextPackPromptProjection || null
         );
       }
     } catch (error) {
@@ -833,7 +855,15 @@ function createPersonaOrchestrator(dependencies = {}) {
 
   async function handleAssistantMessage(payload = {}) {
     assertReady();
-    const { projectInfo, userMessage, attachments, contextHint, conversationMessages, jobId } = payload || {};
+    const {
+      projectInfo,
+      userMessage,
+      attachments,
+      contextHint,
+      conversationMessages,
+      contextPackPromptProjection,
+      jobId,
+    } = payload || {};
     const activeMemory = await resolveRequestActiveMemory(payload, 'message');
     const enrichedContextHint = enrichContextHintWithActiveMemory(contextHint, activeMemory);
     const routeDecision = await resolveAssistantRouteDecision({
@@ -843,6 +873,7 @@ function createPersonaOrchestrator(dependencies = {}) {
       contextHint: enrichedContextHint,
       conversationMessages: conversationMessages || [],
       isMapChat: payload.isMapChat,
+      contextPackPromptProjection: contextPackPromptProjection || null,
     });
 
     const routeOnlyPlan = await buildAssistantRouteOnlyPlan(
@@ -853,6 +884,7 @@ function createPersonaOrchestrator(dependencies = {}) {
         attachments,
         contextHint: enrichedContextHint,
         conversationMessages,
+        contextPackPromptProjection: contextPackPromptProjection || null,
       },
       activeMemory
     );
@@ -877,6 +909,7 @@ function createPersonaOrchestrator(dependencies = {}) {
               : null,
       },
       conversationMessages,
+      contextPackPromptProjection: contextPackPromptProjection || null,
       jobId,
     });
   }

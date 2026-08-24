@@ -57,6 +57,10 @@ async function run() {
   const toolCalls = [];
   const checkpoints = [];
   const events = [];
+  const contextPackPromptProjection = Object.freeze({
+    trustedPrompt: 'TRUSTED CONTEXTPACK PERMISSIONS',
+    untrustedPrompt: 'UNTRUSTED CONTEXTPACK CONTENT',
+  });
 
   const service = createAgenticToolLoopService({
     appendJobEvent: (jobId, type, payload) => events.push({ jobId, type, payload }),
@@ -90,6 +94,13 @@ async function run() {
       assert.strictEqual(Object.hasOwn(request, 'signal'), false);
       assert.match(request.systemPrompt, /`\.faber\/\*\*` é um namespace privado/);
       assert.doesNotMatch(request.systemPrompt, /modificar.*`\.faber/i);
+      assert.match(request.systemPrompt, /TRUSTED CONTEXTPACK PERMISSIONS/);
+      assert.doesNotMatch(request.systemPrompt, /UNTRUSTED CONTEXTPACK CONTENT/);
+      const conversationPrompt = request.conversationMessages
+        .map((entry) => typeof entry.content === 'string' ? entry.content : JSON.stringify(entry.content))
+        .join('\n');
+      assert.match(conversationPrompt, /UNTRUSTED CONTEXTPACK CONTENT/);
+      assert.doesNotMatch(conversationPrompt, /TRUSTED CONTEXTPACK PERMISSIONS/);
       const { previousResponseId, toolResults } = request;
       if (!previousResponseId) {
         return {
@@ -135,7 +146,7 @@ async function run() {
       jobId: 'job-1',
     },
     { id: 'project-1', rootPath: '/tmp/project' },
-    { jobId: 'job-1' }
+    { jobId: 'job-1', contextPackPromptProjection }
   );
 
   assert.strictEqual(result.ok, true);
