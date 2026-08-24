@@ -446,8 +446,20 @@ function assertAssistantHarnessCompositionBoundary() {
   }
   assertDoesNotMatch(
     agenticToolLoopSource,
-    /name:\s*['"](?:run_command|preview_capture)['"]/,
-    'the model must not receive shell or preview capture before the portable sandbox exists'
+    /name:\s*['"]preview_capture['"]/,
+    'the model must not receive preview capture before its isolated runtime exists'
+  );
+  assert.ok(
+    agenticToolLoopSource.includes("BROKERED: 'brokered'")
+      && agenticToolLoopSource.includes("SUSPENDED: 'suspended'")
+      && agenticToolLoopSource.includes(
+        'processExecutionPolicy === AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED'
+      )
+      && agenticToolLoopSource.includes("name: 'run_command'")
+      && mainSource.includes(
+        'const ASSISTANT_PROCESS_EXECUTION_POLICY = PROCESS_EXECUTION_POLICIES.SUSPENDED;'
+      ),
+    'run_command must exist only behind the exact brokered policy while production remains suspended'
   );
   assert.ok(
     agenticToolLoopSource.includes('informe-as como pendentes para o usuário'),
@@ -548,6 +560,12 @@ function assertExecutionWorkspaceBoundary() {
   );
   const isolationAuthorizedJobExecutorSource = read(
     'main/services/execution_isolation_authorized_job_executor.js'
+  );
+  const agenticProcessBrokerFactorySource = read(
+    'main/services/agentic_process_broker_factory.js'
+  );
+  const brokerSandboxRegistrySource = read(
+    'main/services/execution_isolation_broker_sandbox_registry.js'
   );
   const processSupervisorContractSource = read(
     'main/capabilities/process_supervisor_contract.js'
@@ -856,10 +874,36 @@ function assertExecutionWorkspaceBoundary() {
       && mainSource.includes(
         "require('./main/services/execution_isolation_authorized_job_executor')"
       )
+      && mainSource.includes(
+        "require('./main/services/execution_isolation_broker_sandbox_registry')"
+      )
+      && mainSource.includes(
+        "require('./main/services/agentic_process_broker_factory')"
+      )
       && mainSource.includes('createExecutionIsolationRuntimeServices({')
       && mainSource.includes('executionIsolationRuntimeServices = runtimeServices;'),
-    'production must compose selected portable backends and the job-bound executor through one lifecycle-owned boundary'
+    'production must compose portable backends, the job-bound executor, and its broker route through one lifecycle-owned boundary'
   );
+  assert.ok(
+    agenticProcessBrokerFactorySource.includes('createProjectCapabilityBroker({')
+      && agenticProcessBrokerFactorySource.includes('sandboxExecutor,')
+      && agenticProcessBrokerFactorySource.includes(
+        'effects: [PROJECT_CAPABILITY_EFFECTS.PROCESS_EXECUTE]'
+      )
+      && agenticProcessBrokerFactorySource.includes("origin: 'agentic_tool_loop'")
+      && brokerSandboxRegistrySource.includes('authorized_job_executor_only')
+      && brokerSandboxRegistrySource.includes('SANDBOX_EXECUTOR_REQUIRED'),
+    'agentic process execution must cross the generic broker and selection-only registry before the private executor'
+  );
+  for (const [label, source] of [
+    ['agentic process broker factory', agenticProcessBrokerFactorySource],
+    ['execution isolation broker registry', brokerSandboxRegistrySource],
+  ]) {
+    assertDoesNotMatch(source, /require\(['"](?:electron|child_process)['"]\)/,
+      `${label} must not own Electron or host process spawning`);
+    assertDoesNotMatch(source, /legacy_kernel|faber_capability_adapter/,
+      `${label} must not fall back to a legacy execution path`);
+  }
   assert.strictEqual(
     mainSource.includes('execution_isolation_job_session_service'),
     false,
@@ -892,8 +936,17 @@ function assertExecutionWorkspaceBoundary() {
     )
       && packageConfig.scripts['test:execution-workspace'].includes(
         'test:execution-isolation-authorized-job'
+      )
+      && packageConfig.scripts['test:execution-workspace'].includes(
+        'execution-isolation-broker-sandbox-registry.test.js'
+      )
+      && packageConfig.scripts['test:agentic-process-broker'].includes(
+        'agentic-process-broker-factory.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:agentic-process-broker'
       ),
-    'the aggregate execution-workspace gate must run gateway, session, and authorized-executor lifecycle tests'
+    'aggregate gates must run gateway, session, executor, broker registry, and agentic process route tests'
   );
   assertDoesNotMatch(
     isolationProviderFactorySource,

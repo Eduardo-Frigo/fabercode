@@ -2,6 +2,7 @@ const assert = require('assert');
 
 const {
   AGENTIC_EXECUTION_CANCELLED_CODE,
+  AGENTIC_PROCESS_EXECUTION_POLICIES,
   AgenticExecutionCancelledError,
   createAgenticToolLoopService,
 } = require('../main/services/agentic_tool_loop_service');
@@ -222,10 +223,24 @@ async function run() {
     },
   });
 
+  const suspendedExecutionOptions = {
+    jobId: 'job-suspended-surface',
+    processExecutionPolicy: AGENTIC_PROCESS_EXECUTION_POLICIES.SUSPENDED,
+  };
+  let suspendedProcessCalls = 0;
+  Object.defineProperty(suspendedExecutionOptions, 'executeProcess', {
+    configurable: false,
+    enumerable: false,
+    value: async () => {
+      suspendedProcessCalls += 1;
+      return { ok: true };
+    },
+    writable: false,
+  });
   const suspendedSurfaceResult = await suspendedSurfaceService.executeAction(
     buildAction('job-suspended-surface', 'verifique o estado atual'),
     { id: 'project-1', rootPath: '/tmp/project' },
-    { jobId: 'job-suspended-surface' }
+    Object.freeze(suspendedExecutionOptions)
   );
   assert.strictEqual(suspendedSurfaceResult.ok, true);
   assert.match(suspendedSurfaceResult.message, /validações permanecem pendentes/i);
@@ -251,6 +266,227 @@ async function run() {
     suspendedSurfaceToolCalls.map(({ name }) => name),
     ['automata.search_text_in_files']
   );
+  assert.strictEqual(suspendedProcessCalls, 0);
+
+  // The broker-backed process callback is model-visible only under the exact
+  // internal brokered policy. The callback receives bounded executable data
+  // and the model receives only a sanitized process receipt.
+  const processSignalController = new AbortController();
+  const processCallbackSecret = '/private/workspace/job-authority/request-digest';
+  const processCallbackRequests = [];
+  let brokeredProcessDefinitions = null;
+  let brokeredProcessPrompt = '';
+  let brokeredProcessOutput = '';
+  let brokeredProcessTurn = 0;
+  const brokeredProcessService = buildCancellationService({
+    maxSteps: 3,
+    requestModelTurn: async ({ systemPrompt, tools, toolResults }) => {
+      brokeredProcessTurn += 1;
+      if (brokeredProcessTurn === 1) {
+        brokeredProcessDefinitions = tools;
+        brokeredProcessPrompt = systemPrompt;
+        return {
+          responseId: 'brokered-process-1',
+          text: '',
+          toolCalls: [{
+            callId: 'brokered-run-command',
+            name: 'run_command',
+            input: {
+              command: 'npm',
+              args: ['test', '--', '--runInBand'],
+              timeoutMs: 120_000,
+            },
+          }],
+        };
+      }
+      brokeredProcessOutput = toolResults[0].output;
+      return {
+        responseId: 'brokered-process-2',
+        text: '',
+        toolCalls: [{
+          callId: 'finish-brokered-process',
+          name: 'finish_task',
+          input: { status: 'success', summary: 'testes iniciados no sandbox' },
+        }],
+      };
+    },
+  });
+  const brokeredProcessOptions = {
+    jobId: 'job-brokered-process',
+    signal: processSignalController.signal,
+    processExecutionPolicy: AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED,
+  };
+  Object.defineProperty(brokeredProcessOptions, 'executeProcess', {
+    configurable: false,
+    enumerable: false,
+    value: async (request) => {
+      processCallbackRequests.push(request);
+      assert.strictEqual(Object.isFrozen(request), true);
+      assert.strictEqual(Object.isFrozen(request.args), true);
+      assert.deepStrictEqual(Object.keys(request), [
+        'command',
+        'args',
+        'timeoutMs',
+        'signal',
+      ]);
+      assert.strictEqual(request.command, 'npm');
+      assert.deepStrictEqual(request.args, ['test', '--', '--runInBand']);
+      assert.strictEqual(request.timeoutMs, 120_000);
+      assert.strictEqual(request.signal, processSignalController.signal);
+      return Object.freeze({
+        schemaVersion: 'project-capability.result.v1',
+        requestId: processCallbackSecret,
+        capability: 'process',
+        action: 'run',
+        decision: 'allow',
+        status: 'completed',
+        output: Object.freeze({
+          status: 'running',
+          revision: 1,
+          exitCode: null,
+          signal: null,
+          timedOut: false,
+          stopped: false,
+          availableFromCursor: 0,
+          outputCursor: 0,
+          requestDigest: processCallbackSecret,
+          binding: processCallbackSecret,
+        }),
+        error: null,
+        policy: Object.freeze({
+          decision: 'allow',
+          reasonCode: processCallbackSecret,
+        }),
+        approval: null,
+      });
+    },
+    writable: false,
+  });
+  const brokeredProcessResult = await brokeredProcessService.executeAction(
+    buildAction('job-brokered-process', 'rode os testes'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    Object.freeze(brokeredProcessOptions)
+  );
+  assert.strictEqual(brokeredProcessResult.ok, true);
+  assert.strictEqual(processCallbackRequests.length, 1);
+  const runCommandDefinition = brokeredProcessDefinitions.find(
+    (definition) => definition.name === 'run_command'
+  );
+  assert(runCommandDefinition);
+  assert.strictEqual(runCommandDefinition.strict, true);
+  assert.strictEqual(runCommandDefinition.parameters.additionalProperties, false);
+  assert.deepStrictEqual(
+    Object.keys(runCommandDefinition.parameters.properties),
+    ['command', 'args', 'timeoutMs']
+  );
+  assert.deepStrictEqual(
+    runCommandDefinition.parameters.required,
+    ['command', 'args', 'timeoutMs']
+  );
+  assert.strictEqual(JSON.stringify(runCommandDefinition).includes('env'), false);
+  assert.strictEqual(JSON.stringify(runCommandDefinition).includes('network'), false);
+  assert.strictEqual(JSON.stringify(runCommandDefinition).includes('shell'), false);
+  assert.match(brokeredProcessPrompt, /run_command/);
+  assert.strictEqual(brokeredProcessOutput.includes(processCallbackSecret), false);
+  assert.strictEqual(brokeredProcessOutput.includes('requestDigest'), false);
+  assert.strictEqual(brokeredProcessOutput.includes('binding'), false);
+  assert.strictEqual(brokeredProcessOutput.includes('running'), true);
+  assert.strictEqual(brokeredProcessOutput.includes('revision'), true);
+
+  // Accessors and unsupported fields are rejected before fingerprinting or
+  // crossing the private callback boundary.
+  let hostileProcessGetterCalls = 0;
+  let hostileProcessProxyTrapCalls = 0;
+  let hostileProcessCallbackCalls = 0;
+  let hostileProcessTurn = 0;
+  const hostileProcessOutputs = [];
+  const hostileProcessInput = {
+    args: [],
+    timeoutMs: 1_000,
+  };
+  Object.defineProperty(hostileProcessInput, 'command', {
+    enumerable: true,
+    get() {
+      hostileProcessGetterCalls += 1;
+      return 'npm';
+    },
+  });
+  const hostileProcessProxy = new Proxy({
+    command: 'npm',
+    args: [],
+    timeoutMs: 1_000,
+  }, {
+    getPrototypeOf() {
+      hostileProcessProxyTrapCalls += 1;
+      return Object.prototype;
+    },
+    ownKeys(target) {
+      hostileProcessProxyTrapCalls += 1;
+      return Reflect.ownKeys(target);
+    },
+  });
+  const hostileProcessService = buildCancellationService({
+    maxSteps: 4,
+    requestModelTurn: async ({ toolResults }) => {
+      hostileProcessTurn += 1;
+      if (toolResults.length) hostileProcessOutputs.push(toolResults[0].output);
+      if (hostileProcessTurn === 1) {
+        return {
+          responseId: 'hostile-process-1',
+          text: '',
+          toolCalls: [{
+            callId: 'hostile-run-command',
+            name: 'run_command',
+            input: hostileProcessInput,
+          }],
+        };
+      }
+      if (hostileProcessTurn === 2) {
+        return {
+          responseId: 'hostile-process-2',
+          text: '',
+          toolCalls: [{
+            callId: 'hostile-run-command-proxy',
+            name: 'run_command',
+            input: hostileProcessProxy,
+          }],
+        };
+      }
+      return {
+        responseId: 'hostile-process-3',
+        text: '',
+        toolCalls: [{
+          callId: 'finish-hostile-process',
+          name: 'finish_task',
+          input: { status: 'failure', summary: 'entrada hostil recusada' },
+        }],
+      };
+    },
+  });
+  const hostileProcessOptions = {
+    jobId: 'job-hostile-process',
+    processExecutionPolicy: AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED,
+  };
+  Object.defineProperty(hostileProcessOptions, 'executeProcess', {
+    configurable: false,
+    enumerable: false,
+    value: async () => {
+      hostileProcessCallbackCalls += 1;
+      return { ok: true };
+    },
+    writable: false,
+  });
+  const hostileProcessResult = await hostileProcessService.executeAction(
+    buildAction('job-hostile-process'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    Object.freeze(hostileProcessOptions)
+  );
+  assert.strictEqual(hostileProcessResult.ok, false);
+  assert.strictEqual(hostileProcessGetterCalls, 0);
+  assert.strictEqual(hostileProcessProxyTrapCalls, 0);
+  assert.strictEqual(hostileProcessCallbackCalls, 0);
+  assert.strictEqual(hostileProcessOutputs.length, 2);
+  assert(hostileProcessOutputs.every((output) => output.includes('RUN_COMMAND_INVALID_INPUT')));
 
   // Test case for agentic_no_file_changes blocker
   const failingService = createAgenticToolLoopService({

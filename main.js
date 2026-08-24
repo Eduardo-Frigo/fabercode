@@ -201,6 +201,9 @@ const {
 } = require('./main/services/agentic_delete_mutation_backend_factory');
 const { createAgenticDeleteRuntimeService } = require('./main/services/agentic_delete_runtime_service');
 const {
+  createAgenticProcessBrokerFactory,
+} = require('./main/services/agentic_process_broker_factory');
+const {
   createAgenticDeleteRecoveryService,
 } = require('./main/services/agentic_delete_recovery_service');
 const {
@@ -222,6 +225,9 @@ const {
 const {
   createExecutionIsolationAuthorizedJobExecutor,
 } = require('./main/services/execution_isolation_authorized_job_executor');
+const {
+  createExecutionIsolationBrokerSandboxRegistry,
+} = require('./main/services/execution_isolation_broker_sandbox_registry');
 const { createAttachmentContextService } = require('./main/runtime/attachment_context');
 const {
   createAnchoredMutationRuntimeConfig,
@@ -1166,6 +1172,7 @@ let agenticDeleteActorId = `main-process:${crypto.randomUUID()}`;
 let agenticDeleteReleaseBinding = null;
 let agenticDeleteMutationBackendSelection = null;
 let agenticDeleteRuntimeServiceInstance = null;
+let agenticProcessBrokerFactoryInstance = null;
 let agenticDeleteStartupRecoveryHealthy = false;
 let assistantExecutionCoordinatorInstance = null;
 let assistantJobAuthorityServiceInstance = null;
@@ -6005,6 +6012,10 @@ app.whenReady().then(async () => {
       executionContext,
       'authorityBinding'
     );
+    const sandboxExecutor = readAgenticDeleteDataProperty(
+      executionContext,
+      'sandboxExecutor'
+    );
     if (!agenticDeleteStartupRecoveryHealthy) {
       if (jobId) {
         try {
@@ -6099,10 +6110,27 @@ app.whenReady().then(async () => {
         const deleteBinding = agenticDeleteRuntimeIsAvailable()
           ? currentAgenticDeleteBinding(authorityBinding)
           : null;
+        const processBrokerFactory = agenticProcessBrokerFactoryInstance;
+        const processBinding = currentAgenticDeleteBinding(authorityBinding);
+        let processRoute = null;
+        if (processBrokerFactory && processBinding && sandboxExecutor) {
+          try {
+            processRoute = processBrokerFactory.createRoute(Object.freeze({
+              binding: processBinding,
+              sandboxExecutor,
+            }));
+          } catch {
+            appendAuditEvent('assistant.agentic_process_route_rejected', {
+              jobId,
+              reason: 'process_route_invalid',
+            });
+          }
+        }
         const agenticExecutionOptions = {
           jobId,
           requestedMode,
           signal: executionSignal,
+          processExecutionPolicy: ASSISTANT_PROCESS_EXECUTION_POLICY,
         };
         if (deleteRuntime && deleteBinding) {
           const projectLabel = getAgenticDeleteProjectLabel(deleteBinding);
@@ -6115,6 +6143,18 @@ app.whenReady().then(async () => {
               projectLabel,
             }))
           );
+        }
+        if (processRoute) {
+          Object.defineProperty(agenticExecutionOptions, 'executeProcess', {
+            configurable: false,
+            enumerable: false,
+            value: (processInput) => processRoute.execute(Object.freeze({
+              command: readAgenticDeleteDataProperty(processInput, 'command'),
+              args: readAgenticDeleteDataProperty(processInput, 'args'),
+              timeoutMs: readAgenticDeleteDataProperty(processInput, 'timeoutMs'),
+            })),
+            writable: false,
+          });
         }
         const agenticResult = await getAgenticToolLoopService().executeAction(
           initialAction,
@@ -6859,6 +6899,21 @@ app.whenReady().then(async () => {
     ),
   });
   const assistantExecutionIsolationRuntimeServices = executionIsolationRuntimeServices;
+  const assistantProcessSandboxRegistry = assistantExecutionIsolationRuntimeServices
+    ? createExecutionIsolationBrokerSandboxRegistry({
+      runtimeServices: assistantExecutionIsolationRuntimeServices,
+    })
+    : null;
+  const agenticProcessBrokerFactory = assistantProcessSandboxRegistry
+    ? createAgenticProcessBrokerFactory({
+      authorizeLifecycle: authorizeAgenticDeleteLifecycle,
+      authorizeRoot: authorizeAgenticDeleteRoot,
+      authorizeEffectFrontier: authorizeAgenticDeleteEffectFrontier,
+      sandboxRegistry: assistantProcessSandboxRegistry,
+      audit: (event) => appendAuditEvent('assistant.agentic_process_capability', event),
+    })
+    : null;
+  agenticProcessBrokerFactoryInstance = agenticProcessBrokerFactory;
   const assistantExecutionCoordinator = createAssistantExecutionCoordinator({
     authorityService: assistantJobAuthorityService,
     maxActiveJobs: MAX_JOBS_STORED,

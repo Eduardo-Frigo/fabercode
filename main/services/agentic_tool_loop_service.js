@@ -1,3 +1,5 @@
+const util = require('util');
+
 function defaultClipText(value = '', maxChars = 12000) {
   const text = String(value || '');
   if (text.length <= maxChars) return text;
@@ -24,6 +26,23 @@ const AGENTIC_FAILURE_VALIDATION_PENDING_MESSAGE =
   'Tarefa encerrada como falha. Lint, testes e build não foram executados e o preview não foi capturado; essas validações permanecem pendentes.';
 const AGENTIC_MODEL_TEXT_CHECKPOINT_MESSAGE =
   'Resposta textual do modelo recebida; conteúdo omitido. Validações de processo permanecem pendentes.';
+const AGENTIC_PROCESS_EXECUTION_POLICIES = Object.freeze({
+  BROKERED: 'brokered',
+  SUSPENDED: 'suspended',
+});
+const RUN_COMMAND_MAX_ARGS = 128;
+const RUN_COMMAND_MAX_ARG_LENGTH = 8192;
+const RUN_COMMAND_MAX_COMMAND_LENGTH = 4096;
+const RUN_COMMAND_MIN_TIMEOUT_MS = 1000;
+const RUN_COMMAND_MAX_TIMEOUT_MS = 600000;
+const RUN_COMMAND_PUBLIC_STATUSES = new Set([
+  'running',
+  'succeeded',
+  'failed',
+  'stopped',
+  'timed_out',
+]);
+const RUN_COMMAND_SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,79}$/;
 
 class AgenticExecutionCancelledError extends Error {
   constructor(phase = 'agentic_execution') {
@@ -74,7 +93,8 @@ const DELETE_PATHS_SAFE_STATES = new Set([
 const DELETE_PATHS_SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,79}$/;
 
 function ownDataValue(record, key) {
-  if (!record || (typeof record !== 'object' && typeof record !== 'function')) return undefined;
+  if (!record || (typeof record !== 'object' && typeof record !== 'function')
+    || util.types.isProxy(record)) return undefined;
   let descriptor;
   try {
     descriptor = Object.getOwnPropertyDescriptor(record, key);
@@ -86,7 +106,146 @@ function ownDataValue(record, key) {
 
 function optionalExecutionCallback(executionContext, key) {
   const callback = ownDataValue(executionContext, key);
-  return typeof callback === 'function' ? callback : null;
+  return typeof callback === 'function' && !util.types.isProxy(callback) ? callback : null;
+}
+
+function normalizeRunCommandToolInput(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+    || util.types.isProxy(input)) {
+    throw new TypeError('run_command input must be a plain data record');
+  }
+  const prototype = Object.getPrototypeOf(input);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError('run_command input must be a plain data record');
+  }
+  const keys = Reflect.ownKeys(input);
+  const supported = ['command', 'args', 'timeoutMs'];
+  if (keys.length !== supported.length
+    || supported.some((key) => !keys.includes(key))
+    || keys.some((key) => typeof key !== 'string' || !supported.includes(key))) {
+    throw new TypeError('run_command input contains unsupported fields');
+  }
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (!descriptor || descriptor.enumerable !== true || !Object.hasOwn(descriptor, 'value')
+      || descriptor.value === undefined) {
+      throw new TypeError('run_command input must contain enumerable data properties only');
+    }
+  }
+
+  const command = ownDataValue(input, 'command');
+  const args = ownDataValue(input, 'args');
+  const timeoutMs = ownDataValue(input, 'timeoutMs');
+  if (typeof command !== 'string' || command.trim().length < 1
+    || command.length > RUN_COMMAND_MAX_COMMAND_LENGTH || command.includes('\0')) {
+    throw new TypeError('run_command command is invalid');
+  }
+  if (!Array.isArray(args) || util.types.isProxy(args)
+    || Object.getPrototypeOf(args) !== Array.prototype
+    || args.length > RUN_COMMAND_MAX_ARGS) {
+    throw new TypeError('run_command args must be a bounded plain array');
+  }
+  const argKeys = Reflect.ownKeys(args).filter((key) => key !== 'length');
+  if (argKeys.length !== args.length
+    || argKeys.some((key, index) => key !== String(index))) {
+    throw new TypeError('run_command args must be a dense data array');
+  }
+  const normalizedArgs = [];
+  for (const key of argKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(args, key);
+    const value = descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined;
+    if (!descriptor || descriptor.enumerable !== true || typeof value !== 'string'
+      || value.length > RUN_COMMAND_MAX_ARG_LENGTH || value.includes('\0')) {
+      throw new TypeError('run_command args contain an invalid value');
+    }
+    normalizedArgs.push(value);
+  }
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < RUN_COMMAND_MIN_TIMEOUT_MS
+    || timeoutMs > RUN_COMMAND_MAX_TIMEOUT_MS || Object.is(timeoutMs, -0)) {
+    throw new TypeError('run_command timeout is outside the supported bounds');
+  }
+  return Object.freeze({
+    command: command.trim(),
+    args: Object.freeze(normalizedArgs),
+    timeoutMs,
+  });
+}
+
+function failedRunCommandToolResult(errorCode, status = 'failed') {
+  return Object.freeze({
+    ok: false,
+    status,
+    message: 'O processo isolado foi negado ou não pôde ser iniciado.',
+    errors: Object.freeze([errorCode]),
+    modifiedFiles: Object.freeze([]),
+    data: null,
+  });
+}
+
+function sanitizeRunCommandToolResult(raw) {
+  try {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || util.types.isProxy(raw)) {
+      return failedRunCommandToolResult('RUN_COMMAND_INVALID_RESULT');
+    }
+    const prototype = Object.getPrototypeOf(raw);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return failedRunCommandToolResult('RUN_COMMAND_INVALID_RESULT');
+    }
+    const status = ownDataValue(raw, 'status');
+    const decision = ownDataValue(raw, 'decision');
+    if (status !== 'completed' || decision !== 'allow') {
+      const error = ownDataValue(raw, 'error');
+      const rawCode = ownDataValue(error, 'code');
+      const errorCode = typeof rawCode === 'string' && RUN_COMMAND_SAFE_ERROR_CODE.test(rawCode)
+        ? rawCode
+        : 'RUN_COMMAND_OPERATION_FAILED';
+      return failedRunCommandToolResult(
+        errorCode,
+        status === 'denied' ? 'denied' : 'failed'
+      );
+    }
+
+    const output = ownDataValue(raw, 'output');
+    if (!output || typeof output !== 'object' || Array.isArray(output)
+      || util.types.isProxy(output)) {
+      return failedRunCommandToolResult('RUN_COMMAND_INVALID_RESULT');
+    }
+    const outputPrototype = Object.getPrototypeOf(output);
+    const processStatus = ownDataValue(output, 'status');
+    const revision = ownDataValue(output, 'revision');
+    const exitCode = ownDataValue(output, 'exitCode');
+    const timedOut = ownDataValue(output, 'timedOut');
+    const stopped = ownDataValue(output, 'stopped');
+    const availableFromCursor = ownDataValue(output, 'availableFromCursor');
+    const outputCursor = ownDataValue(output, 'outputCursor');
+    if ((outputPrototype !== Object.prototype && outputPrototype !== null)
+      || !RUN_COMMAND_PUBLIC_STATUSES.has(processStatus)
+      || !Number.isSafeInteger(revision) || revision < 1
+      || (exitCode !== null && (!Number.isSafeInteger(exitCode) || Object.is(exitCode, -0)))
+      || typeof timedOut !== 'boolean' || typeof stopped !== 'boolean'
+      || !Number.isSafeInteger(availableFromCursor) || availableFromCursor < 0
+      || !Number.isSafeInteger(outputCursor) || outputCursor < availableFromCursor) {
+      return failedRunCommandToolResult('RUN_COMMAND_INVALID_RESULT');
+    }
+    return Object.freeze({
+      ok: true,
+      status: 'completed',
+      message: 'Processo iniciado pelo broker no sandbox isolado do job.',
+      errors: Object.freeze([]),
+      modifiedFiles: Object.freeze([]),
+      data: Object.freeze({
+        status: processStatus,
+        revision,
+        exitCode,
+        timedOut,
+        stopped,
+        availableFromCursor,
+        outputCursor,
+      }),
+    });
+  } catch {
+    return failedRunCommandToolResult('RUN_COMMAND_INVALID_RESULT');
+  }
 }
 
 function normalizeDeletePathsToolInput(input) {
@@ -221,6 +380,14 @@ function sanitizeDeletePathsToolResult(raw, paths) {
 }
 
 function safeToolCallKey(toolName, input) {
+  if (toolName === 'run_command') {
+    try {
+      const normalized = normalizeRunCommandToolInput(input);
+      return `${toolName}:${JSON.stringify(normalized)}`;
+    } catch {
+      return `${toolName}:invalid_input`;
+    }
+  }
   if (toolName === 'delete_paths') {
     try {
       const normalized = normalizeDeletePathsToolInput(input);
@@ -386,15 +553,21 @@ function createAgenticToolLoopService(dependencies = {}) {
       .join(', ');
   }
 
-  function buildSystemPrompt(projectInfo = {}) {
+  function buildSystemPrompt(projectInfo = {}, executionContext = {}) {
     const rootPath = projectInfo && projectInfo.rootPath ? String(projectInfo.rootPath) : '';
+    const processExecutionAvailable = ownDataValue(
+      executionContext,
+      'processExecutionAvailable'
+    ) === true;
     return [
       'Você é o runtime agentic do Faber Code. Seu trabalho é agir como um engenheiro de software sênior direto no projeto.',
       'IMPORTANTE: Você está na fase de EXECUÇÃO. Não responda apenas com texto (ex: "Vou começar"). Você deve chamar ferramentas imediatamente.',
       '## Diretrizes de Edição (CRÍTICO)',
       '1. PREFIRA EDITAR A REESCREVER: Nunca use write_file para modificar um arquivo existente inteiro. Sempre use `edit_file_fuzzy`.',
       '2. COMO USAR edit_file_fuzzy: Copie um bloco único e exato do arquivo (targetContent) e forneça a nova versão (replacementContent). O sistema ignora espaços e indentações para te ajudar a encontrar o bloco.',
-      '3. VALIDAÇÃO HONESTA: As ferramentas atuais não executam lint, testes ou builds nem capturam preview. Nunca afirme que essas validações foram executadas; informe-as como pendentes para o usuário.',
+      processExecutionAvailable
+        ? '3. PROCESSOS ISOLADOS: Use `run_command` somente para executáveis e argumentos explícitos dentro do sandbox do job. Rede, shell composto e preview continuam indisponíveis; nunca afirme uma validação sem evidência retornada pelas ferramentas.'
+        : '3. VALIDAÇÃO HONESTA: As ferramentas atuais não executam lint, testes ou builds nem capturam preview. Nunca afirme que essas validações foram executadas; informe-as como pendentes para o usuário.',
       '4. MAPA DA APLICAÇÃO E MILESTONES: `.faber/**` é um namespace privado do runtime — nunca leia, crie ou edite arquivos nele. Ao alterar o produto, mantenha atualizados somente os documentos públicos aplicáveis em `docs/application-map/` e `docs/milestones/`; os espelhos internos são responsabilidade de serviços main-only.',
       '## Conclusão',
       'Sempre chame a ferramenta `finish_task` para indicar que você terminou, não importa se foi um sucesso ou se você encontrou um bloqueio instransponível.',
@@ -405,11 +578,19 @@ function createAgenticToolLoopService(dependencies = {}) {
   function buildBoundTools(projectInfo = {}, executionContext = {}) {
     const projectSession = buildProjectSession(projectInfo);
     const rootPath = projectSession.rootPath;
-    const signal = executionContext && executionContext.signal ? executionContext.signal : null;
+    const signal = ownDataValue(executionContext, 'signal') || null;
     const deletePathsSignal = typeof AbortSignal === 'function' && signal instanceof AbortSignal
       ? signal
       : null;
     const deletePaths = optionalExecutionCallback(executionContext, 'deletePaths');
+    const processExecutionPolicy = ownDataValue(executionContext, 'processExecutionPolicy');
+    const processCallback = optionalExecutionCallback(executionContext, 'executeProcess');
+    const executeProcess = processExecutionPolicy === AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED
+      ? processCallback
+      : null;
+    const processSignal = typeof AbortSignal === 'function' && signal instanceof AbortSignal
+      ? signal
+      : null;
     const invocationOptions = signal ? Object.freeze({ signal }) : null;
     const capability = (capabilityId, action, payload = {}) => {
       const request = {
@@ -602,6 +783,58 @@ function createAgenticToolLoopService(dependencies = {}) {
           }
           throwIfExecutionCancelled(signal, 'delete_paths:after_callback');
           return sanitizeDeletePathsToolResult(rawResult, normalized.paths);
+        },
+      }] : []),
+      ...(executeProcess ? [{
+        name: 'run_command',
+        description: 'Inicia um executável com argumentos explícitos no sandbox isolado e sem rede do job.',
+        inputSchema: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['command', 'args', 'timeoutMs'],
+          properties: {
+            command: {
+              type: 'string',
+              minLength: 1,
+              maxLength: RUN_COMMAND_MAX_COMMAND_LENGTH,
+            },
+            args: {
+              type: 'array',
+              maxItems: RUN_COMMAND_MAX_ARGS,
+              items: { type: 'string', maxLength: RUN_COMMAND_MAX_ARG_LENGTH },
+            },
+            timeoutMs: {
+              type: 'integer',
+              minimum: RUN_COMMAND_MIN_TIMEOUT_MS,
+              maximum: RUN_COMMAND_MAX_TIMEOUT_MS,
+            },
+          },
+        },
+        execute: async (input = {}) => {
+          throwIfExecutionCancelled(signal, 'run_command:before_validation');
+          let normalized;
+          try {
+            normalized = normalizeRunCommandToolInput(input);
+          } catch {
+            return failedRunCommandToolResult('RUN_COMMAND_INVALID_INPUT');
+          }
+          throwIfExecutionCancelled(signal, 'run_command:before_callback');
+          const callbackInput = {
+            command: normalized.command,
+            args: normalized.args,
+            timeoutMs: normalized.timeoutMs,
+            ...(processSignal ? { signal: processSignal } : {}),
+          };
+          let rawResult;
+          try {
+            rawResult = await executeProcess(Object.freeze(callbackInput));
+          } catch (error) {
+            if (error instanceof AgenticExecutionCancelledError) throw error;
+            throwIfExecutionCancelled(signal, 'run_command:after_callback');
+            return failedRunCommandToolResult('RUN_COMMAND_OPERATION_FAILED');
+          }
+          throwIfExecutionCancelled(signal, 'run_command:after_callback');
+          return sanitizeRunCommandToolResult(rawResult);
         },
       }] : []),
       {
@@ -884,7 +1117,16 @@ function createAgenticToolLoopService(dependencies = {}) {
     const signal = options && options.signal ? options.signal : null;
     throwIfExecutionCancelled(signal, 'agentic_execution:start');
     const deletePaths = optionalExecutionCallback(options, 'deletePaths');
-    const tools = buildBoundTools(projectInfo, { signal, deletePaths });
+    const processExecutionPolicy = ownDataValue(options, 'processExecutionPolicy');
+    const executeProcess = optionalExecutionCallback(options, 'executeProcess');
+    const processExecutionAvailable = processExecutionPolicy
+      === AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED && Boolean(executeProcess);
+    const tools = buildBoundTools(projectInfo, {
+      signal,
+      deletePaths,
+      processExecutionPolicy,
+      executeProcess,
+    });
     const toolDefinitions = buildToolDefinitions(tools);
     const toolIndex = makeToolIndex(tools);
     const conversationMessages = buildConversationMessages(
@@ -892,7 +1134,7 @@ function createAgenticToolLoopService(dependencies = {}) {
       action.userMessage || '',
       action.attachments || []
     );
-    const systemPrompt = buildSystemPrompt(projectInfo);
+    const systemPrompt = buildSystemPrompt(projectInfo, { processExecutionAvailable });
     const allTextParts = [];
     const modifiedFiles = new Set();
     const toolRuns = [];
@@ -1145,6 +1387,7 @@ function createAgenticToolLoopService(dependencies = {}) {
 
 module.exports = {
   AGENTIC_EXECUTION_CANCELLED_CODE,
+  AGENTIC_PROCESS_EXECUTION_POLICIES,
   AgenticExecutionCancelledError,
   createAgenticToolLoopService,
   isAgenticExecutionCancelledError,

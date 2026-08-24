@@ -124,6 +124,14 @@ assert.ok(
   'production must compose the authority-bound sandbox executor'
 );
 assert.ok(
+  mainSource.includes(
+    "require('./main/services/execution_isolation_broker_sandbox_registry')"
+  ) && mainSource.includes(
+    "require('./main/services/agentic_process_broker_factory')"
+  ),
+  'production must compose the private executor through the process broker route'
+);
+assert.ok(
   legacyExecuteSource.includes('processExecutionPolicy: ASSISTANT_PROCESS_EXECUTION_POLICY'),
   'staged assistant execution must receive the non-forgeable suspended process policy'
 );
@@ -650,6 +658,51 @@ assertInOrder(
     'Object.freeze(agenticExecutionOptions)',
   ],
   'delete_paths must only be injected for an available runtime with a current exact binding'
+);
+
+assertInOrder(
+  legacyExecuteSource,
+  [
+    "readAgenticDeleteDataProperty(\n      executionContext,\n      'sandboxExecutor'",
+    'const processBrokerFactory = agenticProcessBrokerFactoryInstance;',
+    'const processBinding = currentAgenticDeleteBinding(authorityBinding);',
+    'processBrokerFactory.createRoute(Object.freeze({',
+    'binding: processBinding,',
+    'sandboxExecutor,',
+    'processExecutionPolicy: ASSISTANT_PROCESS_EXECUTION_POLICY,',
+    "Object.defineProperty(agenticExecutionOptions, 'executeProcess'",
+    'enumerable: false,',
+    'processRoute.execute(Object.freeze({',
+    "command: readAgenticDeleteDataProperty(processInput, 'command')",
+    "args: readAgenticDeleteDataProperty(processInput, 'args')",
+    "timeoutMs: readAgenticDeleteDataProperty(processInput, 'timeoutMs')",
+    'Object.freeze(agenticExecutionOptions)',
+  ],
+  'the private job executor must be consumed only by the exact process broker route while production remains suspended'
+);
+assert.strictEqual(
+  legacyExecuteSource.includes('sandboxExecutor: sandboxExecutor'),
+  false,
+  'the raw sandbox executor must never be forwarded to the model tool loop'
+);
+
+assertInOrder(
+  mainSource,
+  [
+    'const assistantExecutionIsolationRuntimeServices = executionIsolationRuntimeServices;',
+    'const assistantProcessSandboxRegistry = assistantExecutionIsolationRuntimeServices',
+    '? createExecutionIsolationBrokerSandboxRegistry({',
+    'runtimeServices: assistantExecutionIsolationRuntimeServices,',
+    'const agenticProcessBrokerFactory = assistantProcessSandboxRegistry',
+    '? createAgenticProcessBrokerFactory({',
+    'authorizeLifecycle: authorizeAgenticDeleteLifecycle,',
+    'authorizeRoot: authorizeAgenticDeleteRoot,',
+    'authorizeEffectFrontier: authorizeAgenticDeleteEffectFrontier,',
+    'sandboxRegistry: assistantProcessSandboxRegistry,',
+    'agenticProcessBrokerFactoryInstance = agenticProcessBrokerFactory;',
+    'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
+  ],
+  'the attested sandbox registry and process broker factory must be composed before coordinator execution starts'
 );
 
 const releaseHookSource = extractFunctionDeclaration(
