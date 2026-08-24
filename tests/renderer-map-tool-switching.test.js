@@ -2,6 +2,9 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const {
+  createApplicationMapRenderPlanService,
+} = require('../main/services/application_map_render_plan_service');
 
 function createClassList(initial = []) {
   const values = new Set(initial);
@@ -197,9 +200,15 @@ const terminalController = {
     body.classList.remove('mode-terminal');
   },
 };
+const renderPlanService = createApplicationMapRenderPlanService({ now: () => 1724000000000 });
 
 const api = {
   renderApplicationMap: async () => ({ ok: true }),
+  buildApplicationMapRenderPlanCalls: [],
+  buildApplicationMapRenderPlan: async (payload) => {
+    api.buildApplicationMapRenderPlanCalls.push(payload);
+    return renderPlanService.buildRenderPlan(payload);
+  },
   readProjectFile: async () => ({ ok: false }),
   sendAssistantMessageCalls: 0,
   sendAssistantMessage: async () => {
@@ -355,6 +364,12 @@ function findDescendant(root, predicate) {
   assert.strictEqual(renderListView.classList.contains('hidden'), true, 'Render list should hide when session opens');
   assert.strictEqual(renderSessionView.classList.contains('hidden'), false, 'Render session should open after clicking render');
   assert.strictEqual(renderBackButton.disabled, false, 'Render back button should be available in session view');
+  assert.strictEqual(api.buildApplicationMapRenderPlanCalls.length, 1, 'Render flow should delegate planning exactly once');
+  assert.strictEqual(
+    api.buildApplicationMapRenderPlanCalls[0].rootPath,
+    '/tmp/project',
+    'Render planning must stay scoped to the selected project root'
+  );
 
   await renderBackButton.click();
   await flush();

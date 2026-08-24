@@ -3,6 +3,7 @@ function registerApplicationMapHandlers(dependencies = {}) {
     authorizeProjectRoot,
     mapService,
     renderService,
+    renderPlanService,
     registerIpcHandler,
     appendAuditEvent = () => {},
   } = dependencies;
@@ -14,6 +15,7 @@ function registerApplicationMapHandlers(dependencies = {}) {
   requireDependency('authorizeProjectRoot', authorizeProjectRoot);
   requireDependency('mapService', mapService);
   requireDependency('renderService', renderService);
+  requireDependency('renderPlanService', renderPlanService);
   requireDependency('registerIpcHandler', registerIpcHandler);
 
   registerIpcHandler('application-map:get', (_, payload = {}) => {
@@ -72,6 +74,19 @@ function registerApplicationMapHandlers(dependencies = {}) {
       });
     }
     return result;
+  });
+
+  registerIpcHandler('application-map:render-plan', (_, payload = {}) => {
+    const auth = authorizeProjectRoot(payload && payload.rootPath ? String(payload.rootPath) : '');
+    if (!auth.ok) return auth;
+    return renderPlanService.buildRenderPlan({
+      mapData: payload.mapData,
+      combinedText: payload.combinedText,
+      documents: payload.documents,
+      previousMilestones: payload.previousMilestones,
+      requestText: payload.requestText,
+      copy: payload.copy,
+    });
   });
 
   registerIpcHandler('application-map:summary', (_, payload = {}) => {

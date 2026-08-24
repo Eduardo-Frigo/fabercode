@@ -77,6 +77,7 @@ const preservedFeatureFunctionNames = [
   'removeApplicationMapEdge',
   'importApplicationMapAsset',
   'renderApplicationMap',
+  'buildApplicationMapRenderPlan',
   'getApplicationMapSummary',
   // Milestones.
   'listMilestones',
@@ -429,6 +430,11 @@ async function assertInvoke(methodName, args, expectedChannel, expectedArgs = ar
     'application-map:asset:import'
   );
   await assertInvoke('renderApplicationMap', [mapPayload], 'application-map:render');
+  await assertInvoke(
+    'buildApplicationMapRenderPlan',
+    [{ ...mapPayload, mapData: { nodes: [], edges: [] }, documents: [] }],
+    'application-map:render-plan'
+  );
   await assertInvoke('getApplicationMapSummary', [mapPayload], 'application-map:summary');
 
   await assertInvoke('listMilestones', [mapPayload], 'milestones:list');

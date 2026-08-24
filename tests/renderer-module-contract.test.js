@@ -433,6 +433,22 @@ assert.ok(
   applicationMapSource.includes('let setMapSidePanelMode = () => {};'),
   'map side-panel reset must remain available outside init() when a selected project is deleted'
 );
+assert.doesNotMatch(
+  applicationMapSource,
+  /function\s+(?:evaluateRenderReadiness|buildRenderMilestones|mergeRenderMilestonePlan)\s*\(/,
+  'application-map readiness and milestone planning decisions must not live in the renderer',
+);
+assert.match(
+  applicationMapSource,
+  /await\s+api\.buildApplicationMapRenderPlan\s*\(/,
+  'the renderer must delegate render-plan decisions through the preload boundary',
+);
+assert.ok(
+  mainSource.includes("require('./main/services/application_map_render_plan_service')")
+    && mainSource.includes('createApplicationMapRenderPlanService(')
+    && mainSource.includes('renderPlanService: applicationMapRenderPlanService'),
+  'production must compose and inject the application-map render-plan service',
+);
 assert.ok(
   progressiveSource.includes('canvas.focusNodes([tutorialWelcomeNodeId, tutorialDesignSystemNodeId]'),
   'map tutorial must frame both Markdown nodes automatically'

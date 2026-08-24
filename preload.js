@@ -128,6 +128,7 @@ contextBridge.exposeInMainWorld('localcodeApi', {
   removeApplicationMapEdge: (payload) => ipcRenderer.invoke('application-map:edge:remove', payload),
   importApplicationMapAsset: (payload) => ipcRenderer.invoke('application-map:asset:import', payload),
   renderApplicationMap: (payload) => ipcRenderer.invoke('application-map:render', payload),
+  buildApplicationMapRenderPlan: (payload) => ipcRenderer.invoke('application-map:render-plan', payload),
   getApplicationMapSummary: (payload) => ipcRenderer.invoke('application-map:summary', payload),
   listMilestones: (payload) => ipcRenderer.invoke('milestones:list', payload),
   getMilestone: (payload) => ipcRenderer.invoke('milestones:get', payload),

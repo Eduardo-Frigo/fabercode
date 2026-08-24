@@ -29,6 +29,90 @@
       );
     }
 
+    const RENDER_PLAN_COPY_KEYS = Object.freeze([
+      'mapUntitledItem',
+      'renderCheckDocsLabel',
+      'renderCheckDocsHint',
+      'renderCheckTradeoffsLabel',
+      'renderCheckTradeoffsHint',
+      'renderCheckSecurityLabel',
+      'renderCheckSecurityHint',
+      'renderCheckBrandingLabel',
+      'renderCheckBrandingHint',
+      'renderDefaultTask',
+      'renderDocsGapTitle',
+      'renderDocsGapSummary',
+      'renderDocsGapFallback',
+      'renderDocsGapNotes',
+      'renderFoundationTitle',
+      'renderFoundationSummary',
+      'renderFoundationTaskOne',
+      'renderFoundationTaskTwo',
+      'renderFoundationTaskThree',
+      'renderFoundationTaskFour',
+      'renderFoundationNotes',
+      'renderNodesConsidered',
+      'renderDesignTitle',
+      'renderDesignSummary',
+      'renderDesignTaskOne',
+      'renderDesignTaskTwo',
+      'renderDesignTaskThree',
+      'renderDesignTaskFour',
+      'renderDesignNotes',
+      'renderProductTitle',
+      'renderProductSummary',
+      'renderProductTaskOne',
+      'renderProductTaskTwo',
+      'renderProductTaskThree',
+      'renderProductTaskFour',
+      'renderProductNotes',
+      'renderProductRealUserTask',
+      'renderBackendTitle',
+      'renderBackendSummary',
+      'renderBackendTaskOne',
+      'renderBackendTaskTwo',
+      'renderBackendTaskThree',
+      'renderBackendTaskFour',
+      'renderBackendNotes',
+      'renderPentestTitle',
+      'renderPentestSummary',
+      'renderPentestTaskOne',
+      'renderPentestTaskTwo',
+      'renderPentestTaskThree',
+      'renderPentestTaskFour',
+      'renderLoggingTaskOne',
+      'renderLoggingTaskTwo',
+      'renderLoggingTaskThree',
+      'renderRealUsersTitle',
+      'renderRealUsersSummary',
+      'renderRealUsersTaskOne',
+      'renderRealUsersTaskTwo',
+      'renderRealUsersTaskThree',
+      'renderRealUsersTaskFour',
+      'renderDeliveryTitle',
+      'renderDeliverySummary',
+      'renderDeliveryTaskOne',
+      'renderDeliveryTaskTwo',
+      'renderDeliveryTaskThree',
+      'renderDeliveryTaskFour',
+      'renderDeliveryNotes',
+      'renderDeliveryLoggingTaskOne',
+      'renderDeliveryLoggingTaskTwo',
+      'renderRefinementNotes',
+      'renderReleaseTitle',
+      'renderReleaseSummary',
+      'renderReleaseTaskOne',
+      'renderReleaseTaskTwo',
+      'renderReleaseTaskThree',
+    ]);
+
+    function buildRenderPlanCopy() {
+      return RENDER_PLAN_COPY_KEYS.reduce((copy, key) => {
+        copy[key] = uiText(key, '');
+        return copy;
+      }, {});
+    }
+
     function responseLanguageInstruction() {
       return uiText(
         'respondInInterfaceLanguage',
@@ -425,9 +509,6 @@
           .replace(/'/g, '&#39;');
       }
 
-      function normalizeRenderText(value) {
-        return String(value || '').toLowerCase();
-      }
 
       function getRenderMapMarkdown(mapData = {}) {
         let markdown = `# ${uiText('mapExportTitle', 'MAPA DA APLICAÇÃO PARA RENDERIZAÇÃO')}\n\n`;
@@ -516,333 +597,6 @@
         return { documents, combinedText: combinedText.trim() };
       }
 
-      function evaluateRenderReadiness(mapData = {}, combinedText = '') {
-        const rootNodes = Array.isArray(mapData.nodes) ? mapData.nodes.filter((node) => node && !node.parentId) : [];
-        const groups = rootNodes.filter((node) => node.type === 'group' || node.type === 'folder');
-        const text = normalizeRenderText(combinedText);
-        const nodeText = normalizeRenderText(
-          Array.isArray(mapData.nodes)
-            ? mapData.nodes
-                .map((node) => [node.title, node.description, node.content].filter(Boolean).join(' '))
-                .join(' \n ')
-            : ''
-        );
-        const fullText = `${text}\n${nodeText}`;
-
-        const checks = [
-          {
-            id: 'docs',
-            label: uiText('renderCheckDocsLabel', 'Markdowns do mapa'),
-            ok: groups.length > 0 || /docs\/application-map/.test(fullText),
-            hint: uiText('renderCheckDocsHint', 'O mapa precisa ter markdowns estruturados para guiar a renderização.'),
-          },
-          {
-            id: 'tradeoffs',
-            label: uiText('renderCheckTradeoffsLabel', 'Tradeoffs do projeto'),
-            ok: /tradeoff|trade-offs|frontend|back-end|backend|stack/.test(fullText),
-            hint: uiText('renderCheckTradeoffsHint', 'Documente decisões e compensações de frontend, backend e stack.'),
-          },
-          {
-            id: 'security',
-            label: uiText('renderCheckSecurityLabel', 'Plano de segurança'),
-            ok: /seguran|security|rate limit|rate limiting|mfa|csp|hsts|auth|oauth|jwt/.test(fullText),
-            hint: uiText('renderCheckSecurityHint', 'A base do projeto precisa registrar proteção, autenticação e hardening.'),
-          },
-          {
-            id: 'branding',
-            label: uiText('renderCheckBrandingLabel', 'Marca e design system'),
-            ok: /brand|marca|logo|logotipo|cores|color|design system|tipografia|tipographic|ui kit/.test(fullText),
-            hint: uiText('renderCheckBrandingHint', 'O render precisa saber a linguagem visual e os assets da marca.'),
-          },
-        ];
-
-        const missing = checks.filter((item) => !item.ok);
-        return {
-          checks,
-          missing,
-          ready: missing.length === 0,
-        };
-      }
-
-      function buildRenderMilestones(mapData = {}, readiness = {}, combinedText = '', documents = []) {
-        const nodes = Array.isArray(mapData.nodes) ? mapData.nodes.filter(Boolean) : [];
-        const milestones = [];
-        let index = 1;
-
-        const normalize = (value) => String(value || '').toLowerCase();
-        const unique = (items) => Array.from(new Set((items || []).filter(Boolean)));
-        const collectNodeTitles = (keywords, limit = 6) => unique(
-          nodes
-            .filter((node) => {
-              const haystack = normalize([node.title, node.description, node.content, node.type].join(' '));
-              return keywords.some((keyword) => haystack.includes(keyword));
-            })
-            .map((node) => node.title || node.description || node.type || uiText('mapUntitledItem', 'Item sem título'))
-        ).slice(0, limit);
-
-        const documentList = Array.isArray(documents) ? documents.filter((doc) => doc && doc.path) : [];
-        const pickReferences = (keywords = [], fallbackPaths = []) => {
-          const matches = documentList
-            .filter((doc) => {
-              const haystack = normalize(`${doc.path}\n${doc.content || ''}`);
-              return keywords.some((keyword) => haystack.includes(keyword));
-            })
-            .map((doc) => doc.path);
-          const paths = unique([...matches, ...fallbackPaths]).slice(0, 4);
-          return paths.map((path) => ({ path }));
-        };
-
-        const makeTasks = (fallbackTasks) => fallbackTasks.map((title, taskIndex) => ({
-            id: `render-task-${index}-${taskIndex + 1}`,
-            title,
-            status: 'pending',
-          }));
-
-        const addMilestone = (title, summary, tasks = [], extra = {}) => {
-          const milestone = {
-            id: `render-milestone-${index}`,
-            number: index,
-            title,
-            summary,
-            status: 'planned',
-            tasks: tasks.length
-              ? tasks
-              : [
-                  {
-                    id: `render-task-${index}-1`,
-                    title: uiText('renderDefaultTask', 'Validar o escopo e os markdowns do mapa'),
-                    status: 'pending',
-                  },
-                ],
-            acceptanceCriteria: extra.acceptanceCriteria || '',
-            validationCommands: extra.validationCommands || '',
-            commits: [],
-            notes: extra.notes || '',
-            references: Array.isArray(extra.references) ? extra.references : [],
-            changeMarker: extra.changeMarker || null,
-          };
-          milestones.push(milestone);
-          index += 1;
-          return milestone;
-        };
-
-        const addTasksToMilestone = (milestone, taskTitles = [], markerLabel = '') => {
-          if (!milestone || !Array.isArray(taskTitles) || !taskTitles.length) return;
-          const currentTasks = Array.isArray(milestone.tasks) ? milestone.tasks : [];
-          const additions = taskTitles.map((title, taskIndex) => ({
-            id: `${milestone.id}-refined-${currentTasks.length + taskIndex + 1}`,
-            title,
-            status: 'pending',
-            isRefinement: true,
-          }));
-          milestone.tasks = [...currentTasks, ...additions];
-          milestone.changeMarker = {
-            type: 'task',
-            count: additions.length,
-            label: markerLabel || `+${additions.length}`,
-          };
-        };
-
-        if (readiness.missing && readiness.missing.length) {
-          addMilestone(
-            uiText('renderDocsGapTitle', 'Fechar lacunas da documentação'),
-            uiText('renderDocsGapSummary', 'Completar os markdowns e as decisões que ainda impedem a execução segura do projeto.'),
-            readiness.missing.map((item, idx) => ({
-              id: `render-task-${index}-${idx + 1}`,
-              title: item.hint || item.label || uiText('renderDocsGapFallback', 'Lacuna não descrita'),
-              status: 'pending',
-            })),
-            {
-              notes: uiText('renderDocsGapNotes', 'Etapa derivada diretamente da validação de completude do mapa.'),
-              references: pickReferences(
-                ['open question', 'open-question', 'decis', 'tradeoff', 'seguran', 'security', 'design', 'marca'],
-                documentList.map((doc) => doc.path)
-              ),
-            }
-          );
-        }
-
-        const foundationNodes = collectNodeTitles(['backend', 'database', 'banco', 'stack', 'setup', 'env', 'seguran']);
-        addMilestone(
-          uiText('renderFoundationTitle', 'Preparar fundação técnica do projeto'),
-          uiText('renderFoundationSummary', 'Converter as decisões do mapa em base técnica executável antes de implementar telas e regras finais.'),
-          makeTasks(
-            [
-              uiText('renderFoundationTaskOne', 'Validar a stack definida no mapa e registrar a decisão final de frontend, backend e banco.'),
-              uiText('renderFoundationTaskTwo', 'Organizar estrutura de pastas, scripts de desenvolvimento, build, lint e testes.'),
-              uiText('renderFoundationTaskThree', 'Criar arquivos de ambiente de exemplo sem segredos reais e documentar como configurar o projeto.'),
-              uiText('renderFoundationTaskFour', 'Transformar os itens técnicos do mapa em contratos iniciais para as próximas etapas.'),
-            ]
-          ),
-          {
-            notes: foundationNodes.length
-              ? uiText('renderNodesConsidered', 'Itens do mapa considerados: {items}.', { items: foundationNodes.join(', ') })
-              : uiText('renderFoundationNotes', 'Primeiro bloco do passo a passo: base técnica antes de implementar funcionalidades.'),
-            references: pickReferences(['readme', 'backend', 'banco', 'database', 'stack', 'decis', 'seguran', 'security']),
-          }
-        );
-
-        const designNodes = collectNodeTitles(['design', 'layout', 'frontend', 'brand', 'marca', 'logo', 'tipografia']);
-        addMilestone(
-          uiText('renderDesignTitle', 'Estruturar interface, marca e design system'),
-          uiText('renderDesignSummary', 'Transformar a linguagem visual documentada no mapa em tokens, componentes e navegação reutilizável.'),
-          makeTasks(
-            [
-              uiText('renderDesignTaskOne', 'Consolidar cores, tipografia, espaçamentos, estados de interação e assets de marca.'),
-              uiText('renderDesignTaskTwo', 'Criar shell visual da aplicação com layout base e componentes compartilhados.'),
-              uiText('renderDesignTaskThree', 'Mapear telas, navegação e hierarquia visual antes de implementar o fluxo principal.'),
-              uiText('renderDesignTaskFour', 'Registrar lacunas de design que ainda precisem de imagens, logotipo ou documentação adicional.'),
-            ]
-          ),
-          {
-            notes: designNodes.length
-              ? uiText('renderNodesConsidered', 'Itens do mapa considerados: {items}.', { items: designNodes.join(', ') })
-              : uiText('renderDesignNotes', 'Esta etapa consolida o visual antes da implementação de telas finais.'),
-            references: pickReferences(['design', 'frontend', 'layout', 'marca', 'brand', 'logo', 'cor', 'cores', 'tipografia']),
-          }
-        );
-
-        const productNodes = collectNodeTitles(['funções', 'funcao', 'feature', 'frontend', 'login', 'dashboard', 'fluxo', 'tarefa']);
-        const productMilestone = addMilestone(
-          uiText('renderProductTitle', 'Implementar fluxo principal da aplicação'),
-          uiText('renderProductSummary', 'Construir o caminho ponta a ponta que permite ao usuário usar o produto conforme o mapa definiu.'),
-          makeTasks(
-            [
-              uiText('renderProductTaskOne', 'Implementar telas e rotas principais descritas no mapa da aplicação.'),
-              uiText('renderProductTaskTwo', 'Criar formulários, estados de carregamento, validações de interface e feedbacks de erro/sucesso.'),
-              uiText('renderProductTaskThree', 'Conectar cada ação do usuário ao contrato de dados esperado, mesmo que inicialmente com mocks.'),
-              uiText('renderProductTaskFour', 'Validar o fluxo completo pelo ponto de vista do usuário antes de avançar para hardening.'),
-            ]
-          ),
-          {
-            notes: productNodes.length
-              ? uiText('renderNodesConsidered', 'Itens do mapa considerados: {items}.', { items: productNodes.join(', ') })
-              : uiText('renderProductNotes', 'A partir daqui o plano passa a representar execução real do produto.'),
-            references: pickReferences(['frontend', 'funções', 'funcoes', 'feature', 'login', 'dashboard', 'fluxo', 'tarefa']),
-          }
-        );
-
-        const backendNodes = collectNodeTitles(['backend', 'api', 'database', 'banco', 'auth', 'jwt', 'sequelize', 'dados']);
-        const backendMilestone = addMilestone(
-          uiText('renderBackendTitle', 'Construir backend, dados e integrações'),
-          uiText('renderBackendSummary', 'Implementar persistência, API, autenticação e regras de negócio alinhadas com o fluxo principal.'),
-          makeTasks(
-            [
-              uiText('renderBackendTaskOne', 'Modelar entidades, relações, migrations e seeds necessários para o domínio desenhado.'),
-              uiText('renderBackendTaskTwo', 'Criar contratos REST/API e padronizar payloads, erros e status codes.'),
-              uiText('renderBackendTaskThree', 'Implementar autenticação, autorização e regras de negócio do backend.'),
-              uiText('renderBackendTaskFour', 'Integrar frontend, backend e banco em cenários reais do produto.'),
-            ]
-          ),
-          {
-            notes: backendNodes.length
-              ? uiText('renderNodesConsidered', 'Itens do mapa considerados: {items}.', { items: backendNodes.join(', ') })
-              : (combinedText ? uiText('renderBackendNotes', 'A etapa usa o contexto consolidado dos markdowns e decisões do mapa.') : ''),
-            references: pickReferences(['backend', 'api', 'database', 'banco', 'dados', 'sequelize', 'auth', 'jwt']),
-          }
-        );
-
-        const securityNodes = collectNodeTitles(['seguran', 'security', 'teste', 'test', 'deploy', 'log', 'observ']);
-        const asksForPentest = /pentest|pen test|penetration test|teste de intrus|intrus[aã]o|vulnerability|vulnerabil|owasp/.test(normalize(combinedText));
-        const asksForErrorLogging = /log de erro|logs de erro|error log|erro em produ|observabil|monitoramento|alerta|telemetria|sentry/.test(normalize(combinedText));
-        const asksForRealUserValidation = /usu[aá]rios reais|usuario real|user test|teste com usu[aá]rio|valida[cç][aã]o com usu[aá]rios|pesquisa com usu[aá]rios|beta test|teste beta/.test(normalize(combinedText));
-        if (asksForPentest) {
-          addMilestone(
-            uiText('renderPentestTitle', 'Executar pentest e correção de vulnerabilidades'),
-            uiText('renderPentestSummary', 'Validar a aplicação com testes ofensivos controlados e transformar achados em correções antes da entrega.'),
-            makeTasks(
-              [
-                uiText('renderPentestTaskOne', 'Definir escopo do pentest, ambientes permitidos e critérios de parada.'),
-                uiText('renderPentestTaskTwo', 'Executar checklist OWASP para autenticação, autorização, sessão, inputs e exposição de dados.'),
-                uiText('renderPentestTaskThree', 'Registrar vulnerabilidades com severidade, evidência, impacto e recomendação.'),
-                uiText('renderPentestTaskFour', 'Corrigir achados críticos/altos e repetir os testes de validação antes de liberar a entrega.'),
-              ]
-            ),
-            {
-              validationCommands: 'npm test\nnpm run build',
-              notes: uiText('renderRefinementNotes', 'Etapa adicionada a partir do refinamento solicitado no chat de render.'),
-              references: pickReferences(['seguran', 'security', 'auth', 'jwt', 'owasp', 'pentest', 'teste']),
-              changeMarker: { type: 'milestone', count: 1, label: '+ etapa' },
-            }
-          );
-        }
-
-        if (asksForErrorLogging) {
-          addTasksToMilestone(
-            backendMilestone,
-            [
-              uiText('renderLoggingTaskOne', 'Definir padrão de logs para erros de frontend, backend, autenticação e integrações.'),
-              uiText('renderLoggingTaskTwo', 'Registrar contexto mínimo de falhas sem expor dados sensíveis ou segredos.'),
-              uiText('renderLoggingTaskThree', 'Criar fluxo de captura, consulta e triagem de erros recorrentes.'),
-            ],
-            '+3'
-          );
-        }
-
-        if (asksForRealUserValidation) {
-          addMilestone(
-            uiText('renderRealUsersTitle', 'Validar fluxo com usuários reais'),
-            uiText('renderRealUsersSummary', 'Testar as etapas principais com pessoas reais antes de encerrar o plano de execução.'),
-            makeTasks(
-              [
-                uiText('renderRealUsersTaskOne', 'Definir cenários de uso e critérios de sucesso para a validação com usuários.'),
-                uiText('renderRealUsersTaskTwo', 'Preparar ambiente, dados de teste e roteiro de observação para cada etapa crítica.'),
-                uiText('renderRealUsersTaskThree', 'Coletar dúvidas, bloqueios, erros e pontos de fricção durante a execução real.'),
-                uiText('renderRealUsersTaskFour', 'Transformar os achados em ajustes priorizados no plano antes da entrega final.'),
-              ]
-            ),
-            {
-              notes: uiText('renderRefinementNotes', 'Etapa adicionada a partir do refinamento solicitado no chat de render.'),
-              references: pickReferences(['readme', 'frontend', 'design', 'funções', 'funcoes', 'teste', 'valida']),
-              changeMarker: { type: 'milestone', count: 1, label: '+ etapa' },
-            }
-          );
-        }
-
-        const deliveryMilestone = addMilestone(
-          uiText('renderDeliveryTitle', 'Aplicar segurança, testes e entrega'),
-          uiText('renderDeliverySummary', 'Fechar o projeto com proteção, validação funcional, revisão técnica e preparação de entrega.'),
-          makeTasks(
-            [
-              uiText('renderDeliveryTaskOne', 'Aplicar checklist de segurança definido no mapa: autenticação, autorização, headers, secrets e rate limiting.'),
-              uiText('renderDeliveryTaskTwo', 'Criar testes unitários, integração e fluxo ponta a ponta para as jornadas principais.'),
-              uiText('renderDeliveryTaskThree', 'Revisar logs, tratamento de erros, observabilidade e comportamento em produção.'),
-              uiText('renderDeliveryTaskFour', 'Preparar validação final, documentação de execução e critérios de aceite da entrega.'),
-            ]
-          ),
-          {
-            validationCommands: 'npm test\nnpm run build',
-            notes: securityNodes.length
-              ? uiText('renderNodesConsidered', 'Itens do mapa considerados: {items}.', { items: securityNodes.join(', ') })
-              : uiText('renderDeliveryNotes', 'Último passo da sequência, com validação antes de concluir a entrega.'),
-            references: pickReferences(['seguran', 'security', 'teste', 'test', 'deploy', 'log', 'observability', 'hsts', 'csp']),
-          }
-        );
-
-        if (asksForErrorLogging) {
-          addTasksToMilestone(
-            deliveryMilestone,
-            [
-              uiText('renderDeliveryLoggingTaskOne', 'Adicionar alertas ou checklist de revisão para erros críticos antes da entrega.'),
-              uiText('renderDeliveryLoggingTaskTwo', 'Validar se os logs apoiam análise de incidentes sem expor dados sensíveis.'),
-            ],
-            '+2'
-          );
-        }
-
-        if (asksForRealUserValidation && productMilestone && !productMilestone.changeMarker) {
-          addTasksToMilestone(
-            productMilestone,
-            [
-              uiText('renderProductRealUserTask', 'Preparar o fluxo principal para teste guiado com usuários reais antes do fechamento.'),
-            ],
-            '+1'
-          );
-        }
-
-        return milestones;
-      }
-
       function buildTutorialRenderMilestones(mapData = {}) {
         const frontendDoc = { path: 'docs/application-map/frontend.md' };
         const rulesDoc = { path: 'docs/application-map/regras.md' };
@@ -887,130 +641,6 @@
             notes: definition.notes || '',
           }
         ));
-      }
-
-      function normalizeRenderKey(value) {
-        return String(value || '')
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, ' ')
-          .trim();
-      }
-
-      function renumberRenderMilestones(milestones = []) {
-        return milestones.map((milestone, milestoneIndex) => {
-          const number = milestoneIndex + 1;
-          return {
-            ...milestone,
-            id: milestone.id || `render-milestone-${number}`,
-            number,
-            tasks: Array.isArray(milestone.tasks)
-              ? milestone.tasks.map((task, taskIndex) => ({
-                  ...task,
-                  id: task.id || `render-task-${number}-${taskIndex + 1}`,
-                }))
-              : [],
-          };
-        });
-      }
-
-      function mergeRenderTasks(previousTasks = [], nextTasks = []) {
-        const seen = new Set();
-        const merged = [];
-        [...previousTasks, ...nextTasks].forEach((task) => {
-          if (!task) return;
-          const key = normalizeRenderKey(task.title || task.id);
-          if (!key || seen.has(key)) return;
-          seen.add(key);
-          merged.push({ ...task });
-        });
-        return merged;
-      }
-
-      function buildRequestedReleaseMilestone(requestText = '', nextNumber = 1, pickReferences = () => []) {
-        const normalized = normalizeRenderKey(requestText);
-        const asksExplicitNewStep = /\b(adicionar|adicione|incluir|inclua|criar|crie|colocar|coloque|add|include|create|insert|anadir|agregar|incluya|incluir|crear|cree)\b/.test(normalized)
-          && /\b(etapa|passo|ponto|milestone|step|stage|hito|paso|fase|8|oitavo|eighth|octavo)\b/.test(normalized);
-        const asksRelease = /liberacao|lancamento|release|publicacao|go live|deploy final|entrega final|lancar|publicar|launch|publication|final deployment|final delivery|lanzamiento|publicacion|despliegue final|entrega final|publica/.test(normalized);
-        if (!asksExplicitNewStep || !asksRelease) return null;
-
-        return {
-          id: `render-milestone-manual-release-${Date.now()}`,
-          number: nextNumber,
-          title: uiText('renderReleaseTitle', 'Preparar liberação e lançamento do projeto'),
-          summary: uiText('renderReleaseSummary', 'Organizar a etapa final de release para publicar, comunicar e acompanhar a aplicação após a validação.'),
-          status: 'planned',
-          tasks: [
-            {
-              id: `render-task-release-${nextNumber}-1`,
-              title: uiText('renderReleaseTaskOne', 'Consolidar checklist de release com build, testes, variáveis de ambiente e documentação de execução.'),
-              status: 'pending',
-              isRefinement: true,
-            },
-            {
-              id: `render-task-release-${nextNumber}-2`,
-              title: uiText('renderReleaseTaskTwo', 'Definir plano de lançamento, responsáveis, janela de publicação e estratégia de rollback.'),
-              status: 'pending',
-              isRefinement: true,
-            },
-            {
-              id: `render-task-release-${nextNumber}-3`,
-              title: uiText('renderReleaseTaskThree', 'Acompanhar primeiros usuários reais, logs de erro e métricas críticas após a liberação.'),
-              status: 'pending',
-              isRefinement: true,
-            },
-          ],
-          acceptanceCriteria: '',
-          validationCommands: 'npm test\nnpm run build',
-          commits: [],
-          notes: uiText('renderRefinementNotes', 'Etapa adicionada a partir do refinamento solicitado no chat de render.'),
-          references: pickReferences(['readme', 'deploy', 'release', 'teste', 'seguran', 'security', 'log']),
-          changeMarker: { type: 'milestone', count: 1, label: '+1' },
-        };
-      }
-
-      function mergeRenderMilestonePlan(previousMilestones = [], nextMilestones = [], requestText = '', referencePicker = () => []) {
-        const merged = [];
-        const byTitle = new Map();
-
-        const addOrMerge = (milestone) => {
-          if (!milestone) return;
-          const key = normalizeRenderKey(milestone.title || milestone.id);
-          if (!key) return;
-          const existing = byTitle.get(key);
-          if (!existing) {
-            const copy = {
-              ...milestone,
-              tasks: Array.isArray(milestone.tasks) ? milestone.tasks.map((task) => ({ ...task })) : [],
-              references: Array.isArray(milestone.references) ? milestone.references.map((reference) => ({ ...reference })) : [],
-            };
-            byTitle.set(key, copy);
-            merged.push(copy);
-            return;
-          }
-
-          existing.summary = milestone.summary || existing.summary;
-          existing.status = milestone.status || existing.status;
-          existing.acceptanceCriteria = milestone.acceptanceCriteria || existing.acceptanceCriteria || '';
-          existing.validationCommands = milestone.validationCommands || existing.validationCommands || '';
-          existing.notes = milestone.notes || existing.notes || '';
-          existing.tasks = mergeRenderTasks(existing.tasks, milestone.tasks);
-          existing.references = Array.isArray(milestone.references) && milestone.references.length
-            ? milestone.references
-            : existing.references;
-          existing.changeMarker = milestone.changeMarker || existing.changeMarker || null;
-        };
-
-        previousMilestones.forEach(addOrMerge);
-        nextMilestones.forEach(addOrMerge);
-
-        const requestedRelease = buildRequestedReleaseMilestone(requestText, merged.length + 1, referencePicker);
-        if (requestedRelease && !merged.some((milestone) => /libera|lan[cç]amento|release/i.test(milestone.title || ''))) {
-          merged.push(requestedRelease);
-        }
-
-        return renumberRenderMilestones(merged);
       }
 
       function formatRenderConversationDate(value) {
@@ -1639,40 +1269,39 @@
         ].join('\n');
       }
 
-      function rebuildRenderDraft(mapData, documentation, assistantSummary, options = {}) {
-        const combinedText = `${documentation.combinedText}\n${assistantSummary}`;
-        const readiness = evaluateRenderReadiness(mapData, combinedText);
-        const generatedMilestones = buildRenderMilestones(
+      async function rebuildRenderDraft(mapData, documentation, assistantSummary, options = {}) {
+        const rootPath = options.rootPath || getSelectedProjectInfo()?.rootPath || '';
+        if (!rootPath) {
+          throw new Error(uiText('projectRootRequired', 'Selecione um projeto antes de gerar o plano.'));
+        }
+        if (!api || typeof api.buildApplicationMapRenderPlan !== 'function') {
+          throw new Error('Application map render-plan service unavailable.');
+        }
+
+        const documents = Array.isArray(documentation.documents) ? documentation.documents : [];
+        const combinedText = `${documentation.combinedText || ''}\n${assistantSummary || ''}`;
+        const plan = await api.buildApplicationMapRenderPlan({
+          rootPath,
           mapData,
-          readiness,
           combinedText,
-          documentation.documents
-        );
-        const pickReferences = (keywords = []) => {
-          const normalizedKeywords = keywords.map(normalizeRenderKey).filter(Boolean);
-          const documents = Array.isArray(documentation.documents) ? documentation.documents : [];
-          return documents
-            .filter((document) => {
-              const searchable = normalizeRenderKey(`${document.path || ''}\n${document.content || ''}`);
-              return normalizedKeywords.some((keyword) => searchable.includes(keyword));
-            })
-            .map((document) => ({ path: document.path }))
-            .slice(0, 4);
-        };
-        const previousMilestones = Array.isArray(options.previousMilestones)
-          ? options.previousMilestones
-          : [];
-        const requestText = options.requestText || '';
-        const milestones = previousMilestones.length || requestText
-          ? mergeRenderMilestonePlan(previousMilestones, generatedMilestones, requestText, pickReferences)
-          : generatedMilestones;
+          documents,
+          previousMilestones: Array.isArray(options.previousMilestones)
+            ? options.previousMilestones
+            : [],
+          requestText: options.requestText || '',
+          copy: buildRenderPlanCopy(),
+        });
+        if (!plan || !plan.ok) {
+          throw new Error(plan && plan.message ? plan.message : 'Application map render-plan failed.');
+        }
+
         renderDraft = {
           assistantSummary: assistantSummary || uiText('renderFallbackDiagnostic', 'A IA não retornou uma resposta; o diagnóstico foi preparado com a documentação disponível.'),
-          checks: readiness.checks,
-          missing: readiness.missing,
-          ready: readiness.ready,
-          milestones,
-          documents: documentation.documents,
+          checks: Array.isArray(plan.checks) ? plan.checks : [],
+          missing: Array.isArray(plan.missing) ? plan.missing : [],
+          ready: plan.ready === true,
+          milestones: Array.isArray(plan.milestones) ? plan.milestones : [],
+          documents,
           renderMarkdown: getRenderMapMarkdown(mapData),
         };
         syncRenderConversationState();
@@ -1766,7 +1395,7 @@
             renderTicker.analyzeStep.classList.add('completed');
           }
 
-          rebuildRenderDraft(mapData, documentation, assistantSummary);
+          await rebuildRenderDraft(mapData, documentation, assistantSummary, { rootPath });
           await new Promise((resolve) => setTimeout(resolve, 220));
           if (renderTicker && renderTicker.contextualizedStep) {
             renderTicker.contextualizedStep.classList.add('active');
@@ -2017,7 +1646,8 @@
           const renderTranscript = renderMessages
             .map((message) => `${message.role}: ${message.content || ''}`)
             .join('\n\n');
-          rebuildRenderDraft(mapData, documentation, `${renderTranscript}\n\nPedido atual do usuário: ${messageText}`, {
+          await rebuildRenderDraft(mapData, documentation, `${renderTranscript}\n\nPedido atual do usuário: ${messageText}`, {
+            rootPath,
             previousMilestones,
             requestText: messageText,
           });
@@ -2046,7 +1676,8 @@
             const renderTranscript = renderMessages
               .map((message) => `${message.role}: ${message.content || ''}`)
               .join('\n\n');
-            rebuildRenderDraft(mapData, documentation, `${renderTranscript}\n\nPedido atual do usuário: ${messageText}`, {
+            await rebuildRenderDraft(mapData, documentation, `${renderTranscript}\n\nPedido atual do usuário: ${messageText}`, {
+              rootPath,
               previousMilestones,
               requestText: messageText,
             });

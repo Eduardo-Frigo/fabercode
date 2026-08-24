@@ -109,6 +109,9 @@ const { registerSystemHandlers } = require('./main/ipc/system_handlers');
 const { registerUpdateHandlers } = require('./main/ipc/update_handlers');
 const { createApplicationMapService } = require('./main/services/application_map_service');
 const { createApplicationMapRenderService } = require('./main/services/application_map_render_service');
+const {
+  createApplicationMapRenderPlanService,
+} = require('./main/services/application_map_render_plan_service');
 const { createMilestoneService } = require('./main/services/milestone_service');
 const { createMilestoneGitStatusService } = require('./main/services/milestone_git_status_service');
 const { createIpcSecurity } = require('./main/security/ipc_security');
@@ -5214,6 +5217,7 @@ const {
 
 const applicationMapService = createApplicationMapService({ fs, path });
 const applicationMapRenderService = createApplicationMapRenderService({ fs, path, mapService: applicationMapService });
+const applicationMapRenderPlanService = createApplicationMapRenderPlanService();
 const milestoneService = createMilestoneService({ fs, path });
 const milestoneGitStatusService = createMilestoneGitStatusService({ gitService: projectGitService, milestoneService });
 
@@ -6006,6 +6010,7 @@ app.whenReady().then(async () => {
     authorizeProjectRoot,
     mapService: applicationMapService,
     renderService: applicationMapRenderService,
+    renderPlanService: applicationMapRenderPlanService,
     registerIpcHandler,
     appendAuditEvent,
   });

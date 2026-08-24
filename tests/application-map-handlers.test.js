@@ -64,6 +64,19 @@ function createFixture() {
     },
   };
 
+  const renderPlanService = {
+    buildRenderPlan: (payload) => {
+      calls.push(['buildRenderPlan', payload]);
+      return {
+        ok: true,
+        ready: true,
+        checks: [],
+        missing: [],
+        milestones: [{ id: 'render-milestone-1' }],
+      };
+    },
+  };
+
   registerApplicationMapHandlers({
     authorizeProjectRoot: (rootPath) => {
       calls.push(['authorizeProjectRoot', rootPath]);
@@ -74,6 +87,7 @@ function createFixture() {
     },
     mapService,
     renderService,
+    renderPlanService,
     registerIpcHandler,
     appendAuditEvent: (type, payload) => audits.push({ type, payload }),
   });
@@ -97,6 +111,7 @@ function run() {
     'application-map:node:remove',
     'application-map:node:upsert',
     'application-map:render',
+    'application-map:render-plan',
     'application-map:save',
     'application-map:summary',
   ]);
@@ -177,6 +192,29 @@ function run() {
   assert.deepStrictEqual(failedRender, { ok: false, message: 'render failed' });
   assert.strictEqual(audits.length, 1);
 
+  const renderPlanPayload = {
+    rootPath: '/allowed',
+    mapData: { nodes: [{ id: 'node-1' }], edges: [] },
+    combinedText: 'Tradeoffs, security e design system.',
+    documents: [{ path: 'docs/application-map/README.md', content: 'Contexto' }],
+    previousMilestones: [{ id: 'previous-1' }],
+    requestText: 'Refinar o plano',
+    copy: { renderFoundationTitle: 'Foundation' },
+  };
+  const renderPlanResult = handlers['application-map:render-plan'](null, renderPlanPayload);
+  assert.strictEqual(renderPlanResult.ok, true);
+  assert.deepStrictEqual(lastServiceCall(calls), [
+    'buildRenderPlan',
+    {
+      mapData: renderPlanPayload.mapData,
+      combinedText: renderPlanPayload.combinedText,
+      documents: renderPlanPayload.documents,
+      previousMilestones: renderPlanPayload.previousMilestones,
+      requestText: renderPlanPayload.requestText,
+      copy: renderPlanPayload.copy,
+    },
+  ]);
+
   const deniedCases = [
     ['application-map:get', {}],
     ['application-map:save', { map }],
@@ -186,6 +224,7 @@ function run() {
     ['application-map:edge:remove', { edgeId: 'edge-2' }],
     ['application-map:asset:import', { sourcePath: '/source/logo.svg' }],
     ['application-map:render', {}],
+    ['application-map:render-plan', {}],
     ['application-map:summary', {}],
   ];
 
