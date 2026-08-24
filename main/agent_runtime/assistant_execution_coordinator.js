@@ -6,8 +6,12 @@ const {
   PROJECT_ROOT_AUTHORITY_LEASE_VERSION,
   PROJECT_ROOT_READER_VERSION,
 } = require('../capabilities/project_root_authority_contract');
+const {
+  EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION,
+  EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
+} = require('../services/execution_isolation_authorized_job_executor');
 
-const ASSISTANT_EXECUTION_COORDINATOR_VERSION = 'assistant-execution-coordinator.v2';
+const ASSISTANT_EXECUTION_COORDINATOR_VERSION = 'assistant-execution-coordinator.v3';
 const DEFAULT_MAX_ACTIVE_JOBS = 1_024;
 const HARD_MAX_ACTIVE_JOBS = 10_000;
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
@@ -49,6 +53,7 @@ const PRIVATE_OUTPUT_KEYS = new Set([
   'realRootPath',
   'requestDigest',
   'rootLease',
+  'sandboxExecutor',
   'sessionId',
   'submissionDigest',
   'submissionId',
@@ -98,6 +103,7 @@ const ASSISTANT_EXECUTION_COORDINATOR_REASONS = Object.freeze({
   EXECUTION_DRAINING: 'execution_draining',
   EXECUTION_FAILED: 'execution_failed',
   EXECUTION_NOT_AUTHORIZED: 'execution_not_authorized',
+  EXECUTION_RESOURCE_FAILED: 'execution_resource_failed',
   INVALID_INPUT: 'coordinator_invalid_input',
   JOB_ALREADY_CREATED: 'planning_job_already_created',
   JOB_CREATE_FAILED: 'job_create_failed',
@@ -253,6 +259,15 @@ function observeNativeAsyncResult(value, fieldName) {
       reject(new TypeError(`${fieldName} failed`));
     }
   });
+}
+
+function consumeNativePromise(value) {
+  if (!util.types.isPromise(value)) return;
+  try {
+    Reflect.apply(Promise.prototype.then, value, [() => {}, () => {}]);
+  } catch {
+    // The caller still rejects the invalid async contract fail-closed.
+  }
 }
 
 function callBestEffort(callback, ...args) {
@@ -433,6 +448,14 @@ function createPrivateExecutionContext(record) {
     value: record.binding,
     writable: false,
   });
+  if (record.authorizedJobExecutor) {
+    Object.defineProperty(context, 'sandboxExecutor', {
+      configurable: false,
+      enumerable: false,
+      value: record.authorizedJobExecutor,
+      writable: false,
+    });
+  }
   if (record.projectRootLease) {
     Object.defineProperty(context, 'projectRootLease', {
       configurable: false,
@@ -467,6 +490,7 @@ function createAssistantExecutionCoordinator(options = {}) {
   const bindJobActionDigest = fields.get('bindJobActionDigest');
   const bindActionToProject = fields.get('bindActionToProject');
   const createActionDigest = fields.get('createActionDigest');
+  const createAuthorizedJobExecutor = fields.get('createAuthorizedJobExecutor');
   const executeAction = fields.get('executeAction');
   const projectRootAuthority = fields.get('projectRootAuthority');
   const refreshProjectFromRootLease = fields.get('refreshProjectFromRootLease');
@@ -495,12 +519,21 @@ function createAssistantExecutionCoordinator(options = {}) {
   }
   const hasProjectRootAuthority = fields.has('projectRootAuthority');
   const hasProjectRootRefresh = fields.has('refreshProjectFromRootLease');
+  const authorizedJobExecutorEnabled = fields.has('createAuthorizedJobExecutor');
   if (hasProjectRootAuthority !== hasProjectRootRefresh) {
     throw new TypeError(
       'projectRootAuthority and refreshProjectFromRootLease must be supplied together'
     );
   }
   const projectRootAuthorityEnabled = hasProjectRootAuthority && hasProjectRootRefresh;
+  if (authorizedJobExecutorEnabled && typeof createAuthorizedJobExecutor !== 'function') {
+    throw new TypeError('createAuthorizedJobExecutor must be a function when supplied');
+  }
+  if (authorizedJobExecutorEnabled && projectRootAuthorityEnabled) {
+    throw new TypeError(
+      'createAuthorizedJobExecutor and projectRootAuthority are mutually exclusive'
+    );
+  }
   let acquireProjectRootLease = null;
   let releaseProjectRootLease = null;
   if (projectRootAuthorityEnabled) {
@@ -532,6 +565,7 @@ function createAssistantExecutionCoordinator(options = {}) {
     if (typeof callback !== 'function') throw new TypeError(`${name} is required`);
   }
   for (const [name, callback] of [
+    ['createAuthorizedJobExecutor', createAuthorizedJobExecutor],
     ['beforeAuthorityRelease', beforeAuthorityRelease],
     ['onPlanningFailure', onPlanningFailure],
     ['onAuthorityRevoked', onAuthorityRevoked],
@@ -597,8 +631,26 @@ function createAssistantExecutionCoordinator(options = {}) {
     );
   }
 
-  function deferProjectRootRevocation(record, terminalStatus = 'cancelled') {
-    record.rootRevocationRequested = true;
+  function authorizedJobExecutorLifecycleActive(record) {
+    return Boolean(
+      authorizedJobExecutorEnabled
+      && record
+      && (record.authorizedJobExecutorCreateInProgress
+        || record.authorizedJobExecutor
+        || record.authorizedJobExecutorCloseInProgress
+        || record.executionCleanupInProgress)
+    );
+  }
+
+  function executionLifecycleActive(record) {
+    return Boolean(record
+      && (record.executionCleanupInProgress || record.executionRevocationRequested))
+      || projectRootLifecycleActive(record)
+      || authorizedJobExecutorLifecycleActive(record);
+  }
+
+  function deferExecutionRevocation(record, terminalStatus = 'cancelled') {
+    record.executionRevocationRequested = true;
     if (!record.terminalObserved) record.terminalObserved = terminalStatus;
     if (record.abortController && !record.abortController.signal.aborted) {
       try {
@@ -607,6 +659,38 @@ function createAssistantExecutionCoordinator(options = {}) {
         // The retained root lease and deferred cleanup remain authoritative.
       }
     }
+    if (record.authorizedJobExecutor
+      && !record.authorizedJobExecutorCloseInProgress
+      && !record.authorizedJobExecutorClosePromise) {
+      closeAuthorizedJobExecutorConfirmed(record);
+    }
+  }
+
+  function validateAuthorizedJobExecutor(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || util.types.isProxy(value) || !Object.isFrozen(value)) {
+      throw new TypeError('authorized job executor must be a frozen plain object');
+    }
+    const executorFields = dataFields(value, 'authorized job executor');
+    const keys = ['version', 'execute', 'close', 'diagnostics'];
+    if (executorFields.size !== keys.length
+      || keys.some((key) => !executorFields.has(key))
+      || executorFields.get('version') !== EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION) {
+      throw new TypeError('authorized job executor has an invalid contract');
+    }
+    for (const method of ['execute', 'close', 'diagnostics']) {
+      const callback = executorFields.get(method);
+      if (typeof callback !== 'function' || util.types.isProxy(callback)) {
+        throw new TypeError(`authorized job executor.${method} is invalid`);
+      }
+    }
+    return Object.freeze({
+      executor: value,
+      close: Object.freeze({
+        receiver: value,
+        method: executorFields.get('close'),
+      }),
+    });
   }
 
   function validateProjectRootLease(value, record, expectedPhysicalRootIdentityDigest) {
@@ -807,6 +891,79 @@ function createAssistantExecutionCoordinator(options = {}) {
     return record.projectRootReleasePromise;
   }
 
+  function closeAuthorizedJobExecutorConfirmed(record) {
+    if (!record.authorizedJobExecutor) {
+      return record.authorizedJobExecutorCreateInProgress !== true
+        && record.authorizedJobExecutorCloseInProgress !== true;
+    }
+    if (record.authorizedJobExecutorClosePromise) {
+      return record.authorizedJobExecutorClosePromise;
+    }
+    if (!authorizedJobExecutorEnabled
+      || record.authorizedJobExecutorCreateInProgress
+      || record.authorizedJobExecutorCloseInProgress
+      || !record.authorizedJobExecutorClose) {
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
+    }
+
+    const executor = record.authorizedJobExecutor;
+    const close = record.authorizedJobExecutorClose;
+    record.authorizedJobExecutorCloseInProgress = true;
+    let raw;
+    try {
+      raw = Reflect.apply(close.method, close.receiver, []);
+      if (!util.types.isPromise(raw)) {
+        throw new TypeError('authorized job executor close must return a native Promise');
+      }
+    } catch {
+      record.authorizedJobExecutorCloseInProgress = false;
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
+    }
+
+    const rejectClose = () => {
+      record.authorizedJobExecutorCloseInProgress = false;
+      record.authorizedJobExecutorClosePromise = null;
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
+    };
+    record.authorizedJobExecutorClosePromise = observeNativeAsyncResult(
+      raw,
+      'authorized job executor close'
+    ).then(({ value: result }) => {
+      try {
+        if (!Object.isFrozen(result)) {
+          throw new TypeError('authorized job executor close receipt must be frozen');
+        }
+        const resultFields = dataFields(
+          result,
+          'authorized job executor close receipt'
+        );
+        if (resultFields.size !== 4
+          || resultFields.get('version')
+            !== EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION
+          || resultFields.get('ok') !== true
+          || resultFields.get('closed') !== true
+          || typeof resultFields.get('sessionClosed') !== 'boolean'
+          || recordsByJobId.get(record.jobId) !== record
+          || record.authorizedJobExecutor !== executor
+          || record.authorizedJobExecutorClose !== close
+          || record.authorizedJobExecutorCloseInProgress !== true) {
+          throw new TypeError('authorized job executor close was not confirmed');
+        }
+      } catch {
+        return rejectClose();
+      }
+      record.authorizedJobExecutorCloseInProgress = false;
+      record.authorizedJobExecutorClosePromise = null;
+      record.authorizedJobExecutor = null;
+      record.authorizedJobExecutorClose = null;
+      return true;
+    }, rejectClose);
+    return record.authorizedJobExecutorClosePromise;
+  }
+
   function revokeSubmissionConfirmed(submissionId) {
     let result;
     try {
@@ -824,7 +981,9 @@ function createAssistantExecutionCoordinator(options = {}) {
 
   function removeRecord(record, reason, terminalStatus = null) {
     if (!authorityHealthy || clearing) return false;
-    if (record && (record.projectRootLeaseInUse || record.projectRootReleaseInProgress)) {
+    if (record && (record.projectRootLeaseInUse
+      || record.projectRootReleaseInProgress
+      || authorizedJobExecutorLifecycleActive(record))) {
       poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
       return false;
     }
@@ -846,11 +1005,16 @@ function createAssistantExecutionCoordinator(options = {}) {
   }
 
   async function removeExecutionRecord(record, reason, terminalStatus = null) {
-    if (!authorityHealthy || clearing) return false;
-    if (record && record.projectRootLeaseInUse) {
+    if (clearing || !record || recordsByJobId.get(record.jobId) !== record
+      || record.executionCleanupInProgress) return false;
+    if (record.projectRootLeaseInUse
+      || record.authorizedJobExecutorCreateInProgress) {
       poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
       return false;
     }
+    record.executionCleanupInProgress = true;
+    if (await closeAuthorizedJobExecutorConfirmed(record) !== true) return false;
+    if (!authorityHealthy) return false;
     if (!releaseBarrierConfirmed(record, reason, terminalStatus)) return false;
     if (await releaseProjectRootLeaseConfirmed(record) !== true) return false;
     if (!removeLocalRecord(record, reason)) return false;
@@ -1143,7 +1307,13 @@ function createAssistantExecutionCoordinator(options = {}) {
         projectRootLeaseInUse: false,
         projectRootReleaseInProgress: false,
         projectRootReleasePromise: null,
-        rootRevocationRequested: false,
+        authorizedJobExecutor: null,
+        authorizedJobExecutorClose: null,
+        authorizedJobExecutorCreateInProgress: false,
+        authorizedJobExecutorCloseInProgress: false,
+        authorizedJobExecutorClosePromise: null,
+        executionCleanupInProgress: false,
+        executionRevocationRequested: false,
       };
       if (!scopeIsCurrent(scope)) {
         revokeBindingConfirmed(binding);
@@ -1528,6 +1698,48 @@ function createAssistantExecutionCoordinator(options = {}) {
     });
   }
 
+  function prepareAuthorizedJobExecutor(record, observedGeneration, observedVersion) {
+    if (!authorizedJobExecutorEnabled) return Object.freeze({ ok: true });
+    if (record.authorizedJobExecutorCreateInProgress
+      || record.authorizedJobExecutor
+      || record.authorizedJobExecutorCloseInProgress
+      || record.authorizedJobExecutorClosePromise) {
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_RESOURCE_FAILED);
+    }
+
+    record.authorizedJobExecutorCreateInProgress = true;
+    let normalized = null;
+    try {
+      const created = createAuthorizedJobExecutor(Object.freeze({
+        binding: record.binding,
+      }));
+      if (util.types.isPromise(created)) {
+        consumeNativePromise(created);
+        throw new TypeError('createAuthorizedJobExecutor must be synchronous');
+      }
+      if (!isSynchronousResult(created)) {
+        throw new TypeError('createAuthorizedJobExecutor must be synchronous');
+      }
+      normalized = validateAuthorizedJobExecutor(created);
+    } catch {
+      normalized = null;
+    }
+    record.authorizedJobExecutorCreateInProgress = false;
+
+    if (!normalized) {
+      return deny(record.executionRevocationRequested
+        ? ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
+        : ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_RESOURCE_FAILED);
+    }
+    record.authorizedJobExecutor = normalized.executor;
+    record.authorizedJobExecutorClose = normalized.close;
+    if (!recordIsCurrent(record, observedGeneration, observedVersion, 'executing')
+      || record.executionRevocationRequested) {
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
+    }
+    return Object.freeze({ ok: true });
+  }
+
   async function finishProjectRootPreparation(record, code, terminalStatus = 'failed') {
     record.projectRootLeaseInUse = false;
     if (!authorityHealthy || !await failExecutionRecord(record, code, terminalStatus)) {
@@ -1590,7 +1802,7 @@ function createAssistantExecutionCoordinator(options = {}) {
         'project-root acquire'
       ));
     } catch {
-      const code = record.rootRevocationRequested
+      const code = record.executionRevocationRequested
         ? ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
         : ASSISTANT_EXECUTION_COORDINATOR_REASONS.PROJECT_ROOT_AUTHORITY_FAILED;
       return finishProjectRootPreparation(
@@ -1610,7 +1822,7 @@ function createAssistantExecutionCoordinator(options = {}) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
     }
     if (acquiredFields.get('ok') !== true) {
-      const code = record.rootRevocationRequested
+      const code = record.executionRevocationRequested
         ? ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
         : ASSISTANT_EXECUTION_COORDINATOR_REASONS.PROJECT_ROOT_AUTHORITY_FAILED;
       return finishProjectRootPreparation(
@@ -1639,7 +1851,7 @@ function createAssistantExecutionCoordinator(options = {}) {
       poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
     }
-    if (record.rootRevocationRequested) {
+    if (record.executionRevocationRequested) {
       return finishProjectRootPreparation(
         record,
         ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
@@ -1657,7 +1869,7 @@ function createAssistantExecutionCoordinator(options = {}) {
         rawRefresh,
         'refreshProjectFromRootLease'
       ));
-      if (record.rootRevocationRequested) {
+      if (record.executionRevocationRequested) {
         return finishProjectRootPreparation(
           record,
           ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
@@ -1754,12 +1966,42 @@ function createAssistantExecutionCoordinator(options = {}) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
     }
 
+    const preparedExecutor = prepareAuthorizedJobExecutor(
+      record,
+      observedGeneration,
+      observedVersion,
+    );
+    if (!preparedExecutor.ok) {
+      const terminalStatus = preparedExecutor.code
+        === ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
+        ? (record.terminalObserved || 'cancelled')
+        : 'failed';
+      if (!await failExecutionRecord(record, preparedExecutor.code, terminalStatus)) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      }
+      return preparedExecutor;
+    }
+
     const preparedRoot = await prepareProjectRootExecution(
       record,
       observedGeneration,
       observedVersion,
     );
     if (!preparedRoot.ok) return preparedRoot;
+    if (!recordIsCurrent(record, observedGeneration, observedVersion, 'executing')) {
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
+    }
+    if (record.executionRevocationRequested) {
+      const terminalStatus = record.terminalObserved || 'cancelled';
+      if (!await failExecutionRecord(
+        record,
+        ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+        terminalStatus,
+      )) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      }
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
+    }
 
     try {
       const output = await executeAction(
@@ -1774,7 +2016,7 @@ function createAssistantExecutionCoordinator(options = {}) {
         || record.state !== 'executing') {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
-      if (!projectRootAuthorityEnabled) {
+      if (!projectRootAuthorityEnabled && !authorizedJobExecutorEnabled) {
         record.state = 'executed';
         record.version += 1;
         record.abortController = null;
@@ -1790,17 +2032,17 @@ function createAssistantExecutionCoordinator(options = {}) {
       } catch {
         publicOutput = deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.OUTPUT_INVALID);
       }
-      const terminalStatus = record.rootRevocationRequested
+      const terminalStatus = record.executionRevocationRequested
         ? (record.terminalObserved || 'cancelled')
         : (record.terminalObserved
           || (isPlainRecord(publicOutput) && publicOutput.ok === false ? 'failed' : 'completed'));
-      const removalReason = record.rootRevocationRequested
+      const removalReason = record.executionRevocationRequested
         ? ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
         : 'job_terminal';
       if (!await removeExecutionRecord(record, removalReason, terminalStatus)) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
       }
-      if (record.rootRevocationRequested) {
+      if (record.executionRevocationRequested) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
       return publicOutput;
@@ -1809,13 +2051,15 @@ function createAssistantExecutionCoordinator(options = {}) {
       if (!recordIsCurrent(record, observedGeneration, observedVersion, 'executing')) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
-      const failureCode = record.rootRevocationRequested
+      const failureCode = record.executionRevocationRequested
         ? ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
         : ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_FAILED;
       if (!await failExecutionRecord(
         record,
         failureCode,
-        record.rootRevocationRequested ? (record.terminalObserved || 'cancelled') : 'failed',
+        record.executionRevocationRequested
+          ? (record.terminalObserved || 'cancelled')
+          : 'failed',
       )) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
       }
@@ -1839,8 +2083,8 @@ function createAssistantExecutionCoordinator(options = {}) {
     if (!record || TERMINAL_RECORD_STATES.has(record.state)) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.JOB_NOT_FOUND);
     }
-    if (record.state === 'executing' && projectRootLifecycleActive(record)) {
-      deferProjectRootRevocation(record, 'cancelled');
+    if (record.state === 'executing' && executionLifecycleActive(record)) {
+      deferExecutionRevocation(record, 'cancelled');
       return Object.freeze({ ok: true, revoked: false, deferred: true });
     }
     if (!removeRecord(record, ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED)) {
@@ -1868,15 +2112,15 @@ function createAssistantExecutionCoordinator(options = {}) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY);
     }
     if (!record) return Object.freeze({ ok: true, revoked: false, idempotent: true });
-    const rootExecutionActive = record.state === 'executing'
-      && projectRootLifecycleActive(record);
+    const executionActive = record.state === 'executing'
+      && executionLifecycleActive(record);
     const deferTerminal = (record.state === 'planning' && status === 'completed')
       || (record.state === 'executing' && ['completed', 'failed', 'cancelled'].includes(status))
-      || rootExecutionActive;
+      || executionActive;
     if (deferTerminal) {
       if (record.terminalObserved && record.terminalObserved !== status) {
-        if (rootExecutionActive) {
-          deferProjectRootRevocation(record, 'cancelled');
+        if (executionActive) {
+          deferExecutionRevocation(record, 'cancelled');
           return Object.freeze({ ok: true, revoked: false, deferred: true, idempotent: false });
         }
         if (!removeRecord(record, 'job_terminal_conflict', null)) {
@@ -1885,8 +2129,8 @@ function createAssistantExecutionCoordinator(options = {}) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
       const idempotent = record.terminalObserved === status;
-      if (rootExecutionActive && ['cancelled', 'runtime_interrupted'].includes(status)) {
-        deferProjectRootRevocation(record, status);
+      if (executionActive && ['cancelled', 'runtime_interrupted'].includes(status)) {
+        deferExecutionRevocation(record, status);
       } else {
         record.terminalObserved = status;
       }
@@ -1901,9 +2145,9 @@ function createAssistantExecutionCoordinator(options = {}) {
   function clear() {
     if (!authorityHealthy) return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY);
     if (clearing) return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY);
-    const draining = [...recordsByJobId.values()].filter(projectRootLifecycleActive);
+    const draining = [...recordsByJobId.values()].filter(executionLifecycleActive);
     if (draining.length > 0) {
-      for (const record of draining) deferProjectRootRevocation(record, 'cancelled');
+      for (const record of draining) deferExecutionRevocation(record, 'cancelled');
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING);
     }
     clearing = true;

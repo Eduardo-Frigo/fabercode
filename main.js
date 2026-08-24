@@ -219,6 +219,9 @@ const {
 const {
   createExecutionIsolationRuntimeServices,
 } = require('./main/services/execution_isolation_runtime_services');
+const {
+  createExecutionIsolationAuthorizedJobExecutor,
+} = require('./main/services/execution_isolation_authorized_job_executor');
 const { createAttachmentContextService } = require('./main/runtime/attachment_context');
 const {
   createAnchoredMutationRuntimeConfig,
@@ -6855,6 +6858,7 @@ app.whenReady().then(async () => {
       getProjectAccess().normalizeProjectInfo(projectInfo, options)
     ),
   });
+  const assistantExecutionIsolationRuntimeServices = executionIsolationRuntimeServices;
   const assistantExecutionCoordinator = createAssistantExecutionCoordinator({
     authorityService: assistantJobAuthorityService,
     maxActiveJobs: MAX_JOBS_STORED,
@@ -6863,6 +6867,16 @@ app.whenReady().then(async () => {
     bindJobActionDigest,
     createActionDigest,
     createAuthorizedAssistantJob,
+    createAuthorizedJobExecutor: ({ binding }) => {
+      if (!assistantExecutionIsolationRuntimeServices) {
+        throw new TypeError('Execution isolation runtime services unavailable');
+      }
+      return createExecutionIsolationAuthorizedJobExecutor({
+        binding,
+        authorityService: assistantJobAuthorityService,
+        jobSessionService: assistantExecutionIsolationRuntimeServices.jobSessionService,
+      });
+    },
     executeAction: (action, projectInfo, executionContext) => (
       harnessRouter.execute(action, projectInfo, executionContext)
     ),

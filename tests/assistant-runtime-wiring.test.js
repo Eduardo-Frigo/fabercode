@@ -118,6 +118,12 @@ assert.ok(
   'assistant-originated project processes must stay suspended until the portable sandbox exists'
 );
 assert.ok(
+  mainSource.includes(
+    "require('./main/services/execution_isolation_authorized_job_executor')"
+  ),
+  'production must compose the authority-bound sandbox executor'
+);
+assert.ok(
   legacyExecuteSource.includes('processExecutionPolicy: ASSISTANT_PROCESS_EXECUTION_POLICY'),
   'staged assistant execution must receive the non-forgeable suspended process policy'
 );
@@ -152,6 +158,55 @@ assert.ok(
 assert.ok(
   mainSource.includes('automaticGitDiffCollectionAllowed: false'),
   'automatic files-tree refresh must not execute repository-controlled Git diff callbacks'
+);
+
+const coordinatedExecuteStart = coordinatorSource.indexOf('async function execute(input = {}) {');
+const coordinatedExecuteEnd = coordinatorSource.indexOf(
+  'function revokeJob(input = {}) {',
+  coordinatedExecuteStart
+);
+assert.ok(
+  coordinatedExecuteStart >= 0 && coordinatedExecuteEnd > coordinatedExecuteStart,
+  'missing coordinated execute function'
+);
+const coordinatedExecuteSource = coordinatorSource.slice(
+  coordinatedExecuteStart,
+  coordinatedExecuteEnd
+);
+assertInOrder(
+  coordinatedExecuteSource,
+  [
+    'authorityService.authorizeExecute({',
+    "authorizationFields.get('actionDigest')",
+    'prepareAuthorizedJobExecutor(',
+    'prepareProjectRootExecution(',
+    'executeAction(',
+  ],
+  'the job executor must be created only after exact action authorization and before runtime entry'
+);
+const privateExecutionContextSource = extractFunctionDeclaration(
+  coordinatorSource,
+  'createPrivateExecutionContext'
+);
+assert.ok(
+  privateExecutionContextSource.includes("Object.defineProperty(context, 'sandboxExecutor'")
+    && privateExecutionContextSource.includes('enumerable: false'),
+  'the authority-bound sandbox executor must reach runtime only through private context'
+);
+const executionRemovalSource = extractFunctionDeclaration(
+  coordinatorSource,
+  'removeExecutionRecord'
+);
+assertInOrder(
+  executionRemovalSource,
+  [
+    'closeAuthorizedJobExecutorConfirmed(record)',
+    'releaseBarrierConfirmed(record',
+    'releaseProjectRootLeaseConfirmed(record)',
+    'removeLocalRecord(record',
+    'revokeBindingConfirmed(record.binding)',
+  ],
+  'executor cleanup must be confirmed before delete/root barriers and authority revocation'
 );
 
 assertInOrder(
@@ -204,9 +259,15 @@ assertInOrder(
     'mutationBackend: agenticDeleteMutationBackend,',
     'agenticDeleteRuntimeServiceInstance = agenticDeleteRuntimeService;',
     'const assistantPlanningAuthorizer = createAssistantPlanningAuthorizer({',
+    'const assistantExecutionIsolationRuntimeServices = executionIsolationRuntimeServices;',
     'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
     'maxActiveJobs: MAX_JOBS_STORED,',
     'beforeAuthorityRelease: beforeAgenticDeleteAuthorityRelease,',
+    'createAuthorizedJobExecutor: ({ binding }) => {',
+    'if (!assistantExecutionIsolationRuntimeServices) {',
+    'return createExecutionIsolationAuthorizedJobExecutor({',
+    'authorityService: assistantJobAuthorityService,',
+    'jobSessionService: assistantExecutionIsolationRuntimeServices.jobSessionService,',
     'harnessRouter.execute(action, projectInfo, executionContext)',
     'assistantExecutionCoordinatorInstance = assistantExecutionCoordinator;',
     'const assistantRuntime = createAssistantRuntimeFacade({',

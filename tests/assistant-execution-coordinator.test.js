@@ -10,6 +10,10 @@ const {
   createActionDigest,
   createAssistantJobAuthorityService,
 } = require('../main/services/assistant_job_authority_service');
+const {
+  EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION,
+  EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
+} = require('../main/services/execution_isolation_authorized_job_executor');
 
 function sequenceFactory(prefix) {
   let sequence = 0;
@@ -37,6 +41,7 @@ function project(id) {
 function createHarness({
   maxActiveJobs = 8,
   executeAction: executeOverride = null,
+  createAuthorizedJobExecutor = null,
   hooks = {},
 } = {}) {
   const jobs = new Map();
@@ -209,6 +214,9 @@ function createHarness({
     bindJobActionDigest,
     createActionDigest: digestAction,
     createAuthorizedAssistantJob,
+    ...(createAuthorizedJobExecutor
+      ? { createAuthorizedJobExecutor }
+      : {}),
     executeAction: executeOverride || defaultExecute,
     maxActiveJobs,
     ...(hooks.omitBeforeAuthorityRelease === true
@@ -319,6 +327,11 @@ async function createRetryWaitingJob(
 }
 
 async function run() {
+  assert.throws(
+    () => createHarness({ createAuthorizedJobExecutor: {} }),
+    /createAuthorizedJobExecutor must be a function when supplied/,
+  );
+
   // Planning creates authority late, replaces forged ids/roots, and binds the
   // main-generated root into the exact action digest.
   const basic = createHarness();
@@ -480,6 +493,331 @@ async function run() {
     createJob(basic.coordinator).code,
     ASSISTANT_EXECUTION_COORDINATOR_REASONS.NO_PLANNING_SCOPE,
   );
+
+  // The job-owned sandbox executor is created only after exact execution
+  // authorization, reaches the runtime through a private context field, and
+  // closes before every broader lifecycle release.
+  const isolatedEvents = [];
+  let isolatedExecutor = null;
+  let isolatedExecutionContext = null;
+  let isolatedFactoryBinding = null;
+  const isolated = createHarness({
+    createAuthorizedJobExecutor(input) {
+      isolatedEvents.push('executor_create');
+      assert.strictEqual(Object.isFrozen(input), true);
+      assert.deepStrictEqual(Object.keys(input), ['binding']);
+      assert.strictEqual(Object.isFrozen(input.binding), true);
+      isolatedFactoryBinding = input.binding;
+      isolatedExecutor = Object.freeze({
+        version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
+        execute() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
+        close() {
+          isolatedEvents.push('executor_close');
+          return Promise.resolve(Object.freeze({
+            version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION,
+            ok: true,
+            closed: true,
+            sessionClosed: false,
+          }));
+        },
+        diagnostics() {
+          return Object.freeze({ state: 'ready' });
+        },
+      });
+      return isolatedExecutor;
+    },
+    executeAction: async (action, projectInfo, context) => {
+      isolatedEvents.push('execute_action');
+      isolatedExecutionContext = context;
+      return { ok: true, isolated: true };
+    },
+    hooks: {
+      onAuthorizeExecute() {
+        isolatedEvents.push('authorize_execute');
+      },
+      beforeAuthorityRelease() {
+        isolatedEvents.push('release_barrier');
+        return { ok: true };
+      },
+      revokeExact({ baseAuthorityService, input }) {
+        isolatedEvents.push('authority_revoke');
+        return baseAuthorityService.revokeExact(input);
+      },
+    },
+  });
+  const isolatedJobId = await createReadyJob(isolated, 'isolated-resource');
+  const isolatedResult = await isolated.coordinator.execute({ jobId: isolatedJobId });
+  assert.deepStrictEqual(isolatedResult, { ok: true, isolated: true });
+  assert.strictEqual(isolatedExecutionContext.authorityBinding, isolatedFactoryBinding);
+  assert.strictEqual(isolatedExecutionContext.sandboxExecutor, isolatedExecutor);
+  assert.deepStrictEqual(
+    Object.getOwnPropertyDescriptor(isolatedExecutionContext, 'sandboxExecutor'),
+    {
+      configurable: false,
+      enumerable: false,
+      value: isolatedExecutor,
+      writable: false,
+    },
+  );
+  assert.deepStrictEqual(
+    Object.keys(isolatedExecutionContext).sort(),
+    ['jobId', 'requestedMode', 'signal'],
+  );
+  assert.deepStrictEqual(isolatedEvents, [
+    'authorize_execute',
+    'executor_create',
+    'execute_action',
+    'executor_close',
+    'release_barrier',
+    'authority_revoke',
+  ]);
+
+  // Cancellation at the async frontier after executor creation closes the
+  // resource immediately and fences executeAction from starting with stale
+  // authority.
+  let frontierExecutions = 0;
+  let frontierCloseCalls = 0;
+  const frontierCancellation = createHarness({
+    createAuthorizedJobExecutor() {
+      return Object.freeze({
+        version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
+        execute() {
+          return Promise.reject(new Error('stale executor must not run'));
+        },
+        close() {
+          frontierCloseCalls += 1;
+          return Promise.resolve(Object.freeze({
+            version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION,
+            ok: true,
+            closed: true,
+            sessionClosed: false,
+          }));
+        },
+        diagnostics() {
+          return Object.freeze({ state: 'ready' });
+        },
+      });
+    },
+    executeAction: async () => {
+      frontierExecutions += 1;
+      return { ok: true, stale: true };
+    },
+  });
+  const frontierJobId = await createReadyJob(
+    frontierCancellation,
+    'isolated-frontier-cancellation',
+  );
+  const frontierExecution = frontierCancellation.coordinator.execute({
+    jobId: frontierJobId,
+  });
+  assert.deepStrictEqual(
+    frontierCancellation.coordinator.revokeJob({ jobId: frontierJobId }),
+    { ok: true, revoked: false, deferred: true },
+  );
+  assert.strictEqual(frontierCloseCalls, 1);
+  assert.strictEqual(
+    (await frontierExecution).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+  );
+  assert.strictEqual(frontierExecutions, 0);
+  assert.strictEqual(frontierCancellation.calls.authorityRevocations.length, 1);
+  assert.strictEqual(frontierCancellation.coordinator.diagnostics().activeJobs, 0);
+
+  // Once cancellation has closed the executor, the broader job authority still
+  // drains until executeAction unwinds; repeated cancellation and clear cannot
+  // bypass that remaining runtime frontier.
+  const activeActionStarted = deferred();
+  const activeActionGate = deferred();
+  let activeCancellationSignal = null;
+  const activeCancellation = createHarness({
+    createAuthorizedJobExecutor() {
+      return Object.freeze({
+        version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
+        execute() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
+        close() {
+          return Promise.resolve(Object.freeze({
+            version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION,
+            ok: true,
+            closed: true,
+            sessionClosed: false,
+          }));
+        },
+        diagnostics() {
+          return Object.freeze({ state: 'active' });
+        },
+      });
+    },
+    executeAction: async (action, projectInfo, context) => {
+      activeCancellationSignal = context.signal;
+      activeActionStarted.resolve();
+      await activeActionGate.promise;
+      return { ok: true, stale: true };
+    },
+  });
+  const activeCancellationJobId = await createReadyJob(
+    activeCancellation,
+    'isolated-active-cancellation',
+  );
+  const activeCancellationExecution = activeCancellation.coordinator.execute({
+    jobId: activeCancellationJobId,
+  });
+  await activeActionStarted.promise;
+  assert.deepStrictEqual(
+    activeCancellation.coordinator.revokeJob({ jobId: activeCancellationJobId }),
+    { ok: true, revoked: false, deferred: true },
+  );
+  assert.strictEqual(activeCancellationSignal.aborted, true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepStrictEqual(
+    activeCancellation.coordinator.revokeJob({ jobId: activeCancellationJobId }),
+    { ok: true, revoked: false, deferred: true },
+  );
+  assert.strictEqual(activeCancellation.calls.authorityRevocations.length, 0);
+  assert.strictEqual(
+    activeCancellation.coordinator.clear().code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING,
+  );
+  activeActionGate.resolve();
+  assert.strictEqual(
+    (await activeCancellationExecution).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+  );
+  assert.strictEqual(activeCancellation.calls.authorityRevocations.length, 1);
+
+  // Cancellation while resource cleanup is pending is deferred. No release
+  // barrier or authority revocation may overtake the confirmed executor close.
+  const closeStarted = deferred();
+  const closeGate = deferred();
+  const drainEvents = [];
+  let drainingSignal = null;
+  const draining = createHarness({
+    createAuthorizedJobExecutor() {
+      return Object.freeze({
+        version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
+        execute() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
+        close() {
+          drainEvents.push('executor_close_started');
+          closeStarted.resolve();
+          return closeGate.promise.then((receipt) => {
+            drainEvents.push('executor_close_confirmed');
+            return receipt;
+          });
+        },
+        diagnostics() {
+          return Object.freeze({ state: 'closing' });
+        },
+      });
+    },
+    executeAction: async (action, projectInfo, context) => {
+      drainingSignal = context.signal;
+      return { ok: true, stale: true };
+    },
+    hooks: {
+      beforeAuthorityRelease() {
+        drainEvents.push('release_barrier');
+        return { ok: true };
+      },
+      revokeExact({ baseAuthorityService, input }) {
+        drainEvents.push('authority_revoke');
+        return baseAuthorityService.revokeExact(input);
+      },
+    },
+  });
+  const drainingJobId = await createReadyJob(draining, 'isolated-drain');
+  const drainingExecution = draining.coordinator.execute({ jobId: drainingJobId });
+  await closeStarted.promise;
+  assert.deepStrictEqual(draining.coordinator.revokeJob({ jobId: drainingJobId }), {
+    ok: true,
+    revoked: false,
+    deferred: true,
+  });
+  assert.strictEqual(drainingSignal.aborted, true);
+  assert.strictEqual(
+    draining.coordinator.clear().code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING,
+  );
+  assert.strictEqual(draining.calls.lifecycleReleases.length, 0);
+  assert.strictEqual(draining.calls.authorityRevocations.length, 0);
+  closeGate.resolve(Object.freeze({
+    version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION,
+    ok: true,
+    closed: true,
+    sessionClosed: false,
+  }));
+  assert.strictEqual(
+    (await drainingExecution).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+  );
+  assert.deepStrictEqual(drainEvents, [
+    'executor_close_started',
+    'executor_close_confirmed',
+    'release_barrier',
+    'authority_revoke',
+  ]);
+  assert.strictEqual(draining.coordinator.diagnostics().activeJobs, 0);
+
+  // A malformed close receipt quarantines the lifecycle: broader authority is
+  // retained and the coordinator becomes unhealthy instead of claiming cleanup.
+  const closeFailure = createHarness({
+    createAuthorizedJobExecutor() {
+      return Object.freeze({
+        version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
+        execute() {
+          return Promise.reject(new Error('not exercised by this lifecycle test'));
+        },
+        close() {
+          return Promise.resolve(Object.freeze({
+            version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION,
+            ok: false,
+            closed: false,
+            sessionClosed: false,
+          }));
+        },
+        diagnostics() {
+          return Object.freeze({ state: 'quarantined' });
+        },
+      });
+    },
+    executeAction: async () => ({ ok: true }),
+  });
+  const closeFailureJobId = await createReadyJob(closeFailure, 'isolated-close-failure');
+  assert.strictEqual(
+    (await closeFailure.coordinator.execute({ jobId: closeFailureJobId })).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED,
+  );
+  assert.strictEqual(closeFailure.calls.lifecycleReleases.length, 0);
+  assert.strictEqual(closeFailure.calls.authorityRevocations.length, 0);
+  assert.strictEqual(closeFailure.coordinator.diagnostics().activeJobs, 1);
+  assert.strictEqual(closeFailure.coordinator.diagnostics().authorityHealthy, false);
+
+  // An async factory violates the synchronous authority frontier. Its native
+  // rejection is absorbed, no runtime effect starts, and the unused binding is
+  // still released through the normal barrier.
+  let asyncFactoryExecutions = 0;
+  const asyncFactory = createHarness({
+    createAuthorizedJobExecutor: async () => {
+      throw new Error('async factory is forbidden');
+    },
+    executeAction: async () => {
+      asyncFactoryExecutions += 1;
+      return { ok: true };
+    },
+  });
+  const asyncFactoryJobId = await createReadyJob(asyncFactory, 'async-executor-factory');
+  assert.strictEqual(
+    (await asyncFactory.coordinator.execute({ jobId: asyncFactoryJobId })).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_RESOURCE_FAILED,
+  );
+  assert.strictEqual(asyncFactoryExecutions, 0);
+  assert.strictEqual(asyncFactory.calls.lifecycleReleases.length, 1);
+  assert.strictEqual(asyncFactory.calls.authorityRevocations.length, 1);
+  assert.strictEqual(asyncFactory.coordinator.diagnostics().activeJobs, 0);
 
   // AsyncLocalStorage keeps concurrent projects isolated even when the planner
   // creates jobs after interleaved awaits.
