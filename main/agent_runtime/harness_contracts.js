@@ -1,5 +1,9 @@
 'use strict';
 
+const {
+  assertContextPackManifest,
+} = require('./context_pack_contracts');
+
 const HARNESS_CONTRACT_VERSION = 'harness.v1';
 const HARNESS_REQUEST_SCHEMA_VERSION = 'harness.request.v1';
 const HARNESS_RESULT_SCHEMA_VERSION = 'harness.result.v1';
@@ -83,11 +87,31 @@ function createHarnessResult({
   });
 }
 
+function readOwnContextPack(request) {
+  if (!Object.prototype.hasOwnProperty.call(request, 'contextPack')) return null;
+  let descriptor;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(request, 'contextPack');
+  } catch {
+    return false;
+  }
+  if (!descriptor || descriptor.enumerable !== true
+    || !Object.hasOwn(descriptor, 'value')) return false;
+  try {
+    const contextPack = assertContextPackManifest(descriptor.value);
+    return contextPack.requestId === request.requestId ? contextPack : false;
+  } catch {
+    return false;
+  }
+}
+
 function isHarnessRequest(request) {
   if (!request || typeof request !== 'object') return false;
   if (request.schemaVersion !== HARNESS_REQUEST_SCHEMA_VERSION) return false;
   if (typeof request.requestId !== 'string' || !request.requestId.trim()) return false;
   if (!SUPPORTED_OPERATIONS.has(request.operation)) return false;
+  const contextPack = readOwnContextPack(request);
+  if (contextPack === false) return false;
 
   if (request.operation === HARNESS_OPERATIONS.EXECUTE) {
     const hasOwn = Object.prototype.hasOwnProperty;
@@ -103,6 +127,24 @@ function isHarnessRequest(request) {
   return Object.prototype.hasOwnProperty.call(request, 'payload');
 }
 
+function attachContextPackToHarnessRequest(request, contextPack) {
+  assertHarnessRequest(request);
+  if (!Object.isFrozen(request)) {
+    throw new TypeError('Harness request must be frozen before ContextPack injection');
+  }
+  if (Object.prototype.hasOwnProperty.call(request, 'contextPack')) {
+    throw new TypeError('Harness request already carries a ContextPack');
+  }
+  const manifest = assertContextPackManifest(contextPack);
+  if (manifest.requestId !== request.requestId) {
+    throw new TypeError('ContextPack requestId does not match the Harness request');
+  }
+  return Object.freeze({
+    ...request,
+    contextPack: manifest,
+  });
+}
+
 function assertHarnessRequest(request) {
   if (!isHarnessRequest(request)) {
     throw new TypeError('Invalid harness request');
@@ -115,6 +157,7 @@ module.exports = {
   HARNESS_OPERATIONS,
   HARNESS_REQUEST_SCHEMA_VERSION,
   HARNESS_RESULT_SCHEMA_VERSION,
+  attachContextPackToHarnessRequest,
   assertHarnessRequest,
   createExecuteRequest,
   createHarnessRequest,

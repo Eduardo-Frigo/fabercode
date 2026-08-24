@@ -48,7 +48,9 @@ class LegacyKernelAdapter extends AgentKernel {
 
   async plan(request) {
     assertRequestOperation(request, HARNESS_OPERATIONS.PLAN);
-    const output = await this.legacyPlan(request.payload);
+    const output = Object.prototype.hasOwnProperty.call(request, 'contextPack')
+      ? await this.legacyPlan(request.payload, request.contextPack)
+      : await this.legacyPlan(request.payload);
     return createHarnessResult({
       requestId: request.requestId,
       operation: request.operation,
@@ -60,7 +62,9 @@ class LegacyKernelAdapter extends AgentKernel {
 
   async message(request) {
     assertRequestOperation(request, HARNESS_OPERATIONS.MESSAGE);
-    const output = await this.legacyMessage(request.payload);
+    const output = Object.prototype.hasOwnProperty.call(request, 'contextPack')
+      ? await this.legacyMessage(request.payload, request.contextPack)
+      : await this.legacyMessage(request.payload);
     return createHarnessResult({
       requestId: request.requestId,
       operation: request.operation,
@@ -75,11 +79,18 @@ class LegacyKernelAdapter extends AgentKernel {
     const executionContext = Object.prototype.hasOwnProperty.call(request, 'executionContext')
       ? request.executionContext
       : undefined;
-    const output = await this.legacyExecute(
-      request.action,
-      request.projectInfo,
-      executionContext
-    );
+    const output = Object.prototype.hasOwnProperty.call(request, 'contextPack')
+      ? await this.legacyExecute(
+        request.action,
+        request.projectInfo,
+        executionContext,
+        request.contextPack
+      )
+      : await this.legacyExecute(
+        request.action,
+        request.projectInfo,
+        executionContext
+      );
     return createHarnessResult({
       requestId: request.requestId,
       operation: request.operation,

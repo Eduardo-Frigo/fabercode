@@ -4,6 +4,9 @@ const crypto = require('crypto');
 
 const { assertAgentKernel } = require('./agent_kernel');
 const {
+  assertContextPackHarnessInjector,
+} = require('./context_pack_harness_injector');
+const {
   HARNESS_OPERATIONS,
   HARNESS_RESULT_SCHEMA_VERSION,
   assertHarnessRequest,
@@ -63,6 +66,7 @@ function getKernelDiagnostics(kernel) {
 }
 
 function createHarnessRouter({
+  contextPackInjector = null,
   legacyKernel,
   runtimeConfig = null,
   requestIdFactory = defaultRequestIdFactory,
@@ -71,25 +75,38 @@ function createHarnessRouter({
   if (typeof requestIdFactory !== 'function') {
     throw new Error('Harness router dependency missing: requestIdFactory');
   }
+  const resolvedContextPackInjector = contextPackInjector === null
+    ? null
+    : assertContextPackHarnessInjector(contextPackInjector);
 
   const resolvedRuntimeConfig = resolveRuntimeConfig(runtimeConfig);
   const legacyMode = 'legacy';
 
   async function dispatch(request) {
     assertHarnessRequest(request);
-
-    let result;
-    if (request.operation === HARNESS_OPERATIONS.PLAN) {
-      result = await legacyKernel.plan(request);
-    } else if (request.operation === HARNESS_OPERATIONS.MESSAGE) {
-      result = await legacyKernel.message(request);
-    } else if (request.operation === HARNESS_OPERATIONS.EXECUTE) {
-      result = await legacyKernel.execute(request);
-    } else {
-      throw new Error(`Harness operation not supported: ${request.operation}`);
+    const kernelRequest = resolvedContextPackInjector
+      ? await resolvedContextPackInjector.inject(request)
+      : request;
+    assertHarnessRequest(kernelRequest);
+    if (resolvedContextPackInjector
+      && (!Object.prototype.hasOwnProperty.call(kernelRequest, 'contextPack')
+        || kernelRequest.requestId !== request.requestId
+        || kernelRequest.operation !== request.operation)) {
+      throw new Error('ContextPack injector returned a mismatched Harness request.');
     }
 
-    assertKernelResult(result, request, legacyKernel);
+    let result;
+    if (kernelRequest.operation === HARNESS_OPERATIONS.PLAN) {
+      result = await legacyKernel.plan(kernelRequest);
+    } else if (kernelRequest.operation === HARNESS_OPERATIONS.MESSAGE) {
+      result = await legacyKernel.message(kernelRequest);
+    } else if (kernelRequest.operation === HARNESS_OPERATIONS.EXECUTE) {
+      result = await legacyKernel.execute(kernelRequest);
+    } else {
+      throw new Error(`Harness operation not supported: ${kernelRequest.operation}`);
+    }
+
+    assertKernelResult(result, kernelRequest, legacyKernel);
     return result.output;
   }
 
