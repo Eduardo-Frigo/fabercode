@@ -130,6 +130,9 @@ const {
   assertContextPackPromptProjection,
   createContextPackPromptProjector,
 } = require('./main/services/context_pack_prompt_projection');
+const {
+  createContextPackHarnessProductionService,
+} = require('./main/services/context_pack_harness_production_service');
 const { createCssRuntimeRepairService } = require('./main/services/css_runtime_repair_service');
 const {
   buildCortexPexelsContractFromPersonaBrief,
@@ -6892,7 +6895,28 @@ app.whenReady().then(async () => {
     message: handleLegacyHarnessMessage,
     execute: handleLegacyHarnessExecute,
   });
+  const contextPackHarnessProductionService = createContextPackHarnessProductionService({
+    authorizeProjectBinding: (projectId, rootPath) => (
+      getProjectAccess().authorizeProjectBinding(projectId, rootPath)
+    ),
+    authorizeExecutionBinding: (binding) => (
+      assistantJobAuthorityServiceInstance
+        ? assistantJobAuthorityServiceInstance.authorizeProjectRootLease(binding)
+        : Object.freeze({ authorized: false })
+    ),
+    getProjectRootAuthorityRegistry: () => (
+      executionIsolationRuntimeServices
+        ? executionIsolationRuntimeServices.projectRootAuthorityRegistry
+        : null
+    ),
+    getActiveMemory: (input) => resolveActiveMemoryContext(input),
+    applicationMapService,
+    milestoneService,
+    gitService: projectGitService,
+    kernelId: legacyHarnessKernel.id,
+  });
   const harnessRouter = createHarnessRouter({
+    contextPackInjector: contextPackHarnessProductionService.contextPackInjector,
     legacyKernel: legacyHarnessKernel,
     runtimeConfig: createHarnessRuntimeConfig({ env: process.env }),
   });
