@@ -6287,6 +6287,18 @@ app.whenReady().then(async () => {
             value: () => gitReadRoute.readStatus(),
             writable: false,
           });
+          Object.defineProperty(agenticExecutionOptions, 'readGitHead', {
+            configurable: false,
+            enumerable: false,
+            value: () => gitReadRoute.readHead(),
+            writable: false,
+          });
+          Object.defineProperty(agenticExecutionOptions, 'readGitDiff', {
+            configurable: false,
+            enumerable: false,
+            value: () => gitReadRoute.readDiff(),
+            writable: false,
+          });
         }
         if (processRoute) {
           Object.defineProperty(agenticExecutionOptions, 'executeProcess', {

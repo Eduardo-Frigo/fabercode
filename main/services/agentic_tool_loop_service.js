@@ -99,11 +99,15 @@ const DOMAIN_READ_FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototy
 const DOMAIN_READ_MAX_NODES = 50_000;
 const DOMAIN_READ_MAX_DEPTH = 32;
 const DOMAIN_READ_MAX_STRING_BYTES = 2 * 1024 * 1024;
-const GIT_STATUS_SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,79}$/;
+const GIT_READ_SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,79}$/;
 const GIT_STATUS_FORMAT = 'git-status-porcelain-v1';
+const GIT_HEAD_FORMAT = 'git-head-v1';
+const GIT_DIFF_FORMAT = 'git-diff-v1';
+const GIT_HEAD_OID_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const GIT_STATUS_MAX_ENTRIES = 10_000;
 const GIT_STATUS_MAX_PATH_BYTES = 8 * 1024;
 const GIT_STATUS_MAX_PUBLIC_BYTES = 256 * 1024;
+const GIT_DIFF_MAX_PUBLIC_BYTES = 256 * 1024;
 const GIT_STATUS_CONFLICT_STATES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
 
 function ownDataValue(record, key) {
@@ -861,7 +865,7 @@ function failedGitStatusToolResult(raw, fallbackCode = 'GIT_STATUS_OPERATION_FAI
   const rawCode = ownDataValue(rawOutput, 'code')
     || ownDataValue(rawError, 'code')
     || ownDataValue(raw, 'code');
-  const code = typeof rawCode === 'string' && GIT_STATUS_SAFE_ERROR_CODE.test(rawCode)
+  const code = typeof rawCode === 'string' && GIT_READ_SAFE_ERROR_CODE.test(rawCode)
     ? rawCode
     : fallbackCode;
   return Object.freeze({
@@ -907,7 +911,7 @@ function sanitizeGitStatusToolResult(raw) {
       if (!failureFields
         || failureFields.get('format') !== GIT_STATUS_FORMAT
         || typeof failureFields.get('code') !== 'string'
-        || !GIT_STATUS_SAFE_ERROR_CODE.test(failureFields.get('code'))) {
+        || !GIT_READ_SAFE_ERROR_CODE.test(failureFields.get('code'))) {
         return failedGitStatusToolResult(raw, 'GIT_STATUS_INVALID_RESULT');
       }
       return failedGitStatusToolResult(raw);
@@ -995,6 +999,151 @@ function sanitizeGitStatusToolResult(raw) {
     });
   } catch {
     return failedGitStatusToolResult(raw, 'GIT_STATUS_INVALID_RESULT');
+  }
+}
+
+function failedGitHeadToolResult(raw, fallbackCode = 'GIT_HEAD_OPERATION_FAILED') {
+  const rawOutput = ownDataValue(raw, 'output');
+  const rawError = ownDataValue(raw, 'error');
+  const rawCode = ownDataValue(rawOutput, 'code')
+    || ownDataValue(rawError, 'code')
+    || ownDataValue(raw, 'code');
+  const code = typeof rawCode === 'string' && GIT_READ_SAFE_ERROR_CODE.test(rawCode)
+    ? rawCode
+    : fallbackCode;
+  return Object.freeze({
+    ok: false,
+    status: ownDataValue(raw, 'status') === 'denied' ? 'denied' : 'failed',
+    message: 'O HEAD Git governado foi negado ou não pôde ser lido.',
+    errors: Object.freeze([code]),
+    modifiedFiles: Object.freeze([]),
+    data: null,
+  });
+}
+
+function sanitizeGitHeadToolResult(raw) {
+  try {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)
+      || util.types.isProxy(raw)
+      || (Object.getPrototypeOf(raw) !== Object.prototype
+        && Object.getPrototypeOf(raw) !== null)
+      || ownDataValue(raw, 'status') !== 'completed'
+      || ownDataValue(raw, 'decision') !== 'allow') {
+      return failedGitHeadToolResult(raw);
+    }
+    const output = ownDataValue(raw, 'output');
+    const outputOk = ownDataValue(output, 'ok');
+    if (outputOk === false) {
+      const failureFields = exactPlainDataFields(output, ['ok', 'code', 'format']);
+      if (!failureFields
+        || failureFields.get('format') !== GIT_HEAD_FORMAT
+        || typeof failureFields.get('code') !== 'string'
+        || !GIT_READ_SAFE_ERROR_CODE.test(failureFields.get('code'))) {
+        return failedGitHeadToolResult(raw, 'GIT_HEAD_INVALID_RESULT');
+      }
+      return failedGitHeadToolResult(raw);
+    }
+    const fields = exactPlainDataFields(output, ['ok', 'format', 'oid']);
+    if (!fields || fields.get('ok') !== true
+      || fields.get('format') !== GIT_HEAD_FORMAT
+      || typeof fields.get('oid') !== 'string'
+      || !GIT_HEAD_OID_PATTERN.test(fields.get('oid'))) {
+      return failedGitHeadToolResult(raw, 'GIT_HEAD_INVALID_RESULT');
+    }
+    return Object.freeze({
+      ok: true,
+      status: 'completed',
+      message: 'HEAD Git lido por uma capacidade fixa e read-only no sandbox do job.',
+      errors: Object.freeze([]),
+      modifiedFiles: Object.freeze([]),
+      data: Object.freeze({
+        ok: true,
+        format: GIT_HEAD_FORMAT,
+        oid: fields.get('oid'),
+      }),
+    });
+  } catch {
+    return failedGitHeadToolResult(raw, 'GIT_HEAD_INVALID_RESULT');
+  }
+}
+
+function failedGitDiffToolResult(raw, fallbackCode = 'GIT_DIFF_OPERATION_FAILED') {
+  const rawOutput = ownDataValue(raw, 'output');
+  const rawError = ownDataValue(raw, 'error');
+  const rawCode = ownDataValue(rawOutput, 'code')
+    || ownDataValue(rawError, 'code')
+    || ownDataValue(raw, 'code');
+  const code = typeof rawCode === 'string' && GIT_READ_SAFE_ERROR_CODE.test(rawCode)
+    ? rawCode
+    : fallbackCode;
+  return Object.freeze({
+    ok: false,
+    status: ownDataValue(raw, 'status') === 'denied' ? 'denied' : 'failed',
+    message: 'O diff Git governado foi negado ou não pôde ser lido.',
+    errors: Object.freeze([code]),
+    modifiedFiles: Object.freeze([]),
+    data: null,
+  });
+}
+
+function sanitizeGitDiffToolResult(raw) {
+  try {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)
+      || util.types.isProxy(raw)
+      || (Object.getPrototypeOf(raw) !== Object.prototype
+        && Object.getPrototypeOf(raw) !== null)
+      || ownDataValue(raw, 'status') !== 'completed'
+      || ownDataValue(raw, 'decision') !== 'allow') {
+      return failedGitDiffToolResult(raw);
+    }
+    const output = ownDataValue(raw, 'output');
+    const outputOk = ownDataValue(output, 'ok');
+    if (outputOk === false) {
+      const failureFields = exactPlainDataFields(output, ['ok', 'code', 'format']);
+      if (!failureFields
+        || failureFields.get('format') !== GIT_DIFF_FORMAT
+        || typeof failureFields.get('code') !== 'string'
+        || !GIT_READ_SAFE_ERROR_CODE.test(failureFields.get('code'))) {
+        return failedGitDiffToolResult(raw, 'GIT_DIFF_INVALID_RESULT');
+      }
+      return failedGitDiffToolResult(raw);
+    }
+    const fields = exactPlainDataFields(
+      output,
+      ['ok', 'format', 'base', 'scope', 'bytes', 'truncated', 'content']
+    );
+    const content = fields && fields.get('content');
+    const bytes = fields && fields.get('bytes');
+    if (!fields || fields.get('ok') !== true
+      || fields.get('format') !== GIT_DIFF_FORMAT
+      || fields.get('base') !== 'HEAD'
+      || fields.get('scope') !== 'staged'
+      || !Number.isSafeInteger(bytes) || Object.is(bytes, -0)
+      || bytes < 0 || bytes > GIT_DIFF_MAX_PUBLIC_BYTES
+      || fields.get('truncated') !== false
+      || typeof content !== 'string' || content.includes('\0')
+      || Buffer.byteLength(content, 'utf8') !== bytes
+      || (content.length > 0 && !content.startsWith('diff --git '))) {
+      return failedGitDiffToolResult(raw, 'GIT_DIFF_INVALID_RESULT');
+    }
+    return Object.freeze({
+      ok: true,
+      status: 'completed',
+      message: 'Diff Git lido por uma capacidade fixa e read-only no sandbox do job.',
+      errors: Object.freeze([]),
+      modifiedFiles: Object.freeze([]),
+      data: Object.freeze({
+        ok: true,
+        format: GIT_DIFF_FORMAT,
+        base: 'HEAD',
+        scope: 'staged',
+        bytes,
+        truncated: false,
+        content,
+      }),
+    });
+  } catch {
+    return failedGitDiffToolResult(raw, 'GIT_DIFF_INVALID_RESULT');
   }
 }
 
@@ -1199,10 +1348,23 @@ function createAgenticToolLoopService(dependencies = {}) {
       executionContext,
       'domainReadAvailable'
     ) === true;
-    const gitReadAvailable = ownDataValue(
+    const gitStatusReadAvailable = ownDataValue(
       executionContext,
-      'gitReadAvailable'
+      'gitStatusReadAvailable'
     ) === true;
+    const gitHeadReadAvailable = ownDataValue(
+      executionContext,
+      'gitHeadReadAvailable'
+    ) === true;
+    const gitDiffReadAvailable = ownDataValue(
+      executionContext,
+      'gitDiffReadAvailable'
+    ) === true;
+    const gitReadTools = [
+      ...(gitStatusReadAvailable ? ['`read_git_status`'] : []),
+      ...(gitHeadReadAvailable ? ['`read_git_head`'] : []),
+      ...(gitDiffReadAvailable ? ['`read_git_diff`'] : []),
+    ];
     return [
       'Você é o runtime agentic do Faber Code. Seu trabalho é agir como um engenheiro de software sênior direto no projeto.',
       'IMPORTANTE: Você está na fase de EXECUÇÃO. Não responda apenas com texto (ex: "Vou começar"). Você deve chamar ferramentas imediatamente.',
@@ -1217,9 +1379,9 @@ function createAgenticToolLoopService(dependencies = {}) {
       domainReadAvailable
         ? '4. MAPA DA APLICAÇÃO E MILESTONES: Use `read_application_map` e `read_milestones` para consultar os estados canônicos. `.faber/**` continua privado — nunca leia, crie ou edite esse namespace como arquivo.'
         : '4. MAPA DA APLICAÇÃO E MILESTONES: `.faber/**` é um namespace privado do runtime — nunca leia, crie ou edite arquivos nele. Ao alterar o produto, mantenha atualizados somente os documentos públicos aplicáveis em `docs/application-map/` e `docs/milestones/`; os espelhos internos são responsabilidade de serviços main-only.',
-      gitReadAvailable
-        ? '5. GIT READ-ONLY: Use `read_git_status` para consultar branch e arquivos alterados. Essa ferramenta executa somente um comando Git fixo, sem rede, no sandbox do job.'
-        : '5. GIT READ-ONLY: O status Git governado não está disponível nesta execução; não tente inferi-lo nem afirmar que foi consultado.',
+      gitReadTools.length > 0
+        ? `5. GIT READ-ONLY: Use ${gitReadTools.join(', ')} para consultar o estado Git disponível. Cada ferramenta executa somente seu comando Git fixo, sem rede, no sandbox do job; o diff cobre o índice staged contra HEAD, enquanto o status cobre as demais alterações.`
+        : '5. GIT READ-ONLY: As leituras Git governadas não estão disponíveis nesta execução; não tente inferi-las nem afirmar que foram consultadas.',
       '## Conclusão',
       'Sempre chame a ferramenta `finish_task` para indicar que você terminou, não importa se foi um sucesso ou se você encontrou um bloqueio instransponível.',
       `Projeto ativo: ${rootPath || 'indisponível'}.`,
@@ -1236,6 +1398,8 @@ function createAgenticToolLoopService(dependencies = {}) {
     const deletePaths = optionalExecutionCallback(executionContext, 'deletePaths');
     const readDomain = optionalExecutionCallback(executionContext, 'readDomain');
     const readGitStatus = optionalExecutionCallback(executionContext, 'readGitStatus');
+    const readGitHead = optionalExecutionCallback(executionContext, 'readGitHead');
+    const readGitDiff = optionalExecutionCallback(executionContext, 'readGitDiff');
     const processExecutionPolicy = ownDataValue(executionContext, 'processExecutionPolicy');
     const processCallback = optionalExecutionCallback(executionContext, 'executeProcess');
     const executeProcess = processExecutionPolicy === AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED
@@ -1365,6 +1529,58 @@ function createAgenticToolLoopService(dependencies = {}) {
           }
           throwIfExecutionCancelled(signal, 'read_git_status:after_callback');
           return sanitizeGitStatusToolResult(rawResult);
+        },
+      }] : []),
+      ...(readGitHead ? [{
+        name: 'read_git_head',
+        description: 'Lê o OID imutável do commit HEAD por um comando fixo read-only no sandbox sem rede do job.',
+        inputSchema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {},
+        },
+        execute: async (input = {}) => {
+          throwIfExecutionCancelled(signal, 'read_git_head:before_validation');
+          if (!exactPlainDataFields(input, [])) {
+            return failedGitHeadToolResult(null, 'GIT_HEAD_INVALID_INPUT');
+          }
+          throwIfExecutionCancelled(signal, 'read_git_head:before_callback');
+          let rawResult;
+          try {
+            rawResult = await readGitHead();
+          } catch (error) {
+            if (error instanceof AgenticExecutionCancelledError) throw error;
+            throwIfExecutionCancelled(signal, 'read_git_head:after_callback');
+            return failedGitHeadToolResult(null, 'GIT_HEAD_OPERATION_FAILED');
+          }
+          throwIfExecutionCancelled(signal, 'read_git_head:after_callback');
+          return sanitizeGitHeadToolResult(rawResult);
+        },
+      }] : []),
+      ...(readGitDiff ? [{
+        name: 'read_git_diff',
+        description: 'Lê o diff limitado do índice staged contra HEAD por um comando fixo read-only no sandbox sem rede do job.',
+        inputSchema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {},
+        },
+        execute: async (input = {}) => {
+          throwIfExecutionCancelled(signal, 'read_git_diff:before_validation');
+          if (!exactPlainDataFields(input, [])) {
+            return failedGitDiffToolResult(null, 'GIT_DIFF_INVALID_INPUT');
+          }
+          throwIfExecutionCancelled(signal, 'read_git_diff:before_callback');
+          let rawResult;
+          try {
+            rawResult = await readGitDiff();
+          } catch (error) {
+            if (error instanceof AgenticExecutionCancelledError) throw error;
+            throwIfExecutionCancelled(signal, 'read_git_diff:after_callback');
+            return failedGitDiffToolResult(null, 'GIT_DIFF_OPERATION_FAILED');
+          }
+          throwIfExecutionCancelled(signal, 'read_git_diff:after_callback');
+          return sanitizeGitDiffToolResult(rawResult);
         },
       }] : []),
       {
@@ -1973,6 +2189,8 @@ function createAgenticToolLoopService(dependencies = {}) {
     const deletePaths = optionalExecutionCallback(options, 'deletePaths');
     const readDomain = optionalExecutionCallback(options, 'readDomain');
     const readGitStatus = optionalExecutionCallback(options, 'readGitStatus');
+    const readGitHead = optionalExecutionCallback(options, 'readGitHead');
+    const readGitDiff = optionalExecutionCallback(options, 'readGitDiff');
     const processExecutionPolicy = ownDataValue(options, 'processExecutionPolicy');
     const executeProcess = optionalExecutionCallback(options, 'executeProcess');
     const readProcess = optionalExecutionCallback(options, 'readProcess');
@@ -1988,6 +2206,8 @@ function createAgenticToolLoopService(dependencies = {}) {
       deletePaths,
       readDomain,
       readGitStatus,
+      readGitHead,
+      readGitDiff,
       processExecutionPolicy,
       executeProcess,
       readProcess,
@@ -2013,7 +2233,9 @@ function createAgenticToolLoopService(dependencies = {}) {
         processExecutionAvailable,
         processControlAvailable,
         domainReadAvailable: Boolean(readDomain),
-        gitReadAvailable: Boolean(readGitStatus),
+        gitStatusReadAvailable: Boolean(readGitStatus),
+        gitHeadReadAvailable: Boolean(readGitHead),
+        gitDiffReadAvailable: Boolean(readGitDiff),
       }),
       contextPackPrompts.trustedPrompt,
     ].filter(Boolean).join('\n\n');

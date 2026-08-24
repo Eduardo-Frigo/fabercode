@@ -40,6 +40,18 @@ const STATUS_TEXT = [
   'UU conflict.txt',
   '',
 ].join('\n');
+const HEAD_OID = 'b'.repeat(40);
+const HEAD_TEXT = `${HEAD_OID}\n`;
+const DIFF_TEXT = [
+  'diff --git a/src/app.js b/src/app.js',
+  'index 3367afd..3e75765 100644',
+  '--- a/src/app.js',
+  '+++ b/src/app.js',
+  '@@ -1 +1 @@',
+  '-const value = 1;',
+  '+const value = 2;',
+  '',
+].join('\n');
 
 function frozenSnapshot({
   executionId,
@@ -201,7 +213,7 @@ function createHarness() {
     sandboxRegistry,
     requestIdFactory() {
       state.requestIds += 1;
-      return `agentic-git-status-${state.requestIds}`;
+      return `agentic-git-read-${state.requestIds}`;
     },
     audit(event) {
       state.audits.push(event);
@@ -226,6 +238,8 @@ function createHarness() {
   assert.deepStrictEqual(Reflect.ownKeys(route), [
     'version',
     'readStatus',
+    'readHead',
+    'readDiff',
     'diagnostics',
   ]);
   assert.strictEqual(route.version, AGENTIC_GIT_READ_ROUTE_VERSION);
@@ -262,10 +276,43 @@ function createHarness() {
   assert.strictEqual(JSON.stringify(result).includes('sandbox-exec:'), false);
   assert.strictEqual(JSON.stringify(result).includes('submissionDigest'), false);
 
+  harness.state.stdout = HEAD_TEXT;
+  const headResult = await route.readHead();
+  assert.strictEqual(headResult.status, 'completed');
+  assert.strictEqual(headResult.decision, 'allow');
+  assert.strictEqual(headResult.capability, 'git');
+  assert.strictEqual(headResult.action, 'head');
+  assert.deepStrictEqual(headResult.output, {
+    ok: true,
+    format: 'git-head-v1',
+    oid: HEAD_OID,
+  });
+  assert.strictEqual(JSON.stringify(headResult).includes('sandbox-exec:'), false);
+  assert.strictEqual(JSON.stringify(headResult).includes('/private/projects/a'), false);
+
+  harness.state.stdout = DIFF_TEXT;
+  const diffResult = await route.readDiff();
+  assert.strictEqual(diffResult.status, 'completed');
+  assert.strictEqual(diffResult.decision, 'allow');
+  assert.strictEqual(diffResult.capability, 'git');
+  assert.strictEqual(diffResult.action, 'diff');
+  assert.deepStrictEqual(diffResult.output, {
+    ok: true,
+    format: 'git-diff-v1',
+    base: 'HEAD',
+    scope: 'staged',
+    bytes: Buffer.byteLength(DIFF_TEXT, 'utf8'),
+    truncated: false,
+    content: DIFF_TEXT,
+  });
+  assert.strictEqual(Object.isFrozen(diffResult.output), true);
+  assert.strictEqual(JSON.stringify(diffResult).includes('sandbox-exec:'), false);
+  assert.strictEqual(JSON.stringify(diffResult).includes('/private/projects/a'), false);
+
   assert.strictEqual(harness.state.backendExecutions, 0);
-  assert.strictEqual(harness.state.executorCalls.length, 1);
-  assert.strictEqual(harness.state.waitCalls.length, 1);
-  assert.strictEqual(harness.state.readCalls.length, 1);
+  assert.strictEqual(harness.state.executorCalls.length, 3);
+  assert.strictEqual(harness.state.waitCalls.length, 3);
+  assert.strictEqual(harness.state.readCalls.length, 3);
   assert.strictEqual(harness.state.stopCalls.length, 0);
   assert(harness.state.lifecycleChecks >= 4);
   assert(harness.state.rootChecks >= 4);
@@ -273,8 +320,12 @@ function createHarness() {
   assert(harness.state.audits.some((event) => event.event === 'capability_execution_started'));
   assert(harness.state.audits.some((event) => event.event === 'capability_execution_completed'));
 
-  const [{ sandboxRequest, executionContext }] = harness.state.executorCalls;
-  assert.strictEqual(sandboxRequest.requestId, 'agentic-git-status-1');
+  const [
+    { sandboxRequest, executionContext },
+    { sandboxRequest: headSandboxRequest, executionContext: headExecutionContext },
+    { sandboxRequest: diffSandboxRequest, executionContext: diffExecutionContext },
+  ] = harness.state.executorCalls;
+  assert.strictEqual(sandboxRequest.requestId, 'agentic-git-read-1');
   assert.strictEqual(sandboxRequest.rootPath, binding.canonicalRootPath);
   assert.strictEqual(sandboxRequest.realRootPath, binding.realRootPath);
   assert.deepStrictEqual(sandboxRequest.command, {
@@ -304,6 +355,63 @@ function createHarness() {
     'filesystem_read',
     'process_execute',
   ]);
+  assert.strictEqual(executionContext.action, 'status');
+  assert.strictEqual(headSandboxRequest.requestId, 'agentic-git-read-2');
+  assert.deepStrictEqual(headSandboxRequest.command, {
+    kind: 'executable',
+    executable: 'git',
+    args: [
+      '--no-optional-locks',
+      '--no-pager',
+      '-c',
+      'core.quotepath=false',
+      '-c',
+      'core.fsmonitor=false',
+      '-c',
+      'core.untrackedCache=false',
+      '-c',
+      'submodule.recurse=false',
+      'rev-parse',
+      '--verify',
+      'HEAD^{commit}',
+    ],
+  });
+  assert.strictEqual(headSandboxRequest.networkMode, 'disabled');
+  assert.strictEqual(headExecutionContext.action, 'head');
+  assert.strictEqual(diffSandboxRequest.requestId, 'agentic-git-read-3');
+  assert.deepStrictEqual(diffSandboxRequest.command, {
+    kind: 'executable',
+    executable: 'git',
+    args: [
+      '--no-optional-locks',
+      '--no-pager',
+      '-c',
+      'core.quotepath=false',
+      '-c',
+      'core.fsmonitor=false',
+      '-c',
+      'core.untrackedCache=false',
+      '-c',
+      'submodule.recurse=false',
+      'diff',
+      '--cached',
+      '--no-ext-diff',
+      '--no-textconv',
+      '--no-renames',
+      '--no-color',
+      '--no-relative',
+      '--no-indent-heuristic',
+      '--diff-algorithm=myers',
+      '--unified=3',
+      '--src-prefix=a/',
+      '--dst-prefix=b/',
+      '--ignore-submodules=all',
+      'HEAD',
+      '--',
+    ],
+  });
+  assert.strictEqual(diffSandboxRequest.networkMode, 'disabled');
+  assert.strictEqual(diffExecutionContext.action, 'diff');
   assert.deepStrictEqual(harness.state.waitCalls[0], {
     executionId: sandboxRequest.executionId,
     afterRevision: 1,
@@ -318,10 +426,15 @@ function createHarness() {
   assert.deepStrictEqual(route.diagnostics(), Object.freeze({
     version: AGENTIC_GIT_READ_ROUTE_VERSION,
     capability: 'git',
-    action: 'status',
-    requests: 1,
-    completed: 1,
+    actions: Object.freeze(['status', 'head', 'diff']),
+    requests: 3,
+    completed: 3,
     failed: 0,
+    byAction: Object.freeze({
+      status: Object.freeze({ requests: 1, completed: 1, failed: 0 }),
+      head: Object.freeze({ requests: 1, completed: 1, failed: 0 }),
+      diff: Object.freeze({ requests: 1, completed: 1, failed: 0 }),
+    }),
     networkMode: 'disabled',
     commandPolicy: 'fixed_read_only',
     authorityBoundary: 'job_binding',
@@ -330,27 +443,58 @@ function createHarness() {
     version: AGENTIC_GIT_READ_BROKER_FACTORY_VERSION,
     descriptorVersion: AGENTIC_GIT_READ_DESCRIPTOR_VERSION,
     routesCreated: 1,
-    totalRequests: 1,
+    totalRequests: 3,
     capability: 'git',
-    action: 'status',
+    actions: Object.freeze(['status', 'head', 'diff']),
+    totalRequestsByAction: Object.freeze({ status: 1, head: 1, diff: 1 }),
     networkDefault: 'disabled',
     commandPolicy: 'fixed_read_only',
     authorityBoundary: 'main_process_only',
   }));
 
+  const emptyDiffHarness = createHarness();
+  emptyDiffHarness.state.stdout = '';
+  const emptyDiffRoute = emptyDiffHarness.factory.createRoute(Object.freeze({
+    binding,
+    sandboxExecutor: emptyDiffHarness.sandboxExecutor,
+  }));
+  const emptyDiff = await emptyDiffRoute.readDiff();
+  assert.deepStrictEqual(emptyDiff.output, {
+    ok: true,
+    format: 'git-diff-v1',
+    base: 'HEAD',
+    scope: 'staged',
+    bytes: 0,
+    truncated: false,
+    content: '',
+  });
+  assert.strictEqual(emptyDiffHarness.state.readCalls.length, 0);
+
+  const invalidHeadHarness = createHarness();
+  invalidHeadHarness.state.stdout = 'not-an-object-id\n';
+  const invalidHeadRoute = invalidHeadHarness.factory.createRoute(Object.freeze({
+    binding,
+    sandboxExecutor: invalidHeadHarness.sandboxExecutor,
+  }));
+  const invalidHead = await invalidHeadRoute.readHead();
+  assert.strictEqual(invalidHead.output.ok, false);
+  assert.strictEqual(invalidHead.output.code, 'GIT_HEAD_INVALID_OUTPUT');
+
   await assert.rejects(route.readStatus({ unexpected: true }), TypeError);
-  assert.strictEqual(harness.state.executorCalls.length, 1);
+  await assert.rejects(route.readHead({ unexpected: true }), TypeError);
+  await assert.rejects(route.readDiff({ unexpected: true }), TypeError);
+  assert.strictEqual(harness.state.executorCalls.length, 3);
 
   harness.state.oversized = true;
   const oversizedRoute = harness.factory.createRoute(Object.freeze({
     binding,
     sandboxExecutor: harness.sandboxExecutor,
   }));
-  const oversized = await oversizedRoute.readStatus();
+  const oversized = await oversizedRoute.readDiff();
   assert.strictEqual(oversized.status, 'completed');
   assert.strictEqual(oversized.output.ok, false);
-  assert.strictEqual(oversized.output.code, 'GIT_STATUS_OUTPUT_TOO_LARGE');
-  assert.strictEqual(harness.state.readCalls.length, 1);
+  assert.strictEqual(oversized.output.code, 'GIT_DIFF_OUTPUT_TOO_LARGE');
+  assert.strictEqual(harness.state.readCalls.length, 3);
   assert.strictEqual(oversizedRoute.diagnostics().failed, 1);
 
   harness.state.oversized = false;
@@ -363,11 +507,11 @@ function createHarness() {
   assert.strictEqual(revokedDuringExecution.status, 'completed');
   assert.strictEqual(revokedDuringExecution.output.ok, false);
   assert.strictEqual(revokedDuringExecution.output.code, 'GIT_STATUS_AUTHORITY_DENIED');
-  assert.strictEqual(harness.state.waitCalls.length, 2);
+  assert.strictEqual(harness.state.waitCalls.length, 4);
 
   const denied = await revokedDuringExecutionRoute.readStatus();
   assert.strictEqual(denied.status, 'denied');
-  assert.strictEqual(harness.state.executorCalls.length, 3);
+  assert.strictEqual(harness.state.executorCalls.length, 5);
 
   assert.throws(
     () => harness.factory.createRoute({

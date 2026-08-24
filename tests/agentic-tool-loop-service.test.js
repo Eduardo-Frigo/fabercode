@@ -1344,10 +1344,14 @@ async function run() {
           toolCalls: [
             { callId: 'git-status-safe', name: 'read_git_status', input: {} },
             { callId: 'git-status-hostile', name: 'read_git_status', input: {} },
+            { callId: 'git-head-safe', name: 'read_git_head', input: {} },
+            { callId: 'git-head-hostile', name: 'read_git_head', input: {} },
+            { callId: 'git-diff-safe', name: 'read_git_diff', input: {} },
+            { callId: 'git-diff-hostile', name: 'read_git_diff', input: {} },
           ],
         };
       }
-      assert.strictEqual(toolResults.length, 2);
+      assert.strictEqual(toolResults.length, 6);
       const outputs = toolResults.map((entry) => JSON.parse(entry.output));
       assert.strictEqual(outputs[0].ok, true);
       assert.strictEqual(outputs[0].data.branch, 'main...origin/main [ahead 1]');
@@ -1360,6 +1364,17 @@ async function run() {
       assert.strictEqual(outputs[0].data.entries[0].path, 'src/app.js');
       assert.strictEqual(outputs[1].ok, false);
       assert.deepStrictEqual(outputs[1].errors, ['GIT_STATUS_INVALID_RESULT']);
+      assert.strictEqual(outputs[2].ok, true);
+      assert.strictEqual(outputs[2].data.oid, 'b'.repeat(40));
+      assert.strictEqual(outputs[3].ok, false);
+      assert.deepStrictEqual(outputs[3].errors, ['GIT_HEAD_INVALID_RESULT']);
+      assert.strictEqual(outputs[4].ok, true);
+      assert.strictEqual(outputs[4].data.base, 'HEAD');
+      assert.strictEqual(outputs[4].data.scope, 'staged');
+      assert.strictEqual(outputs[4].data.truncated, false);
+      assert(outputs[4].data.content.includes('+const value = 2;'));
+      assert.strictEqual(outputs[5].ok, false);
+      assert.deepStrictEqual(outputs[5].errors, ['GIT_DIFF_INVALID_RESULT']);
       assert.strictEqual(JSON.stringify(outputs).includes('sandbox-exec:'), false);
       assert.strictEqual(JSON.stringify(outputs).includes('/private/projects/a'), false);
       return {
@@ -1374,6 +1389,17 @@ async function run() {
     },
   });
   const gitReadOptions = { jobId: 'job-git-read' };
+  const gitDiffText = [
+    'diff --git a/src/app.js b/src/app.js',
+    '--- a/src/app.js',
+    '+++ b/src/app.js',
+    '@@ -1 +1 @@',
+    '-const value = 1;',
+    '+const value = 2;',
+    '',
+  ].join('\n');
+  let gitHeadCallbackCalls = 0;
+  let gitDiffCallbackCalls = 0;
   Object.defineProperty(gitReadOptions, 'readGitStatus', {
     configurable: false,
     enumerable: false,
@@ -1409,6 +1435,54 @@ async function run() {
     },
     writable: false,
   });
+  Object.defineProperty(gitReadOptions, 'readGitHead', {
+    configurable: false,
+    enumerable: false,
+    value: async function readGitHead() {
+      assert.strictEqual(arguments.length, 0);
+      gitHeadCallbackCalls += 1;
+      return Object.freeze({
+        status: 'completed',
+        decision: 'allow',
+        output: Object.freeze({
+          ok: true,
+          format: 'git-head-v1',
+          oid: 'b'.repeat(40),
+          ...(gitHeadCallbackCalls === 2 ? {
+            executionId: 'sandbox-exec:' + 'e'.repeat(64),
+          } : {}),
+        }),
+        error: null,
+      });
+    },
+    writable: false,
+  });
+  Object.defineProperty(gitReadOptions, 'readGitDiff', {
+    configurable: false,
+    enumerable: false,
+    value: async function readGitDiff() {
+      assert.strictEqual(arguments.length, 0);
+      gitDiffCallbackCalls += 1;
+      return Object.freeze({
+        status: 'completed',
+        decision: 'allow',
+        output: Object.freeze({
+          ok: true,
+          format: 'git-diff-v1',
+          base: 'HEAD',
+          scope: 'staged',
+          bytes: Buffer.byteLength(gitDiffText, 'utf8'),
+          truncated: false,
+          content: gitDiffText,
+          ...(gitDiffCallbackCalls === 2 ? {
+            canonicalRootPath: '/private/projects/a',
+          } : {}),
+        }),
+        error: null,
+      });
+    },
+    writable: false,
+  });
   const governedGitReadResult = await gitReadService.executeAction(
     buildAction('job-git-read', 'inspecione o status do repositório'),
     { id: 'project-1', rootPath: '/tmp/project' },
@@ -1416,8 +1490,14 @@ async function run() {
   );
   assert.strictEqual(governedGitReadResult.ok, true);
   assert.strictEqual(gitReadCallbackCalls, 2);
+  assert.strictEqual(gitHeadCallbackCalls, 2);
+  assert.strictEqual(gitDiffCallbackCalls, 2);
   assert(gitReadDefinitions.some((tool) => tool.name === 'read_git_status'));
+  assert(gitReadDefinitions.some((tool) => tool.name === 'read_git_head'));
+  assert(gitReadDefinitions.some((tool) => tool.name === 'read_git_diff'));
   assert(gitReadSystemPrompt.includes('read_git_status'));
+  assert(gitReadSystemPrompt.includes('read_git_head'));
+  assert(gitReadSystemPrompt.includes('read_git_diff'));
 
   let absentGitDefinitions = null;
   const absentGitService = buildCancellationService({
@@ -1441,6 +1521,14 @@ async function run() {
   );
   assert.strictEqual(
     absentGitDefinitions.some((tool) => tool.name === 'read_git_status'),
+    false
+  );
+  assert.strictEqual(
+    absentGitDefinitions.some((tool) => tool.name === 'read_git_head'),
+    false
+  );
+  assert.strictEqual(
+    absentGitDefinitions.some((tool) => tool.name === 'read_git_diff'),
     false
   );
 

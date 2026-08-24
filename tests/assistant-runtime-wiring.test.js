@@ -764,6 +764,12 @@ assertInOrder(
     "Object.defineProperty(agenticExecutionOptions, 'readGitStatus'",
     'enumerable: false,',
     'gitReadRoute.readStatus()',
+    "Object.defineProperty(agenticExecutionOptions, 'readGitHead'",
+    'enumerable: false,',
+    'gitReadRoute.readHead()',
+    "Object.defineProperty(agenticExecutionOptions, 'readGitDiff'",
+    'enumerable: false,',
+    'gitReadRoute.readDiff()',
     'Object.freeze(agenticExecutionOptions)',
   ],
   'Git status must enter the loop only through a fixed-command broker route bound to the private job executor'
@@ -777,6 +783,17 @@ assert.ok(
     .includes('enumerable: false'),
   'readGitStatus must remain non-enumerable'
 );
+for (const callbackName of ['readGitHead', 'readGitDiff']) {
+  const callbackStart = legacyExecuteSource.indexOf(
+    `Object.defineProperty(agenticExecutionOptions, '${callbackName}'`
+  );
+  assert.ok(callbackStart >= 0, `missing private ${callbackName} callback`);
+  assert.ok(
+    legacyExecuteSource.slice(callbackStart, callbackStart + 220)
+      .includes('enumerable: false'),
+    `${callbackName} must remain non-enumerable`
+  );
+}
 
 assertInOrder(
   legacyExecuteSource,

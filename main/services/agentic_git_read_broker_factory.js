@@ -28,16 +28,25 @@ const {
   preflightDataGraph,
 } = require('../capabilities/execution_workspace_contract');
 
-const AGENTIC_GIT_READ_BROKER_FACTORY_VERSION = 'agentic-git-read-broker-factory.v1';
-const AGENTIC_GIT_READ_ROUTE_VERSION = 'agentic-git-read-route.v1';
-const AGENTIC_GIT_READ_DESCRIPTOR_VERSION = 'agentic-git-read-descriptor.v1';
+const AGENTIC_GIT_READ_BROKER_FACTORY_VERSION = 'agentic-git-read-broker-factory.v2';
+const AGENTIC_GIT_READ_ROUTE_VERSION = 'agentic-git-read-route.v2';
+const AGENTIC_GIT_READ_DESCRIPTOR_VERSION = 'agentic-git-read-descriptor.v2';
 const GIT_CAPABILITY = 'git';
 const GIT_STATUS_ACTION = 'status';
+const GIT_HEAD_ACTION = 'head';
+const GIT_DIFF_ACTION = 'diff';
+const GIT_READ_ACTIONS = Object.freeze([
+  GIT_STATUS_ACTION,
+  GIT_HEAD_ACTION,
+  GIT_DIFF_ACTION,
+]);
 const GIT_STATUS_FORMAT = 'git-status-porcelain-v1';
-const GIT_STATUS_COMMAND_TIMEOUT_MS = 25_000;
-const GIT_STATUS_WAIT_TIMEOUT_MS = 30_000;
-const GIT_STATUS_MAX_OUTPUT_BYTES = 256 * 1024;
-const GIT_STATUS_MAX_WAIT_REVISIONS = 256;
+const GIT_HEAD_FORMAT = 'git-head-v1';
+const GIT_DIFF_FORMAT = 'git-diff-v1';
+const GIT_READ_COMMAND_TIMEOUT_MS = 25_000;
+const GIT_READ_WAIT_TIMEOUT_MS = 30_000;
+const GIT_READ_MAX_OUTPUT_BYTES = 256 * 1024;
+const GIT_READ_MAX_WAIT_REVISIONS = 256;
 const GIT_STATUS_MAX_ENTRIES = 10_000;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:@-]{1,256}$/;
 const BROKER_EXECUTION_ID = /^sandbox-exec:[a-f0-9]{64}$/;
@@ -55,8 +64,8 @@ const TERMINAL_PROCESS_STATUSES = new Set([
   'timed_out',
 ]);
 const CONFLICT_STATUSES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
-const GIT_STATUS_STOP_REASON = 'AGENTIC_GIT_STATUS_WAIT_LIMIT';
-const GIT_STATUS_ARGS = Object.freeze([
+const GIT_READ_STOP_REASON = 'AGENTIC_GIT_READ_WAIT_LIMIT';
+const GIT_COMMON_ARGS = Object.freeze([
   '--no-optional-locks',
   '--no-pager',
   '-c',
@@ -67,12 +76,58 @@ const GIT_STATUS_ARGS = Object.freeze([
   'core.untrackedCache=false',
   '-c',
   'submodule.recurse=false',
+]);
+const GIT_STATUS_ARGS = Object.freeze([
+  ...GIT_COMMON_ARGS,
   'status',
   '--porcelain=v1',
   '--branch',
   '--untracked-files=all',
   '--ignore-submodules=all',
 ]);
+const GIT_HEAD_ARGS = Object.freeze([
+  ...GIT_COMMON_ARGS,
+  'rev-parse',
+  '--verify',
+  'HEAD^{commit}',
+]);
+// Patch content is index-only because a working-tree diff can execute
+// repository-configured clean filters while converting files to Git form.
+const GIT_DIFF_ARGS = Object.freeze([
+  ...GIT_COMMON_ARGS,
+  'diff',
+  '--cached',
+  '--no-ext-diff',
+  '--no-textconv',
+  '--no-renames',
+  '--no-color',
+  '--no-relative',
+  '--no-indent-heuristic',
+  '--diff-algorithm=myers',
+  '--unified=3',
+  '--src-prefix=a/',
+  '--dst-prefix=b/',
+  '--ignore-submodules=all',
+  'HEAD',
+  '--',
+]);
+const GIT_READ_ACTION_CONFIGS = Object.freeze({
+  [GIT_STATUS_ACTION]: Object.freeze({
+    format: GIT_STATUS_FORMAT,
+    errorPrefix: 'GIT_STATUS',
+    args: GIT_STATUS_ARGS,
+  }),
+  [GIT_HEAD_ACTION]: Object.freeze({
+    format: GIT_HEAD_FORMAT,
+    errorPrefix: 'GIT_HEAD',
+    args: GIT_HEAD_ARGS,
+  }),
+  [GIT_DIFF_ACTION]: Object.freeze({
+    format: GIT_DIFF_FORMAT,
+    errorPrefix: 'GIT_DIFF',
+    args: GIT_DIFF_ARGS,
+  }),
+});
 const OPTION_KEYS = Object.freeze([
   'authorizeLifecycle',
   'authorizeRoot',
@@ -237,6 +292,17 @@ function gitStatusFailure(code) {
   });
 }
 
+function gitReadFailure(action, reason) {
+  const config = Object.hasOwn(GIT_READ_ACTION_CONFIGS, action)
+    ? GIT_READ_ACTION_CONFIGS[action]
+    : GIT_READ_ACTION_CONFIGS[GIT_STATUS_ACTION];
+  return Object.freeze({
+    ok: false,
+    code: `${config.errorPrefix}_${reason}`,
+    format: config.format,
+  });
+}
+
 function normalizeProcessSnapshot(value, expectedExecutionId, expectedVersion) {
   const fields = exactOwnDataFields(value, SNAPSHOT_KEYS, SNAPSHOT_KEYS);
   if (!fields || !Object.isFrozen(value)
@@ -367,7 +433,7 @@ function normalizeReadResult(value, expectedExecutionId, expectedSnapshot) {
 
 function parseGitStatus(stdout) {
   if (typeof stdout !== 'string' || stdout.length < 4 || stdout.includes('\0')
-    || Buffer.byteLength(stdout, 'utf8') > GIT_STATUS_MAX_OUTPUT_BYTES) {
+    || Buffer.byteLength(stdout, 'utf8') > GIT_READ_MAX_OUTPUT_BYTES) {
     return gitStatusFailure('GIT_STATUS_INVALID_OUTPUT');
   }
   const lines = stdout.split('\n');
@@ -418,10 +484,51 @@ function parseGitStatus(stdout) {
   });
 }
 
+function parseGitHead(stdout) {
+  if (typeof stdout !== 'string' || stdout.includes('\0')
+    || Buffer.byteLength(stdout, 'utf8') > GIT_READ_MAX_OUTPUT_BYTES) {
+    return gitReadFailure(GIT_HEAD_ACTION, 'INVALID_OUTPUT');
+  }
+  const match = /^(?:([0-9a-f]{40}|[0-9a-f]{64}))\n$/.exec(stdout);
+  if (!match) return gitReadFailure(GIT_HEAD_ACTION, 'INVALID_OUTPUT');
+  return Object.freeze({
+    ok: true,
+    format: GIT_HEAD_FORMAT,
+    oid: match[1],
+  });
+}
+
+function parseGitDiff(stdout) {
+  if (typeof stdout !== 'string' || stdout.includes('\0')) {
+    return gitReadFailure(GIT_DIFF_ACTION, 'INVALID_OUTPUT');
+  }
+  const bytes = Buffer.byteLength(stdout, 'utf8');
+  if (bytes > GIT_READ_MAX_OUTPUT_BYTES
+    || (stdout.length > 0 && !stdout.startsWith('diff --git '))) {
+    return gitReadFailure(GIT_DIFF_ACTION, 'INVALID_OUTPUT');
+  }
+  return Object.freeze({
+    ok: true,
+    format: GIT_DIFF_FORMAT,
+    base: 'HEAD',
+    scope: 'staged',
+    bytes,
+    truncated: false,
+    content: stdout,
+  });
+}
+
+function parseGitReadOutput(action, stdout) {
+  if (action === GIT_STATUS_ACTION) return parseGitStatus(stdout);
+  if (action === GIT_HEAD_ACTION) return parseGitHead(stdout);
+  if (action === GIT_DIFF_ACTION) return parseGitDiff(stdout);
+  return gitReadFailure(GIT_STATUS_ACTION, 'INVALID_ACTION');
+}
+
 function processFailureForSnapshot(snapshot) {
-  if (snapshot.status === 'timed_out') return 'GIT_STATUS_TIMED_OUT';
-  if (snapshot.status === 'stopped') return 'GIT_STATUS_STOPPED';
-  return 'GIT_STATUS_COMMAND_FAILED';
+  if (snapshot.status === 'timed_out') return 'TIMED_OUT';
+  if (snapshot.status === 'stopped') return 'STOPPED';
+  return 'COMMAND_FAILED';
 }
 
 function invokeCaptured(captured, args) {
@@ -462,7 +569,7 @@ function createAgenticGitReadBrokerFactory(options = {}) {
   const now = optionFields.has('now') ? optionFields.get('now') : () => Date.now();
   const requestIdFactory = optionFields.has('requestIdFactory')
     ? optionFields.get('requestIdFactory')
-    : () => 'agentic-git-status:' + crypto.randomUUID();
+    : () => 'agentic-git-read:' + crypto.randomUUID();
   for (const [name, callback] of [
     ['authorizeLifecycle', authorizeLifecycle],
     ['authorizeRoot', authorizeRoot],
@@ -479,6 +586,9 @@ function createAgenticGitReadBrokerFactory(options = {}) {
 
   let routesCreated = 0;
   let totalRequests = 0;
+  const totalRequestsByAction = Object.fromEntries(
+    GIT_READ_ACTIONS.map((action) => [action, 0])
+  );
 
   function createRoute(input = {}) {
     const fields = exactOwnDataFields(input, CREATE_KEYS, CREATE_KEYS);
@@ -579,104 +689,114 @@ function createAgenticGitReadBrokerFactory(options = {}) {
       await invokeCaptured(processStop, [Object.freeze({
         executionId,
         expectedRevision: revision,
-        reasonCode: GIT_STATUS_STOP_REASON,
+        reasonCode: GIT_READ_STOP_REASON,
       })]);
     }
 
-    async function executeGitStatus(sandboxRequest, executionContext) {
+    async function executeGitRead(sandboxRequest, executionContext) {
+      const action = dataValue(executionContext, 'action');
+      const config = Object.hasOwn(GIT_READ_ACTION_CONFIGS, action)
+        ? GIT_READ_ACTION_CONFIGS[action]
+        : null;
       const executionId = dataValue(sandboxRequest, 'executionId');
-      if (typeof executionId !== 'string' || !BROKER_EXECUTION_ID.test(executionId)
+      if (!config || typeof executionId !== 'string' || !BROKER_EXECUTION_ID.test(executionId)
         || !controlAuthorized()) {
-        return gitStatusFailure('GIT_STATUS_AUTHORITY_DENIED');
+        return gitReadFailure(action, 'AUTHORITY_DENIED');
       }
       const started = await invokeCaptured(processExecute, [
         sandboxRequest,
         executionContext,
       ]);
-      if (!started.ok) return gitStatusFailure('GIT_STATUS_EXECUTION_FAILED');
+      if (!started.ok) return gitReadFailure(action, 'EXECUTION_FAILED');
       let snapshot = normalizeProcessSnapshot(
         started.value,
         executionId,
         'process-supervisor-exec-receipt.v1'
       );
-      if (!snapshot) return gitStatusFailure('GIT_STATUS_INVALID_PROCESS_RESULT');
+      if (!snapshot) return gitReadFailure(action, 'INVALID_PROCESS_RESULT');
 
       let waits = 0;
-      while (snapshot.status === 'running' && waits < GIT_STATUS_MAX_WAIT_REVISIONS) {
+      while (snapshot.status === 'running' && waits < GIT_READ_MAX_WAIT_REVISIONS) {
         if (!controlAuthorized()) {
-          return gitStatusFailure('GIT_STATUS_AUTHORITY_DENIED');
+          return gitReadFailure(action, 'AUTHORITY_DENIED');
         }
         const waited = await invokeCaptured(processWait, [Object.freeze({
           executionId,
           afterRevision: snapshot.revision,
-          timeoutMs: GIT_STATUS_WAIT_TIMEOUT_MS,
+          timeoutMs: GIT_READ_WAIT_TIMEOUT_MS,
         })]);
-        if (!waited.ok) return gitStatusFailure('GIT_STATUS_WAIT_FAILED');
+        if (!waited.ok) return gitReadFailure(action, 'WAIT_FAILED');
         snapshot = normalizeWaitResult(waited.value, executionId, snapshot.revision);
-        if (!snapshot) return gitStatusFailure('GIT_STATUS_INVALID_PROCESS_RESULT');
+        if (!snapshot) return gitReadFailure(action, 'INVALID_PROCESS_RESULT');
         waits += 1;
       }
       if (snapshot.status === 'running') {
         await stopAfterWaitLimit(executionId, snapshot.revision);
-        return gitStatusFailure('GIT_STATUS_WAIT_LIMIT_EXCEEDED');
+        return gitReadFailure(action, 'WAIT_LIMIT_EXCEEDED');
       }
-      if (snapshot.outputCursor > GIT_STATUS_MAX_OUTPUT_BYTES
+      if (snapshot.outputCursor > GIT_READ_MAX_OUTPUT_BYTES
         || snapshot.availableFromCursor !== 0) {
-        return gitStatusFailure('GIT_STATUS_OUTPUT_TOO_LARGE');
+        return gitReadFailure(action, 'OUTPUT_TOO_LARGE');
       }
       if (snapshot.outputCursor === 0) {
-        return gitStatusFailure(processFailureForSnapshot(snapshot));
+        return snapshot.status === 'succeeded' && snapshot.exitCode === 0
+          ? parseGitReadOutput(action, '')
+          : gitReadFailure(action, processFailureForSnapshot(snapshot));
       }
       if (!controlAuthorized()) {
-        return gitStatusFailure('GIT_STATUS_AUTHORITY_DENIED');
+        return gitReadFailure(action, 'AUTHORITY_DENIED');
       }
       const read = await invokeCaptured(processRead, [Object.freeze({
         executionId,
         cursor: 0,
         maxBytes: snapshot.outputCursor,
       })]);
-      if (!read.ok) return gitStatusFailure('GIT_STATUS_READ_FAILED');
+      if (!read.ok) return gitReadFailure(action, 'READ_FAILED');
       const output = normalizeReadResult(read.value, executionId, snapshot);
-      if (!output) return gitStatusFailure('GIT_STATUS_INVALID_PROCESS_RESULT');
+      if (!output) return gitReadFailure(action, 'INVALID_PROCESS_RESULT');
       if (snapshot.status !== 'succeeded' || snapshot.exitCode !== 0) {
-        return gitStatusFailure(processFailureForSnapshot(snapshot));
+        return gitReadFailure(action, processFailureForSnapshot(snapshot));
       }
-      return parseGitStatus(output.stdout);
+      if (output.stderr.length > 0) return gitReadFailure(action, 'INVALID_OUTPUT');
+      return parseGitReadOutput(action, output.stdout);
     }
 
-    const brokerSandboxExecutor = Object.freeze({ execute: executeGitStatus });
-    const descriptor = createProjectCapabilityDescriptor({
-      capability: GIT_CAPABILITY,
-      action: GIT_STATUS_ACTION,
-      version: AGENTIC_GIT_READ_DESCRIPTOR_VERSION,
-      kind: PROJECT_CAPABILITY_KINDS.GIT,
-      effects: [
-        PROJECT_CAPABILITY_EFFECTS.FILESYSTEM_READ,
-        PROJECT_CAPABILITY_EFFECTS.PROCESS_EXECUTE,
-      ],
-      requiresSandbox: true,
-      risk: 'low',
-      canonicalizePayload() {
-        return Object.freeze({});
-      },
-      createSandboxExecutionSpec() {
-        return Object.freeze({
-          command: Object.freeze({
-            kind: SANDBOX_COMMAND_KINDS.EXECUTABLE,
-            executable: 'git',
-            args: GIT_STATUS_ARGS,
-          }),
-          timeoutMs: GIT_STATUS_COMMAND_TIMEOUT_MS,
-        });
-      },
-    });
+    const brokerSandboxExecutor = Object.freeze({ execute: executeGitRead });
+    const descriptors = Object.freeze(Object.fromEntries(GIT_READ_ACTIONS.map((action) => {
+      const config = GIT_READ_ACTION_CONFIGS[action];
+      return [action, createProjectCapabilityDescriptor({
+        capability: GIT_CAPABILITY,
+        action,
+        version: AGENTIC_GIT_READ_DESCRIPTOR_VERSION,
+        kind: PROJECT_CAPABILITY_KINDS.GIT,
+        effects: [
+          PROJECT_CAPABILITY_EFFECTS.FILESYSTEM_READ,
+          PROJECT_CAPABILITY_EFFECTS.PROCESS_EXECUTE,
+        ],
+        requiresSandbox: true,
+        risk: 'low',
+        canonicalizePayload() {
+          return Object.freeze({});
+        },
+        createSandboxExecutionSpec() {
+          return Object.freeze({
+            command: Object.freeze({
+              kind: SANDBOX_COMMAND_KINDS.EXECUTABLE,
+              executable: 'git',
+              args: config.args,
+            }),
+            timeoutMs: GIT_READ_COMMAND_TIMEOUT_MS,
+          });
+        },
+      })];
+    })));
     const broker = createProjectCapabilityBroker({
       authorizeProjectSession: authorizeSession,
       authorizeProjectEffect: authorizeEffect,
       descriptorResolver: Object.freeze({
         resolve(capability, action) {
-          return capability === GIT_CAPABILITY && action === GIT_STATUS_ACTION
-            ? descriptor
+          return capability === GIT_CAPABILITY && Object.hasOwn(descriptors, action)
+            ? descriptors[action]
             : null;
         },
       }),
@@ -687,8 +807,8 @@ function createAgenticGitReadBrokerFactory(options = {}) {
         consume() { return Object.freeze({ authorized: false, reason: 'grant_not_found' }); },
       }),
       pendingApprovalStore: Object.freeze({
-        create() { throw new Error('Read-only Git status must not request external approval'); },
-        resolve() { throw new Error('Read-only Git status has no pending approval'); },
+        create() { throw new Error('Read-only Git operations must not request external approval'); },
+        resolve() { throw new Error('Read-only Git operations have no pending approval'); },
       }),
       approvalReviewer: Object.freeze({
         verifyDecision() { return Object.freeze({ verified: false }); },
@@ -702,25 +822,29 @@ function createAgenticGitReadBrokerFactory(options = {}) {
     let requests = 0;
     let completed = 0;
     let failed = 0;
+    const byAction = Object.fromEntries(GIT_READ_ACTIONS.map((action) => [action, {
+      requests: 0,
+      completed: 0,
+      failed: 0,
+    }]));
 
-    async function readStatus() {
-      if (arguments.length !== 0) {
-        throw new TypeError('Git status does not accept model-controlled input');
-      }
+    async function readAction(action) {
       let requestId;
       try {
         requestId = requestIdFactory();
       } catch (error) {
         preflightDataGraph(error);
-        throw new TypeError('Agentic Git status request id generation failed');
+        throw new TypeError('Agentic Git read request id generation failed');
       }
       if (util.types.isPromise(requestId) || typeof requestId !== 'string'
         || !REQUEST_ID_PATTERN.test(requestId)) {
         preflightDataGraph(requestId);
-        throw new TypeError('Agentic Git status request id is invalid');
+        throw new TypeError('Agentic Git read request id is invalid');
       }
       requests += 1;
       totalRequests += 1;
+      byAction[action].requests += 1;
+      totalRequestsByAction[action] += 1;
       const request = createProjectCapabilityRequest({
         requestId,
         principal: Object.freeze({ kind: 'agent', kernelId: binding.kernelId }),
@@ -732,7 +856,7 @@ function createAgenticGitReadBrokerFactory(options = {}) {
           jobId: binding.jobId,
         }),
         capability: GIT_CAPABILITY,
-        action: GIT_STATUS_ACTION,
+        action,
         payload: Object.freeze({}),
         context: Object.freeze({
           origin: 'agentic_tool_loop',
@@ -741,20 +865,49 @@ function createAgenticGitReadBrokerFactory(options = {}) {
       });
       const result = await broker.execute(request);
       const output = dataValue(result, 'output');
-      if (dataValue(result, 'status') === 'completed'
-        && dataValue(output, 'ok') === true) completed += 1;
-      else failed += 1;
+      if (dataValue(result, 'status') === 'completed' && dataValue(output, 'ok') === true) {
+        completed += 1;
+        byAction[action].completed += 1;
+      } else {
+        failed += 1;
+        byAction[action].failed += 1;
+      }
       return result;
+    }
+
+    async function readStatus() {
+      if (arguments.length !== 0) {
+        throw new TypeError('Git status does not accept model-controlled input');
+      }
+      return readAction(GIT_STATUS_ACTION);
+    }
+
+    async function readHead() {
+      if (arguments.length !== 0) {
+        throw new TypeError('Git HEAD does not accept model-controlled input');
+      }
+      return readAction(GIT_HEAD_ACTION);
+    }
+
+    async function readDiff() {
+      if (arguments.length !== 0) {
+        throw new TypeError('Git diff does not accept model-controlled input');
+      }
+      return readAction(GIT_DIFF_ACTION);
     }
 
     function diagnostics() {
       return Object.freeze({
         version: AGENTIC_GIT_READ_ROUTE_VERSION,
         capability: GIT_CAPABILITY,
-        action: GIT_STATUS_ACTION,
+        actions: GIT_READ_ACTIONS,
         requests,
         completed,
         failed,
+        byAction: Object.freeze(Object.fromEntries(GIT_READ_ACTIONS.map((action) => [
+          action,
+          Object.freeze({ ...byAction[action] }),
+        ]))),
         networkMode: 'disabled',
         commandPolicy: 'fixed_read_only',
         authorityBoundary: 'job_binding',
@@ -765,6 +918,8 @@ function createAgenticGitReadBrokerFactory(options = {}) {
     return Object.freeze({
       version: AGENTIC_GIT_READ_ROUTE_VERSION,
       readStatus,
+      readHead,
+      readDiff,
       diagnostics,
     });
   }
@@ -776,7 +931,8 @@ function createAgenticGitReadBrokerFactory(options = {}) {
       routesCreated,
       totalRequests,
       capability: GIT_CAPABILITY,
-      action: GIT_STATUS_ACTION,
+      actions: GIT_READ_ACTIONS,
+      totalRequestsByAction: Object.freeze({ ...totalRequestsByAction }),
       networkDefault: 'disabled',
       commandPolicy: 'fixed_read_only',
       authorityBoundary: 'main_process_only',
