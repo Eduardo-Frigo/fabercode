@@ -1026,8 +1026,14 @@ function assertExecutionWorkspaceBoundary() {
       )
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:agentic-mcp-discovery-broker'
+      )
+      && packageConfig.scripts['test:codex-app-server-stdio-client'].includes(
+        'codex-app-server-stdio-client.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:codex-app-server-stdio-client'
       ),
-    'aggregate gates must run gateway, session, executor, broker registry, process route, fixed Git reads, and cached MCP discovery tests'
+    'aggregate gates must run workspace, broker, fixed-read, discovery, and App Server transport tests'
   );
   assertDoesNotMatch(
     isolationProviderFactorySource,
