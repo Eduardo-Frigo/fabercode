@@ -137,6 +137,9 @@ function assertAgentRuntimeBoundary() {
 
   const routerSource = read('main/agent_runtime/harness_router.js');
   const facadeSource = read('main/agent_runtime/assistant_runtime_facade.js');
+  const codexAppServerKernelAdapterSource = read(
+    'main/agent_runtime/codex_app_server_kernel_adapter.js'
+  );
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
@@ -154,6 +157,24 @@ function assertAgentRuntimeBoundary() {
   assert.ok(
     facadeSource.includes('coordinator.retry({'),
     'AssistantRuntimeFacade must delegate retry to the main-only coordinator'
+  );
+  assertDoesNotMatch(
+    codexAppServerKernelAdapterSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron)['"]\)/,
+    'the App Server kernel adapter must not own host I/O, process, worker, or Electron capabilities'
+  );
+  assertDoesNotMatch(
+    codexAppServerKernelAdapterSource,
+    /\b(?:exec|execFile|spawn|fork|writeFile|appendFile|unlink|rm)\s*\(/,
+    'the App Server kernel adapter must remain a plan-only protocol consumer'
+  );
+  assert.ok(
+    codexAppServerKernelAdapterSource.includes(
+      'capabilities: [HARNESS_OPERATIONS.PLAN]'
+    )
+      && codexAppServerKernelAdapterSource.includes('shadow: true')
+      && codexAppServerKernelAdapterSource.includes('readOnly: true'),
+    'the App Server kernel adapter must stay explicitly plan-only, shadow, and read-only'
   );
 }
 
@@ -1032,8 +1053,15 @@ function assertExecutionWorkspaceBoundary() {
       )
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:codex-app-server-stdio-client'
+      )
+      && typeof packageConfig.scripts['test:codex-app-server-kernel-adapter'] === 'string'
+      && packageConfig.scripts['test:codex-app-server-kernel-adapter'].includes(
+        'codex-app-server-kernel-adapter.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:codex-app-server-kernel-adapter'
       ),
-    'aggregate gates must run workspace, broker, fixed-read, discovery, and App Server transport tests'
+    'aggregate gates must run workspace, broker, fixed-read, discovery, and App Server transport and adapter tests'
   );
   assertDoesNotMatch(
     isolationProviderFactorySource,
