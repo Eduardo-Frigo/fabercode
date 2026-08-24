@@ -1166,6 +1166,165 @@ async function run() {
   assert.strictEqual(poisonedMapCalls, 0);
   assert.strictEqual(poisonedCallbackCalls, 0);
 
+  // Governed domain reads replace the legacy capability adapter only when
+  // main injects the private job-bound route. Map and Milestones are absent
+  // without that authority and never expose their private .faber paths.
+  const domainReadCalls = [];
+  let legacyDomainCapabilityCalls = 0;
+  let domainReadTurn = 0;
+  let domainReadDefinitions = null;
+  const domainReadService = buildCancellationService({
+    executeCapability: async () => {
+      legacyDomainCapabilityCalls += 1;
+      return { ok: false, message: 'legacy adapter must not receive governed reads' };
+    },
+    requestModelTurn: async ({ tools, toolResults }) => {
+      domainReadTurn += 1;
+      if (domainReadTurn === 1) {
+        domainReadDefinitions = tools;
+        return {
+          responseId: 'domain-read-1',
+          text: '',
+          toolCalls: [
+            { callId: 'domain-tree', name: 'project_tree', input: {} },
+            {
+              callId: 'domain-file',
+              name: 'read_file',
+              input: { path: 'README.md', maxChars: 1200 },
+            },
+            { callId: 'domain-map', name: 'read_application_map', input: {} },
+            { callId: 'domain-milestones', name: 'read_milestones', input: {} },
+          ],
+        };
+      }
+      assert.strictEqual(toolResults.length, 4);
+      const outputs = toolResults.map((entry) => JSON.parse(entry.output));
+      assert.strictEqual(outputs.every((entry) => entry.ok === true), true);
+      assert.strictEqual(outputs[0].data.entries[0].path, 'README.md');
+      assert.strictEqual(outputs[1].data.revision, `sha256:${'a'.repeat(64)}`);
+      assert.strictEqual(outputs[1].data.content, '# Faber');
+      assert.strictEqual(outputs[2].data.map.revision, 8);
+      assert.strictEqual(outputs[3].data.milestones[0].id, 'milestone-3');
+      assert.strictEqual(JSON.stringify(outputs).includes('.faber/'), false);
+      return {
+        responseId: 'domain-read-2',
+        text: '',
+        toolCalls: [{
+          callId: 'domain-finish',
+          name: 'finish_task',
+          input: { status: 'success', summary: 'domínios inspecionados' },
+        }],
+      };
+    },
+  });
+  const domainReadOptions = { jobId: 'job-domain-read' };
+  Object.defineProperty(domainReadOptions, 'readDomain', {
+    configurable: false,
+    enumerable: false,
+    value: async (input) => {
+      assert.strictEqual(Object.isFrozen(input), true);
+      assert.strictEqual(Object.isFrozen(input.payload), true);
+      domainReadCalls.push(input);
+      const key = `${input.capability}.${input.action}`;
+      const outputs = {
+        'filesystem.project_tree': {
+          ok: true,
+          entries: [{ path: 'README.md', kind: 'file' }],
+          truncated: false,
+        },
+        'filesystem.read_file': {
+          ok: true,
+          found: true,
+          code: null,
+          path: 'README.md',
+          revision: `sha256:${'a'.repeat(64)}`,
+          bytes: 7,
+          returnedBytes: 7,
+          encoding: 'utf8',
+          truncated: false,
+          content: '# Faber',
+        },
+        'application_map.read': {
+          ok: true,
+          found: true,
+          code: null,
+          format: 'application-map-v2',
+          revision: `sha256:${'b'.repeat(64)}`,
+          map: { revision: 8, nodes: [], edges: [], viewport: {} },
+        },
+        'milestones.read': {
+          ok: true,
+          found: true,
+          code: null,
+          format: 'milestones-v2',
+          revision: `sha256:${'c'.repeat(64)}`,
+          sourceMapRevision: 8,
+          renderedAt: null,
+          milestones: [{ id: 'milestone-3', status: 'active' }],
+        },
+      };
+      return Object.freeze({
+        status: 'completed',
+        decision: 'allow',
+        output: Object.freeze(outputs[key]),
+        error: null,
+      });
+    },
+    writable: false,
+  });
+  const governedDomainResult = await domainReadService.executeAction(
+    buildAction('job-domain-read', 'inspecione o estado atual'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    Object.freeze(domainReadOptions)
+  );
+  assert.strictEqual(governedDomainResult.ok, true);
+  assert.strictEqual(legacyDomainCapabilityCalls, 0);
+  assert.deepStrictEqual(
+    domainReadCalls.map((input) => `${input.capability}.${input.action}`),
+    [
+      'filesystem.project_tree',
+      'filesystem.read_file',
+      'application_map.read',
+      'milestones.read',
+    ]
+  );
+  assert.deepStrictEqual(domainReadCalls[0].payload, { maxEntries: 500 });
+  assert.deepStrictEqual(domainReadCalls[1].payload, {
+    path: 'README.md',
+    maxBytes: 1200,
+  });
+  assert(domainReadDefinitions.some((tool) => tool.name === 'read_application_map'));
+  assert(domainReadDefinitions.some((tool) => tool.name === 'read_milestones'));
+
+  let absentDomainDefinitions = null;
+  const absentDomainService = buildCancellationService({
+    requestModelTurn: async ({ tools }) => {
+      absentDomainDefinitions = tools;
+      return {
+        responseId: 'domain-absent',
+        text: '',
+        toolCalls: [{
+          callId: 'domain-absent-finish',
+          name: 'finish_task',
+          input: { status: 'success', summary: 'sem rota privada' },
+        }],
+      };
+    },
+  });
+  await absentDomainService.executeAction(
+    buildAction('job-domain-absent', 'inspecione o estado atual'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    { jobId: 'job-domain-absent' }
+  );
+  assert.strictEqual(
+    absentDomainDefinitions.some((tool) => tool.name === 'read_application_map'),
+    false
+  );
+  assert.strictEqual(
+    absentDomainDefinitions.some((tool) => tool.name === 'read_milestones'),
+    false
+  );
+
   // Cancellation during the async delete callback waits for that callback to
   // settle, then fences its late result and every subsequent model turn.
   const pendingDeleteController = new AbortController();

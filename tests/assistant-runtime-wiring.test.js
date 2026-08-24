@@ -751,6 +751,40 @@ assertInOrder(
   ],
   'the private job executor and its process identity must be consumed only by the exact process broker route while production remains suspended'
 );
+
+assertInOrder(
+  legacyExecuteSource,
+  [
+    "readAgenticDeleteDataProperty(\n      executionContext,\n      'projectRootLease'",
+    "readAgenticDeleteDataProperty(projectRootLease, 'reader')",
+    'const domainReadBrokerFactory = agenticDomainReadBrokerFactoryInstance;',
+    'domainReadBrokerFactory.createRoute(Object.freeze({',
+    'binding: domainReadBinding,',
+    'projectRootReader,',
+    "Object.defineProperty(agenticExecutionOptions, 'readDomain'",
+    'enumerable: false,',
+    'domainReadRoute.execute(Object.freeze({',
+    "capability: readAgenticDeleteDataProperty(domainInput, 'capability')",
+    "action: readAgenticDeleteDataProperty(domainInput, 'action')",
+    "payload: readAgenticDeleteDataProperty(domainInput, 'payload')",
+    'Object.freeze(agenticExecutionOptions)',
+  ],
+  'Files, Map, and Milestones must enter the loop only through the private job-bound domain broker route'
+);
+const privateDomainCallbackStart = legacyExecuteSource.indexOf(
+  "Object.defineProperty(agenticExecutionOptions, 'readDomain'"
+);
+assert.ok(privateDomainCallbackStart >= 0, 'missing private readDomain callback');
+assert.ok(
+  legacyExecuteSource.slice(privateDomainCallbackStart, privateDomainCallbackStart + 220)
+    .includes('enumerable: false'),
+  'readDomain must remain non-enumerable'
+);
+assert.strictEqual(
+  legacyExecuteSource.includes('projectRootReader: projectRootReader'),
+  false,
+  'the raw project-root reader must never be forwarded to the model loop'
+);
 for (const privateProcessCallback of [
   'executeProcess',
   'readProcess',
@@ -789,6 +823,18 @@ assertInOrder(
     'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
   ],
   'the attested sandbox registry and process broker factory must be composed before coordinator execution starts'
+);
+assertInOrder(
+  mainSource,
+  [
+    'const agenticDomainReadBrokerFactory = createAgenticDomainReadBrokerFactory({',
+    'authorizeLifecycle: authorizeAgenticDeleteLifecycle,',
+    'authorizeRoot: authorizeAgenticDeleteRoot,',
+    'authorizeEffectFrontier: authorizeAgenticDeleteEffectFrontier,',
+    'agenticDomainReadBrokerFactoryInstance = agenticDomainReadBrokerFactory;',
+    'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
+  ],
+  'the read-only domain broker factory must be composed before coordinated execution starts'
 );
 
 const releaseHookSource = extractFunctionDeclaration(

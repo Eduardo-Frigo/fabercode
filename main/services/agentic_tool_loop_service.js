@@ -94,6 +94,11 @@ const DELETE_PATHS_SAFE_STATES = new Set([
   'RECOVERY_POST_COMMIT',
 ]);
 const DELETE_PATHS_SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,79}$/;
+const DOMAIN_READ_SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,79}$/;
+const DOMAIN_READ_FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const DOMAIN_READ_MAX_NODES = 50_000;
+const DOMAIN_READ_MAX_DEPTH = 32;
+const DOMAIN_READ_MAX_STRING_BYTES = 2 * 1024 * 1024;
 
 function ownDataValue(record, key) {
   if (!record || (typeof record !== 'object' && typeof record !== 'function')
@@ -105,6 +110,79 @@ function ownDataValue(record, key) {
     return undefined;
   }
   return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined;
+}
+
+function snapshotDomainReadData(
+  value,
+  state = { seen: new Set(), nodes: 0, stringBytes: 0 },
+  depth = 0
+) {
+  if (depth > DOMAIN_READ_MAX_DEPTH) {
+    throw new TypeError('Domain read result exceeds its depth bound');
+  }
+  state.nodes += 1;
+  if (state.nodes > DOMAIN_READ_MAX_NODES) {
+    throw new TypeError('Domain read result exceeds its node bound');
+  }
+  if (value === null || typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || Object.is(value, -0)) {
+      throw new TypeError('Domain read result contains an invalid number');
+    }
+    return value;
+  }
+  if (typeof value === 'string') {
+    if (value.includes('\0')) throw new TypeError('Domain read result contains NUL');
+    state.stringBytes += Buffer.byteLength(value, 'utf8');
+    if (state.stringBytes > DOMAIN_READ_MAX_STRING_BYTES) {
+      throw new TypeError('Domain read result exceeds its string bound');
+    }
+    return value;
+  }
+  if (!value || typeof value !== 'object' || util.types.isProxy(value)) {
+    throw new TypeError('Domain read result contains an unsupported value');
+  }
+  if (state.seen.has(value)) throw new TypeError('Domain read result contains a cycle');
+  const isArray = Array.isArray(value);
+  const prototype = Object.getPrototypeOf(value);
+  if ((isArray && prototype !== Array.prototype)
+    || (!isArray && prototype !== Object.prototype && prototype !== null)) {
+    throw new TypeError('Domain read result must contain plain data');
+  }
+  const keys = Reflect.ownKeys(value).filter((key) => !(isArray && key === 'length'));
+  if (keys.some((key) => typeof key !== 'string' || DOMAIN_READ_FORBIDDEN_KEYS.has(key))) {
+    throw new TypeError('Domain read result contains a forbidden key');
+  }
+  if (isArray && (keys.length !== value.length
+    || keys.some((key, index) => key !== String(index)))) {
+    throw new TypeError('Domain read result arrays must be dense');
+  }
+  state.seen.add(value);
+  try {
+    if (isArray) {
+      const entries = keys.map((key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!descriptor || descriptor.enumerable !== true
+          || !Object.hasOwn(descriptor, 'value')) {
+          throw new TypeError('Domain read arrays must contain data properties');
+        }
+        return snapshotDomainReadData(descriptor.value, state, depth + 1);
+      });
+      return Object.freeze(entries);
+    }
+    const output = {};
+    for (const key of keys.sort()) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || descriptor.enumerable !== true
+        || !Object.hasOwn(descriptor, 'value') || descriptor.value === undefined) {
+        throw new TypeError('Domain read objects must contain data properties');
+      }
+      output[key] = snapshotDomainReadData(descriptor.value, state, depth + 1);
+    }
+    return Object.freeze(output);
+  } finally {
+    state.seen.delete(value);
+  }
 }
 
 function optionalExecutionCallback(executionContext, key) {
@@ -683,6 +761,60 @@ function sanitizeDeletePathsToolResult(raw, paths) {
   }
 }
 
+function failedDomainReadToolResult(raw, fallbackCode = 'DOMAIN_READ_OPERATION_FAILED') {
+  const rawError = ownDataValue(raw, 'error');
+  const errorCodeValue = ownDataValue(rawError, 'code') || ownDataValue(raw, 'code');
+  const errorCode = typeof errorCodeValue === 'string'
+    && DOMAIN_READ_SAFE_ERROR_CODE.test(errorCodeValue)
+    ? errorCodeValue
+    : fallbackCode;
+  return Object.freeze({
+    ok: false,
+    status: ownDataValue(raw, 'status') === 'denied' ? 'denied' : 'failed',
+    message: 'A leitura governada do domínio foi negada ou não pôde ser concluída.',
+    errors: Object.freeze([errorCode]),
+    modifiedFiles: Object.freeze([]),
+    data: null,
+  });
+}
+
+function sanitizeDomainReadToolResult(raw, capability, action) {
+  try {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)
+      || util.types.isProxy(raw)
+      || (Object.getPrototypeOf(raw) !== Object.prototype
+        && Object.getPrototypeOf(raw) !== null)
+      || ownDataValue(raw, 'status') !== 'completed'
+      || ownDataValue(raw, 'decision') !== 'allow') {
+      return failedDomainReadToolResult(raw);
+    }
+    const output = snapshotDomainReadData(ownDataValue(raw, 'output'));
+    if (!output || typeof output !== 'object' || Array.isArray(output)
+      || ownDataValue(output, 'ok') !== true) {
+      return failedDomainReadToolResult(
+        output,
+        'DOMAIN_READ_INVALID_RESULT'
+      );
+    }
+    const labels = {
+      'filesystem.project_tree': 'Árvore governada do projeto lida pelo Broker.',
+      'filesystem.read_file': 'Arquivo governado do projeto lido pelo Broker.',
+      'application_map.read': 'Application Map lido pelo serviço de domínio governado.',
+      'milestones.read': 'Milestones lidas pelo serviço de domínio governado.',
+    };
+    return Object.freeze({
+      ok: true,
+      status: 'completed',
+      message: labels[`${capability}.${action}`] || 'Domínio lido pelo Broker.',
+      errors: Object.freeze([]),
+      modifiedFiles: Object.freeze([]),
+      data: output,
+    });
+  } catch {
+    return failedDomainReadToolResult(raw, 'DOMAIN_READ_INVALID_RESULT');
+  }
+}
+
 function safeToolCallKey(toolName, input) {
   if (toolName === 'run_command') {
     try {
@@ -880,6 +1012,10 @@ function createAgenticToolLoopService(dependencies = {}) {
       executionContext,
       'processControlAvailable'
     ) === true;
+    const domainReadAvailable = ownDataValue(
+      executionContext,
+      'domainReadAvailable'
+    ) === true;
     return [
       'Você é o runtime agentic do Faber Code. Seu trabalho é agir como um engenheiro de software sênior direto no projeto.',
       'IMPORTANTE: Você está na fase de EXECUÇÃO. Não responda apenas com texto (ex: "Vou começar"). Você deve chamar ferramentas imediatamente.',
@@ -891,7 +1027,9 @@ function createAgenticToolLoopService(dependencies = {}) {
           ? '3. PROCESSOS ISOLADOS: Use `run_command` somente para executáveis e argumentos explícitos. Acompanhe com `read_command_output` e `wait_command`; use `stop_command` para encerrar a árvore. Rede, shell composto e preview continuam indisponíveis; nunca afirme uma validação sem evidência retornada pelas ferramentas.'
           : '3. PROCESSOS ISOLADOS: Use `run_command` somente para executáveis e argumentos explícitos dentro do sandbox do job. Rede, shell composto e preview continuam indisponíveis; nunca afirme uma validação sem evidência retornada pelas ferramentas.'
         : '3. VALIDAÇÃO HONESTA: As ferramentas atuais não executam lint, testes ou builds nem capturam preview. Nunca afirme que essas validações foram executadas; informe-as como pendentes para o usuário.',
-      '4. MAPA DA APLICAÇÃO E MILESTONES: `.faber/**` é um namespace privado do runtime — nunca leia, crie ou edite arquivos nele. Ao alterar o produto, mantenha atualizados somente os documentos públicos aplicáveis em `docs/application-map/` e `docs/milestones/`; os espelhos internos são responsabilidade de serviços main-only.',
+      domainReadAvailable
+        ? '4. MAPA DA APLICAÇÃO E MILESTONES: Use `read_application_map` e `read_milestones` para consultar os estados canônicos. `.faber/**` continua privado — nunca leia, crie ou edite esse namespace como arquivo.'
+        : '4. MAPA DA APLICAÇÃO E MILESTONES: `.faber/**` é um namespace privado do runtime — nunca leia, crie ou edite arquivos nele. Ao alterar o produto, mantenha atualizados somente os documentos públicos aplicáveis em `docs/application-map/` e `docs/milestones/`; os espelhos internos são responsabilidade de serviços main-only.',
       '## Conclusão',
       'Sempre chame a ferramenta `finish_task` para indicar que você terminou, não importa se foi um sucesso ou se você encontrou um bloqueio instransponível.',
       `Projeto ativo: ${rootPath || 'indisponível'}.`,
@@ -906,6 +1044,7 @@ function createAgenticToolLoopService(dependencies = {}) {
       ? signal
       : null;
     const deletePaths = optionalExecutionCallback(executionContext, 'deletePaths');
+    const readDomain = optionalExecutionCallback(executionContext, 'readDomain');
     const processExecutionPolicy = ownDataValue(executionContext, 'processExecutionPolicy');
     const processCallback = optionalExecutionCallback(executionContext, 'executeProcess');
     const executeProcess = processExecutionPolicy === AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED
@@ -938,17 +1077,27 @@ function createAgenticToolLoopService(dependencies = {}) {
         ? executeTool(name, input, invocationOptions)
         : executeTool(name, input)
     );
+    const governedDomainRead = async (capabilityId, action, payload) => {
+      const raw = await readDomain(Object.freeze({
+        capability: capabilityId,
+        action,
+        payload: Object.freeze(payload),
+      }));
+      return sanitizeDomainReadToolResult(raw, capabilityId, action);
+    };
 
     return [
       {
         name: 'project_tree',
-        description: 'Lista a árvore resumida do projeto ativo, incluindo stacks detectadas e arquivos principais.',
+        description: 'Lista a árvore resumida do projeto ativo sem alterar arquivos.',
         inputSchema: {
           type: 'object',
           additionalProperties: false,
           properties: {},
         },
-        execute: async () => capability('filesystem', 'project_tree', {}),
+        execute: async () => readDomain
+          ? governedDomainRead('filesystem', 'project_tree', { maxEntries: 500 })
+          : capability('filesystem', 'project_tree', {}),
       },
       {
         name: 'read_file',
@@ -962,12 +1111,45 @@ function createAgenticToolLoopService(dependencies = {}) {
             maxChars: { type: 'integer', minimum: 200, maximum: 20000 },
           },
         },
-        execute: async (input = {}) =>
-          capability('filesystem', 'read_file', {
-            path: input.path,
-            maxChars: input.maxChars,
-          }),
+        execute: async (input = {}) => {
+          const requestedMaxChars = ownDataValue(input, 'maxChars');
+          const maxBytes = Number.isSafeInteger(requestedMaxChars)
+            ? requestedMaxChars
+            : 12_000;
+          const filePath = ownDataValue(input, 'path');
+          return readDomain
+            ? governedDomainRead('filesystem', 'read_file', {
+              path: filePath,
+              maxBytes,
+            })
+            : capability('filesystem', 'read_file', {
+              path: filePath,
+              maxChars: requestedMaxChars,
+            });
+        },
       },
+      ...(readDomain ? [
+        {
+          name: 'read_application_map',
+          description: 'Lê o Application Map canônico por uma capacidade de domínio read-only e retorna sua revisão.',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {},
+          },
+          execute: async () => governedDomainRead('application_map', 'read', {}),
+        },
+        {
+          name: 'read_milestones',
+          description: 'Lê as Milestones canônicas por uma capacidade de domínio read-only e retorna sua revisão.',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {},
+          },
+          execute: async () => governedDomainRead('milestones', 'read', {}),
+        },
+      ] : []),
       {
         name: 'search_text',
         description: 'Busca texto nos arquivos do projeto sem alterar conteúdo.',
@@ -1572,6 +1754,7 @@ function createAgenticToolLoopService(dependencies = {}) {
     const signal = options && options.signal ? options.signal : null;
     throwIfExecutionCancelled(signal, 'agentic_execution:start');
     const deletePaths = optionalExecutionCallback(options, 'deletePaths');
+    const readDomain = optionalExecutionCallback(options, 'readDomain');
     const processExecutionPolicy = ownDataValue(options, 'processExecutionPolicy');
     const executeProcess = optionalExecutionCallback(options, 'executeProcess');
     const readProcess = optionalExecutionCallback(options, 'readProcess');
@@ -1585,6 +1768,7 @@ function createAgenticToolLoopService(dependencies = {}) {
     const tools = buildBoundTools(projectInfo, {
       signal,
       deletePaths,
+      readDomain,
       processExecutionPolicy,
       executeProcess,
       readProcess,
@@ -1609,6 +1793,7 @@ function createAgenticToolLoopService(dependencies = {}) {
       buildSystemPrompt(projectInfo, {
         processExecutionAvailable,
         processControlAvailable,
+        domainReadAvailable: Boolean(readDomain),
       }),
       contextPackPrompts.trustedPrompt,
     ].filter(Boolean).join('\n\n');

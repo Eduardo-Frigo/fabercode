@@ -208,6 +208,9 @@ const {
 } = require('./main/services/agentic_delete_mutation_backend_factory');
 const { createAgenticDeleteRuntimeService } = require('./main/services/agentic_delete_runtime_service');
 const {
+  createAgenticDomainReadBrokerFactory,
+} = require('./main/services/agentic_domain_read_broker_factory');
+const {
   createAgenticProcessBrokerFactory,
 } = require('./main/services/agentic_process_broker_factory');
 const {
@@ -1179,6 +1182,7 @@ let agenticDeleteActorId = `main-process:${crypto.randomUUID()}`;
 let agenticDeleteReleaseBinding = null;
 let agenticDeleteMutationBackendSelection = null;
 let agenticDeleteRuntimeServiceInstance = null;
+let agenticDomainReadBrokerFactoryInstance = null;
 let agenticProcessBrokerFactoryInstance = null;
 let agenticDeleteStartupRecoveryHealthy = false;
 let assistantExecutionCoordinatorInstance = null;
@@ -6093,6 +6097,11 @@ app.whenReady().then(async () => {
       executionContext,
       'sandboxExecutor'
     );
+    const projectRootLease = readAgenticDeleteDataProperty(
+      executionContext,
+      'projectRootLease'
+    );
+    const projectRootReader = readAgenticDeleteDataProperty(projectRootLease, 'reader');
     if (!agenticDeleteStartupRecoveryHealthy) {
       if (jobId) {
         try {
@@ -6190,7 +6199,10 @@ app.whenReady().then(async () => {
           : null;
         const processBrokerFactory = agenticProcessBrokerFactoryInstance;
         const processBinding = currentAgenticDeleteBinding(authorityBinding);
+        const domainReadBrokerFactory = agenticDomainReadBrokerFactoryInstance;
+        const domainReadBinding = currentAgenticDeleteBinding(authorityBinding);
         let processRoute = null;
+        let domainReadRoute = null;
         if (processBrokerFactory && processBinding && sandboxExecutor) {
           try {
             processRoute = processBrokerFactory.createRoute(Object.freeze({
@@ -6201,6 +6213,19 @@ app.whenReady().then(async () => {
             appendAuditEvent('assistant.agentic_process_route_rejected', {
               jobId,
               reason: 'process_route_invalid',
+            });
+          }
+        }
+        if (domainReadBrokerFactory && domainReadBinding && projectRootReader) {
+          try {
+            domainReadRoute = domainReadBrokerFactory.createRoute(Object.freeze({
+              binding: domainReadBinding,
+              projectRootReader,
+            }));
+          } catch {
+            appendAuditEvent('assistant.agentic_domain_read_route_rejected', {
+              jobId,
+              reason: 'domain_read_route_invalid',
             });
           }
         }
@@ -6222,6 +6247,18 @@ app.whenReady().then(async () => {
               projectLabel,
             }))
           );
+        }
+        if (domainReadRoute) {
+          Object.defineProperty(agenticExecutionOptions, 'readDomain', {
+            configurable: false,
+            enumerable: false,
+            value: (domainInput) => domainReadRoute.execute(Object.freeze({
+              capability: readAgenticDeleteDataProperty(domainInput, 'capability'),
+              action: readAgenticDeleteDataProperty(domainInput, 'action'),
+              payload: readAgenticDeleteDataProperty(domainInput, 'payload'),
+            })),
+            writable: false,
+          });
         }
         if (processRoute) {
           Object.defineProperty(agenticExecutionOptions, 'executeProcess', {
@@ -7044,6 +7081,13 @@ app.whenReady().then(async () => {
     })
     : null;
   agenticProcessBrokerFactoryInstance = agenticProcessBrokerFactory;
+  const agenticDomainReadBrokerFactory = createAgenticDomainReadBrokerFactory({
+    authorizeLifecycle: authorizeAgenticDeleteLifecycle,
+    authorizeRoot: authorizeAgenticDeleteRoot,
+    authorizeEffectFrontier: authorizeAgenticDeleteEffectFrontier,
+    audit: (event) => appendAuditEvent('assistant.agentic_domain_read_capability', event),
+  });
+  agenticDomainReadBrokerFactoryInstance = agenticDomainReadBrokerFactory;
   const assistantExecutionCoordinator = createAssistantExecutionCoordinator({
     authorityService: assistantJobAuthorityService,
     maxActiveJobs: MAX_JOBS_STORED,
