@@ -564,6 +564,9 @@ function assertExecutionWorkspaceBoundary() {
   const agenticProcessBrokerFactorySource = read(
     'main/services/agentic_process_broker_factory.js'
   );
+  const agenticGitReadBrokerFactorySource = read(
+    'main/services/agentic_git_read_broker_factory.js'
+  );
   const brokerSandboxRegistrySource = read(
     'main/services/execution_isolation_broker_sandbox_registry.js'
   );
@@ -880,6 +883,9 @@ function assertExecutionWorkspaceBoundary() {
       && mainSource.includes(
         "require('./main/services/agentic_process_broker_factory')"
       )
+      && mainSource.includes(
+        "require('./main/services/agentic_git_read_broker_factory')"
+      )
       && mainSource.includes('createExecutionIsolationRuntimeServices({')
       && mainSource.includes('executionIsolationRuntimeServices = runtimeServices;'),
     'production must compose portable backends, the job-bound executor, and its broker route through one lifecycle-owned boundary'
@@ -895,8 +901,32 @@ function assertExecutionWorkspaceBoundary() {
       && brokerSandboxRegistrySource.includes('SANDBOX_EXECUTOR_REQUIRED'),
     'agentic process execution must cross the generic broker and selection-only registry before the private executor'
   );
+  assert.ok(
+    agenticGitReadBrokerFactorySource.includes('createProjectCapabilityBroker({')
+      && agenticGitReadBrokerFactorySource.includes(
+        'kind: PROJECT_CAPABILITY_KINDS.GIT'
+      )
+      && agenticGitReadBrokerFactorySource.includes(
+        'PROJECT_CAPABILITY_EFFECTS.FILESYSTEM_READ'
+      )
+      && agenticGitReadBrokerFactorySource.includes(
+        'PROJECT_CAPABILITY_EFFECTS.PROCESS_EXECUTE'
+      )
+      && agenticGitReadBrokerFactorySource.includes("'--no-optional-locks'")
+      && agenticGitReadBrokerFactorySource.includes("'--no-pager'")
+      && agenticGitReadBrokerFactorySource.includes("'core.quotepath=false'")
+      && agenticGitReadBrokerFactorySource.includes("'core.fsmonitor=false'")
+      && agenticGitReadBrokerFactorySource.includes("'submodule.recurse=false'")
+      && agenticGitReadBrokerFactorySource.includes("origin: 'agentic_tool_loop'")
+      && agenticGitReadBrokerFactorySource.includes("networkMode: 'disabled'")
+      && agenticGitReadBrokerFactorySource.includes(
+        "commandPolicy: 'fixed_read_only'"
+      ),
+    'agentic Git status must be a fixed read-only process capability through the generic broker and private executor'
+  );
   for (const [label, source] of [
     ['agentic process broker factory', agenticProcessBrokerFactorySource],
+    ['agentic Git read broker factory', agenticGitReadBrokerFactorySource],
     ['execution isolation broker registry', brokerSandboxRegistrySource],
   ]) {
     assertDoesNotMatch(source, /require\(['"](?:electron|child_process)['"]\)/,
@@ -945,8 +975,14 @@ function assertExecutionWorkspaceBoundary() {
       )
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:agentic-process-broker'
+      )
+      && packageConfig.scripts['test:agentic-git-read-broker'].includes(
+        'agentic-git-read-broker-factory.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:agentic-git-read-broker'
       ),
-    'aggregate gates must run gateway, session, executor, broker registry, and agentic process route tests'
+    'aggregate gates must run gateway, session, executor, broker registry, process route, and fixed Git read tests'
   );
   assertDoesNotMatch(
     isolationProviderFactorySource,

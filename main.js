@@ -211,6 +211,9 @@ const {
   createAgenticDomainReadBrokerFactory,
 } = require('./main/services/agentic_domain_read_broker_factory');
 const {
+  createAgenticGitReadBrokerFactory,
+} = require('./main/services/agentic_git_read_broker_factory');
+const {
   createAgenticProcessBrokerFactory,
 } = require('./main/services/agentic_process_broker_factory');
 const {
@@ -1183,6 +1186,7 @@ let agenticDeleteReleaseBinding = null;
 let agenticDeleteMutationBackendSelection = null;
 let agenticDeleteRuntimeServiceInstance = null;
 let agenticDomainReadBrokerFactoryInstance = null;
+let agenticGitReadBrokerFactoryInstance = null;
 let agenticProcessBrokerFactoryInstance = null;
 let agenticDeleteStartupRecoveryHealthy = false;
 let assistantExecutionCoordinatorInstance = null;
@@ -6199,9 +6203,12 @@ app.whenReady().then(async () => {
           : null;
         const processBrokerFactory = agenticProcessBrokerFactoryInstance;
         const processBinding = currentAgenticDeleteBinding(authorityBinding);
+        const gitReadBrokerFactory = agenticGitReadBrokerFactoryInstance;
+        const gitReadBinding = currentAgenticDeleteBinding(authorityBinding);
         const domainReadBrokerFactory = agenticDomainReadBrokerFactoryInstance;
         const domainReadBinding = currentAgenticDeleteBinding(authorityBinding);
         let processRoute = null;
+        let gitReadRoute = null;
         let domainReadRoute = null;
         if (processBrokerFactory && processBinding && sandboxExecutor) {
           try {
@@ -6213,6 +6220,19 @@ app.whenReady().then(async () => {
             appendAuditEvent('assistant.agentic_process_route_rejected', {
               jobId,
               reason: 'process_route_invalid',
+            });
+          }
+        }
+        if (gitReadBrokerFactory && gitReadBinding && sandboxExecutor) {
+          try {
+            gitReadRoute = gitReadBrokerFactory.createRoute(Object.freeze({
+              binding: gitReadBinding,
+              sandboxExecutor,
+            }));
+          } catch {
+            appendAuditEvent('assistant.agentic_git_read_route_rejected', {
+              jobId,
+              reason: 'git_read_route_invalid',
             });
           }
         }
@@ -6257,6 +6277,14 @@ app.whenReady().then(async () => {
               action: readAgenticDeleteDataProperty(domainInput, 'action'),
               payload: readAgenticDeleteDataProperty(domainInput, 'payload'),
             })),
+            writable: false,
+          });
+        }
+        if (gitReadRoute) {
+          Object.defineProperty(agenticExecutionOptions, 'readGitStatus', {
+            configurable: false,
+            enumerable: false,
+            value: () => gitReadRoute.readStatus(),
             writable: false,
           });
         }
@@ -7081,6 +7109,16 @@ app.whenReady().then(async () => {
     })
     : null;
   agenticProcessBrokerFactoryInstance = agenticProcessBrokerFactory;
+  const agenticGitReadBrokerFactory = assistantProcessSandboxRegistry
+    ? createAgenticGitReadBrokerFactory({
+      authorizeLifecycle: authorizeAgenticDeleteLifecycle,
+      authorizeRoot: authorizeAgenticDeleteRoot,
+      authorizeEffectFrontier: authorizeAgenticDeleteEffectFrontier,
+      sandboxRegistry: assistantProcessSandboxRegistry,
+      audit: (event) => appendAuditEvent('assistant.agentic_git_read_capability', event),
+    })
+    : null;
+  agenticGitReadBrokerFactoryInstance = agenticGitReadBrokerFactory;
   const agenticDomainReadBrokerFactory = createAgenticDomainReadBrokerFactory({
     authorizeLifecycle: authorizeAgenticDeleteLifecycle,
     authorizeRoot: authorizeAgenticDeleteRoot,

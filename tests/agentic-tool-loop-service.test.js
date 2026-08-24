@@ -1325,6 +1325,125 @@ async function run() {
     false
   );
 
+  // Git status is a separate private process-backed read. It is advertised
+  // only when main injects the fixed-command route, accepts no model input,
+  // and strips/rejects internal executor fields before they reach the model.
+  let gitReadTurn = 0;
+  let gitReadDefinitions = null;
+  let gitReadSystemPrompt = '';
+  let gitReadCallbackCalls = 0;
+  const gitReadService = buildCancellationService({
+    requestModelTurn: async ({ systemPrompt, tools, toolResults }) => {
+      gitReadTurn += 1;
+      if (gitReadTurn === 1) {
+        gitReadDefinitions = tools;
+        gitReadSystemPrompt = systemPrompt;
+        return {
+          responseId: 'git-read-1',
+          text: '',
+          toolCalls: [
+            { callId: 'git-status-safe', name: 'read_git_status', input: {} },
+            { callId: 'git-status-hostile', name: 'read_git_status', input: {} },
+          ],
+        };
+      }
+      assert.strictEqual(toolResults.length, 2);
+      const outputs = toolResults.map((entry) => JSON.parse(entry.output));
+      assert.strictEqual(outputs[0].ok, true);
+      assert.strictEqual(outputs[0].data.branch, 'main...origin/main [ahead 1]');
+      assert.deepStrictEqual(outputs[0].data.counts, {
+        staged: 1,
+        unstaged: 0,
+        untracked: 1,
+        conflicted: 0,
+      });
+      assert.strictEqual(outputs[0].data.entries[0].path, 'src/app.js');
+      assert.strictEqual(outputs[1].ok, false);
+      assert.deepStrictEqual(outputs[1].errors, ['GIT_STATUS_INVALID_RESULT']);
+      assert.strictEqual(JSON.stringify(outputs).includes('sandbox-exec:'), false);
+      assert.strictEqual(JSON.stringify(outputs).includes('/private/projects/a'), false);
+      return {
+        responseId: 'git-read-2',
+        text: '',
+        toolCalls: [{
+          callId: 'git-read-finish',
+          name: 'finish_task',
+          input: { status: 'success', summary: 'status Git inspecionado' },
+        }],
+      };
+    },
+  });
+  const gitReadOptions = { jobId: 'job-git-read' };
+  Object.defineProperty(gitReadOptions, 'readGitStatus', {
+    configurable: false,
+    enumerable: false,
+    value: async function readGitStatus() {
+      assert.strictEqual(arguments.length, 0);
+      gitReadCallbackCalls += 1;
+      const output = {
+        ok: true,
+        format: 'git-status-porcelain-v1',
+        branch: 'main...origin/main [ahead 1]',
+        clean: false,
+        counts: {
+          staged: 1,
+          unstaged: 0,
+          untracked: 1,
+          conflicted: 0,
+        },
+        entries: [
+          { status: 'M ', path: 'src/app.js' },
+          { status: '??', path: 'notes.txt' },
+        ],
+        ...(gitReadCallbackCalls === 2 ? {
+          executionId: 'sandbox-exec:' + 'f'.repeat(64),
+          canonicalRootPath: '/private/projects/a',
+        } : {}),
+      };
+      return Object.freeze({
+        status: 'completed',
+        decision: 'allow',
+        output: Object.freeze(output),
+        error: null,
+      });
+    },
+    writable: false,
+  });
+  const governedGitReadResult = await gitReadService.executeAction(
+    buildAction('job-git-read', 'inspecione o status do repositório'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    Object.freeze(gitReadOptions)
+  );
+  assert.strictEqual(governedGitReadResult.ok, true);
+  assert.strictEqual(gitReadCallbackCalls, 2);
+  assert(gitReadDefinitions.some((tool) => tool.name === 'read_git_status'));
+  assert(gitReadSystemPrompt.includes('read_git_status'));
+
+  let absentGitDefinitions = null;
+  const absentGitService = buildCancellationService({
+    requestModelTurn: async ({ tools }) => {
+      absentGitDefinitions = tools;
+      return {
+        responseId: 'git-absent',
+        text: '',
+        toolCalls: [{
+          callId: 'git-absent-finish',
+          name: 'finish_task',
+          input: { status: 'success', summary: 'sem rota Git privada' },
+        }],
+      };
+    },
+  });
+  await absentGitService.executeAction(
+    buildAction('job-git-absent', 'inspecione o status do repositório'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    { jobId: 'job-git-absent' }
+  );
+  assert.strictEqual(
+    absentGitDefinitions.some((tool) => tool.name === 'read_git_status'),
+    false
+  );
+
   // Cancellation during the async delete callback waits for that callback to
   // settle, then fences its late result and every subsequent model turn.
   const pendingDeleteController = new AbortController();

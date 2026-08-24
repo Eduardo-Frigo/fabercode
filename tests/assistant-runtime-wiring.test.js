@@ -755,6 +755,32 @@ assertInOrder(
 assertInOrder(
   legacyExecuteSource,
   [
+    "readAgenticDeleteDataProperty(\n      executionContext,\n      'sandboxExecutor'",
+    'const gitReadBrokerFactory = agenticGitReadBrokerFactoryInstance;',
+    'const gitReadBinding = currentAgenticDeleteBinding(authorityBinding);',
+    'gitReadBrokerFactory.createRoute(Object.freeze({',
+    'binding: gitReadBinding,',
+    'sandboxExecutor,',
+    "Object.defineProperty(agenticExecutionOptions, 'readGitStatus'",
+    'enumerable: false,',
+    'gitReadRoute.readStatus()',
+    'Object.freeze(agenticExecutionOptions)',
+  ],
+  'Git status must enter the loop only through a fixed-command broker route bound to the private job executor'
+);
+const privateGitReadCallbackStart = legacyExecuteSource.indexOf(
+  "Object.defineProperty(agenticExecutionOptions, 'readGitStatus'"
+);
+assert.ok(privateGitReadCallbackStart >= 0, 'missing private readGitStatus callback');
+assert.ok(
+  legacyExecuteSource.slice(privateGitReadCallbackStart, privateGitReadCallbackStart + 220)
+    .includes('enumerable: false'),
+  'readGitStatus must remain non-enumerable'
+);
+
+assertInOrder(
+  legacyExecuteSource,
+  [
     "readAgenticDeleteDataProperty(\n      executionContext,\n      'projectRootLease'",
     "readAgenticDeleteDataProperty(projectRootLease, 'reader')",
     'const domainReadBrokerFactory = agenticDomainReadBrokerFactoryInstance;',
@@ -823,6 +849,20 @@ assertInOrder(
     'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
   ],
   'the attested sandbox registry and process broker factory must be composed before coordinator execution starts'
+);
+assertInOrder(
+  mainSource,
+  [
+    'const agenticGitReadBrokerFactory = assistantProcessSandboxRegistry',
+    '? createAgenticGitReadBrokerFactory({',
+    'authorizeLifecycle: authorizeAgenticDeleteLifecycle,',
+    'authorizeRoot: authorizeAgenticDeleteRoot,',
+    'authorizeEffectFrontier: authorizeAgenticDeleteEffectFrontier,',
+    'sandboxRegistry: assistantProcessSandboxRegistry,',
+    'agenticGitReadBrokerFactoryInstance = agenticGitReadBrokerFactory;',
+    'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
+  ],
+  'the fixed Git read broker factory must be composed before coordinated execution starts'
 );
 assertInOrder(
   mainSource,

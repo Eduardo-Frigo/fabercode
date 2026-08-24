@@ -99,6 +99,12 @@ const DOMAIN_READ_FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototy
 const DOMAIN_READ_MAX_NODES = 50_000;
 const DOMAIN_READ_MAX_DEPTH = 32;
 const DOMAIN_READ_MAX_STRING_BYTES = 2 * 1024 * 1024;
+const GIT_STATUS_SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,79}$/;
+const GIT_STATUS_FORMAT = 'git-status-porcelain-v1';
+const GIT_STATUS_MAX_ENTRIES = 10_000;
+const GIT_STATUS_MAX_PATH_BYTES = 8 * 1024;
+const GIT_STATUS_MAX_PUBLIC_BYTES = 256 * 1024;
+const GIT_STATUS_CONFLICT_STATES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
 
 function ownDataValue(record, key) {
   if (!record || (typeof record !== 'object' && typeof record !== 'function')
@@ -815,6 +821,183 @@ function sanitizeDomainReadToolResult(raw, capability, action) {
   }
 }
 
+function exactPlainDataFields(value, expectedKeys) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || util.types.isProxy(value)) return null;
+  let prototype;
+  let keys;
+  try {
+    prototype = Object.getPrototypeOf(value);
+    keys = Reflect.ownKeys(value);
+  } catch {
+    return null;
+  }
+  if ((prototype !== Object.prototype && prototype !== null)
+    || keys.length !== expectedKeys.length
+    || expectedKeys.some((key) => !keys.includes(key))
+    || keys.some((key) => typeof key !== 'string' || !expectedKeys.includes(key))) {
+    return null;
+  }
+  const fields = new Map();
+  for (const key of keys) {
+    let descriptor;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(value, key);
+    } catch {
+      return null;
+    }
+    if (!descriptor || descriptor.enumerable !== true
+      || !Object.hasOwn(descriptor, 'value') || descriptor.value === undefined) {
+      return null;
+    }
+    fields.set(key, descriptor.value);
+  }
+  return fields;
+}
+
+function failedGitStatusToolResult(raw, fallbackCode = 'GIT_STATUS_OPERATION_FAILED') {
+  const rawOutput = ownDataValue(raw, 'output');
+  const rawError = ownDataValue(raw, 'error');
+  const rawCode = ownDataValue(rawOutput, 'code')
+    || ownDataValue(rawError, 'code')
+    || ownDataValue(raw, 'code');
+  const code = typeof rawCode === 'string' && GIT_STATUS_SAFE_ERROR_CODE.test(rawCode)
+    ? rawCode
+    : fallbackCode;
+  return Object.freeze({
+    ok: false,
+    status: ownDataValue(raw, 'status') === 'denied' ? 'denied' : 'failed',
+    message: 'O status Git governado foi negado ou não pôde ser lido.',
+    errors: Object.freeze([code]),
+    modifiedFiles: Object.freeze([]),
+    data: null,
+  });
+}
+
+function densePlainArrayKeys(value, maximum) {
+  if (!Array.isArray(value) || util.types.isProxy(value)
+    || Object.getPrototypeOf(value) !== Array.prototype
+    || value.length > maximum) return null;
+  let keys;
+  try {
+    keys = Reflect.ownKeys(value).filter((key) => key !== 'length');
+  } catch {
+    return null;
+  }
+  return keys.length === value.length
+    && keys.every((key, index) => key === String(index))
+    ? keys
+    : null;
+}
+
+function sanitizeGitStatusToolResult(raw) {
+  try {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)
+      || util.types.isProxy(raw)
+      || (Object.getPrototypeOf(raw) !== Object.prototype
+        && Object.getPrototypeOf(raw) !== null)
+      || ownDataValue(raw, 'status') !== 'completed'
+      || ownDataValue(raw, 'decision') !== 'allow') {
+      return failedGitStatusToolResult(raw);
+    }
+    const output = ownDataValue(raw, 'output');
+    const outputOk = ownDataValue(output, 'ok');
+    if (outputOk === false) {
+      const failureFields = exactPlainDataFields(output, ['ok', 'code', 'format']);
+      if (!failureFields
+        || failureFields.get('format') !== GIT_STATUS_FORMAT
+        || typeof failureFields.get('code') !== 'string'
+        || !GIT_STATUS_SAFE_ERROR_CODE.test(failureFields.get('code'))) {
+        return failedGitStatusToolResult(raw, 'GIT_STATUS_INVALID_RESULT');
+      }
+      return failedGitStatusToolResult(raw);
+    }
+    const fields = exactPlainDataFields(
+      output,
+      ['ok', 'format', 'branch', 'clean', 'counts', 'entries']
+    );
+    if (!fields || fields.get('ok') !== true
+      || fields.get('format') !== GIT_STATUS_FORMAT
+      || typeof fields.get('branch') !== 'string'
+      || fields.get('branch').length < 1
+      || fields.get('branch').includes('\0')
+      || typeof fields.get('clean') !== 'boolean') {
+      return failedGitStatusToolResult(raw, 'GIT_STATUS_INVALID_RESULT');
+    }
+    const countFields = exactPlainDataFields(
+      fields.get('counts'),
+      ['staged', 'unstaged', 'untracked', 'conflicted']
+    );
+    const entries = fields.get('entries');
+    const entryKeys = densePlainArrayKeys(entries, GIT_STATUS_MAX_ENTRIES);
+    if (!countFields || !entryKeys
+      || [...countFields.values()].some((value) => !Number.isSafeInteger(value)
+        || value < 0 || Object.is(value, -0))) {
+      return failedGitStatusToolResult(raw, 'GIT_STATUS_INVALID_RESULT');
+    }
+    const counts = {
+      staged: 0,
+      unstaged: 0,
+      untracked: 0,
+      conflicted: 0,
+    };
+    const safeEntries = [];
+    let publicBytes = Buffer.byteLength(fields.get('branch'), 'utf8');
+    for (const key of entryKeys) {
+      const entryFields = exactPlainDataFields(entries[key], ['status', 'path']);
+      const status = entryFields && entryFields.get('status');
+      const filePath = entryFields && entryFields.get('path');
+      const pathBytes = typeof filePath === 'string'
+        ? Buffer.byteLength(filePath, 'utf8')
+        : 0;
+      if (!entryFields || typeof status !== 'string'
+        || !/^[ MADRCU?!T]{2}$/.test(status)
+        || typeof filePath !== 'string' || filePath.length < 1
+        || filePath.includes('\0') || pathBytes > GIT_STATUS_MAX_PATH_BYTES) {
+        return failedGitStatusToolResult(raw, 'GIT_STATUS_INVALID_RESULT');
+      }
+      if (status === '??') {
+        counts.untracked += 1;
+      } else if (GIT_STATUS_CONFLICT_STATES.has(status)) {
+        counts.conflicted += 1;
+      } else {
+        if (status[0] !== ' ' && status[0] !== '!') counts.staged += 1;
+        if (status[1] !== ' ' && status[1] !== '!') counts.unstaged += 1;
+      }
+      publicBytes += 2 + pathBytes;
+      if (publicBytes > GIT_STATUS_MAX_PUBLIC_BYTES) {
+        return failedGitStatusToolResult(raw, 'GIT_STATUS_INVALID_RESULT');
+      }
+      safeEntries.push(Object.freeze({ status, path: filePath }));
+    }
+    for (const key of Object.keys(counts)) {
+      if (countFields.get(key) !== counts[key]) {
+        return failedGitStatusToolResult(raw, 'GIT_STATUS_INVALID_RESULT');
+      }
+    }
+    if (fields.get('clean') !== (safeEntries.length === 0)) {
+      return failedGitStatusToolResult(raw, 'GIT_STATUS_INVALID_RESULT');
+    }
+    return Object.freeze({
+      ok: true,
+      status: 'completed',
+      message: 'Status Git lido por uma capacidade fixa e read-only no sandbox do job.',
+      errors: Object.freeze([]),
+      modifiedFiles: Object.freeze([]),
+      data: Object.freeze({
+        ok: true,
+        format: GIT_STATUS_FORMAT,
+        branch: fields.get('branch'),
+        clean: fields.get('clean'),
+        counts: Object.freeze(counts),
+        entries: Object.freeze(safeEntries),
+      }),
+    });
+  } catch {
+    return failedGitStatusToolResult(raw, 'GIT_STATUS_INVALID_RESULT');
+  }
+}
+
 function safeToolCallKey(toolName, input) {
   if (toolName === 'run_command') {
     try {
@@ -1016,6 +1199,10 @@ function createAgenticToolLoopService(dependencies = {}) {
       executionContext,
       'domainReadAvailable'
     ) === true;
+    const gitReadAvailable = ownDataValue(
+      executionContext,
+      'gitReadAvailable'
+    ) === true;
     return [
       'Você é o runtime agentic do Faber Code. Seu trabalho é agir como um engenheiro de software sênior direto no projeto.',
       'IMPORTANTE: Você está na fase de EXECUÇÃO. Não responda apenas com texto (ex: "Vou começar"). Você deve chamar ferramentas imediatamente.',
@@ -1030,6 +1217,9 @@ function createAgenticToolLoopService(dependencies = {}) {
       domainReadAvailable
         ? '4. MAPA DA APLICAÇÃO E MILESTONES: Use `read_application_map` e `read_milestones` para consultar os estados canônicos. `.faber/**` continua privado — nunca leia, crie ou edite esse namespace como arquivo.'
         : '4. MAPA DA APLICAÇÃO E MILESTONES: `.faber/**` é um namespace privado do runtime — nunca leia, crie ou edite arquivos nele. Ao alterar o produto, mantenha atualizados somente os documentos públicos aplicáveis em `docs/application-map/` e `docs/milestones/`; os espelhos internos são responsabilidade de serviços main-only.',
+      gitReadAvailable
+        ? '5. GIT READ-ONLY: Use `read_git_status` para consultar branch e arquivos alterados. Essa ferramenta executa somente um comando Git fixo, sem rede, no sandbox do job.'
+        : '5. GIT READ-ONLY: O status Git governado não está disponível nesta execução; não tente inferi-lo nem afirmar que foi consultado.',
       '## Conclusão',
       'Sempre chame a ferramenta `finish_task` para indicar que você terminou, não importa se foi um sucesso ou se você encontrou um bloqueio instransponível.',
       `Projeto ativo: ${rootPath || 'indisponível'}.`,
@@ -1045,6 +1235,7 @@ function createAgenticToolLoopService(dependencies = {}) {
       : null;
     const deletePaths = optionalExecutionCallback(executionContext, 'deletePaths');
     const readDomain = optionalExecutionCallback(executionContext, 'readDomain');
+    const readGitStatus = optionalExecutionCallback(executionContext, 'readGitStatus');
     const processExecutionPolicy = ownDataValue(executionContext, 'processExecutionPolicy');
     const processCallback = optionalExecutionCallback(executionContext, 'executeProcess');
     const executeProcess = processExecutionPolicy === AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED
@@ -1150,6 +1341,32 @@ function createAgenticToolLoopService(dependencies = {}) {
           execute: async () => governedDomainRead('milestones', 'read', {}),
         },
       ] : []),
+      ...(readGitStatus ? [{
+        name: 'read_git_status',
+        description: 'Lê branch e alterações do Git por um comando fixo read-only no sandbox sem rede do job.',
+        inputSchema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {},
+        },
+        execute: async (input = {}) => {
+          throwIfExecutionCancelled(signal, 'read_git_status:before_validation');
+          if (!exactPlainDataFields(input, [])) {
+            return failedGitStatusToolResult(null, 'GIT_STATUS_INVALID_INPUT');
+          }
+          throwIfExecutionCancelled(signal, 'read_git_status:before_callback');
+          let rawResult;
+          try {
+            rawResult = await readGitStatus();
+          } catch (error) {
+            if (error instanceof AgenticExecutionCancelledError) throw error;
+            throwIfExecutionCancelled(signal, 'read_git_status:after_callback');
+            return failedGitStatusToolResult(null, 'GIT_STATUS_OPERATION_FAILED');
+          }
+          throwIfExecutionCancelled(signal, 'read_git_status:after_callback');
+          return sanitizeGitStatusToolResult(rawResult);
+        },
+      }] : []),
       {
         name: 'search_text',
         description: 'Busca texto nos arquivos do projeto sem alterar conteúdo.',
@@ -1755,6 +1972,7 @@ function createAgenticToolLoopService(dependencies = {}) {
     throwIfExecutionCancelled(signal, 'agentic_execution:start');
     const deletePaths = optionalExecutionCallback(options, 'deletePaths');
     const readDomain = optionalExecutionCallback(options, 'readDomain');
+    const readGitStatus = optionalExecutionCallback(options, 'readGitStatus');
     const processExecutionPolicy = ownDataValue(options, 'processExecutionPolicy');
     const executeProcess = optionalExecutionCallback(options, 'executeProcess');
     const readProcess = optionalExecutionCallback(options, 'readProcess');
@@ -1769,6 +1987,7 @@ function createAgenticToolLoopService(dependencies = {}) {
       signal,
       deletePaths,
       readDomain,
+      readGitStatus,
       processExecutionPolicy,
       executeProcess,
       readProcess,
@@ -1794,6 +2013,7 @@ function createAgenticToolLoopService(dependencies = {}) {
         processExecutionAvailable,
         processControlAvailable,
         domainReadAvailable: Boolean(readDomain),
+        gitReadAvailable: Boolean(readGitStatus),
       }),
       contextPackPrompts.trustedPrompt,
     ].filter(Boolean).join('\n\n');
