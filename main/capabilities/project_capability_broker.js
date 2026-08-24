@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const util = require('util');
 
 const {
   PROJECT_CAPABILITY_DECISIONS,
@@ -77,6 +78,21 @@ function requireMethod(target, method, dependencyName) {
   if (!target || typeof target[method] !== 'function') {
     throw new TypeError(`${dependencyName}.${method} must be a function`);
   }
+}
+
+function captureFrozenOwnMethod(target, method, dependencyName) {
+  if (!target || typeof target !== 'object' || util.types.isProxy(target)
+    || !Object.isFrozen(target)) {
+    throw new TypeError(`${dependencyName} must be a frozen trusted object`);
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(target, method);
+  if (!descriptor || descriptor.enumerable !== true
+    || !Object.hasOwn(descriptor, 'value')
+    || typeof descriptor.value !== 'function'
+    || util.types.isProxy(descriptor.value)) {
+    throw new TypeError(`${dependencyName}.${method} must be an own data method`);
+  }
+  return Object.freeze({ receiver: target, method: descriptor.value });
 }
 
 function safeAuditIdentifier(value) {
@@ -470,6 +486,7 @@ function createProjectCapabilityBroker({
   pendingApprovalStore,
   approvalReviewer,
   sandboxRegistry,
+  sandboxExecutor = null,
   buildSandboxEnvironment,
   audit,
   now,
@@ -491,6 +508,9 @@ function createProjectCapabilityBroker({
   requireMethod(pendingApprovalStore, 'create', 'pendingApprovalStore');
   requireMethod(pendingApprovalStore, 'resolve', 'pendingApprovalStore');
   requireMethod(sandboxRegistry, 'select', 'sandboxRegistry');
+  const authorizedSandboxExecute = sandboxExecutor === null
+    ? null
+    : captureFrozenOwnMethod(sandboxExecutor, 'execute', 'sandboxExecutor');
   if (typeof approvalReviewer !== 'function') {
     requireMethod(approvalReviewer, 'verifyDecision', 'approvalReviewer');
   }
@@ -1044,8 +1064,19 @@ function createProjectCapabilityBroker({
           'Sandbox execution request is not bound to the authorized project request.'
         );
       }
+      const sandboxExecutionContext = Object.freeze({
+        ...context,
+        requestDigest: prepared.requestDigest,
+      });
       return Object.freeze({
         execute() {
+          if (authorizedSandboxExecute) {
+            return Reflect.apply(
+              authorizedSandboxExecute.method,
+              authorizedSandboxExecute.receiver,
+              [sandboxRequest, sandboxExecutionContext]
+            );
+          }
           return sandboxSelection.backend.execute(sandboxRequest);
         },
       });

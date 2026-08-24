@@ -90,6 +90,7 @@ function createHarness({
   grantAuthorization = { ok: false, authorized: false, reason: 'grant_not_found' },
   grantStore: injectedGrantStore = null,
   sandboxSelection = null,
+  sandboxExecutor = null,
   auditEvents = [],
   audit = null,
   pendingApprovalStore = createPendingFake(),
@@ -135,6 +136,7 @@ function createHarness({
         return sandboxSelection;
       },
     },
+    ...(sandboxExecutor ? { sandboxExecutor } : {}),
     buildSandboxEnvironment,
     audit: audit || { async record(event) { auditEvents.push(event); } },
     now,
@@ -1678,6 +1680,78 @@ function createRegressedClassifier(overrides) {
   assert.match(receivedSandboxRequest.grantId, /^sandbox-auth:[a-f0-9]{64}$/);
   assert.deepStrictEqual(receivedSandboxRequest.env, { SAFE_TEST_FLAG: '1' });
   assert.strictEqual('API_TOKEN' in receivedSandboxRequest.env, false);
+
+  let brokerExecutorCall = null;
+  let bypassedBackendExecutions = 0;
+  const authorizedSandboxExecutor = Object.freeze({
+    execute(sandboxRequest, executionContext) {
+      brokerExecutorCall = Object.freeze({ sandboxRequest, executionContext });
+      return Object.freeze({ status: 'running', revision: 1 });
+    },
+  });
+  assert.throws(() => createHarness({
+    descriptors: { 'process:run': processDescriptor },
+    sandboxExecutor: { execute() {} },
+  }), TypeError);
+  const brokerExecutor = createHarness({
+    descriptors: {
+      'process:run': {
+        ...processDescriptor,
+        createSandboxExecutionSpec(payload) {
+          return {
+            command: {
+              kind: 'executable',
+              executable: payload.command,
+              args: payload.args,
+            },
+          };
+        },
+      },
+    },
+    sandboxSelection: {
+      backend: {
+        id: 'selection-only-backend',
+        async execute() {
+          bypassedBackendExecutions += 1;
+          return { status: 'bypassed' };
+        },
+      },
+      probe: fullyEnforcedProbe,
+    },
+    sandboxExecutor: authorizedSandboxExecutor,
+  });
+  const brokerExecutorResult = await brokerExecutor.execute(makeRequest({
+    requestId: 'process-authorized-executor',
+    capability: 'process',
+    action: 'run',
+    payload: { command: 'npm', args: ['test'] },
+  }));
+  assert.strictEqual(brokerExecutorResult.status, 'completed');
+  assert.strictEqual(bypassedBackendExecutions, 0);
+  assert.ok(brokerExecutorCall);
+  assert.strictEqual(Object.isFrozen(brokerExecutorCall.sandboxRequest), true);
+  assert.strictEqual(
+    brokerExecutorCall.sandboxRequest.requestId,
+    'process-authorized-executor'
+  );
+  assert.strictEqual(Object.isFrozen(brokerExecutorCall.executionContext), true);
+  assert.deepStrictEqual(Reflect.ownKeys(brokerExecutorCall.executionContext), [
+    'requestId',
+    'principal',
+    'projectSession',
+    'capability',
+    'action',
+    'effects',
+    'requestDigest',
+  ]);
+  assert.strictEqual(brokerExecutorCall.executionContext.requestId,
+    brokerExecutorCall.sandboxRequest.requestId);
+  assert.strictEqual(
+    brokerExecutorCall.executionContext.requestDigest,
+    brokerExecutorCall.sandboxRequest.executionId.slice('sandbox-exec:'.length)
+  );
+  assert.strictEqual(brokerExecutorCall.executionContext.projectSession.jobId, 'job-1');
+  assert.strictEqual(brokerExecutorCall.executionContext.principal.kernelId, 'kernel-test');
 
   const collidingExecutionIds = [];
   const executionIdBroker = createHarness({
