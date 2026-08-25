@@ -1095,13 +1095,27 @@ body:not(.workspace-left-collapsed) .btn-update-wide .update-text {
   display: flex;
   flex-direction: column;
   flex-grow: 1;
+  min-width: 0;
 }
 
-.job-status-cancel {
+.job-status-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin-left: auto;
+  flex-shrink: 0;
+}
+
+.job-status-cancel,
+.job-status-rollback {
   height: fit-content;
   padding: 4px 8px;
   font-size: 0.8em;
+}
+
+.job-status-rollback {
+  border-color: rgba(229, 197, 111, 0.34);
+  color: #e5c56f;
 }
 
 .sidebar-icon-12 {

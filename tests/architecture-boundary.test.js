@@ -191,6 +191,15 @@ function assertAgentRuntimeBoundary() {
   const canaryRolloutEvidenceJournalSource = read(
     'main/services/canary_rollout_evidence_journal_adapter.js'
   );
+  const canaryPromotionRollbackStoreSource = read(
+    'main/services/canary_promotion_rollback_store_adapter.js'
+  );
+  const canaryManualRollbackJournalSource = read(
+    'main/services/canary_manual_rollback_journal_adapter.js'
+  );
+  const canaryManualRollbackJobServiceSource = read(
+    'main/services/canary_manual_rollback_job_service.js'
+  );
   const canaryRolloutEvidenceObserverSource = read(
     'main/agent_runtime/canary_rollout_evidence_observer_adapter.js'
   );
@@ -727,6 +736,78 @@ function assertAgentRuntimeBoundary() {
       && canaryRolloutEvidenceJournalSource.includes('fs.fchmodSync(descriptor, 0o600)')
       && canaryRolloutEvidenceJournalSource.includes('JOURNAL_CORRUPTED'),
     'the rollout evidence journal must be private, durable, hash chained, symlink resistant, and fail closed during recovery'
+  );
+  assertDoesNotMatch(
+    canaryPromotionRollbackStoreSource,
+    /require\(['"](?:child_process|worker_threads|electron|net|tls|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork)\s*\(|\b(?:git|Git)\s+(?:reset|checkout|clean|restore)\b/,
+    'the promotion rollback store may own private persistence only, never process, network, Electron, environment, or broad Git authority'
+  );
+  assert.ok(
+    canaryPromotionRollbackStoreSource.includes('fs.constants.O_NOFOLLOW')
+      && canaryPromotionRollbackStoreSource.includes(
+        'fs.fsyncSync(descriptor)'
+      )
+      && canaryPromotionRollbackStoreSource.includes(
+        'fs.chmodSync(directoryPath, 0o700)'
+      )
+      && canaryPromotionRollbackStoreSource.includes(
+        'fs.fchmodSync(descriptor, 0o600)'
+      )
+      && canaryPromotionRollbackStoreSource.includes('fs.renameSync(')
+      && canaryPromotionRollbackStoreSource.includes('STORAGE_CORRUPTED')
+      && canaryPromotionRollbackStoreSource.includes('RECOVERY_AMBIGUOUS')
+      && canaryPromotionRollbackStoreSource.includes(
+        "stateModel: 'prepared_committed_settled'"
+      ),
+    'the promotion rollback store must durably persist private inverse patches, reject links or corruption, and fail closed on ambiguous recovery'
+  );
+  assertDoesNotMatch(
+    canaryManualRollbackJournalSource,
+    /require\(['"](?:child_process|worker_threads|electron|net|tls|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork)\s*\(|\b(?:git|Git)\s+(?:reset|checkout|clean|restore)\b/,
+    'the manual rollback journal may own private persistence only, never process, network, Electron, environment, or broad Git authority'
+  );
+  assert.ok(
+    canaryManualRollbackJournalSource.includes('fs.constants.O_NOFOLLOW')
+      && canaryManualRollbackJournalSource.includes(
+        'fs.fsyncSync(descriptor)'
+      )
+      && canaryManualRollbackJournalSource.includes(
+        'fs.chmodSync(directoryPath, 0o700)'
+      )
+      && canaryManualRollbackJournalSource.includes(
+        'fs.fchmodSync(descriptor, 0o600)'
+      )
+      && canaryManualRollbackJournalSource.includes('fs.renameSync(')
+      && canaryManualRollbackJournalSource.includes('JOURNAL_CORRUPTED')
+      && canaryManualRollbackJournalSource.includes(
+        "stateModel: 'registered_removed'"
+      ),
+    'the manual rollback journal must durably persist private registrations, reject links or corruption, and remove only settled promotions'
+  );
+  assertDoesNotMatch(
+    canaryManualRollbackJobServiceSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|tls|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm)\s*\(/,
+    'the job rollback coordinator must use captured authority ports without ambient filesystem, process, network, Electron, or environment authority'
+  );
+  assert.ok(
+    canaryManualRollbackJobServiceSource.includes(
+      "const REQUEST_KEYS = Object.freeze(['jobId'])"
+    )
+      && canaryManualRollbackJobServiceSource.includes(
+        "exactDataFields(value, REQUEST_KEYS, { frozen: true })"
+      )
+      && canaryManualRollbackJobServiceSource.includes(
+        'dependencies.getAuthorizedJobById(request.jobId)'
+      )
+      && canaryManualRollbackJobServiceSource.includes(
+        'dependencies.getManualRollback()'
+      )
+      && canaryManualRollbackJobServiceSource.indexOf(
+        'Reflect.apply(port.rollback, port.receiver, [coreInput])'
+      ) < canaryManualRollbackJobServiceSource.indexOf(
+        'dependencies.markJobCanaryRolledBack('
+      ),
+    'manual rollback must accept only a frozen job locator, re-authorize durable canary evidence, restore through the owned runtime, and persist the receipt afterward'
   );
   assertDoesNotMatch(
     canaryEditLifecycleSource,
@@ -1394,6 +1475,10 @@ function assertAgentRuntimeBoundary() {
   const productionFactsIndex = canaryEditProductionRuntimeSource.indexOf(
     'const admissionFactsProvider = createCanaryAdmissionFactsProvider({'
   );
+  const productionRollbackAlignmentIndex =
+    canaryEditProductionRuntimeSource.indexOf(
+      'assertDurableRollbackAlignment('
+    );
   const productionSnapshotIndex = canaryEditProductionRuntimeSource.indexOf(
     'const sourceSnapshotProvider = createCanarySourceSnapshotProvider();'
   );
@@ -1404,7 +1489,7 @@ function assertAgentRuntimeBoundary() {
     'const canaryEditor = createCanaryLocalStagingEditorAdapter({'
   );
   const productionPromotionIndex = canaryEditProductionRuntimeSource.indexOf(
-    'const promotionBackend = createCanaryLocalPromotionBackend();'
+    'const promotionBackend = createCanaryLocalPromotionBackend({'
   );
   const productionRuntimeIndex = canaryEditProductionRuntimeSource.indexOf(
     'const runtime = createCanaryEditRuntimeComposition(runtimeOptions);'
@@ -1414,13 +1499,23 @@ function assertAgentRuntimeBoundary() {
       'createCanaryEditTerminalObserverAdapter({'
     );
   assert.ok(
-    productionFactsIndex >= 0
+    productionRollbackAlignmentIndex >= 0
+      && productionFactsIndex > productionRollbackAlignmentIndex
       && productionSnapshotIndex > productionFactsIndex
       && productionWorkspaceIndex > productionSnapshotIndex
       && productionEditorIndex > productionWorkspaceIndex
       && productionPromotionIndex > productionEditorIndex
       && productionRuntimeIndex > productionPromotionIndex
       && productionTerminalObserverIndex > productionRuntimeIndex
+      && canaryEditProductionRuntimeSource.includes(
+        "rollbackStore: fields.get('promotionRollbackStore')"
+      )
+      && canaryEditProductionRuntimeSource.includes(
+        "manualRollbackJournal: fields.get('manualRollbackJournal')"
+      )
+      && canaryEditRuntimeCompositionSource.includes(
+        "registrationJournal: fields.get('manualRollbackJournal')"
+      )
       && canaryEditProductionRuntimeSource.includes(
         "CANARY_EDIT_PRODUCTION_KERNEL_ID = 'codex-app-server-canary'"
       ),
@@ -1637,6 +1732,15 @@ function assertProjectCapabilityBoundary() {
     /\bgetAuthorizedJobById\b|\bbindJobActionDigest\b/,
     'Orchestration IPC must use only public redacted job APIs'
   );
+  assert.ok(
+    orchestrationIpcSource.includes(
+      "registerIpcHandler('orchestration:jobs:rollback-canary', async (_, ...args) => {"
+    )
+      && orchestrationIpcSource.includes(
+        'return publicJobResult(await rollbackCanaryJob(envelope));'
+      ),
+    'canary rollback IPC must accept the exact job envelope and redact authority fields before returning'
+  );
 }
 
 function assertAssistantHarnessCompositionBoundary() {
@@ -1786,6 +1890,12 @@ function assertAssistantHarnessCompositionBoundary() {
     preloadSource,
     /executePlan:\s*\(\s*action\s*,\s*projectInfo\s*\)|ipcRenderer\.invoke\(['"]job:cancel['"]|assistant:execute['"],\s*action/,
     'preload must expose execute and cancel by authoritative job locator only'
+  );
+  assert.ok(
+    preloadSource.includes(
+      "rollbackCanaryJob: (payload) =>\n    ipcRenderer.invoke('orchestration:jobs:rollback-canary', payload)"
+    ),
+    'preload must expose canary rollback only through its job-locator IPC channel'
   );
   assertDoesNotMatch(
     appActionsSource,

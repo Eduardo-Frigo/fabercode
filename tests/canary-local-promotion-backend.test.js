@@ -72,6 +72,20 @@ const bytesDigest = (bytes) => `sha256:${crypto.createHash('sha256')
   .digest('hex')}`;
 let fixtureSequence = 0;
 
+const ROLLBACK_STORE_VERSION = 'canary-promotion-rollback-store.v1';
+const ROLLBACK_STORE_SNAPSHOT_VERSION =
+  'canary-promotion-rollback-store-snapshot.v1';
+const ROLLBACK_PREPARED_VERSION =
+  'canary-promotion-rollback-prepared.v1';
+const ROLLBACK_COMMIT_VERSION =
+  'canary-promotion-rollback-commit.v1';
+const ROLLBACK_RECOVERY_VERSION =
+  'canary-promotion-rollback-recovery.v1';
+const ROLLBACK_CANCEL_VERSION =
+  'canary-promotion-rollback-cancel.v1';
+const ROLLBACK_SETTLEMENT_VERSION =
+  'canary-promotion-rollback-settlement.v1';
+
 function deepFreeze(value, seen = new Set()) {
   if (!value || typeof value !== 'object' || seen.has(value)) return value;
   seen.add(value);
@@ -305,6 +319,71 @@ function assertBackendError(code) {
   };
 }
 
+function createRollbackStoreFixture() {
+  const calls = {
+    load: 0,
+    prepare: [],
+    commit: [],
+    cancel: [],
+    settle: [],
+  };
+  const prepared = new Map();
+  const active = new Map();
+  const store = Object.freeze({
+    version: ROLLBACK_STORE_VERSION,
+    load() {
+      calls.load += 1;
+      return Object.freeze({
+        schemaVersion: ROLLBACK_STORE_SNAPSHOT_VERSION,
+        records: Object.freeze([...active.values()]),
+      });
+    },
+    prepare(value) {
+      calls.prepare.push(value);
+      assert.strictEqual(value.schemaVersion, ROLLBACK_PREPARED_VERSION);
+      prepared.set(value.promotionId, value);
+      return undefined;
+    },
+    commit(value) {
+      calls.commit.push(value);
+      assert.strictEqual(value.schemaVersion, ROLLBACK_COMMIT_VERSION);
+      const pending = prepared.get(value.promotionId);
+      assert.ok(pending);
+      active.set(value.promotionId, Object.freeze({
+        schemaVersion: ROLLBACK_RECOVERY_VERSION,
+        request: pending.request,
+        inversePatchDigest: pending.inversePatchDigest,
+        entries: pending.entries,
+        promotionReceipt: value.promotionReceipt,
+        sourceAfter: value.sourceAfter,
+      }));
+      return undefined;
+    },
+    cancel(value) {
+      calls.cancel.push(value);
+      assert.strictEqual(value.schemaVersion, ROLLBACK_CANCEL_VERSION);
+      prepared.delete(value.promotionId);
+      active.delete(value.promotionId);
+      return undefined;
+    },
+    settle(value) {
+      calls.settle.push(value);
+      assert.strictEqual(value.schemaVersion, ROLLBACK_SETTLEMENT_VERSION);
+      prepared.delete(value.promotionId);
+      active.delete(value.promotionId);
+      return undefined;
+    },
+    diagnostics() {
+      return Object.freeze({
+        version: ROLLBACK_STORE_VERSION,
+        durability: 'private_user_data',
+        stateModel: 'prepared_committed_settled',
+      });
+    },
+  });
+  return { active, calls, prepared, store };
+}
+
 async function testPatchPromotionAndRevert() {
   const fixture = await makeFixture();
   const backend = createCanaryLocalPromotionBackend();
@@ -352,6 +431,48 @@ async function testPatchPromotionAndRevert() {
       'utf8'
     ), 'module.exports = "promoted";\n');
     assert.deepStrictEqual(await backend.revert(revertInput), reverted);
+  } finally {
+    await fixture.cleanup();
+  }
+}
+
+async function testDurableInversePatchSurvivesBackendRestart() {
+  const fixture = await makeFixture();
+  const rollbackStore = createRollbackStoreFixture();
+  try {
+    const firstBackend = createCanaryLocalPromotionBackend({
+      rollbackStore: rollbackStore.store,
+    });
+    const receipt = await firstBackend.promote(fixture.request);
+    assert.strictEqual(rollbackStore.calls.prepare.length, 1);
+    assert.strictEqual(rollbackStore.calls.commit.length, 1);
+    assert.strictEqual(
+      rollbackStore.calls.prepare[0].inversePatchDigest,
+      receipt.inversePatchDigest
+    );
+    assert.deepStrictEqual(
+      rollbackStore.calls.prepare[0].entries.map((entry) => entry.path),
+      fixture.request.changedPaths
+    );
+    assert.strictEqual(rollbackStore.active.size, 1);
+
+    const restartedBackend = createCanaryLocalPromotionBackend({
+      rollbackStore: rollbackStore.store,
+    });
+    assert.ok(rollbackStore.calls.load >= 2);
+    const reverted = await restartedBackend.revert(Object.freeze({
+      request: fixture.request,
+      promotionReceipt: receipt,
+      reason: 'manual_user_rollback',
+    }));
+    assert.strictEqual(reverted.inversePatchApplied, true);
+    assert.strictEqual(reverted.sourceRestored, true);
+    assert.strictEqual(fs.readFileSync(
+      path.join(fixture.sourceRoot, 'src', 'app.js'),
+      'utf8'
+    ), 'module.exports = "original";\n');
+    assert.strictEqual(rollbackStore.calls.settle.length, 1);
+    assert.strictEqual(rollbackStore.active.size, 0);
   } finally {
     await fixture.cleanup();
   }
@@ -667,6 +788,7 @@ async function testHostileInputAndSurface() {
 async function main() {
   await testHostileInputAndSurface();
   await testPatchPromotionAndRevert();
+  await testDurableInversePatchSurvivesBackendRestart();
   await testBatchRoundTrip();
   await testPreWriteConflicts();
   await testPostWriteFailureSettlesOrBecomesAmbiguous();

@@ -82,19 +82,33 @@ function createRequest({
   );
 }
 
-function canaryResult(request, output = null) {
+function canaryResult(request, output = null, diagnostics = undefined) {
   const resolvedOutput = output || deepFreeze({
     status: 'completed',
     mutationScope: 'staging',
     changedPaths: ['src/app.js'],
     writeSetDigest: `sha256:${'c'.repeat(64)}`,
   });
+  const resolvedDiagnostics = diagnostics === undefined
+    ? deepFreeze({
+      schemaVersion: 'canary-transactional-staging-result-diagnostics.v1',
+      executorVersion: 'canary-transactional-staging-executor.v1',
+      promotionId: 'canary-terminal-promotion-1',
+      stagingId: 'canary-terminal-staging-1',
+      checkpointDigest: `sha256:${'d'.repeat(64)}`,
+      writeSetDigest: resolvedOutput.writeSetDigest,
+      sourceBeforeDigest: `sha256:${'e'.repeat(64)}`,
+      sourceAfterDigest: `sha256:${'f'.repeat(64)}`,
+      changedPaths: [...resolvedOutput.changedPaths],
+      stagingDiscarded: true,
+    })
+    : diagnostics;
   return createHarnessResult({
     requestId: request.requestId,
     operation: HARNESS_OPERATIONS.EXECUTE,
     kernelId: CANARY_KERNEL_ID,
     output: resolvedOutput,
-    diagnostics: null,
+    diagnostics: resolvedDiagnostics,
   });
 }
 
@@ -182,6 +196,7 @@ async function testCanaryCompletionIsPersistedFromExactSafeOutcome() {
     jobId: 'canary-terminal-job-1',
     projectId: 'canary-terminal-project-1',
     requestId: 'canary-terminal-request-1',
+    promotionId: 'canary-terminal-promotion-1',
     changedPaths: ['src/app.js'],
     writeSetDigest: `sha256:${'c'.repeat(64)}`,
   });
@@ -316,6 +331,41 @@ async function testMalformedCanaryOutcomeFailsClosedAndMarksTheBoundJob() {
   assert.doesNotMatch(JSON.stringify(failed), /\/private\/project/);
 }
 
+async function testMismatchedPromotionDiagnosticsFailClosed() {
+  const request = createRequest({ requestId: 'canary-terminal-diagnostics-1' });
+  const malformed = canaryResult(request, null, deepFreeze({
+    schemaVersion: 'canary-transactional-staging-result-diagnostics.v1',
+    executorVersion: 'canary-transactional-staging-executor.v1',
+    promotionId: 'canary-terminal-promotion-1',
+    stagingId: 'canary-terminal-staging-1',
+    checkpointDigest: `sha256:${'d'.repeat(64)}`,
+    writeSetDigest: `sha256:${'9'.repeat(64)}`,
+    sourceBeforeDigest: `sha256:${'e'.repeat(64)}`,
+    sourceAfterDigest: `sha256:${'f'.repeat(64)}`,
+    changedPaths: ['src/app.js'],
+    stagingDiscarded: true,
+  }));
+  const fake = createRunner(() => Promise.resolve(malformed));
+  const failed = [];
+  const adapter = createAdapter(fake.runner, {
+    onCanaryFailed(observation) {
+      failed.push(observation);
+      return Object.freeze({ ok: true });
+    },
+  });
+
+  await assert.rejects(
+    adapter.canaryEditRunner.execute(request),
+    (error) => error && error.code
+      === CANARY_EDIT_TERMINAL_OBSERVER_ADAPTER_REASONS.INVALID_RESULT
+  );
+  assert.strictEqual(failed.length, 1);
+  assert.strictEqual(
+    failed[0].reason,
+    CANARY_EDIT_TERMINAL_OBSERVER_ADAPTER_REASONS.INVALID_RESULT
+  );
+}
+
 function testInvalidAndHostileDependenciesAreRejectedWithoutGetters() {
   assert.throws(
     () => createCanaryEditTerminalObserverAdapter({}),
@@ -354,6 +404,7 @@ async function main() {
   await testRunnerFailureUsesOnlySanitizedBoundIdentity();
   await testObserverFailureCannotRewritePromotedCanarySuccess();
   await testMalformedCanaryOutcomeFailsClosedAndMarksTheBoundJob();
+  await testMismatchedPromotionDiagnosticsFailClosed();
   testInvalidAndHostileDependenciesAreRejectedWithoutGetters();
   console.log('canary-edit-terminal-observer-adapter.test.js: ok');
 }

@@ -13,14 +13,18 @@ const CANARY_ROLLOUT_EVIDENCE_SCHEMA_VERSION =
   'canary-rollout-evidence.v1';
 const CANARY_ROLLOUT_EVIDENCE_SINK_VERSION =
   'canary-rollout-evidence-sink.v1';
+const CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SCHEMA_VERSION =
+  'canary-rollout-evidence-reconciliation.v1';
+const CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SINK_VERSION =
+  'canary-rollout-evidence-reconciliation-sink.v1';
 const CANARY_ROLLOUT_EVIDENCE_SNAPSHOT_SCHEMA_VERSION =
   'canary-rollout-evidence-snapshot.v1';
 const CANARY_ROLLOUT_ADVANCEMENT_DECISION_SCHEMA_VERSION =
   'canary-rollout-advancement-decision.v1';
 const CANARY_ROLLOUT_EVIDENCE_JOURNAL_VERSION =
-  'canary-rollout-evidence-journal.v1';
+  'canary-rollout-evidence-journal.v2';
 const CANARY_ROLLOUT_EVIDENCE_JOURNAL_SNAPSHOT_SCHEMA_VERSION =
-  'canary-rollout-evidence-journal-snapshot.v1';
+  'canary-rollout-evidence-journal-snapshot.v2';
 
 const TOTAL_BASIS_POINTS = 10_000;
 const DEFAULT_MINIMUM_CANARY_JOBS = 10;
@@ -56,8 +60,13 @@ const CANARY_ROLLOUT_ADVANCEMENT_REASONS = Object.freeze({
 
 const CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS = Object.freeze({
   DUPLICATE_EVIDENCE: 'CANARY_ROLLOUT_DUPLICATE_EVIDENCE',
+  DUPLICATE_RECONCILIATION: 'CANARY_ROLLOUT_DUPLICATE_RECONCILIATION',
   INVALID_EVIDENCE: 'CANARY_ROLLOUT_INVALID_EVIDENCE',
+  INVALID_RECONCILIATION: 'CANARY_ROLLOUT_INVALID_RECONCILIATION',
   PERSISTENCE_FAILED: 'CANARY_ROLLOUT_EVIDENCE_PERSISTENCE_FAILED',
+  RECONCILIATION_NO_NEW_SIGNAL: 'CANARY_ROLLOUT_RECONCILIATION_NO_NEW_SIGNAL',
+  RECONCILIATION_TARGET_MISMATCH: 'CANARY_ROLLOUT_RECONCILIATION_TARGET_MISMATCH',
+  RECONCILIATION_TARGET_NOT_FOUND: 'CANARY_ROLLOUT_RECONCILIATION_TARGET_NOT_FOUND',
 });
 
 const STAGE_ORDER = Object.freeze([
@@ -91,6 +100,19 @@ const EVIDENCE_KEYS = Object.freeze([
   'securityIncident',
   'duplicateExternalEffect',
 ]);
+const RECONCILIATION_KEYS = Object.freeze([
+  'schemaVersion',
+  'reconciliationId',
+  'jobId',
+  'projectId',
+  'rolloutStage',
+  'manualRollback',
+  'corrupted',
+  'dataLossIncident',
+  'securityIncident',
+  'duplicateExternalEffect',
+]);
+const JOURNAL_EVENT_KEYS = Object.freeze(['type', 'value']);
 const OUTCOME_SIGNAL_KEYS = Object.freeze([
   'manualRollback',
   'corrupted',
@@ -181,6 +203,27 @@ function normalizeEvidence(value) {
   ));
 }
 
+function normalizeReconciliation(value) {
+  const fields = plainDataFields(value, RECONCILIATION_KEYS, { frozen: true });
+  if (!fields
+    || fields.get('schemaVersion')
+      !== CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SCHEMA_VERSION
+    || typeof fields.get('reconciliationId') !== 'string'
+    || !SAFE_IDENTIFIER.test(fields.get('reconciliationId'))
+    || typeof fields.get('jobId') !== 'string'
+    || !SAFE_IDENTIFIER.test(fields.get('jobId'))
+    || typeof fields.get('projectId') !== 'string'
+    || !SAFE_IDENTIFIER.test(fields.get('projectId'))
+    || !VALID_STAGES.has(fields.get('rolloutStage'))
+    || OUTCOME_SIGNAL_KEYS.some(
+      (key) => typeof fields.get(key) !== 'boolean'
+    )
+    || !OUTCOME_SIGNAL_KEYS.some((key) => fields.get(key))) return null;
+  return Object.freeze(Object.fromEntries(
+    RECONCILIATION_KEYS.map((key) => [key, fields.get(key)])
+  ));
+}
+
 function scalarToken(name, value) {
   const text = String(value);
   return name.length + ':' + name + ':' + text.length + ':' + text;
@@ -189,6 +232,12 @@ function scalarToken(name, value) {
 function canonicalEvidence(evidence) {
   return EVIDENCE_KEYS.map(
     (key) => scalarToken(key, evidence[key])
+  ).join('|');
+}
+
+function canonicalReconciliation(reconciliation) {
+  return RECONCILIATION_KEYS.map(
+    (key) => scalarToken(key, reconciliation[key])
   ).join('|');
 }
 
@@ -271,7 +320,7 @@ function captureEvidenceJournal(value) {
   });
 }
 
-function denseFrozenEvidence(value) {
+function denseFrozenEvents(value) {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype
     || !Object.isFrozen(value)) return null;
   const keys = Reflect.ownKeys(value).filter((key) => key !== 'length');
@@ -282,12 +331,24 @@ function denseFrozenEvidence(value) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (!descriptor || descriptor.enumerable !== true
       || !Object.hasOwn(descriptor, 'value')) return null;
-    entries.push(descriptor.value);
+    const eventFields = plainDataFields(
+      descriptor.value,
+      JOURNAL_EVENT_KEYS,
+      { frozen: true }
+    );
+    if (!eventFields
+      || !['evidence', 'reconciliation'].includes(eventFields.get('type'))) {
+      return null;
+    }
+    entries.push(Object.freeze({
+      type: eventFields.get('type'),
+      value: eventFields.get('value'),
+    }));
   }
   return entries;
 }
 
-function loadPersistedEvidence(journal) {
+function loadPersistedEvents(journal) {
   let snapshot;
   try {
     snapshot = Reflect.apply(journal.load, journal.receiver, []);
@@ -304,10 +365,10 @@ function loadPersistedEvidence(journal) {
   }
   const fields = plainDataFields(
     snapshot,
-    ['schemaVersion', 'evidence'],
+    ['schemaVersion', 'events'],
     { frozen: true }
   );
-  const entries = fields ? denseFrozenEvidence(fields.get('evidence')) : null;
+  const entries = fields ? denseFrozenEvents(fields.get('events')) : null;
   if (!fields || !entries
     || fields.get('schemaVersion')
       !== CANARY_ROLLOUT_EVIDENCE_JOURNAL_SNAPSHOT_SCHEMA_VERSION) {
@@ -341,11 +402,15 @@ function createCanaryRolloutEvidenceLedger(options = {}) {
     STAGE_ORDER.map((stage) => [stage, createStageState()])
   );
   const jobIds = new Set();
+  const reconciliationIds = new Set();
+  const jobOutcomes = new Map();
   let acceptedEvidence = 0;
+  let acceptedReconciliations = 0;
   let rejections = 0;
   let duplicateEvidence = 0;
   let lastFailureCode = null;
   let recoveredEvidence = 0;
+  let recoveredReconciliations = 0;
 
   function acceptEvidence(evidence) {
     const state = stageStates.get(evidence.rolloutStage);
@@ -372,6 +437,42 @@ function createCanaryRolloutEvidenceLedger(options = {}) {
         ? 1
         : 0;
     }
+    jobOutcomes.set(evidence.jobId, {
+      evidence,
+      succeeded: evidence.succeeded,
+      manualRollback: evidence.manualRollback,
+      corrupted: evidence.corrupted,
+      dataLossIncident: evidence.dataLossIncident,
+      securityIncident: evidence.securityIncident,
+      duplicateExternalEffect: evidence.duplicateExternalEffect,
+    });
+  }
+
+  function persistJournalValue(value) {
+    if (!journal) return;
+    let persisted;
+    try {
+      persisted = Reflect.apply(
+        journal.append,
+        journal.receiver,
+        [value]
+      );
+    } catch {
+      throw ledgerError(
+        CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
+      );
+    }
+    if (util.types.isPromise(persisted)) {
+      persisted.catch(() => {});
+      throw ledgerError(
+        CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
+      );
+    }
+    if (persisted !== undefined) {
+      throw ledgerError(
+        CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
+      );
+    }
   }
 
   function record(value) {
@@ -387,31 +488,7 @@ function createCanaryRolloutEvidenceLedger(options = {}) {
           CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.DUPLICATE_EVIDENCE
         );
       }
-      if (journal) {
-        let persisted;
-        try {
-          persisted = Reflect.apply(
-            journal.append,
-            journal.receiver,
-            [evidence]
-          );
-        } catch {
-          throw ledgerError(
-            CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
-          );
-        }
-        if (util.types.isPromise(persisted)) {
-          persisted.catch(() => {});
-          throw ledgerError(
-            CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
-          );
-        }
-        if (persisted !== undefined) {
-          throw ledgerError(
-            CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
-          );
-        }
-      }
+      persistJournalValue(evidence);
       acceptEvidence(evidence);
       lastFailureCode = null;
       return undefined;
@@ -431,28 +508,122 @@ function createCanaryRolloutEvidenceLedger(options = {}) {
     }
   }
 
+  function validateReconciliationTarget(reconciliation) {
+    const outcome = jobOutcomes.get(reconciliation.jobId);
+    if (!outcome) {
+      throw ledgerError(
+        CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS
+          .RECONCILIATION_TARGET_NOT_FOUND
+      );
+    }
+    if (outcome.evidence.route !== 'canary'
+      || outcome.evidence.projectId !== reconciliation.projectId
+      || outcome.evidence.rolloutStage !== reconciliation.rolloutStage
+      || reconciliation.manualRollback && !outcome.evidence.succeeded) {
+      throw ledgerError(
+        CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.RECONCILIATION_TARGET_MISMATCH
+      );
+    }
+    const newSignals = OUTCOME_SIGNAL_KEYS.filter(
+      (key) => reconciliation[key] && !outcome[key]
+    );
+    if (newSignals.length === 0) {
+      throw ledgerError(
+        CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.RECONCILIATION_NO_NEW_SIGNAL
+      );
+    }
+    return Object.freeze({ outcome, newSignals: Object.freeze(newSignals) });
+  }
+
+  function acceptReconciliation(reconciliation, target) {
+    const state = stageStates.get(reconciliation.rolloutStage);
+    state.headDigest = 'sha256:' + crypto.createHash('sha256')
+      .update(state.headDigest || '')
+      .update('\n')
+      .update(canonicalReconciliation(reconciliation))
+      .digest('hex');
+    if (target.outcome.succeeded) {
+      state.canarySuccesses -= 1;
+      target.outcome.succeeded = false;
+    }
+    for (const key of target.newSignals) {
+      target.outcome[key] = true;
+      if (key === 'manualRollback') state.manualRollbacks += 1;
+      else if (key === 'corrupted') state.corruptedJobs += 1;
+      else if (key === 'dataLossIncident') state.dataLossIncidents += 1;
+      else if (key === 'securityIncident') state.securityIncidents += 1;
+      else if (key === 'duplicateExternalEffect') {
+        state.duplicateExternalEffects += 1;
+      }
+    }
+    reconciliationIds.add(reconciliation.reconciliationId);
+    acceptedReconciliations += 1;
+  }
+
+  function recordReconciliation(value) {
+    try {
+      const reconciliation = normalizeReconciliation(value);
+      if (!reconciliation) {
+        throw ledgerError(
+          CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.INVALID_RECONCILIATION
+        );
+      }
+      if (reconciliationIds.has(reconciliation.reconciliationId)) {
+        throw ledgerError(
+          CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.DUPLICATE_RECONCILIATION
+        );
+      }
+      const target = validateReconciliationTarget(reconciliation);
+      persistJournalValue(reconciliation);
+      acceptReconciliation(reconciliation, target);
+      lastFailureCode = null;
+      return undefined;
+    } catch (error) {
+      const normalized = error instanceof CanaryRolloutEvidenceLedgerError
+        ? error
+        : ledgerError(
+          CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.INVALID_RECONCILIATION
+        );
+      rejections += 1;
+      lastFailureCode = normalized.code;
+      throw normalized;
+    }
+  }
+
   if (journal) {
-    const persistedEvidence = loadPersistedEvidence(journal);
-    for (const value of persistedEvidence) {
-      const evidence = normalizeEvidence(value);
-      if (!evidence) {
-        throw ledgerError(
-          CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
-        );
+    const persistedEvents = loadPersistedEvents(journal);
+    try {
+      for (const event of persistedEvents) {
+        if (event.type === 'evidence') {
+          const evidence = normalizeEvidence(event.value);
+          if (!evidence || jobIds.has(evidence.jobId)) throw new Error();
+          acceptEvidence(evidence);
+          recoveredEvidence += 1;
+        } else {
+          const reconciliation = normalizeReconciliation(event.value);
+          if (!reconciliation
+            || reconciliationIds.has(reconciliation.reconciliationId)) {
+            throw new Error();
+          }
+          const target = validateReconciliationTarget(reconciliation);
+          acceptReconciliation(reconciliation, target);
+          recoveredReconciliations += 1;
+        }
       }
-      if (jobIds.has(evidence.jobId)) {
-        throw ledgerError(
-          CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
-        );
-      }
-      acceptEvidence(evidence);
-      recoveredEvidence += 1;
+    } catch {
+      throw ledgerError(
+        CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
+      );
     }
   }
 
   const evidenceSink = Object.freeze({
     version: CANARY_ROLLOUT_EVIDENCE_SINK_VERSION,
     record,
+  });
+  const reconciliationSink = Object.freeze({
+    version: CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SINK_VERSION,
+    record: recordReconciliation,
   });
 
   function snapshot(stageValue) {
@@ -593,7 +764,9 @@ function createCanaryRolloutEvidenceLedger(options = {}) {
       evidenceSinkVersion: CANARY_ROLLOUT_EVIDENCE_SINK_VERSION,
       journalVersion: journal ? journal.version : null,
       recoveredEvidence,
+      recoveredReconciliations,
       acceptedEvidence,
+      acceptedReconciliations,
       acceptedByStage: Object.fromEntries(STAGE_ORDER.map(
         (stage) => [stage, stageStates.get(stage).acceptedEvidence]
       )),
@@ -606,6 +779,7 @@ function createCanaryRolloutEvidenceLedger(options = {}) {
   return Object.freeze({
     version: CANARY_ROLLOUT_EVIDENCE_LEDGER_VERSION,
     evidenceSink,
+    reconciliationSink,
     snapshot,
     advancement,
     diagnostics,
@@ -617,6 +791,8 @@ module.exports = {
   CANARY_ROLLOUT_ADVANCEMENT_REASONS,
   CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS,
   CANARY_ROLLOUT_EVIDENCE_LEDGER_VERSION,
+  CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SCHEMA_VERSION,
+  CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SINK_VERSION,
   CANARY_ROLLOUT_EVIDENCE_SCHEMA_VERSION,
   CANARY_ROLLOUT_EVIDENCE_SINK_VERSION,
   CANARY_ROLLOUT_EVIDENCE_SNAPSHOT_SCHEMA_VERSION,

@@ -7,6 +7,10 @@ const {
   createCanaryEditRunner,
 } = require('./canary_edit_runner');
 const {
+  CANARY_MANUAL_ROLLBACK_SERVICE_VERSION,
+  createCanaryManualRollbackService,
+} = require('./canary_manual_rollback_service');
+const {
   CANARY_PROMOTION_CONTROLLER_VERSION,
   createCanaryPromotionController,
 } = require('./canary_promotion_controller');
@@ -56,6 +60,8 @@ const CANARY_EDIT_RUNTIME_COMPOSITION_REASONS = Object.freeze({
   COMPOSITION_FAILED: 'composition_failed',
   DRAIN_FAILED: 'drain_failed',
   EVIDENCE_JOURNAL_UNAVAILABLE: 'evidence_journal_unavailable',
+  MANUAL_ROLLBACK_JOURNAL_UNAVAILABLE:
+    'manual_rollback_journal_unavailable',
   INVALID_OPTIONS: 'invalid_options',
   INVALID_RUNTIME_CONFIG: 'invalid_runtime_config',
   KILL_SWITCH: 'kill_switch',
@@ -75,6 +81,7 @@ const OPTION_KEYS = Object.freeze([
   'canaryEditor',
   'promotionBackend',
   'evidenceJournal',
+  'manualRollbackJournal',
   'client',
   'minimumCanaryJobs',
   'minimumBaselineJobs',
@@ -253,6 +260,7 @@ function createRuntimePort({
   runner = null,
   executor = null,
   ledger = null,
+  manualRollbackService = null,
   rolloutEvidenceObserver = null,
   clientLifecycle = null,
 }) {
@@ -294,6 +302,45 @@ function createRuntimePort({
     })
     : null;
 
+  function trackManualRollback(request) {
+    if (state !== CANARY_EDIT_RUNTIME_COMPOSITION_STATES.READY) {
+      return Promise.reject(new TypeError('canary runtime is closing or closed'));
+    }
+    let pending;
+    try {
+      pending = Reflect.apply(
+        manualRollbackService.rollback,
+        manualRollbackService,
+        [request]
+      );
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    if (!util.types.isPromise(pending)) {
+      return Promise.reject(new TypeError(
+        'manualRollbackService.rollback must return a native Promise'
+      ));
+    }
+    const tracked = observeNativePromise(
+      pending,
+      'manualRollbackService.rollback'
+    );
+    inFlight.add(tracked);
+    Reflect.apply(Promise.prototype.then, tracked, [
+      () => inFlight.delete(tracked),
+      () => inFlight.delete(tracked),
+    ]);
+    return tracked;
+  }
+
+  const manualRollback = manualRollbackService
+    ? Object.freeze({
+      version: CANARY_MANUAL_ROLLBACK_SERVICE_VERSION,
+      rollback: trackManualRollback,
+      diagnostics: () => manualRollbackService.diagnostics(),
+    })
+    : null;
+
   function diagnostics() {
     const runnerDiagnostics = runner ? runner.diagnostics() : null;
     const ledgerDiagnostics = ledger ? ledger.diagnostics() : null;
@@ -319,6 +366,12 @@ function createRuntimePort({
       recoveredEvidence: ledgerDiagnostics
         ? ledgerDiagnostics.recoveredEvidence
         : 0,
+      recoveredReconciliations: ledgerDiagnostics
+        ? ledgerDiagnostics.recoveredReconciliations
+        : 0,
+      manualRollbackService: manualRollbackService
+        ? manualRollbackService.diagnostics()
+        : null,
       rolloutEvidenceObserver: rolloutEvidenceObserver
         ? rolloutEvidenceObserver.diagnostics()
         : null,
@@ -398,6 +451,8 @@ function createRuntimePort({
     version: CANARY_EDIT_RUNTIME_COMPOSITION_VERSION,
     canaryEditRunner,
     evidenceSink: ledger ? ledger.evidenceSink : null,
+    reconciliationSink: ledger ? ledger.reconciliationSink : null,
+    manualRollback,
     snapshot,
     advancement,
     diagnostics,
@@ -470,6 +525,7 @@ function createCanaryEditRuntimeComposition(options = {}) {
     ['canaryEditor', 'CANARY_EDITOR_UNAVAILABLE'],
     ['promotionBackend', 'PROMOTION_BACKEND_UNAVAILABLE'],
     ['evidenceJournal', 'EVIDENCE_JOURNAL_UNAVAILABLE'],
+    ['manualRollbackJournal', 'MANUAL_ROLLBACK_JOURNAL_UNAVAILABLE'],
     ['client', 'CLIENT_UNAVAILABLE'],
   ];
   for (const [fieldName, reasonName] of requiredAuthorities) {
@@ -529,6 +585,11 @@ function createCanaryEditRuntimeComposition(options = {}) {
     if (promotionController.version !== CANARY_PROMOTION_CONTROLLER_VERSION) {
       throw new TypeError('promotion controller version mismatch');
     }
+    const manualRollbackService = createCanaryManualRollbackService({
+      promotionController,
+      reconciliationSink: ledger.reconciliationSink,
+      registrationJournal: fields.get('manualRollbackJournal'),
+    });
     const canaryKernelId = ownDataValue(
       fields.get('canaryEditor'),
       'kernelId'
@@ -538,6 +599,7 @@ function createCanaryEditRuntimeComposition(options = {}) {
       workspaceSessionPort: fields.get('workspaceSessionPort'),
       canaryEditor: fields.get('canaryEditor'),
       promotionController,
+      promotionSink: manualRollbackService.promotionSink,
     });
     const unobservedRunner = createCanaryEditRunner({
       authoritativeKernel: fields.get('authoritativeKernel'),
@@ -554,6 +616,7 @@ function createCanaryEditRuntimeComposition(options = {}) {
       runner,
       executor,
       ledger,
+      manualRollbackService,
       rolloutEvidenceObserver,
       clientLifecycle,
     });

@@ -84,6 +84,8 @@ contextBridge.exposeInMainWorld('localcodeApi', {
   listJobs: (payload) => ipcRenderer.invoke('orchestration:jobs:list', payload),
   getJob: (payload) => ipcRenderer.invoke('orchestration:jobs:get', payload),
   cancelJob: (payload) => ipcRenderer.invoke('orchestration:jobs:cancel', payload),
+  rollbackCanaryJob: (payload) =>
+    ipcRenderer.invoke('orchestration:jobs:rollback-canary', payload),
   retryJob: (payload) => ipcRenderer.invoke('orchestration:jobs:retry', payload),
   listAutomataContracts: (payload) => ipcRenderer.invoke('automata:contracts:list', payload),
   getAutomataContractSummary: (payload) => ipcRenderer.invoke('automata:contracts:summary', payload),

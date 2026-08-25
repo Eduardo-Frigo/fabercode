@@ -31,6 +31,10 @@ const {
   CANARY_EDIT_RUNNER_FALLBACK_SIGNAL_SCHEMA_VERSION,
 } = require('./canary_edit_runner');
 const {
+  CANARY_MANUAL_ROLLBACK_PROMOTION_REGISTRATION_SCHEMA_VERSION,
+  CANARY_MANUAL_ROLLBACK_PROMOTION_SINK_VERSION,
+} = require('./canary_manual_rollback_service');
+const {
   CANARY_PROMOTION_CONTROLLER_REASONS,
   CANARY_PROMOTION_CONTROLLER_VERSION,
   CANARY_PROMOTION_TRANSACTION_VERSION,
@@ -93,6 +97,7 @@ const OPTION_KEYS = Object.freeze([
   'workspaceSessionPort',
   'canaryEditor',
   'promotionController',
+  'promotionSink',
 ]);
 const WORKSPACE_PORT_KEYS = Object.freeze([
   'version',
@@ -132,6 +137,11 @@ const PROMOTION_CONTROLLER_DIAGNOSTIC_KEYS = Object.freeze([
   'backendVersion',
   'promotionContract',
   'revertContract',
+]);
+const PROMOTION_SINK_KEYS = Object.freeze([
+  'version',
+  'record',
+  'cancel',
 ]);
 const GRANT_KEYS = Object.freeze([
   'schemaVersion',
@@ -406,6 +416,24 @@ function capturePromotionController(value) {
   return port;
 }
 
+function capturePromotionSink(value) {
+  const fields = exactDataFields(
+    value,
+    PROMOTION_SINK_KEYS,
+    { frozen: true }
+  );
+  if (!fields
+    || fields.get('version') !== CANARY_MANUAL_ROLLBACK_PROMOTION_SINK_VERSION) {
+    throw new TypeError('promotionSink must be the manual rollback sink');
+  }
+  return Object.freeze({
+    receiver: value,
+    version: fields.get('version'),
+    record: inspectableFunction(fields.get('record'), 'promotionSink.record'),
+    cancel: inspectableFunction(fields.get('cancel'), 'promotionSink.cancel'),
+  });
+}
+
 function captureDependencies(options) {
   const fields = exactDataFields(options, OPTION_KEYS);
   const kernelId = fields && fields.get('kernelId');
@@ -421,6 +449,7 @@ function captureDependencies(options) {
     promotionController: capturePromotionController(
       fields.get('promotionController')
     ),
+    promotionSink: capturePromotionSink(fields.get('promotionSink')),
   });
 }
 
@@ -760,6 +789,32 @@ function isPreWritePromotionRejection(error) {
     ].includes(error.code);
 }
 
+function callPromotionSink(port, methodName, value) {
+  let result;
+  try {
+    result = Reflect.apply(port[methodName], port.receiver, [value]);
+  } catch {
+    throw executorError(
+      CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.REVERT_FAILED
+    );
+  }
+  if (util.types.isPromise(result)) {
+    try {
+      Reflect.apply(Promise.prototype.then, result, [() => {}, () => {}]);
+    } catch {
+      // Any asynchronous sink is rejected regardless of observation behavior.
+    }
+    throw executorError(
+      CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.REVERT_FAILED
+    );
+  }
+  if (result !== undefined) {
+    throw executorError(
+      CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.REVERT_FAILED
+    );
+  }
+}
+
 function createCanaryTransactionalStagingExecutor(options = {}) {
   const dependencies = captureDependencies(options);
 
@@ -833,6 +888,7 @@ function createCanaryTransactionalStagingExecutor(options = {}) {
     lifecycle,
     transaction,
     reason,
+    promotionRegistered = false,
   }) {
     const fallback = lifecycle.requestFallback({ reason });
     if (fallback.ok
@@ -870,6 +926,22 @@ function createCanaryTransactionalStagingExecutor(options = {}) {
       throw executorError(
         CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.REVERT_FAILED
       );
+    }
+    if (promotionRegistered) {
+      try {
+        callPromotionSink(
+          dependencies.promotionSink,
+          'cancel',
+          Object.freeze({
+            promotionId: transaction.request.promotionId,
+            reason: 'automatic_revert_before_completion',
+          })
+        );
+      } catch {
+        throw executorError(
+          CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.REVERT_FAILED
+        );
+      }
     }
     return fallbackSignal(
       request,
@@ -1004,6 +1076,28 @@ function createCanaryTransactionalStagingExecutor(options = {}) {
       });
     }
 
+    try {
+      callPromotionSink(
+        dependencies.promotionSink,
+        'record',
+        Object.freeze({
+          schemaVersion:
+            CANARY_MANUAL_ROLLBACK_PROMOTION_REGISTRATION_SCHEMA_VERSION,
+          rolloutStage: grant.rolloutDecision.rolloutStage,
+          transaction,
+        })
+      );
+    } catch {
+      return settleSourceFallback({
+        request,
+        authorityBinding,
+        opened,
+        lifecycle,
+        transaction,
+        reason: 'rollback_registration_failed',
+      });
+    }
+
     let discardReceipt = null;
     try {
       const discardValue = await callNativePort(
@@ -1023,6 +1117,7 @@ function createCanaryTransactionalStagingExecutor(options = {}) {
         lifecycle,
         transaction,
         reason: 'post_promotion_cleanup_failed',
+        promotionRegistered: true,
       });
     }
     const completed = lifecycle.completeCanary();
@@ -1035,6 +1130,7 @@ function createCanaryTransactionalStagingExecutor(options = {}) {
         lifecycle,
         transaction,
         reason: 'canary_completion_failed',
+        promotionRegistered: true,
       });
     }
     return createHarnessResult({

@@ -20,6 +20,15 @@ const {
   createCanaryPromotionRevertReceipt,
 } = require('../agent_runtime/canary_promotion_contract');
 const {
+  CANARY_PROMOTION_ROLLBACK_CANCEL_SCHEMA_VERSION,
+  CANARY_PROMOTION_ROLLBACK_COMMIT_SCHEMA_VERSION,
+  CANARY_PROMOTION_ROLLBACK_PREPARED_SCHEMA_VERSION,
+  CANARY_PROMOTION_ROLLBACK_RECOVERY_SCHEMA_VERSION,
+  CANARY_PROMOTION_ROLLBACK_SETTLEMENT_SCHEMA_VERSION,
+  CANARY_PROMOTION_ROLLBACK_STORE_SNAPSHOT_SCHEMA_VERSION,
+  CANARY_PROMOTION_ROLLBACK_STORE_VERSION,
+} = require('../agent_runtime/canary_promotion_rollback_store_contract');
+const {
   CANARY_SOURCE_BRANCH_STATE_SCHEMA_VERSION,
   CANARY_SOURCE_INDEX_STATE_SCHEMA_VERSION,
   CANARY_SOURCE_TREE_SCHEMA_VERSION,
@@ -35,6 +44,7 @@ const CANARY_LOCAL_PROMOTION_BACKEND_REASONS = Object.freeze({
   CAPACITY_EXCEEDED: 'CANARY_LOCAL_PROMOTION_CAPACITY_EXCEEDED',
   INVALID_INPUT: 'CANARY_LOCAL_PROMOTION_INVALID_INPUT',
   REPLAY_MISMATCH: 'CANARY_LOCAL_PROMOTION_REPLAY_MISMATCH',
+  ROLLBACK_STORE_FAILED: 'CANARY_LOCAL_PROMOTION_ROLLBACK_STORE_FAILED',
   REVERT_CONFLICT: 'CANARY_LOCAL_PROMOTION_REVERT_CONFLICT',
   REVERT_FAILED: 'CANARY_LOCAL_PROMOTION_REVERT_FAILED',
   SOURCE_CONFLICT: 'CANARY_LOCAL_PROMOTION_SOURCE_CONFLICT',
@@ -67,11 +77,56 @@ const TEMP_FILE_ATTEMPTS = 8;
 const SAFE_REF = /^refs\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/;
 const SAFE_OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const SAFE_REASON = /^[a-z][a-z0-9_:-]{0,79}$/;
+const SAFE_DIGEST = /^sha256:[a-f0-9]{64}$/;
+const CANONICAL_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const OPTION_KEYS = Object.freeze([
   'maxPromotions',
   'maxEntries',
   'maxPrivateBytes',
+  'rollbackStore',
+]);
+const ROLLBACK_STORE_KEYS = Object.freeze([
+  'version',
+  'load',
+  'prepare',
+  'commit',
+  'cancel',
+  'settle',
+  'diagnostics',
+]);
+const ROLLBACK_STORE_DIAGNOSTIC_KEYS = Object.freeze([
+  'version',
+  'durability',
+  'stateModel',
+]);
+const ROLLBACK_STORE_SNAPSHOT_KEYS = Object.freeze([
+  'schemaVersion',
+  'records',
+]);
+const ROLLBACK_RECOVERY_KEYS = Object.freeze([
+  'schemaVersion',
+  'request',
+  'inversePatchDigest',
+  'entries',
+  'promotionReceipt',
+  'sourceAfter',
+]);
+const ROLLBACK_ENTRY_KEYS = Object.freeze(['path', 'before', 'after']);
+const ABSENT_STATE_KEYS = Object.freeze(['kind']);
+const DIRECTORY_STATE_KEYS = Object.freeze(['kind', 'mode']);
+const FILE_STATE_KEYS = Object.freeze([
+  'kind',
+  'mode',
+  'bytes',
+  'contentDigest',
+  'contentBase64',
+]);
+const SOURCE_AFTER_KEYS = Object.freeze([
+  'sourceStateDigest',
+  'branchHeadDigest',
+  'gitIndexDigest',
+  'userDirtyDigest',
 ]);
 const REVERT_INPUT_KEYS = Object.freeze([
   'request',
@@ -181,7 +236,62 @@ function normalizeOptions(options) {
     || maxPrivateBytes > HARD_MAX_PRIVATE_BYTES) {
     throw new TypeError('Invalid canary local promotion backend limit options');
   }
-  return Object.freeze({ maxPromotions, maxEntries, maxPrivateBytes });
+  const rollbackStore = values.rollbackStore === undefined
+    ? null : captureRollbackStore(values.rollbackStore);
+  return Object.freeze({
+    maxPromotions,
+    maxEntries,
+    maxPrivateBytes,
+    rollbackStore,
+  });
+}
+
+function invokeRollbackStore(port, method, argument, { mutation = false } = {}) {
+  let result;
+  try {
+    result = argument === undefined
+      ? Reflect.apply(port[method], port.receiver, [])
+      : Reflect.apply(port[method], port.receiver, [argument]);
+  } catch {
+    fail(CANARY_LOCAL_PROMOTION_BACKEND_REASONS.ROLLBACK_STORE_FAILED);
+  }
+  if (util.types.isPromise(result) || mutation && result !== undefined) {
+    fail(CANARY_LOCAL_PROMOTION_BACKEND_REASONS.ROLLBACK_STORE_FAILED);
+  }
+  return result;
+}
+
+function captureRollbackStore(value) {
+  const fields = exactDataFields(value, ROLLBACK_STORE_KEYS, { frozen: true });
+  if (!fields
+    || fields.get('version') !== CANARY_PROMOTION_ROLLBACK_STORE_VERSION
+    || ROLLBACK_STORE_KEYS.slice(1).some(
+      (key) => typeof fields.get(key) !== 'function'
+    )) {
+    throw new TypeError('Invalid canary promotion rollback store');
+  }
+  const port = Object.freeze({
+    receiver: value,
+    load: fields.get('load'),
+    prepare: fields.get('prepare'),
+    commit: fields.get('commit'),
+    cancel: fields.get('cancel'),
+    settle: fields.get('settle'),
+    diagnostics: fields.get('diagnostics'),
+  });
+  const diagnostics = invokeRollbackStore(port, 'diagnostics');
+  const diagnosticFields = exactDataFields(
+    diagnostics,
+    ROLLBACK_STORE_DIAGNOSTIC_KEYS,
+    { frozen: true }
+  );
+  if (!diagnosticFields
+    || diagnosticFields.get('version') !== CANARY_PROMOTION_ROLLBACK_STORE_VERSION
+    || diagnosticFields.get('durability') !== 'private_user_data'
+    || diagnosticFields.get('stateModel') !== 'prepared_committed_settled') {
+    throw new TypeError('Invalid canary promotion rollback store diagnostics');
+  }
+  return port;
 }
 
 function errorCode(error) {
@@ -793,6 +903,215 @@ function publicEntryMetadata(value) {
   });
 }
 
+function frozenArrayValues(value, { minimum = 0, maximum } = {}) {
+  if (!Array.isArray(value) || util.types.isProxy(value)
+    || Object.getPrototypeOf(value) !== Array.prototype
+    || !Object.isFrozen(value)
+    || !Number.isSafeInteger(maximum)
+    || value.length < minimum || value.length > maximum) return null;
+  let keys;
+  try { keys = Reflect.ownKeys(value).filter((key) => key !== 'length'); } catch {
+    return null;
+  }
+  if (keys.length !== value.length
+    || keys.some((key, index) => key !== String(index))) return null;
+  const output = [];
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || descriptor.enumerable !== true
+      || !Object.hasOwn(descriptor, 'value')
+      || descriptor.value === undefined) return null;
+    output.push(descriptor.value);
+  }
+  return output;
+}
+
+function serializeRollbackState(value) {
+  if (value.kind === 'absent') return Object.freeze({ kind: 'absent' });
+  if (value.kind === 'directory') {
+    return Object.freeze({ kind: 'directory', mode: value.mode });
+  }
+  if (value.kind !== 'file' || !Buffer.isBuffer(value.content)) {
+    physicalFail('source');
+  }
+  return Object.freeze({
+    kind: 'file',
+    mode: value.mode,
+    bytes: value.bytes,
+    contentDigest: value.contentDigest,
+    contentBase64: value.content.toString('base64'),
+  });
+}
+
+function serializeRollbackEntries(inverse) {
+  return Object.freeze(inverse.entries.map((entry) => Object.freeze({
+    path: entry.path,
+    before: serializeRollbackState(entry.before),
+    after: serializeRollbackState(entry.after),
+  })));
+}
+
+function serializeSourceAfter(value) {
+  return Object.freeze({
+    sourceStateDigest: value.sourceStateDigest,
+    branchHeadDigest: value.branchHeadDigest,
+    gitIndexDigest: value.gitIndexDigest,
+    userDirtyDigest: value.userDirtyDigest,
+  });
+}
+
+function rollbackPreparedRecord(request, inverse) {
+  return Object.freeze({
+    schemaVersion: CANARY_PROMOTION_ROLLBACK_PREPARED_SCHEMA_VERSION,
+    promotionId: request.promotionId,
+    request,
+    inversePatchDigest: inverse.inversePatchDigest,
+    entries: serializeRollbackEntries(inverse),
+  });
+}
+
+function rollbackCommitRecord(record) {
+  return Object.freeze({
+    schemaVersion: CANARY_PROMOTION_ROLLBACK_COMMIT_SCHEMA_VERSION,
+    promotionId: record.request.promotionId,
+    promotionReceipt: record.receipt,
+    sourceAfter: serializeSourceAfter(record.sourceAfter),
+  });
+}
+
+function rollbackCancelRecord(record) {
+  return Object.freeze({
+    schemaVersion: CANARY_PROMOTION_ROLLBACK_CANCEL_SCHEMA_VERSION,
+    promotionId: record.request.promotionId,
+  });
+}
+
+function rollbackSettlementRecord(record) {
+  return Object.freeze({
+    schemaVersion: CANARY_PROMOTION_ROLLBACK_SETTLEMENT_SCHEMA_VERSION,
+    promotionId: record.request.promotionId,
+  });
+}
+
+function normalizeStoredMode(value) {
+  return Number.isSafeInteger(value) && value >= 0 && value <= 0o7777
+    && !Object.is(value, -0) ? value : null;
+}
+
+function normalizeStoredState(value, config) {
+  const absent = exactDataFields(value, ABSENT_STATE_KEYS, { frozen: true });
+  if (absent && absent.get('kind') === 'absent') {
+    return Object.freeze({
+      state: Object.freeze({ kind: 'absent' }),
+      privateBytes: 0,
+    });
+  }
+  const directory = exactDataFields(
+    value,
+    DIRECTORY_STATE_KEYS,
+    { frozen: true }
+  );
+  const directoryMode = directory && normalizeStoredMode(directory.get('mode'));
+  if (directory && directory.get('kind') === 'directory'
+    && directoryMode !== null) {
+    return Object.freeze({
+      state: Object.freeze({ kind: 'directory', mode: directoryMode }),
+      privateBytes: 0,
+    });
+  }
+  const file = exactDataFields(value, FILE_STATE_KEYS, { frozen: true });
+  if (!file || file.get('kind') !== 'file') return null;
+  const mode = normalizeStoredMode(file.get('mode'));
+  const bytes = file.get('bytes');
+  const contentDigest = file.get('contentDigest');
+  const contentBase64 = file.get('contentBase64');
+  const maximumBase64Bytes = Math.ceil(config.maxPrivateBytes / 3) * 4;
+  if (mode === null || !Number.isSafeInteger(bytes) || bytes < 0
+    || Object.is(bytes, -0) || bytes > config.maxPrivateBytes
+    || typeof contentDigest !== 'string' || !SAFE_DIGEST.test(contentDigest)
+    || typeof contentBase64 !== 'string'
+    || Buffer.byteLength(contentBase64, 'utf8') > maximumBase64Bytes
+    || !CANONICAL_BASE64.test(contentBase64)) return null;
+  let content;
+  try { content = Buffer.from(contentBase64, 'base64'); } catch { return null; }
+  if (content.length !== bytes || content.toString('base64') !== contentBase64
+    || bytesDigest(content) !== contentDigest) return null;
+  return Object.freeze({
+    state: Object.freeze({
+      kind: 'file',
+      mode,
+      bytes,
+      contentDigest,
+      content,
+    }),
+    privateBytes: bytes,
+  });
+}
+
+function normalizeStoredInverse(value, request, inversePatchDigest, config) {
+  const records = frozenArrayValues(value, {
+    minimum: request.changedPaths.length,
+    maximum: request.changedPaths.length,
+  });
+  if (!records) return null;
+  const entries = [];
+  let privateBytes = 0;
+  for (let index = 0; index < records.length; index += 1) {
+    const fields = exactDataFields(
+      records[index],
+      ROLLBACK_ENTRY_KEYS,
+      { frozen: true }
+    );
+    if (!fields || fields.get('path') !== request.changedPaths[index]) return null;
+    const before = normalizeStoredState(fields.get('before'), config);
+    const after = normalizeStoredState(fields.get('after'), config);
+    if (!before || !after) return null;
+    privateBytes += before.privateBytes + after.privateBytes;
+    if (!Number.isSafeInteger(privateBytes)
+      || privateBytes > config.maxPrivateBytes) return null;
+    entries.push(Object.freeze({
+      path: fields.get('path'),
+      before: before.state,
+      after: after.state,
+    }));
+  }
+  const frozenEntries = Object.freeze(entries);
+  const observedDigest = canonicalSha256Digest({
+    schemaVersion: 'canary-local-inverse-patch.v1',
+    promotionId: request.promotionId,
+    sourceRootIdentityDigest: request.sourceRootIdentityDigest,
+    entries: Object.freeze(frozenEntries.map((entry) => Object.freeze({
+      path: entry.path,
+      before: publicEntryMetadata(entry.before),
+      after: publicEntryMetadata(entry.after),
+    }))),
+  });
+  if (observedDigest !== inversePatchDigest) return null;
+  return Object.freeze({
+    entries: frozenEntries,
+    inversePatchDigest,
+    privateBytes,
+  });
+}
+
+function normalizeStoredSourceAfter(value, request, promotionReceipt) {
+  const fields = exactDataFields(value, SOURCE_AFTER_KEYS, { frozen: true });
+  if (!fields || SOURCE_AFTER_KEYS.some((key) => (
+    typeof fields.get(key) !== 'string' || !SAFE_DIGEST.test(fields.get(key))
+  ))) return null;
+  const output = Object.freeze(Object.fromEntries(
+    SOURCE_AFTER_KEYS.map((key) => [key, fields.get(key)])
+  ));
+  if (output.sourceStateDigest !== promotionReceipt.sourceAfterDigest
+    || output.branchHeadDigest !== promotionReceipt.branchHeadAfterDigest
+    || output.gitIndexDigest !== promotionReceipt.gitIndexAfterDigest
+    || output.userDirtyDigest !== promotionReceipt.userDirtyAfterDigest
+    || output.branchHeadDigest !== request.branchHeadDigest
+    || output.gitIndexDigest !== request.gitIndexDigest
+    || output.userDirtyDigest !== request.userDirtyDigest) return null;
+  return output;
+}
+
 function prepareInverse(sourceRoot, request, sourceState, stagingState, config) {
   const entries = [];
   let privateBytes = 0;
@@ -1242,9 +1561,109 @@ function verifyBaseline(record, config) {
   return restored;
 }
 
+function normalizeRollbackRecovery(value, config) {
+  const fields = exactDataFields(value, ROLLBACK_RECOVERY_KEYS, { frozen: true });
+  if (!fields
+    || fields.get('schemaVersion')
+      !== CANARY_PROMOTION_ROLLBACK_RECOVERY_SCHEMA_VERSION
+    || typeof fields.get('inversePatchDigest') !== 'string'
+    || !SAFE_DIGEST.test(fields.get('inversePatchDigest'))) return null;
+  let request;
+  let receipt;
+  try {
+    request = assertCanaryPromotionBackendRequest(fields.get('request'));
+    receipt = assertCanaryPromotionReceipt(
+      fields.get('promotionReceipt'),
+      request
+    );
+  } catch {
+    return null;
+  }
+  const inversePatchDigest = fields.get('inversePatchDigest');
+  if (receipt.inversePatchDigest !== inversePatchDigest) return null;
+  const inverse = normalizeStoredInverse(
+    fields.get('entries'),
+    request,
+    inversePatchDigest,
+    config
+  );
+  const storedSourceAfter = normalizeStoredSourceAfter(
+    fields.get('sourceAfter'),
+    request,
+    receipt
+  );
+  if (!inverse || !storedSourceAfter) return null;
+  let sourceRoot;
+  try {
+    sourceRoot = captureBoundRoot(
+      request.sourceRootPath,
+      request.sourceRealRootPath,
+      request.sourceRootIdentityDigest,
+      'source'
+    );
+  } catch {
+    return null;
+  }
+  const record = {
+    fingerprint: requestFingerprint(request),
+    request,
+    state: 'promoted',
+    receipt,
+    revertReceipt: null,
+    receiptFingerprint: receiptFingerprint(receipt),
+    inverse,
+    roots: Object.freeze({ sourceRoot }),
+    sourceAfter: storedSourceAfter,
+  };
+  try {
+    const observedSourceAfter = verifyPromotedState(record, config);
+    if (!stateMatches(observedSourceAfter, storedSourceAfter)) return null;
+    record.sourceAfter = observedSourceAfter;
+  } catch {
+    return null;
+  }
+  return record;
+}
+
+function hydrateRollbackRecoveries(config, promotions) {
+  if (!config.rollbackStore) return;
+  try {
+    const snapshot = invokeRollbackStore(config.rollbackStore, 'load');
+    const fields = exactDataFields(
+      snapshot,
+      ROLLBACK_STORE_SNAPSHOT_KEYS,
+      { frozen: true }
+    );
+    const records = fields && frozenArrayValues(fields.get('records'), {
+      maximum: config.maxPromotions,
+    });
+    if (!fields
+      || fields.get('schemaVersion')
+        !== CANARY_PROMOTION_ROLLBACK_STORE_SNAPSHOT_SCHEMA_VERSION
+      || !records) {
+      fail(CANARY_LOCAL_PROMOTION_BACKEND_REASONS.ROLLBACK_STORE_FAILED);
+    }
+    for (const value of records) {
+      const record = normalizeRollbackRecovery(value, config);
+      if (!record || promotions.has(record.request.promotionId)) {
+        fail(CANARY_LOCAL_PROMOTION_BACKEND_REASONS.ROLLBACK_STORE_FAILED);
+      }
+      promotions.set(record.request.promotionId, record);
+    }
+  } catch (error) {
+    if (error instanceof CanaryLocalPromotionBackendError
+      && error.code
+        === CANARY_LOCAL_PROMOTION_BACKEND_REASONS.ROLLBACK_STORE_FAILED) {
+      throw error;
+    }
+    fail(CANARY_LOCAL_PROMOTION_BACKEND_REASONS.ROLLBACK_STORE_FAILED);
+  }
+}
+
 function createCanaryLocalPromotionBackend(options = {}) {
   const config = normalizeOptions(options);
   const promotions = new Map();
+  hydrateRollbackRecoveries(config, promotions);
 
   function diagnostics() {
     return CANARY_LOCAL_PROMOTION_BACKEND_DIAGNOSTICS;
@@ -1284,6 +1703,30 @@ function createCanaryLocalPromotionBackend(options = {}) {
       fail(CANARY_LOCAL_PROMOTION_BACKEND_REASONS.SOURCE_CONFLICT);
     }
     Object.assign(record, prepared);
+    if (config.rollbackStore) {
+      try {
+        invokeRollbackStore(
+          config.rollbackStore,
+          'prepare',
+          rollbackPreparedRecord(request, record.inverse),
+          { mutation: true }
+        );
+      } catch {
+        try {
+          invokeRollbackStore(
+            config.rollbackStore,
+            'cancel',
+            rollbackCancelRecord(record),
+            { mutation: true }
+          );
+        } catch {
+          record.state = 'ambiguous';
+          throw new CanaryPromotionBackendAmbiguousError();
+        }
+        promotions.delete(request.promotionId);
+        fail(CANARY_LOCAL_PROMOTION_BACKEND_REASONS.ROLLBACK_STORE_FAILED);
+      }
+    }
     record.state = 'promoting';
     const attempted = [];
     try {
@@ -1301,9 +1744,22 @@ function createCanaryLocalPromotionBackend(options = {}) {
         promotionApplied: true,
       });
       record.receiptFingerprint = receiptFingerprint(record.receipt);
+      if (config.rollbackStore) {
+        invokeRollbackStore(
+          config.rollbackStore,
+          'commit',
+          rollbackCommitRecord(record),
+          { mutation: true }
+        );
+      }
       record.state = 'promoted';
       return record.receipt;
-    } catch {
+    } catch (error) {
+      const failureCode = error instanceof CanaryLocalPromotionBackendError
+        && error.code
+          === CANARY_LOCAL_PROMOTION_BACKEND_REASONS.ROLLBACK_STORE_FAILED
+        ? CANARY_LOCAL_PROMOTION_BACKEND_REASONS.ROLLBACK_STORE_FAILED
+        : CANARY_LOCAL_PROMOTION_BACKEND_REASONS.WRITE_FAILED;
       try {
         restoreBaseline(record.roots.sourceRoot, record.inverse, attempted);
         verifyBaseline(record, config);
@@ -1311,8 +1767,21 @@ function createCanaryLocalPromotionBackend(options = {}) {
         record.state = 'ambiguous';
         throw new CanaryPromotionBackendAmbiguousError();
       }
+      if (config.rollbackStore) {
+        try {
+          invokeRollbackStore(
+            config.rollbackStore,
+            'cancel',
+            rollbackCancelRecord(record),
+            { mutation: true }
+          );
+        } catch {
+          record.state = 'ambiguous';
+          throw new CanaryPromotionBackendAmbiguousError();
+        }
+      }
       promotions.delete(request.promotionId);
-      fail(CANARY_LOCAL_PROMOTION_BACKEND_REASONS.WRITE_FAILED);
+      fail(failureCode);
     }
   }
 
@@ -1354,6 +1823,14 @@ function createCanaryLocalPromotionBackend(options = {}) {
         inversePatchApplied: true,
         sourceRestored: true,
       });
+      if (config.rollbackStore) {
+        invokeRollbackStore(
+          config.rollbackStore,
+          'settle',
+          rollbackSettlementRecord(record),
+          { mutation: true }
+        );
+      }
       record.state = 'reverted';
       return record.revertReceipt;
     } catch {

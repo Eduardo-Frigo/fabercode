@@ -10,6 +10,7 @@ const {
   createCanaryEditRuntimeComposition,
 } = require('../main/agent_runtime/canary_edit_runtime_composition');
 const {
+  CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SCHEMA_VERSION,
   CANARY_ROLLOUT_EVIDENCE_SCHEMA_VERSION,
 } = require('../main/agent_runtime/canary_rollout_evidence_ledger');
 const {
@@ -165,11 +166,11 @@ function createReadyOptions({
     },
   });
   const evidenceJournal = Object.freeze({
-    version: 'canary-rollout-evidence-journal.v1',
+    version: 'canary-rollout-evidence-journal.v2',
     load() {
       return Object.freeze({
-        schemaVersion: 'canary-rollout-evidence-journal-snapshot.v1',
-        evidence: Object.freeze([]),
+        schemaVersion: 'canary-rollout-evidence-journal-snapshot.v2',
+        events: Object.freeze([]),
       });
     },
     append() {
@@ -177,8 +178,26 @@ function createReadyOptions({
     },
     diagnostics() {
       return Object.freeze({
-        version: 'canary-rollout-evidence-journal.v1',
+        version: 'canary-rollout-evidence-journal.v2',
         records: 0,
+      });
+    },
+  });
+  const manualRollbackJournal = Object.freeze({
+    version: 'canary-manual-rollback-journal.v1',
+    load() {
+      return Object.freeze({
+        schemaVersion: 'canary-manual-rollback-journal-snapshot.v1',
+        registrations: Object.freeze([]),
+      });
+    },
+    append() { return undefined; },
+    remove() { return undefined; },
+    diagnostics() {
+      return Object.freeze({
+        version: 'canary-manual-rollback-journal.v1',
+        durability: 'private_user_data',
+        stateModel: 'registered_removed',
       });
     },
   });
@@ -197,6 +216,7 @@ function createReadyOptions({
       canaryEditor,
       promotionBackend,
       evidenceJournal,
+      manualRollbackJournal,
       client: clientFixture.client,
       ...options,
     },
@@ -206,6 +226,8 @@ function createReadyOptions({
 function assertUnavailable(runtime, state, reason) {
   assert.strictEqual(runtime.canaryEditRunner, null);
   assert.strictEqual(runtime.evidenceSink, null);
+  assert.strictEqual(runtime.reconciliationSink, null);
+  assert.strictEqual(runtime.manualRollback, null);
   assert.strictEqual(runtime.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL), null);
   assert.strictEqual(runtime.advancement(CANARY_ROLLOUT_STAGES.INTERNAL), null);
   const diagnostics = runtime.diagnostics();
@@ -278,7 +300,8 @@ async function testRequestedCanaryFailsClosedWithoutEveryAuthority() {
     ['workspaceSessionPort', 'canary_editor_unavailable'],
     ['canaryEditor', 'promotion_backend_unavailable'],
     ['promotionBackend', 'evidence_journal_unavailable'],
-    ['evidenceJournal', 'client_unavailable'],
+    ['evidenceJournal', 'manual_rollback_journal_unavailable'],
+    ['manualRollbackJournal', 'client_unavailable'],
   ];
   const partial = { runtimeConfig, adapterEnabled: true };
   for (const [field, nextReason] of dependencyOrder) {
@@ -336,6 +359,11 @@ async function testReadyCompositionIsLazyAndOwnsEvidence() {
   assert.strictEqual(Object.isFrozen(runtime), true);
   assert.strictEqual(Object.isFrozen(runtime.canaryEditRunner), true);
   assert.strictEqual(Object.isFrozen(runtime.evidenceSink), true);
+  assert.strictEqual(Object.isFrozen(runtime.reconciliationSink), true);
+  assert.strictEqual(Object.isFrozen(runtime.manualRollback), true);
+  assert.deepStrictEqual(Reflect.ownKeys(runtime.manualRollback), [
+    'version', 'rollback', 'diagnostics',
+  ]);
   assert.deepStrictEqual(runtime.diagnostics(), {
     version: CANARY_EDIT_RUNTIME_COMPOSITION_VERSION,
     state: CANARY_EDIT_RUNTIME_COMPOSITION_STATES.READY,
@@ -348,8 +376,23 @@ async function testReadyCompositionIsLazyAndOwnsEvidence() {
     runnerVersion: 'canary-edit-runner.v1',
     executorVersion: 'canary-transactional-staging-executor.v1',
     ledgerVersion: 'canary-rollout-evidence-ledger.v1',
-    journalVersion: 'canary-rollout-evidence-journal.v1',
+    journalVersion: 'canary-rollout-evidence-journal.v2',
     recoveredEvidence: 0,
+    recoveredReconciliations: 0,
+    manualRollbackService: {
+      version: 'canary-manual-rollback-service.v1',
+      promotionSinkVersion: 'canary-manual-rollback-promotion-sink.v1',
+      registrations: 0,
+      cancellations: 0,
+      availablePromotions: 0,
+      completedRollbacks: 0,
+      unreconciledRollbacks: 0,
+      inFlightRollbacks: 0,
+      rollbackFailures: 0,
+      reconciliationFailures: 0,
+      rejections: 0,
+      lastFailureCode: null,
+    },
     rolloutEvidenceObserver: {
       version: 'canary-rollout-evidence-observer-adapter.v1',
       evidenceSinkVersion: 'canary-rollout-evidence-sink.v1',
@@ -388,8 +431,40 @@ async function testReadyCompositionIsLazyAndOwnsEvidence() {
     securityIncident: false,
     duplicateExternalEffect: false,
   }));
+  const canary = Object.freeze({
+    schemaVersion: CANARY_ROLLOUT_EVIDENCE_SCHEMA_VERSION,
+    jobId: 'composition-canary-1',
+    projectId: 'composition-project-canary-1',
+    rolloutStage: CANARY_ROLLOUT_STAGES.INTERNAL,
+    route: 'canary',
+    eligible: true,
+    terminal: true,
+    succeeded: true,
+    manualRollback: false,
+    corrupted: false,
+    dataLossIncident: false,
+    securityIncident: false,
+    duplicateExternalEffect: false,
+  });
+  runtime.evidenceSink.record(canary);
+  runtime.reconciliationSink.record(Object.freeze({
+    schemaVersion: CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SCHEMA_VERSION,
+    reconciliationId: 'composition-manual-rollback-1',
+    jobId: canary.jobId,
+    projectId: canary.projectId,
+    rolloutStage: canary.rolloutStage,
+    manualRollback: true,
+    corrupted: false,
+    dataLossIncident: false,
+    securityIncident: false,
+    duplicateExternalEffect: false,
+  }));
   assert.strictEqual(
     runtime.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL).totals.baselineJobs,
+    1
+  );
+  assert.strictEqual(
+    runtime.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL).totals.manualRollbacks,
     1
   );
   assert.strictEqual(

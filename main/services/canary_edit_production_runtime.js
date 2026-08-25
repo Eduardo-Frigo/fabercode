@@ -6,6 +6,12 @@ const {
   createCanaryEditRuntimeComposition,
 } = require('../agent_runtime/canary_edit_runtime_composition');
 const {
+  CANARY_MANUAL_ROLLBACK_JOURNAL_SNAPSHOT_SCHEMA_VERSION,
+} = require('../agent_runtime/canary_manual_rollback_journal_contract');
+const {
+  CANARY_PROMOTION_ROLLBACK_STORE_SNAPSHOT_SCHEMA_VERSION,
+} = require('../agent_runtime/canary_promotion_rollback_store_contract');
+const {
   createCanaryAdmissionFactsProvider,
 } = require('./canary_admission_facts_provider');
 const {
@@ -40,6 +46,8 @@ const OPTION_KEYS = Object.freeze([
   'promotionIdFactory',
   'cohortSeed',
   'evidenceJournal',
+  'promotionRollbackStore',
+  'manualRollbackJournal',
   'client',
   'onCanaryCompleted',
   'onCanaryFailed',
@@ -82,6 +90,104 @@ function exactDataFields(value, allowedKeys, requiredKeys = allowedKeys) {
   return fields;
 }
 
+function ownDataValue(value, key) {
+  if (!value || typeof value !== 'object' || util.types.isProxy(value)) {
+    return null;
+  }
+  let descriptor;
+  try { descriptor = Object.getOwnPropertyDescriptor(value, key); } catch {
+    return null;
+  }
+  return descriptor && descriptor.enumerable === true
+    && Object.hasOwn(descriptor, 'value')
+    ? descriptor.value : null;
+}
+
+function frozenArrayValues(value) {
+  if (!Array.isArray(value) || util.types.isProxy(value)
+    || Object.getPrototypeOf(value) !== Array.prototype
+    || !Object.isFrozen(value)) return null;
+  const keys = Reflect.ownKeys(value).filter((key) => key !== 'length');
+  if (keys.length !== value.length
+    || keys.some((key, index) => key !== String(index))) return null;
+  return keys.map((key) => ownDataValue(value, key));
+}
+
+function synchronousLoad(port, fieldName) {
+  if (!port || typeof port !== 'object' || util.types.isProxy(port)
+    || !Object.isFrozen(port)) {
+    throw new TypeError(fieldName + ' must be a frozen durable port');
+  }
+  const load = ownDataValue(port, 'load');
+  if (typeof load !== 'function' || util.types.isProxy(load)) {
+    throw new TypeError(fieldName + '.load is invalid');
+  }
+  let snapshot;
+  try { snapshot = Reflect.apply(load, port, []); } catch {
+    throw new TypeError(fieldName + '.load failed');
+  }
+  if (util.types.isPromise(snapshot)) {
+    snapshot.catch(() => {});
+    throw new TypeError(fieldName + '.load must be synchronous');
+  }
+  return snapshot;
+}
+
+function rollbackStorePromotionIds(port) {
+  const snapshot = synchronousLoad(port, 'promotionRollbackStore');
+  const fields = exactDataFields(snapshot, ['schemaVersion', 'records']);
+  const records = fields && Object.isFrozen(snapshot)
+    ? frozenArrayValues(fields.get('records')) : null;
+  if (!fields || !records
+    || fields.get('schemaVersion')
+      !== CANARY_PROMOTION_ROLLBACK_STORE_SNAPSHOT_SCHEMA_VERSION) {
+    throw new TypeError('promotionRollbackStore snapshot is invalid');
+  }
+  return records.map((record) => {
+    const request = ownDataValue(record, 'request');
+    const promotionId = ownDataValue(request, 'promotionId');
+    if (typeof promotionId !== 'string' || !promotionId) {
+      throw new TypeError('promotionRollbackStore recovery is invalid');
+    }
+    return promotionId;
+  });
+}
+
+function manualJournalPromotionIds(port) {
+  const snapshot = synchronousLoad(port, 'manualRollbackJournal');
+  const fields = exactDataFields(
+    snapshot,
+    ['schemaVersion', 'registrations']
+  );
+  const registrations = fields && Object.isFrozen(snapshot)
+    ? frozenArrayValues(fields.get('registrations')) : null;
+  if (!fields || !registrations
+    || fields.get('schemaVersion')
+      !== CANARY_MANUAL_ROLLBACK_JOURNAL_SNAPSHOT_SCHEMA_VERSION) {
+    throw new TypeError('manualRollbackJournal snapshot is invalid');
+  }
+  return registrations.map((registration) => {
+    const transaction = ownDataValue(registration, 'transaction');
+    const request = ownDataValue(transaction, 'request');
+    const promotionId = ownDataValue(request, 'promotionId');
+    if (typeof promotionId !== 'string' || !promotionId) {
+      throw new TypeError('manualRollbackJournal registration is invalid');
+    }
+    return promotionId;
+  });
+}
+
+function assertDurableRollbackAlignment(promotionStore, manualJournal) {
+  const promotionIds = rollbackStorePromotionIds(promotionStore).sort();
+  const registrationIds = manualJournalPromotionIds(manualJournal).sort();
+  if (new Set(promotionIds).size !== promotionIds.length
+    || new Set(registrationIds).size !== registrationIds.length
+    || promotionIds.length !== registrationIds.length
+    || promotionIds.some((value, index) => value !== registrationIds[index])) {
+    throw new TypeError('Durable manual rollback registrations are misaligned');
+  }
+}
+
 function createCanaryEditProductionRuntime(options = {}) {
   const fields = exactDataFields(options, OPTION_KEYS, REQUIRED_OPTION_KEYS);
   if (!fields || typeof fields.get('adapterEnabled') !== 'boolean'
@@ -89,6 +195,11 @@ function createCanaryEditProductionRuntime(options = {}) {
     || typeof fields.get('onCanaryFailed') !== 'function') {
     throw new TypeError('Invalid canary edit production runtime options');
   }
+
+  assertDurableRollbackAlignment(
+    fields.get('promotionRollbackStore'),
+    fields.get('manualRollbackJournal')
+  );
 
   const admissionFactsProvider = createCanaryAdmissionFactsProvider({
     authorityService: fields.get('authorityService'),
@@ -106,7 +217,9 @@ function createCanaryEditProductionRuntime(options = {}) {
   const canaryEditor = createCanaryLocalStagingEditorAdapter({
     kernelId: CANARY_EDIT_PRODUCTION_KERNEL_ID,
   });
-  const promotionBackend = createCanaryLocalPromotionBackend();
+  const promotionBackend = createCanaryLocalPromotionBackend({
+    rollbackStore: fields.get('promotionRollbackStore'),
+  });
   const runtimeOptions = {
     runtimeConfig: fields.get('runtimeConfig'),
     adapterEnabled: fields.get('adapterEnabled'),
@@ -117,6 +230,7 @@ function createCanaryEditProductionRuntime(options = {}) {
     canaryEditor,
     promotionBackend,
     evidenceJournal: fields.get('evidenceJournal'),
+    manualRollbackJournal: fields.get('manualRollbackJournal'),
     client: fields.get('client'),
   };
   if (fields.has('minimumCanaryJobs')) {
@@ -151,6 +265,10 @@ function createCanaryEditProductionRuntime(options = {}) {
       workspaceSessionPort: workspaceSessionPort.diagnostics(),
       canaryEditor: canaryEditor.diagnostics(),
       promotionBackend: promotionBackend.diagnostics(),
+      promotionRollbackStore:
+        fields.get('promotionRollbackStore').diagnostics(),
+      manualRollbackJournal:
+        fields.get('manualRollbackJournal').diagnostics(),
       evidenceJournal: fields.get('evidenceJournal').diagnostics(),
       terminalObserver: terminalObserver ? terminalObserver.diagnostics() : null,
     });
@@ -166,6 +284,8 @@ function createCanaryEditProductionRuntime(options = {}) {
       ? terminalObserver.canaryEditRunner
       : null,
     evidenceSink: runtime.evidenceSink,
+    reconciliationSink: runtime.reconciliationSink,
+    manualRollback: runtime.manualRollback,
     snapshot,
     advancement,
     diagnostics,

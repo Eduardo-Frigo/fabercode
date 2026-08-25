@@ -6,6 +6,7 @@ const path = require('path');
 const util = require('util');
 
 const {
+  CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SCHEMA_VERSION,
   CANARY_ROLLOUT_EVIDENCE_SCHEMA_VERSION,
 } = require('../agent_runtime/canary_rollout_evidence_ledger');
 const {
@@ -13,18 +14,24 @@ const {
 } = require('../agent_runtime/canary_rollout_selector');
 
 const CANARY_ROLLOUT_EVIDENCE_JOURNAL_VERSION =
-  'canary-rollout-evidence-journal.v1';
+  'canary-rollout-evidence-journal.v2';
 const CANARY_ROLLOUT_EVIDENCE_JOURNAL_RECORD_SCHEMA_VERSION =
   'canary-rollout-evidence-journal-record.v1';
+const CANARY_ROLLOUT_EVIDENCE_JOURNAL_RECONCILIATION_RECORD_SCHEMA_VERSION =
+  'canary-rollout-evidence-journal-reconciliation-record.v1';
 const CANARY_ROLLOUT_EVIDENCE_JOURNAL_SNAPSHOT_SCHEMA_VERSION =
-  'canary-rollout-evidence-journal-snapshot.v1';
+  'canary-rollout-evidence-journal-snapshot.v2';
 const CANARY_ROLLOUT_EVIDENCE_JOURNAL_DIRECTORY_NAME =
   'canary-rollout-evidence';
 const CANARY_ROLLOUT_EVIDENCE_JOURNAL_FILE_NAME = 'evidence-v1.jsonl';
 
 const CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS = Object.freeze({
   DUPLICATE_EVIDENCE: 'CANARY_ROLLOUT_EVIDENCE_JOURNAL_DUPLICATE_EVIDENCE',
+  DUPLICATE_RECONCILIATION:
+    'CANARY_ROLLOUT_EVIDENCE_JOURNAL_DUPLICATE_RECONCILIATION',
   INVALID_EVIDENCE: 'CANARY_ROLLOUT_EVIDENCE_JOURNAL_INVALID_EVIDENCE',
+  INVALID_RECONCILIATION:
+    'CANARY_ROLLOUT_EVIDENCE_JOURNAL_INVALID_RECONCILIATION',
   INVALID_OPTIONS: 'CANARY_ROLLOUT_EVIDENCE_JOURNAL_INVALID_OPTIONS',
   JOURNAL_CORRUPTED: 'CANARY_ROLLOUT_EVIDENCE_JOURNAL_CORRUPTED',
   STORAGE_CHANGED: 'CANARY_ROLLOUT_EVIDENCE_JOURNAL_STORAGE_CHANGED',
@@ -52,6 +59,25 @@ const RECORD_KEYS = Object.freeze([
   'sequence',
   'previousRecordDigest',
   'evidence',
+  'recordDigest',
+]);
+const RECONCILIATION_KEYS = Object.freeze([
+  'schemaVersion',
+  'reconciliationId',
+  'jobId',
+  'projectId',
+  'rolloutStage',
+  'manualRollback',
+  'corrupted',
+  'dataLossIncident',
+  'securityIncident',
+  'duplicateExternalEffect',
+]);
+const RECONCILIATION_RECORD_KEYS = Object.freeze([
+  'schemaVersion',
+  'sequence',
+  'previousRecordDigest',
+  'reconciliation',
   'recordDigest',
 ]);
 const SIGNAL_KEYS = Object.freeze([
@@ -151,6 +177,27 @@ function normalizeEvidence(value, { frozen = false } = {}) {
     || fields.get('succeeded') && hasSignal) return null;
   return Object.freeze(Object.fromEntries(
     EVIDENCE_KEYS.map((key) => [key, fields.get(key)])
+  ));
+}
+
+function normalizeReconciliation(value, { frozen = false } = {}) {
+  const fields = plainDataFields(value, RECONCILIATION_KEYS, { frozen });
+  if (!fields
+    || fields.get('schemaVersion')
+      !== CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SCHEMA_VERSION
+    || typeof fields.get('reconciliationId') !== 'string'
+    || !SAFE_IDENTIFIER.test(fields.get('reconciliationId'))
+    || typeof fields.get('jobId') !== 'string'
+    || !SAFE_IDENTIFIER.test(fields.get('jobId'))
+    || typeof fields.get('projectId') !== 'string'
+    || !SAFE_IDENTIFIER.test(fields.get('projectId'))
+    || !VALID_STAGES.has(fields.get('rolloutStage'))
+    || SIGNAL_KEYS.some((key) => typeof fields.get(key) !== 'boolean')
+    || !SIGNAL_KEYS.some((key) => fields.get(key))) {
+    return null;
+  }
+  return Object.freeze(Object.fromEntries(
+    RECONCILIATION_KEYS.map((key) => [key, fields.get(key)])
   ));
 }
 
@@ -305,13 +352,35 @@ function buildRecord(sequence, previousRecordDigest, evidence) {
   });
 }
 
+function buildReconciliationRecord(
+  sequence,
+  previousRecordDigest,
+  reconciliation
+) {
+  const core = {
+    schemaVersion:
+      CANARY_ROLLOUT_EVIDENCE_JOURNAL_RECONCILIATION_RECORD_SCHEMA_VERSION,
+    sequence,
+    previousRecordDigest,
+    reconciliation,
+  };
+  return Object.freeze({
+    ...core,
+    recordDigest: digestCore(core),
+  });
+}
+
+function journalEvent(type, value) {
+  return Object.freeze({ type, value });
+}
+
 function parseJournal(bytes) {
   if (!Buffer.isBuffer(bytes) || bytes.length > MAXIMUM_JOURNAL_BYTES
     || bytes.length > 0 && bytes[bytes.length - 1] !== 0x0a) {
     fail(CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS.JOURNAL_CORRUPTED);
   }
   if (bytes.length === 0) {
-    return Object.freeze({ evidence: Object.freeze([]), headDigest: null });
+    return Object.freeze({ events: Object.freeze([]), headDigest: null });
   }
   const lines = bytes.toString('utf8').slice(0, -1).split('\n');
   if (lines.length > MAXIMUM_RECORDS) {
@@ -319,6 +388,7 @@ function parseJournal(bytes) {
   }
   const recovered = [];
   const jobIds = new Set();
+  const reconciliationIds = new Set();
   let priorDigest = null;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
@@ -331,31 +401,51 @@ function parseJournal(bytes) {
     } catch {
       fail(CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS.JOURNAL_CORRUPTED);
     }
-    const fields = plainDataFields(value, RECORD_KEYS);
-    const evidence = fields
-      ? normalizeEvidence(fields.get('evidence'))
+    const evidenceFields = plainDataFields(value, RECORD_KEYS);
+    const evidence = evidenceFields
+      ? normalizeEvidence(evidenceFields.get('evidence'))
       : null;
-    if (!fields || !evidence
-      || fields.get('schemaVersion')
-        !== CANARY_ROLLOUT_EVIDENCE_JOURNAL_RECORD_SCHEMA_VERSION
-      || fields.get('sequence') !== index
+    const reconciliationFields = evidenceFields
+      ? null
+      : plainDataFields(value, RECONCILIATION_RECORD_KEYS);
+    const reconciliation = reconciliationFields
+      ? normalizeReconciliation(reconciliationFields.get('reconciliation'))
+      : null;
+    let fields;
+    let record;
+    let event;
+    if (evidenceFields && evidence
+      && evidenceFields.get('schemaVersion')
+        === CANARY_ROLLOUT_EVIDENCE_JOURNAL_RECORD_SCHEMA_VERSION
+      && !jobIds.has(evidence.jobId)) {
+      fields = evidenceFields;
+      record = buildRecord(index, priorDigest, evidence);
+      event = journalEvent('evidence', evidence);
+      jobIds.add(evidence.jobId);
+    } else if (reconciliationFields && reconciliation
+      && reconciliationFields.get('schemaVersion')
+        === CANARY_ROLLOUT_EVIDENCE_JOURNAL_RECONCILIATION_RECORD_SCHEMA_VERSION
+      && !reconciliationIds.has(reconciliation.reconciliationId)) {
+      fields = reconciliationFields;
+      record = buildReconciliationRecord(index, priorDigest, reconciliation);
+      event = journalEvent('reconciliation', reconciliation);
+      reconciliationIds.add(reconciliation.reconciliationId);
+    } else {
+      fail(CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS.JOURNAL_CORRUPTED);
+    }
+    if (fields.get('sequence') !== index
       || fields.get('previousRecordDigest') !== priorDigest
       || typeof fields.get('recordDigest') !== 'string'
       || !SAFE_DIGEST.test(fields.get('recordDigest'))
-      || jobIds.has(evidence.jobId)) {
-      fail(CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS.JOURNAL_CORRUPTED);
-    }
-    const record = buildRecord(index, priorDigest, evidence);
-    if (record.recordDigest !== fields.get('recordDigest')
+      || record.recordDigest !== fields.get('recordDigest')
       || JSON.stringify(record) !== line) {
       fail(CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS.JOURNAL_CORRUPTED);
     }
-    recovered.push(evidence);
-    jobIds.add(evidence.jobId);
+    recovered.push(event);
     priorDigest = record.recordDigest;
   }
   return Object.freeze({
-    evidence: Object.freeze(recovered),
+    events: Object.freeze(recovered),
     headDigest: priorDigest,
   });
 }
@@ -387,8 +477,9 @@ function createCanaryRolloutEvidenceJournalAdapter(options = {}) {
     CANARY_ROLLOUT_EVIDENCE_JOURNAL_FILE_NAME
   );
   let loaded = false;
-  let evidenceRecords = Object.freeze([]);
+  let events = Object.freeze([]);
   let jobIds = new Set();
+  let reconciliationIds = new Set();
   let headDigest = null;
   let pinnedFileState = null;
   let persistedBytes = 0;
@@ -429,7 +520,7 @@ function createCanaryRolloutEvidenceJournalAdapter(options = {}) {
     assertDirectoryUnchanged();
     if (!fs.existsSync(filePath)) {
       return Object.freeze({
-        evidence: Object.freeze([]),
+        events: Object.freeze([]),
         headDigest: null,
         fileState: null,
         persistedBytes: 0,
@@ -473,7 +564,7 @@ function createCanaryRolloutEvidenceJournalAdapter(options = {}) {
       const parsed = parseJournal(bytes);
       assertDirectoryUnchanged();
       return Object.freeze({
-        evidence: parsed.evidence,
+        events: parsed.events,
         headDigest: parsed.headDigest,
         fileState: afterIdentity,
         persistedBytes: bytes.length,
@@ -491,8 +582,13 @@ function createCanaryRolloutEvidenceJournalAdapter(options = {}) {
   function ensureLoaded() {
     if (loaded) return;
     const recovered = readPersistedJournal();
-    evidenceRecords = recovered.evidence;
-    jobIds = new Set(evidenceRecords.map((entry) => entry.jobId));
+    events = recovered.events;
+    jobIds = new Set(events
+      .filter((event) => event.type === 'evidence')
+      .map((event) => event.value.jobId));
+    reconciliationIds = new Set(events
+      .filter((event) => event.type === 'reconciliation')
+      .map((event) => event.value.reconciliationId));
     headDigest = recovered.headDigest;
     pinnedFileState = recovered.fileState;
     persistedBytes = recovered.persistedBytes;
@@ -502,7 +598,7 @@ function createCanaryRolloutEvidenceJournalAdapter(options = {}) {
   function snapshot() {
     return Object.freeze({
       schemaVersion: CANARY_ROLLOUT_EVIDENCE_JOURNAL_SNAPSHOT_SCHEMA_VERSION,
-      evidence: Object.freeze([...evidenceRecords]),
+      events: Object.freeze([...events]),
     });
   }
 
@@ -604,29 +700,50 @@ function createCanaryRolloutEvidenceJournalAdapter(options = {}) {
 
   function append(value) {
     const evidence = normalizeEvidence(value, { frozen: true });
-    if (!evidence) {
+    const reconciliation = evidence
+      ? null
+      : normalizeReconciliation(value, { frozen: true });
+    if (!evidence && !reconciliation) {
+      const reconciliationFields = plainDataFields(
+        value,
+        RECONCILIATION_KEYS,
+        { frozen: true }
+      );
+      const reason = reconciliationFields
+        ? CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS.INVALID_RECONCILIATION
+        : CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS.INVALID_EVIDENCE;
       return reject(
-        journalError(CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS.INVALID_EVIDENCE),
-        CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS.INVALID_EVIDENCE
+        journalError(reason),
+        reason
       );
     }
     try {
       ensureLoaded();
-      if (jobIds.has(evidence.jobId)) {
+      if (evidence && jobIds.has(evidence.jobId)) {
         fail(CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS.DUPLICATE_EVIDENCE);
       }
-      if (evidenceRecords.length >= MAXIMUM_RECORDS) {
+      if (reconciliation
+        && reconciliationIds.has(reconciliation.reconciliationId)) {
+        fail(
+          CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS.DUPLICATE_RECONCILIATION
+        );
+      }
+      if (events.length >= MAXIMUM_RECORDS) {
         fail(CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS.STORAGE_UNAVAILABLE);
       }
       assertStorageUnchanged();
-      const record = buildRecord(
-        evidenceRecords.length,
-        headDigest,
-        evidence
-      );
+      const record = evidence
+        ? buildRecord(events.length, headDigest, evidence)
+        : buildReconciliationRecord(events.length, headDigest, reconciliation);
       persist(record);
-      evidenceRecords = Object.freeze([...evidenceRecords, evidence]);
-      jobIds.add(evidence.jobId);
+      events = Object.freeze([
+        ...events,
+        evidence
+          ? journalEvent('evidence', evidence)
+          : journalEvent('reconciliation', reconciliation),
+      ]);
+      if (evidence) jobIds.add(evidence.jobId);
+      else reconciliationIds.add(reconciliation.reconciliationId);
       headDigest = record.recordDigest;
       appends += 1;
       lastFailureCode = null;
@@ -643,7 +760,7 @@ function createCanaryRolloutEvidenceJournalAdapter(options = {}) {
     return Object.freeze({
       version: CANARY_ROLLOUT_EVIDENCE_JOURNAL_VERSION,
       storageMode: 'private_user_data_append_only',
-      records: evidenceRecords.length,
+      records: events.length,
       headDigest,
       loads,
       appends,
@@ -664,6 +781,7 @@ module.exports = {
   CANARY_ROLLOUT_EVIDENCE_JOURNAL_DIRECTORY_NAME,
   CANARY_ROLLOUT_EVIDENCE_JOURNAL_FILE_NAME,
   CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS,
+  CANARY_ROLLOUT_EVIDENCE_JOURNAL_RECONCILIATION_RECORD_SCHEMA_VERSION,
   CANARY_ROLLOUT_EVIDENCE_JOURNAL_RECORD_SCHEMA_VERSION,
   CANARY_ROLLOUT_EVIDENCE_JOURNAL_SNAPSHOT_SCHEMA_VERSION,
   CANARY_ROLLOUT_EVIDENCE_JOURNAL_VERSION,

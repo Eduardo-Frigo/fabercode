@@ -33,6 +33,12 @@ const AUTHORITY_CONTEXT_KEYS = [
 const SHA256_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SAFE_JOB_ID_PATTERN = /^job-[A-Za-z0-9._-]{1,180}$/;
+const SAFE_CANARY_IDENTIFIER_PATTERN = /^[A-Za-z0-9._:@-]{1,256}$/;
+const CANARY_ROLLBACK_COMPLETION_KEYS = Object.freeze([
+  'promotionId',
+  'reconciliationId',
+  'sourceRestored',
+]);
 const MAX_JOB_ID_ATTEMPTS = 3;
 const UNSAFE_RECORD_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const PUBLIC_JOB_REDACTED_KEYS = new Set([
@@ -188,6 +194,74 @@ function createJobStateStore(dependencies = {}) {
   function invalidJobIdResult(jobId) {
     if (!jobId) return { ok: false, code: 'job_id_required', message: 'jobId é obrigatório.' };
     return { ok: false, code: 'invalid_job_id', message: 'jobId inválido.' };
+  }
+
+  function normalizeCanaryRollbackCompletion(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    let prototype;
+    let keys;
+    let descriptors;
+    try {
+      prototype = Object.getPrototypeOf(value);
+      keys = Reflect.ownKeys(value);
+      descriptors = Object.getOwnPropertyDescriptors(value);
+    } catch {
+      return null;
+    }
+    if ((prototype !== Object.prototype && prototype !== null)
+      || keys.length !== CANARY_ROLLBACK_COMPLETION_KEYS.length
+      || keys.some((key) => typeof key !== 'string'
+        || UNSAFE_RECORD_KEYS.has(key)
+        || !CANARY_ROLLBACK_COMPLETION_KEYS.includes(key))
+      || CANARY_ROLLBACK_COMPLETION_KEYS.some((key) => {
+        const descriptor = descriptors[key];
+        return !descriptor || descriptor.enumerable !== true
+          || !Object.prototype.hasOwnProperty.call(descriptor, 'value');
+      })) return null;
+    const promotionId = descriptors.promotionId.value;
+    const reconciliationId = descriptors.reconciliationId.value;
+    const sourceRestored = descriptors.sourceRestored.value;
+    if (typeof promotionId !== 'string'
+      || !SAFE_CANARY_IDENTIFIER_PATTERN.test(promotionId)
+      || typeof reconciliationId !== 'string'
+      || !SAFE_CANARY_IDENTIFIER_PATTERN.test(reconciliationId)
+      || sourceRestored !== true) return null;
+    return {
+      promotionId,
+      reconciliationId,
+      sourceRestored: true,
+    };
+  }
+
+  function ownDataValue(value, key) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return undefined;
+    }
+    let descriptor;
+    try { descriptor = Object.getOwnPropertyDescriptor(value, key); } catch {
+      return undefined;
+    }
+    return descriptor && descriptor.enumerable === true
+      && Object.prototype.hasOwnProperty.call(descriptor, 'value')
+      ? descriptor.value : undefined;
+  }
+
+  function completedCanaryPromotionId(job) {
+    if (ownDataValue(job, 'status') !== 'completed'
+      || ownDataValue(job, 'phase') !== 'done') return null;
+    const events = ownDataValue(job, 'events');
+    if (!Array.isArray(events)) return null;
+    for (const event of events) {
+      if (ownDataValue(event, 'type') !== 'job.completed') continue;
+      const payload = ownDataValue(event, 'payload');
+      const promotionId = ownDataValue(payload, 'canaryPromotionId');
+      if (ownDataValue(payload, 'canary') === true
+        && typeof promotionId === 'string'
+        && SAFE_CANARY_IDENTIFIER_PATTERN.test(promotionId)) {
+        return promotionId;
+      }
+    }
+    return null;
   }
 
   function projectPublicJobValue(value, seen = new WeakSet()) {
@@ -862,6 +936,74 @@ function createJobStateStore(dependencies = {}) {
     return next;
   }
 
+  function markJobCanaryRolledBack(jobId, value) {
+    if (!isSafeJobId(jobId)) return invalidJobIdResult(jobId);
+    const completion = normalizeCanaryRollbackCompletion(value);
+    if (!completion) {
+      return {
+        ok: false,
+        code: 'canary_rollback_completion_invalid',
+        message: 'Comprovante de rollback canary inválido.',
+      };
+    }
+    const current = readJobsState();
+    if (!Object.hasOwn(current.jobsById, jobId)) {
+      return { ok: false, code: 'job_not_found', message: 'Job não encontrado.' };
+    }
+    const previousJob = current.jobsById[jobId];
+    const authority = validateStoredAuthorityJob(previousJob);
+    if (!authority.ok) return authority;
+    if (authority.authorityContextStatus !== 'bound'
+      || ownDataValue(previousJob, 'id') !== jobId
+      || completedCanaryPromotionId(previousJob) !== completion.promotionId) {
+      return {
+        ok: false,
+        code: 'canary_rollback_unavailable',
+        message: 'Este job não possui uma promoção canary reversível.',
+      };
+    }
+    const previousCompletion = ownDataValue(previousJob, 'canaryRollback');
+    if (previousCompletion !== undefined) {
+      if (ownDataValue(previousCompletion, 'status') === 'completed'
+        && CANARY_ROLLBACK_COMPLETION_KEYS.every((key) => (
+          ownDataValue(previousCompletion, key) === completion[key]
+        ))) {
+        return { ok: true, job: previousJob, idempotent: true };
+      }
+      return {
+        ok: false,
+        code: 'canary_rollback_conflict',
+        message: 'O job já possui outro comprovante de rollback canary.',
+      };
+    }
+    const canaryRollback = {
+      status: 'completed',
+      ...completion,
+    };
+    const nextJob = {
+      ...previousJob,
+      updatedAt: new Date().toISOString(),
+      canaryRollback,
+      events: [
+        buildJobEvent('job.canary_rolled_back', completion),
+        ...(Array.isArray(previousJob.events) ? previousJob.events : []),
+      ].slice(0, MAX_JOB_EVENTS),
+    };
+    writeJobsState({
+      ...current,
+      jobsById: {
+        ...current.jobsById,
+        [jobId]: nextJob,
+      },
+    });
+    appendJobAuditBestEffort('job.canary_rolled_back', {
+      jobId,
+      promotionId: completion.promotionId,
+      reconciliationId: completion.reconciliationId,
+    });
+    return { ok: true, job: nextJob, idempotent: false };
+  }
+
   function markJobAwaitingUserInput(jobId, payload = {}) {
     const next = mutateJobState(jobId, (job) => {
       const retryState = ensureJobRetryState(job);
@@ -1233,6 +1375,7 @@ function createJobStateStore(dependencies = {}) {
     listJobs,
     markJobAwaitingUserInput,
     markJobCancelled,
+    markJobCanaryRolledBack,
     markJobCompleted,
     markJobFailed,
     markJobPausedForMemory,

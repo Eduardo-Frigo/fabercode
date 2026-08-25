@@ -22,6 +22,10 @@ const {
   CANARY_EDIT_MUTATION_FRONTIERS,
 } = require('../main/agent_runtime/canary_edit_lifecycle');
 const {
+  CANARY_MANUAL_ROLLBACK_PROMOTION_REGISTRATION_SCHEMA_VERSION,
+  CANARY_MANUAL_ROLLBACK_PROMOTION_SINK_VERSION,
+} = require('../main/agent_runtime/canary_manual_rollback_service');
+const {
   CANARY_EDIT_RUNNER_EXECUTION_GRANT_SCHEMA_VERSION,
   CANARY_EDIT_RUNNER_FALLBACK_SIGNAL_SCHEMA_VERSION,
   createCanaryEditRunner,
@@ -81,6 +85,7 @@ function makeFixture({
   editorResultOverride = null,
   invalidPromotionReceipt = false,
   openOutcomeOverride = null,
+  promotionRegistrationFailure = null,
   promotionRejection = null,
   revertRejection = null,
 } = {}) {
@@ -220,6 +225,8 @@ function makeFixture({
     edit: [],
     open: [],
     promote: [],
+    registerPromotion: [],
+    cancelPromotion: [],
     revert: [],
   };
   const workspaceSessionPort = Object.freeze({
@@ -333,11 +340,26 @@ function makeFixture({
     },
   });
   const promotionController = createCanaryPromotionController({ backend });
+  const promotionSink = Object.freeze({
+    version: CANARY_MANUAL_ROLLBACK_PROMOTION_SINK_VERSION,
+    record(value) {
+      calls.registerPromotion.push(value);
+      events.push('register');
+      if (promotionRegistrationFailure) throw promotionRegistrationFailure;
+      return undefined;
+    },
+    cancel(value) {
+      calls.cancelPromotion.push(value);
+      events.push('cancel');
+      return undefined;
+    },
+  });
   const executor = createCanaryTransactionalStagingExecutor({
     kernelId: binding.kernelId,
     workspaceSessionPort,
     canaryEditor,
     promotionController,
+    promotionSink,
   });
 
   return {
@@ -350,6 +372,7 @@ function makeFixture({
     executor,
     grant,
     promotionController,
+    promotionSink,
     request,
     rootMutation,
     session,
@@ -363,9 +386,23 @@ function makeFixture({
 async function testPromotesOnlyAfterValidStagingAndDiscardsBeforeSuccess() {
   const fixture = makeFixture();
   const result = await fixture.executor.execute(fixture.request, fixture.grant);
-  assert.deepStrictEqual(fixture.events, ['open', 'edit', 'promote', 'discard']);
+  assert.deepStrictEqual(fixture.events, [
+    'open', 'edit', 'promote', 'register', 'discard',
+  ]);
   assert.strictEqual(fixture.calls.promote.length, 1);
   assert.strictEqual(fixture.calls.revert.length, 0);
+  assert.strictEqual(fixture.calls.registerPromotion.length, 1);
+  assert.deepStrictEqual(fixture.calls.registerPromotion[0], {
+    schemaVersion:
+      CANARY_MANUAL_ROLLBACK_PROMOTION_REGISTRATION_SCHEMA_VERSION,
+    rolloutStage: CANARY_ROLLOUT_STAGES.INTERNAL,
+    transaction: Object.freeze({
+      version: 'canary-promotion-transaction.v1',
+      request: fixture.calls.promote[0],
+      receipt: fixture.calls.registerPromotion[0].transaction.receipt,
+    }),
+  });
+  assertDeepFrozen(fixture.calls.registerPromotion[0]);
   assert.strictEqual(result.kernelId, fixture.binding.kernelId);
   assert.deepStrictEqual(result.output, { ok: true, engine: 'canary-promoted' });
   assert.deepStrictEqual(result.diagnostics, {
@@ -454,7 +491,9 @@ async function testPromotedResultIntegratesWithGuardedRunner() {
   assert.strictEqual(legacy.calls.length, 0);
   assert.strictEqual(runner.diagnostics().canaryCompleted, 1);
   assert.strictEqual(runner.diagnostics().legacyFallbacks, 0);
-  assert.deepStrictEqual(fixture.events, ['open', 'edit', 'promote', 'discard']);
+  assert.deepStrictEqual(fixture.events, [
+    'open', 'edit', 'promote', 'register', 'discard',
+  ]);
 }
 
 async function testPrePromotionFailuresDiscardThenFallback() {
@@ -517,13 +556,19 @@ async function testPostPromotionCleanupRevertsBeforeFallback() {
     'open',
     'edit',
     'promote',
+    'register',
     'discard',
     'revert',
+    'cancel',
   ]);
   assert.strictEqual(signal.mutationFrontier, CANARY_EDIT_MUTATION_FRONTIERS.SOURCE);
   assert.strictEqual(signal.cleanupReceipt.disposition, 'reverted');
   assert.strictEqual(signal.cleanupReceipt.clean, true);
   assert.strictEqual(fixture.calls.revert.length, 1);
+  assert.deepStrictEqual(fixture.calls.cancelPromotion, [{
+    promotionId: fixture.calls.promote[0].promotionId,
+    reason: 'automatic_revert_before_completion',
+  }]);
   assertDeepFrozen(signal);
 
   const failedRevert = makeFixture({
@@ -540,9 +585,24 @@ async function testPostPromotionCleanupRevertsBeforeFallback() {
     'open',
     'edit',
     'promote',
+    'register',
     'discard',
     'revert',
   ]);
+}
+
+async function testRollbackRegistrationFailureRevertsBeforeFallback() {
+  const fixture = makeFixture({
+    promotionRegistrationFailure: new Error('private registration failure'),
+  });
+  const signal = await fixture.executor.execute(fixture.request, fixture.grant);
+  assert.deepStrictEqual(fixture.events, [
+    'open', 'edit', 'promote', 'register', 'revert',
+  ]);
+  assert.strictEqual(signal.mutationFrontier, CANARY_EDIT_MUTATION_FRONTIERS.SOURCE);
+  assert.strictEqual(signal.cleanupReceipt.disposition, 'reverted');
+  assert.strictEqual(fixture.calls.cancelPromotion.length, 0);
+  assertDeepFrozen(signal);
 }
 
 async function testInvalidOpenOrEditorResultFailsClosed() {
@@ -606,6 +666,7 @@ function testConstructionRejectsUnsafePorts() {
       }),
       canaryEditor: fixture.canaryEditor,
       promotionController: fixture.promotionController,
+      promotionSink: fixture.promotionSink,
     }),
     /workspaceSessionPort|staging|isolation/i
   );
@@ -615,6 +676,7 @@ function testConstructionRejectsUnsafePorts() {
       workspaceSessionPort: fixture.workspaceSessionPort,
       canaryEditor: fixture.canaryEditor,
       promotionController: { ...fixture.promotionController },
+      promotionSink: fixture.promotionSink,
     }),
     /promotionController/
   );
@@ -639,6 +701,7 @@ async function run() {
   await testPrePromotionFailuresDiscardThenFallback();
   await testAmbiguousPromotionNeverFallsBack();
   await testPostPromotionCleanupRevertsBeforeFallback();
+  await testRollbackRegistrationFailureRevertsBeforeFallback();
   await testInvalidOpenOrEditorResultFailsClosed();
   console.log('canary transactional staging executor tests passed');
 }

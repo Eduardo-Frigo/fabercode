@@ -7,6 +7,8 @@ const {
   CANARY_ROLLOUT_ADVANCEMENT_REASONS,
   CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS,
   CANARY_ROLLOUT_EVIDENCE_LEDGER_VERSION,
+  CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SCHEMA_VERSION,
+  CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SINK_VERSION,
   CANARY_ROLLOUT_EVIDENCE_SCHEMA_VERSION,
   CANARY_ROLLOUT_EVIDENCE_SINK_VERSION,
   CANARY_ROLLOUT_EVIDENCE_SNAPSHOT_SCHEMA_VERSION,
@@ -44,16 +46,42 @@ function evidence(index, overrides = {}) {
   });
 }
 
-function evidenceJournal(initialEvidence = [], { appendFailure = null } = {}) {
+function reconciliation(index, jobId, projectId, overrides = {}) {
+  return Object.freeze({
+    schemaVersion: CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SCHEMA_VERSION,
+    reconciliationId: 'canary-reconciliation-' + index,
+    jobId,
+    projectId,
+    rolloutStage: CANARY_ROLLOUT_STAGES.INTERNAL,
+    manualRollback: false,
+    corrupted: false,
+    dataLossIncident: false,
+    securityIncident: false,
+    duplicateExternalEffect: false,
+    ...overrides,
+  });
+}
+
+function journalEvent(value) {
+  return Object.freeze({
+    type: value.schemaVersion
+      === CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SCHEMA_VERSION
+      ? 'reconciliation'
+      : 'evidence',
+    value,
+  });
+}
+
+function evidenceJournal(initialEvents = [], { appendFailure = null } = {}) {
   const calls = { append: 0, load: 0 };
-  const persisted = [...initialEvidence];
+  const persisted = [...initialEvents];
   const journal = Object.freeze({
-    version: 'canary-rollout-evidence-journal.v1',
+    version: 'canary-rollout-evidence-journal.v2',
     load() {
       calls.load += 1;
       return Object.freeze({
-        schemaVersion: 'canary-rollout-evidence-journal-snapshot.v1',
-        evidence: Object.freeze([...persisted]),
+        schemaVersion: 'canary-rollout-evidence-journal-snapshot.v2',
+        events: Object.freeze(persisted.map(journalEvent)),
       });
     },
     append(value) {
@@ -127,6 +155,7 @@ function testPassingGateAndStageIsolation() {
   assert.deepStrictEqual(Reflect.ownKeys(ledger), [
     'version',
     'evidenceSink',
+    'reconciliationSink',
     'snapshot',
     'advancement',
     'diagnostics',
@@ -380,7 +409,9 @@ function testDuplicateAndInvalidEvidenceFailClosed() {
     evidenceSinkVersion: CANARY_ROLLOUT_EVIDENCE_SINK_VERSION,
     journalVersion: null,
     recoveredEvidence: 0,
+    recoveredReconciliations: 0,
     acceptedEvidence: 1,
+    acceptedReconciliations: 0,
     acceptedByStage: {
       internal: 1,
       '1_percent': 0,
@@ -443,7 +474,7 @@ function testJournalHydrationAndPersistBeforeVisibility() {
   assert.strictEqual(ledger.diagnostics().recoveredEvidence, 2);
   assert.strictEqual(
     ledger.diagnostics().journalVersion,
-    'canary-rollout-evidence-journal.v1'
+    'canary-rollout-evidence-journal.v2'
   );
 
   const next = evidence('persisted-before-visible');
@@ -495,6 +526,184 @@ function testJournalFailureLeavesLedgerRetryable() {
     ledger.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL).totals.canaryJobs,
     1
   );
+  appendFailure.active = true;
+  const rollback = reconciliation(
+    'retry-after-reconciliation-persistence-failure',
+    next.jobId,
+    next.projectId,
+    { manualRollback: true }
+  );
+  const beforeReconciliation = ledger.snapshot(
+    CANARY_ROLLOUT_STAGES.INTERNAL
+  );
+  assert.throws(
+    () => ledger.reconciliationSink.record(rollback),
+    (error) => error.code
+      === CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
+  );
+  assert.deepStrictEqual(
+    ledger.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL),
+    beforeReconciliation
+  );
+  appendFailure.active = false;
+  assert.strictEqual(ledger.reconciliationSink.record(rollback), undefined);
+  assert.strictEqual(
+    ledger.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL).totals.manualRollbacks,
+    1
+  );
+}
+
+function testJournalHydratesReconciliationInOrder() {
+  const baseline = evidence('recovered-reconciliation-baseline', {
+    route: 'baseline',
+  });
+  const canary = evidence('recovered-reconciliation-canary');
+  const fixture = evidenceJournal([baseline, canary]);
+  const ledger = createCanaryRolloutEvidenceLedger({
+    minimumCanaryJobs: 1,
+    minimumBaselineJobs: 1,
+    evidenceJournal: fixture.journal,
+  });
+  const rollback = reconciliation(
+    'recovered-manual-rollback',
+    canary.jobId,
+    canary.projectId,
+    { manualRollback: true }
+  );
+  ledger.reconciliationSink.record(rollback);
+  const beforeRestart = ledger.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL);
+  assert.deepStrictEqual(fixture.persisted, [baseline, canary, rollback]);
+
+  const restarted = createCanaryRolloutEvidenceLedger({
+    minimumCanaryJobs: 1,
+    minimumBaselineJobs: 1,
+    evidenceJournal: fixture.journal,
+  });
+  assert.deepStrictEqual(
+    restarted.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL),
+    beforeRestart
+  );
+  assert.strictEqual(restarted.diagnostics().recoveredEvidence, 2);
+  assert.strictEqual(restarted.diagnostics().recoveredReconciliations, 1);
+  assert.strictEqual(restarted.diagnostics().acceptedReconciliations, 1);
+}
+
+function testAppendOnlyPostExecutionReconciliation() {
+  const ledger = createCanaryRolloutEvidenceLedger({
+    minimumCanaryJobs: 1,
+    minimumBaselineJobs: 1,
+  });
+  assert.deepStrictEqual(Reflect.ownKeys(ledger), [
+    'version',
+    'evidenceSink',
+    'reconciliationSink',
+    'snapshot',
+    'advancement',
+    'diagnostics',
+  ]);
+  assert.deepStrictEqual(Reflect.ownKeys(ledger.reconciliationSink), [
+    'version',
+    'record',
+  ]);
+  assert.strictEqual(
+    ledger.reconciliationSink.version,
+    CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SINK_VERSION
+  );
+  assertDeepFrozen(ledger.reconciliationSink);
+
+  const baseline = evidence('reconciliation-baseline', {
+    route: 'baseline',
+    projectId: 'reconciliation-baseline-project',
+  });
+  const canary = evidence('reconciliation-canary', {
+    projectId: 'reconciliation-canary-project',
+  });
+  ledger.evidenceSink.record(baseline);
+  ledger.evidenceSink.record(canary);
+  const before = ledger.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL);
+  assert.strictEqual(before.gate.status, CANARY_ROLLOUT_GATE_STATUSES.PASS);
+  assert.strictEqual(before.totals.canarySuccesses, 1);
+
+  const rollback = reconciliation(
+    'manual-rollback',
+    canary.jobId,
+    canary.projectId,
+    { manualRollback: true }
+  );
+  assert.strictEqual(ledger.reconciliationSink.record(rollback), undefined);
+  const after = ledger.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL);
+  assert.strictEqual(after.totals.canaryJobs, 1);
+  assert.strictEqual(after.totals.canarySuccesses, 0);
+  assert.strictEqual(after.totals.manualRollbacks, 1);
+  assert.notStrictEqual(after.headDigest, before.headDigest);
+  assert.deepStrictEqual(after.gate, {
+    status: CANARY_ROLLOUT_GATE_STATUSES.BLOCKED,
+    reasons: [
+      CANARY_ROLLOUT_GATE_REASONS.MANUAL_ROLLBACK_RATE,
+      CANARY_ROLLOUT_GATE_REASONS.SUCCESS_BELOW_BASELINE,
+    ],
+  });
+  assert.strictEqual(ledger.diagnostics().acceptedReconciliations, 1);
+
+  assert.throws(
+    () => ledger.reconciliationSink.record(rollback),
+    (error) => error.code
+      === CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.DUPLICATE_RECONCILIATION
+  );
+  assert.throws(
+    () => ledger.reconciliationSink.record(reconciliation(
+      'manual-rollback-repeated-signal',
+      canary.jobId,
+      canary.projectId,
+      { manualRollback: true }
+    )),
+    (error) => error.code
+      === CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.RECONCILIATION_NO_NEW_SIGNAL
+  );
+  assert.throws(
+    () => ledger.reconciliationSink.record(reconciliation(
+      'wrong-project',
+      canary.jobId,
+      'another-project',
+      { corrupted: true }
+    )),
+    (error) => error.code
+      === CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.RECONCILIATION_TARGET_MISMATCH
+  );
+  assert.throws(
+    () => ledger.reconciliationSink.record(reconciliation(
+      'baseline-target',
+      baseline.jobId,
+      baseline.projectId,
+      { securityIncident: true }
+    )),
+    (error) => error.code
+      === CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.RECONCILIATION_TARGET_MISMATCH
+  );
+}
+
+function testReconciledSafetyIncidentBlocksImmediately() {
+  const ledger = createCanaryRolloutEvidenceLedger({
+    minimumCanaryJobs: 100,
+    minimumBaselineJobs: 100,
+  });
+  const canary = evidence('reconciled-security-incident', {
+    projectId: 'reconciled-security-project',
+  });
+  ledger.evidenceSink.record(canary);
+  ledger.reconciliationSink.record(reconciliation(
+    'security-incident',
+    canary.jobId,
+    canary.projectId,
+    { securityIncident: true }
+  ));
+  assert.deepStrictEqual(
+    ledger.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL).gate,
+    {
+      status: CANARY_ROLLOUT_GATE_STATUSES.BLOCKED,
+      reasons: [CANARY_ROLLOUT_GATE_REASONS.SECURITY_INCIDENT],
+    }
+  );
 }
 
 function run() {
@@ -510,6 +719,14 @@ function run() {
     CANARY_ROLLOUT_EVIDENCE_SINK_VERSION,
     'canary-rollout-evidence-sink.v1'
   );
+  assert.strictEqual(
+    CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SCHEMA_VERSION,
+    'canary-rollout-evidence-reconciliation.v1'
+  );
+  assert.strictEqual(
+    CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SINK_VERSION,
+    'canary-rollout-evidence-reconciliation-sink.v1'
+  );
   assert.deepStrictEqual(CANARY_ROLLOUT_GATE_STATUSES, {
     BLOCKED: 'blocked',
     INSUFFICIENT_DATA: 'insufficient_data',
@@ -521,6 +738,9 @@ function run() {
   testDuplicateAndInvalidEvidenceFailClosed();
   testJournalHydrationAndPersistBeforeVisibility();
   testJournalFailureLeavesLedgerRetryable();
+  testJournalHydratesReconciliationInOrder();
+  testAppendOnlyPostExecutionReconciliation();
+  testReconciledSafetyIncidentBlocksImmediately();
   console.log('canary rollout evidence ledger tests passed');
 }
 

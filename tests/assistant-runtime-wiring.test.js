@@ -272,6 +272,9 @@ for (const productionCanaryDependency of [
   "require('./main/services/codex_app_server_production_client_activation')",
   "require('./main/services/canary_internal_rollout_policy')",
   "require('./main/services/canary_edit_production_runtime')",
+  "require('./main/services/canary_manual_rollback_job_service')",
+  "require('./main/services/canary_manual_rollback_journal_adapter')",
+  "require('./main/services/canary_promotion_rollback_store_adapter')",
   "require('./main/services/canary_rollout_evidence_journal_adapter')",
 ]) {
   assert.ok(
@@ -295,6 +298,10 @@ assertInOrder(
     'getProjectAccess().authorizeProjectBinding(projectId, rootPath)',
     'const evidenceJournal = createCanaryRolloutEvidenceJournalAdapter({',
     "storageDir: app.getPath('userData')",
+    'const promotionRollbackStore = createCanaryPromotionRollbackStoreAdapter({',
+    "storageDir: app.getPath('userData')",
+    'const manualRollbackJournal = createCanaryManualRollbackJournalAdapter({',
+    "storageDir: app.getPath('userData')",
     'createCodexAppServerProductionClientActivation({',
     "cwd: app.getPath('userData')",
     'clientVersion: app.getVersion()',
@@ -309,11 +316,15 @@ assertInOrder(
     'inspectRollout: (binding) => rolloutPolicy.inspect(binding),',
     'promotionIdFactory: () => `canary-promotion-${crypto.randomUUID()}`',
     'evidenceJournal,',
+    'promotionRollbackStore,',
+    'manualRollbackJournal,',
     'onCanaryCompleted: (observation) => {',
     "const jobId = readAgenticDeleteDataProperty(observation, 'jobId');",
+    "'promotionId'",
     "'changedPaths'",
     'const terminalResult = markJobCompleted(jobId, {',
     'canary: true,',
+    'canaryPromotionId: promotionId,',
     'modifiedFiles: changedPaths,',
     '...buildAssistantProcessValidationPendingFields(',
     "appendAuditEvent('assistant.canary_edit_completed'",
@@ -443,6 +454,22 @@ assertInOrder(
   'main process must compose authorization, coordination, the low-level router, and IPC in order'
 );
 
+assertInOrder(
+  mainSource,
+  [
+    'const canaryRuntimeSelection = await initializeCanaryEditProductionRuntime({',
+    'const canaryManualRollbackJobService = createCanaryManualRollbackJobService({',
+    'getAuthorizedJobById,',
+    'getManualRollback: () => {',
+    'const runtime = canaryEditProductionRuntimeInstance;',
+    'return runtime ? runtime.manualRollback : null;',
+    'markJobCanaryRolledBack,',
+    'audit: appendAuditEvent,',
+    'const activeHarnessKernelId = canaryRuntimeSelection.activeKernelId;',
+  ],
+  'manual canary rollback must bind durable job authority to the owned production runtime'
+);
+
 assert.strictEqual(
   (mainSource.match(/createAgenticDeleteMutationBackendSelection\(\{/g) || []).length,
   1,
@@ -524,6 +551,7 @@ assertInOrder(
     'bindJobActionDigest,',
     'createAuthorizedAssistantJob,',
     'getAuthorizedJobById,',
+    'markJobCanaryRolledBack,',
     'markJobAwaitingUserInput,',
   ],
   'the state store must expose its main-only authority APIs behind a terminal observer'
@@ -546,12 +574,15 @@ assertInOrder(
     'const cancelAssistantJob = async ({ jobId }) => {',
     'assistantExecutionCoordinator.revokeJob({ jobId })',
     "markJobCancelled(jobId, 'cancelled_by_user')",
+    'const rollbackCanaryJob = (input) => (',
+    'canaryManualRollbackJobService.rollback(input)',
     'const retryAssistantJob = ({ jobId }) => assistantRuntime.retry({ jobId });',
     'registerOrchestrationHandlers({',
     'cancelAssistantJob,',
+    'rollbackCanaryJob,',
     'retryAssistantJob,',
   ],
-  'cancel and retry IPC must delegate to the authoritative runtime'
+  'cancel, canary rollback, and retry IPC must delegate to authoritative runtime services'
 );
 
 assert.ok(

@@ -101,6 +101,7 @@ const preservedFeatureFunctionNames = [
   // Assistant execution and local project execution.
   'executePlan',
   'cancelJob',
+  'rollbackCanaryJob',
   'retryJob',
   'getProjectPreviewPlan',
   'startProjectPreview',
@@ -194,8 +195,14 @@ async function assertInvoke(methodName, args, expectedChannel, expectedArgs = ar
     [{ jobId: 'job-1' }]
   );
   await assertInvoke('cancelJob', [{ jobId: 'job-1' }], 'orchestration:jobs:cancel');
+  await assertInvoke(
+    'rollbackCanaryJob',
+    [{ jobId: 'job-1' }],
+    'orchestration:jobs:rollback-canary'
+  );
   await assertInvoke('retryJob', [{ jobId: 'job-1' }], 'orchestration:jobs:retry');
   assert.strictEqual((source.match(/\bcancelJob\s*:/g) || []).length, 1);
+  assert.strictEqual((source.match(/\brollbackCanaryJob\s*:/g) || []).length, 1);
   assert.strictEqual(source.includes("ipcRenderer.invoke('job:cancel'"), false);
 
   await assertInvoke('listProjectTerminalSessions', [{ rootPath: '/tmp/app' }], 'project:terminal:list');

@@ -387,7 +387,10 @@
                   <strong id="job-progress-title">Processando</strong>
                   <span id="job-progress-status">Aguardando</span>
                 </div>
-                <button id="btn-job-cancel" class="btn btn-muted job-status-cancel" title="Parar execução">Parar</button>
+                <div class="job-status-actions">
+                  <button id="btn-job-rollback-canary" class="btn btn-muted job-status-rollback hidden" title="Restaurar os arquivos anteriores à alteração canary">Desfazer alteração canary</button>
+                  <button id="btn-job-cancel" class="btn btn-muted job-status-cancel" title="Parar execução">Parar</button>
+                </div>
               </div>
               <div id="job-progress-detail" class="job-progress-detail"></div>
             </div>

@@ -17,6 +17,10 @@ const {
   HARNESS_RESULT_SCHEMA_VERSION,
   assertHarnessRequest,
 } = require('../agent_runtime/harness_contracts');
+const {
+  CANARY_TRANSACTIONAL_STAGING_EXECUTOR_VERSION,
+  CANARY_TRANSACTIONAL_STAGING_RESULT_DIAGNOSTICS_SCHEMA_VERSION,
+} = require('../agent_runtime/canary_transactional_staging_executor');
 
 const CANARY_EDIT_TERMINAL_OBSERVER_ADAPTER_VERSION =
   'canary-edit-terminal-observer-adapter.v1';
@@ -49,6 +53,18 @@ const OUTPUT_KEYS = Object.freeze([
   'mutationScope',
   'changedPaths',
   'writeSetDigest',
+]);
+const RESULT_DIAGNOSTIC_KEYS = Object.freeze([
+  'schemaVersion',
+  'executorVersion',
+  'promotionId',
+  'stagingId',
+  'checkpointDigest',
+  'writeSetDigest',
+  'sourceBeforeDigest',
+  'sourceAfterDigest',
+  'changedPaths',
+  'stagingDiscarded',
 ]);
 const AUTHORITY_BINDING_KEYS = Object.freeze([
   'projectId',
@@ -356,6 +372,62 @@ function inspectCanaryOutcome(value) {
   return Object.freeze({ changedPaths, writeSetDigest });
 }
 
+function inspectPromotionDiagnostics(value, outcome) {
+  const fields = exactDataFields(
+    value,
+    RESULT_DIAGNOSTIC_KEYS,
+    { frozen: true }
+  );
+  if (!fields
+    || fields.get('schemaVersion')
+      !== CANARY_TRANSACTIONAL_STAGING_RESULT_DIAGNOSTICS_SCHEMA_VERSION
+    || fields.get('executorVersion')
+      !== CANARY_TRANSACTIONAL_STAGING_EXECUTOR_VERSION
+    || typeof fields.get('promotionId') !== 'string'
+    || !SAFE_IDENTIFIER.test(fields.get('promotionId'))
+    || typeof fields.get('stagingId') !== 'string'
+    || !SAFE_IDENTIFIER.test(fields.get('stagingId'))
+    || fields.get('stagingDiscarded') !== true) return null;
+  let checkpointDigest;
+  let writeSetDigest;
+  let sourceBeforeDigest;
+  let sourceAfterDigest;
+  try {
+    checkpointDigest = normalizeDigest(
+      fields.get('checkpointDigest'),
+      'checkpointDigest'
+    );
+    writeSetDigest = normalizeDigest(
+      fields.get('writeSetDigest'),
+      'writeSetDigest'
+    );
+    sourceBeforeDigest = normalizeDigest(
+      fields.get('sourceBeforeDigest'),
+      'sourceBeforeDigest'
+    );
+    sourceAfterDigest = normalizeDigest(
+      fields.get('sourceAfterDigest'),
+      'sourceAfterDigest'
+    );
+  } catch {
+    return null;
+  }
+  const changedPaths = inspectChangedPaths(fields.get('changedPaths'));
+  if (checkpointDigest !== fields.get('checkpointDigest')
+    || writeSetDigest !== fields.get('writeSetDigest')
+    || sourceBeforeDigest !== fields.get('sourceBeforeDigest')
+    || sourceAfterDigest !== fields.get('sourceAfterDigest')
+    || writeSetDigest !== outcome.writeSetDigest
+    || !changedPaths
+    || changedPaths.length !== outcome.changedPaths.length
+    || changedPaths.some((pathValue, index) => (
+      pathValue !== outcome.changedPaths[index]
+    ))) return null;
+  return Object.freeze({
+    promotionId: fields.get('promotionId'),
+  });
+}
+
 function inspectResult(value, request, dependencies) {
   const fields = exactDataFields(value, RESULT_KEYS, { frozen: true });
   if (!fields
@@ -484,7 +556,10 @@ function createCanaryEditTerminalObserverAdapter(options = {}) {
     const outcome = identity
       ? inspectCanaryOutcome(resultFields.get('output'))
       : null;
-    if (!outcome) {
+    const promotion = outcome
+      ? inspectPromotionDiagnostics(resultFields.get('diagnostics'), outcome)
+      : null;
+    if (!outcome || !promotion) {
       canaryFailures += 1;
       observeFailure(
         identity,
@@ -502,6 +577,7 @@ function createCanaryEditTerminalObserverAdapter(options = {}) {
         jobId: identity.jobId,
         projectId: identity.projectId,
         requestId: identity.requestId,
+        promotionId: promotion.promotionId,
         changedPaths: outcome.changedPaths,
         writeSetDigest: outcome.writeSetDigest,
       }),

@@ -44,6 +44,7 @@ const selectors = [
   '#composer-approval-mode-select option[value="ask_each"]',
   '#composer-approval-mode-select option[value="delegate_task"]',
   '#composer-approval-mode-help',
+  '#btn-job-rollback-canary',
 ];
 const nodes = new Map(selectors.map((selector) => [selector, createNode()]));
 const document = {
@@ -82,6 +83,11 @@ assert.strictEqual(nodes.get('.composer-approval-mode__label span').textContent,
 assert.strictEqual(nodes.get('#composer-approval-mode-select option[value="ask_each"]').textContent, 'Ask first');
 assert.strictEqual(nodes.get('#composer-approval-mode-select option[value="delegate_task"]').textContent, 'AI decides for this task');
 assert.strictEqual(nodes.get('#composer-approval-mode-help').textContent, 'Delegation applies only to the submitted task.');
+assert.strictEqual(nodes.get('#btn-job-rollback-canary').textContent, 'Undo canary change');
+assert.strictEqual(
+  nodes.get('#btn-job-rollback-canary').attributes.title,
+  'Restore the files from before this canary change'
+);
 
 locale = 'es-ES';
 controller.applyStaticTranslations();
@@ -92,5 +98,10 @@ assert.strictEqual(nodes.get('#btn-project-milestones span').textContent, 'Hitos
 assert.strictEqual(nodes.get('.composer-approval-mode__label span').textContent, 'Aprobación');
 assert.strictEqual(nodes.get('#composer-approval-mode-select option[value="ask_each"]').textContent, 'Preguntar antes');
 assert.strictEqual(nodes.get('#composer-approval-mode-select option[value="delegate_task"]').textContent, 'La IA decide en esta tarea');
+assert.strictEqual(nodes.get('#btn-job-rollback-canary').textContent, 'Deshacer cambio canary');
+assert.strictEqual(
+  nodes.get('#btn-job-rollback-canary').attributes.title,
+  'Restaurar los archivos anteriores a este cambio canary'
+);
 
 console.log('renderer-i18n.test.js: ok');

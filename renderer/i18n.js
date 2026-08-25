@@ -771,6 +771,12 @@ const UI_TRANSLATIONS = {
     updateInstallError: 'Erro ao instalar atualização: {message}',
     stopping: 'Parando...',
     stop: 'Parar',
+    undoCanaryChange: 'Desfazer alteração canary',
+    undoCanaryChangeTitle: 'Restaurar os arquivos anteriores a esta alteração canary',
+    undoingCanaryChange: 'Desfazendo...',
+    confirmUndoCanaryChange: 'Desfazer esta alteração canary e restaurar os arquivos anteriores?',
+    canaryUndoFailed: 'Não foi possível desfazer a alteração canary.',
+    canaryUndoCompleted: 'Alteração canary desfeita; arquivos anteriores restaurados.',
     resultRecorded: 'Resultado registrado.',
     viewExecutionPath: 'Ver caminho da execução',
     phases: 'Fases',
@@ -1774,6 +1780,12 @@ const UI_TRANSLATIONS = {
     updateInstallError: 'Could not install the update: {message}',
     stopping: 'Stopping...',
     stop: 'Stop',
+    undoCanaryChange: 'Undo canary change',
+    undoCanaryChangeTitle: 'Restore the files from before this canary change',
+    undoingCanaryChange: 'Undoing...',
+    confirmUndoCanaryChange: 'Undo this canary change and restore the previous files?',
+    canaryUndoFailed: 'The canary change could not be undone.',
+    canaryUndoCompleted: 'Canary change undone; previous files restored.',
     resultRecorded: 'Result recorded.',
     viewExecutionPath: 'View execution path',
     phases: 'Phases',
@@ -2777,6 +2789,12 @@ const UI_TRANSLATIONS = {
     updateInstallError: 'No se pudo instalar la actualización: {message}',
     stopping: 'Deteniendo...',
     stop: 'Detener',
+    undoCanaryChange: 'Deshacer cambio canary',
+    undoCanaryChangeTitle: 'Restaurar los archivos anteriores a este cambio canary',
+    undoingCanaryChange: 'Deshaciendo...',
+    confirmUndoCanaryChange: '¿Deshacer este cambio canary y restaurar los archivos anteriores?',
+    canaryUndoFailed: 'No se pudo deshacer el cambio canary.',
+    canaryUndoCompleted: 'Cambio canary deshecho; archivos anteriores restaurados.',
     resultRecorded: 'Resultado registrado.',
     viewExecutionPath: 'Ver recorrido de ejecución',
     phases: 'Fases',
@@ -3094,6 +3112,8 @@ function applyStaticTranslations() {
   setNodeText('#btn-cancel', 'cancel');
   setNodeText('#job-progress-title', 'processing');
   setNodeText('#job-progress-status', 'waiting');
+  setNodeText('#btn-job-rollback-canary', 'undoCanaryChange');
+  setNodeAttribute('#btn-job-rollback-canary', 'title', 'undoCanaryChangeTitle');
   setNodeAttribute('#welcome-panel', 'aria-label', 'welcomeAria');
   setNodeAttribute('#welcome-project-modal .welcome-project-modal__dialog', 'aria-label', 'chooseProject');
   setNodeText('#welcome-project-title', 'chooseProject');

@@ -36,6 +36,12 @@ const {
   createCanaryEditProductionRuntime,
 } = require('../main/services/canary_edit_production_runtime');
 const {
+  createCanaryManualRollbackJournalAdapter,
+} = require('../main/services/canary_manual_rollback_journal_adapter');
+const {
+  createCanaryPromotionRollbackStoreAdapter,
+} = require('../main/services/canary_promotion_rollback_store_adapter');
+const {
   createCanaryRolloutEvidenceJournalAdapter,
 } = require('../main/services/canary_rollout_evidence_journal_adapter');
 const {
@@ -273,6 +279,10 @@ async function main() {
     const evidenceJournal = createCanaryRolloutEvidenceJournalAdapter({
       storageDir: fixtureRoot,
     });
+    const promotionRollbackStore =
+      createCanaryPromotionRollbackStoreAdapter({ storageDir: fixtureRoot });
+    const manualRollbackJournal =
+      createCanaryManualRollbackJournalAdapter({ storageDir: fixtureRoot });
     runtime = createCanaryEditProductionRuntime({
       runtimeConfig,
       adapterEnabled: true,
@@ -291,6 +301,8 @@ async function main() {
       promotionIdFactory: () => 'phase5-internal-promotion',
       cohortSeed: 'phase5-internal-real-sample-v1',
       evidenceJournal,
+      promotionRollbackStore,
+      manualRollbackJournal,
       client,
       onCanaryCompleted(observation) {
         terminalCompletions.push(observation);
@@ -316,6 +328,7 @@ async function main() {
       jobId,
       projectId,
       requestId: request.requestId,
+      promotionId: 'phase5-internal-promotion',
       changedPaths: ['src/app.js'],
       writeSetDigest: result.output.writeSetDigest,
     });
@@ -364,6 +377,101 @@ async function main() {
     assert.strictEqual(closeReceipt.drained, true);
     assert.strictEqual(closeReceipt.clientClosed, true);
     assert.strictEqual(clientCloseCalls, 1);
+
+    const restartedEvidenceJournal =
+      createCanaryRolloutEvidenceJournalAdapter({ storageDir: fixtureRoot });
+    const restartedPromotionRollbackStore =
+      createCanaryPromotionRollbackStoreAdapter({ storageDir: fixtureRoot });
+    const restartedManualRollbackJournal =
+      createCanaryManualRollbackJournalAdapter({ storageDir: fixtureRoot });
+    runtime = createCanaryEditProductionRuntime({
+      runtimeConfig,
+      adapterEnabled: true,
+      authoritativeKernel,
+      authorityService,
+      projectRootAuthorityRegistry,
+      executionWorkspaceRegistry,
+      inspectRootMutation(binding) {
+        return Object.freeze({
+          canonicalRootPath: binding.canonicalRootPath,
+          ownerJobId: binding.jobId,
+          activeOtherMutatingJobs: 0,
+        });
+      },
+      inspectRollout: rolloutPolicy.inspect,
+      promotionIdFactory: () => 'phase5-internal-promotion',
+      cohortSeed: 'phase5-internal-real-sample-v1',
+      evidenceJournal: restartedEvidenceJournal,
+      promotionRollbackStore: restartedPromotionRollbackStore,
+      manualRollbackJournal: restartedManualRollbackJournal,
+      client,
+      onCanaryCompleted(observation) {
+        terminalCompletions.push(observation);
+        return Object.freeze({ ok: true });
+      },
+      onCanaryFailed(observation) {
+        terminalFailures.push(observation);
+        return Object.freeze({ ok: true });
+      },
+      minimumCanaryJobs: 1,
+      minimumBaselineJobs: 1,
+    });
+    assert.strictEqual(runtime.diagnostics().runtime.state, 'ready');
+    assert.strictEqual(
+      runtime.manualRollback.diagnostics().availablePromotions,
+      1
+    );
+
+    const rollbackReceipt = await runtime.manualRollback.rollback(
+      Object.freeze({
+        jobId,
+        projectId,
+        promotionId: 'phase5-internal-promotion',
+        reason: 'manual_user_rollback',
+      })
+    );
+    assert.strictEqual(rollbackReceipt.jobId, jobId);
+    assert.strictEqual(rollbackReceipt.projectId, projectId);
+    assert.strictEqual(
+      rollbackReceipt.promotionId,
+      'phase5-internal-promotion'
+    );
+    assert.strictEqual(
+      rollbackReceipt.revertReceipt.inversePatchApplied,
+      true
+    );
+    assert.strictEqual(rollbackReceipt.revertReceipt.sourceRestored, true);
+    assert.deepStrictEqual(fs.readFileSync(sourceFile), originalSource);
+    assert.deepStrictEqual(fs.readFileSync(unrelatedFile), unrelatedBytes);
+    assert.deepStrictEqual(fs.readFileSync(gitHead), headBytes);
+    assert.deepStrictEqual(fs.readFileSync(gitRef), refBytes);
+    assert.deepStrictEqual(fs.readFileSync(gitIndex), indexBytes);
+
+    const reconciledSnapshot = runtime.snapshot(
+      CANARY_ROLLOUT_STAGES.INTERNAL
+    );
+    assert.strictEqual(reconciledSnapshot.totals.baselineJobs, 1);
+    assert.strictEqual(reconciledSnapshot.totals.canaryJobs, 1);
+    assert.strictEqual(reconciledSnapshot.totals.canarySuccesses, 0);
+    assert.strictEqual(reconciledSnapshot.totals.manualRollbacks, 1);
+    assert.strictEqual(
+      reconciledSnapshot.gate.status,
+      CANARY_ROLLOUT_GATE_STATUSES.BLOCKED
+    );
+    assert.strictEqual(
+      runtime.manualRollback.diagnostics().completedRollbacks,
+      1
+    );
+    assert.strictEqual(
+      runtime.manualRollback.diagnostics().availablePromotions,
+      0
+    );
+
+    const restartedCloseReceipt = await runtime.close();
+    assert.strictEqual(restartedCloseReceipt.ok, true);
+    assert.strictEqual(restartedCloseReceipt.drained, true);
+    assert.strictEqual(restartedCloseReceipt.clientClosed, true);
+    assert.strictEqual(clientCloseCalls, 2);
   } finally {
     if (runtime) {
       try { await runtime.close(); } catch { /* cleanup continues */ }

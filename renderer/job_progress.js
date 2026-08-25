@@ -1,7 +1,32 @@
 (function () {
+  const ROLLBACK_JOB_ID_PATTERN = /^job-[A-Za-z0-9._-]{1,180}$/;
+
+  function getCanaryRollbackCandidate(job) {
+    if (!job || typeof job !== 'object' || Array.isArray(job)
+      || job.status !== 'completed' || job.phase !== 'done'
+      || typeof job.id !== 'string' || !ROLLBACK_JOB_ID_PATTERN.test(job.id)) {
+      return null;
+    }
+    if (job.canaryRollback && typeof job.canaryRollback === 'object') return null;
+    const events = Array.isArray(job.events) ? job.events : [];
+    const completion = events.find((event) => {
+      const payload = event && event.payload;
+      return event && event.type === 'job.completed'
+        && payload && typeof payload === 'object'
+        && payload.canary === true
+        && typeof payload.canaryPromotionId === 'string'
+        && payload.canaryPromotionId.length > 0;
+    });
+    return completion ? Object.freeze({ jobId: job.id }) : null;
+  }
+
   function createJobProgressController(options = {}) {
     const updateStatus = typeof options.updateStatus === 'function' ? options.updateStatus : () => {};
     const onVisibilityChange = typeof options.onVisibilityChange === 'function' ? options.onVisibilityChange : () => {};
+    const api = options.api || window.api || null;
+    const confirmRollback = typeof options.confirmRollback === 'function'
+      ? options.confirmRollback
+      : (message) => typeof window.confirm === 'function' && window.confirm(message);
     const textFor = (key, fallback, params = {}) => {
       let template = '';
       if (typeof window.t === 'function') {
@@ -23,8 +48,23 @@
       status: document.getElementById('job-progress-status'),
       detail: document.getElementById('job-progress-detail'),
       cancelBtn: document.getElementById('btn-job-cancel'),
+      rollbackBtn: document.getElementById('btn-job-rollback-canary'),
     };
     const uxStateModel = window.FaberUxStateModel || null;
+    let currentJob = null;
+    let currentRollbackCandidate = null;
+    let rollbackInFlightJobId = null;
+
+    function syncRollbackAction() {
+      currentRollbackCandidate = getCanaryRollbackCandidate(currentJob);
+      if (!elements.rollbackBtn) return;
+      const visible = Boolean(currentRollbackCandidate);
+      elements.rollbackBtn.classList.toggle('hidden', !visible);
+      elements.rollbackBtn.disabled = !visible || Boolean(rollbackInFlightJobId);
+      elements.rollbackBtn.textContent = rollbackInFlightJobId
+        ? textFor('undoingCanaryChange', 'Desfazendo...')
+        : textFor('undoCanaryChange', 'Desfazer alteração canary');
+    }
 
     // Toggle collapse on header click, persisting it in localStorage
     const header = elements.root ? elements.root.querySelector('.job-progress-head') : null;
@@ -55,6 +95,69 @@
             elements.cancelBtn.disabled = false;
             elements.cancelBtn.textContent = textFor('stop', 'Parar');
           });
+        }
+      });
+    }
+
+    if (elements.rollbackBtn) {
+      elements.rollbackBtn.addEventListener('click', async () => {
+        const candidate = currentRollbackCandidate;
+        if (!candidate || rollbackInFlightJobId
+          || !api || typeof api.rollbackCanaryJob !== 'function') return false;
+        let confirmed = false;
+        try {
+          confirmed = confirmRollback(textFor(
+            'confirmUndoCanaryChange',
+            'Desfazer esta alteração canary e restaurar os arquivos anteriores?'
+          )) === true;
+        } catch {
+          confirmed = false;
+        }
+        if (!confirmed) return false;
+
+        const requestedJobId = candidate.jobId;
+        rollbackInFlightJobId = requestedJobId;
+        syncRollbackAction();
+        try {
+          const result = await api.rollbackCanaryJob(Object.freeze({
+            jobId: requestedJobId,
+          }));
+          const currentCandidateMatches = currentRollbackCandidate
+            && currentRollbackCandidate.jobId === requestedJobId;
+          const restored = result && result.ok === true
+            && result.rollback && result.rollback.sourceRestored === true
+            && result.job && result.job.id === requestedJobId
+            && result.job.canaryRollback
+            && result.job.canaryRollback.status === 'completed'
+            && result.job.canaryRollback.sourceRestored === true;
+          if (!currentCandidateMatches) return false;
+          if (!restored) {
+            const message = result && typeof result.message === 'string'
+              ? result.message.slice(0, 240)
+              : textFor('canaryUndoFailed', 'Não foi possível desfazer a alteração canary.');
+            updateStatus(message);
+            return false;
+          }
+          render(result.job);
+          updateStatus(textFor(
+            'canaryUndoCompleted',
+            'Alteração canary desfeita; arquivos anteriores restaurados.'
+          ));
+          return true;
+        } catch {
+          if (currentRollbackCandidate
+            && currentRollbackCandidate.jobId === requestedJobId) {
+            updateStatus(textFor(
+              'canaryUndoFailed',
+              'Não foi possível desfazer a alteração canary.'
+            ));
+          }
+          return false;
+        } finally {
+          if (rollbackInFlightJobId === requestedJobId) {
+            rollbackInFlightJobId = null;
+            syncRollbackAction();
+          }
         }
       });
     }
@@ -403,6 +506,8 @@
     }
 
     function hide() {
+      currentJob = null;
+      syncRollbackAction();
       if (elements.root) elements.root.classList.add('hidden');
       if (elements.detail) elements.detail.textContent = '';
       onVisibilityChange();
@@ -596,6 +701,8 @@
         hide();
         return;
       }
+      currentJob = job;
+      syncRollbackAction();
 
       const presentation = uxStateModel && typeof uxStateModel.buildJobProgressPresentation === 'function'
         ? uxStateModel.buildJobProgressPresentation(job)

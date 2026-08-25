@@ -526,7 +526,11 @@ function runAuthorityAndLifecycleTests(tempRoot) {
     'action_digest_conflict'
   );
 
-  const completed = store.markJobCompleted(created.job.id, { source: 'test' });
+  const completed = store.markJobCompleted(created.job.id, {
+    source: 'test',
+    canary: true,
+    canaryPromotionId: 'canary-promotion-state-1',
+  });
   assert.strictEqual(completed.ok, true);
   assert.strictEqual(terminalSnapshots.length, 1);
   assert.strictEqual(terminalSnapshots[0].status, 'completed');
@@ -541,6 +545,64 @@ function runAuthorityAndLifecycleTests(tempRoot) {
   assert.deepStrictEqual(store.getAuthorizedJobById(created.job.id).job, completedSnapshot);
   assert.strictEqual(store.markJobCompleted(created.job.id).code, 'job_terminal');
   assert.strictEqual(terminalSnapshots.length, 1);
+  const rollbackCompletion = Object.freeze({
+    promotionId: 'canary-promotion-state-1',
+    reconciliationId: `rollback-${'c'.repeat(64)}`,
+    sourceRestored: true,
+  });
+  const rolledBack = store.markJobCanaryRolledBack(
+    created.job.id,
+    rollbackCompletion
+  );
+  assert.strictEqual(rolledBack.ok, true);
+  assert.strictEqual(rolledBack.idempotent, false);
+  assert.strictEqual(rolledBack.job.status, 'completed');
+  assert.strictEqual(rolledBack.job.phase, 'done');
+  assert.deepStrictEqual(rolledBack.job.canaryRollback, {
+    status: 'completed',
+    promotionId: rollbackCompletion.promotionId,
+    reconciliationId: rollbackCompletion.reconciliationId,
+    sourceRestored: true,
+  });
+  assert.deepStrictEqual(rolledBack.job.events[0].payload, {
+    promotionId: rollbackCompletion.promotionId,
+    reconciliationId: rollbackCompletion.reconciliationId,
+    sourceRestored: true,
+  });
+  assert.strictEqual(rolledBack.job.events[0].type, 'job.canary_rolled_back');
+  assert.strictEqual(terminalSnapshots.length, 1);
+
+  const restartedStore = createStore(authorityRoot);
+  const repeatedRollback = restartedStore.markJobCanaryRolledBack(
+    created.job.id,
+    rollbackCompletion
+  );
+  assert.strictEqual(
+    repeatedRollback.ok,
+    true,
+    JSON.stringify(repeatedRollback)
+  );
+  assert.strictEqual(repeatedRollback.idempotent, true);
+  assert.strictEqual(
+    repeatedRollback.job.events.filter(
+      (event) => event.type === 'job.canary_rolled_back'
+    ).length,
+    1
+  );
+  assert.strictEqual(
+    restartedStore.markJobCanaryRolledBack(created.job.id, Object.freeze({
+      ...rollbackCompletion,
+      promotionId: 'canary-promotion-state-other',
+    })).code,
+    'canary_rollback_unavailable'
+  );
+  assert.strictEqual(
+    restartedStore.markJobCanaryRolledBack(created.job.id, Object.freeze({
+      ...rollbackCompletion,
+      reconciliationId: `rollback-${'d'.repeat(64)}`,
+    })).code,
+    'canary_rollback_conflict'
+  );
   assert.strictEqual(store.getJobById('__proto__').code, 'invalid_job_id');
   assert.strictEqual(store.getAuthorizedJobById('job-__proto__').code, 'invalid_job_id');
   assert.strictEqual(store.appendJobEvent('__proto__', 'forged').code, 'invalid_job_id');

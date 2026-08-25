@@ -9,12 +9,14 @@ const {
   CANARY_ROLLOUT_EVIDENCE_JOURNAL_DIRECTORY_NAME,
   CANARY_ROLLOUT_EVIDENCE_JOURNAL_FILE_NAME,
   CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS,
+  CANARY_ROLLOUT_EVIDENCE_JOURNAL_RECONCILIATION_RECORD_SCHEMA_VERSION,
   CANARY_ROLLOUT_EVIDENCE_JOURNAL_RECORD_SCHEMA_VERSION,
   CANARY_ROLLOUT_EVIDENCE_JOURNAL_SNAPSHOT_SCHEMA_VERSION,
   CANARY_ROLLOUT_EVIDENCE_JOURNAL_VERSION,
   createCanaryRolloutEvidenceJournalAdapter,
 } = require('../main/services/canary_rollout_evidence_journal_adapter');
 const {
+  CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SCHEMA_VERSION,
   CANARY_ROLLOUT_EVIDENCE_SCHEMA_VERSION,
 } = require('../main/agent_runtime/canary_rollout_evidence_ledger');
 const {
@@ -31,6 +33,22 @@ function evidence(jobId, overrides = {}) {
     eligible: true,
     terminal: true,
     succeeded: true,
+    manualRollback: false,
+    corrupted: false,
+    dataLossIncident: false,
+    securityIncident: false,
+    duplicateExternalEffect: false,
+    ...overrides,
+  });
+}
+
+function reconciliation(reconciliationId, jobId, projectId, overrides = {}) {
+  return Object.freeze({
+    schemaVersion: CANARY_ROLLOUT_EVIDENCE_RECONCILIATION_SCHEMA_VERSION,
+    reconciliationId,
+    jobId,
+    projectId,
+    rolloutStage: CANARY_ROLLOUT_STAGES.INTERNAL,
     manualRollback: false,
     corrupted: false,
     dataLossIncident: false,
@@ -64,7 +82,7 @@ function testDurableReplayAndIntegrity() {
   const journal = createCanaryRolloutEvidenceJournalAdapter({ storageDir });
   assert.strictEqual(
     CANARY_ROLLOUT_EVIDENCE_JOURNAL_VERSION,
-    'canary-rollout-evidence-journal.v1'
+    'canary-rollout-evidence-journal.v2'
   );
   assert.deepStrictEqual(Reflect.ownKeys(journal), [
     'version', 'load', 'append', 'diagnostics',
@@ -72,17 +90,24 @@ function testDurableReplayAndIntegrity() {
   assertDeepFrozen(journal);
   assert.deepStrictEqual(journal.load(), {
     schemaVersion: CANARY_ROLLOUT_EVIDENCE_JOURNAL_SNAPSHOT_SCHEMA_VERSION,
-    evidence: [],
+    events: [],
   });
 
   const baseline = evidence('baseline-a', { route: 'baseline' });
   const canary = evidence('canary-a');
+  const rollback = reconciliation(
+    'rollback-a',
+    canary.jobId,
+    canary.projectId,
+    { manualRollback: true }
+  );
   assert.strictEqual(journal.append(baseline), undefined);
   assert.strictEqual(journal.append(canary), undefined);
+  assert.strictEqual(journal.append(rollback), undefined);
   const filePath = persistedPath(storageDir);
   const lines = fs.readFileSync(filePath, 'utf8')
     .split('\n').filter(Boolean).map(JSON.parse);
-  assert.strictEqual(lines.length, 2);
+  assert.strictEqual(lines.length, 3);
   assert.deepStrictEqual(Reflect.ownKeys(lines[0]), [
     'schemaVersion', 'sequence', 'previousRecordDigest',
     'evidence', 'recordDigest',
@@ -95,7 +120,17 @@ function testDurableReplayAndIntegrity() {
   assert.strictEqual(lines[0].previousRecordDigest, null);
   assert.strictEqual(lines[1].sequence, 1);
   assert.strictEqual(lines[1].previousRecordDigest, lines[0].recordDigest);
-  assert.match(lines[1].recordDigest, /^sha256:[a-f0-9]{64}$/);
+  assert.deepStrictEqual(Reflect.ownKeys(lines[2]), [
+    'schemaVersion', 'sequence', 'previousRecordDigest',
+    'reconciliation', 'recordDigest',
+  ]);
+  assert.strictEqual(
+    lines[2].schemaVersion,
+    CANARY_ROLLOUT_EVIDENCE_JOURNAL_RECONCILIATION_RECORD_SCHEMA_VERSION
+  );
+  assert.strictEqual(lines[2].sequence, 2);
+  assert.strictEqual(lines[2].previousRecordDigest, lines[1].recordDigest);
+  assert.match(lines[2].recordDigest, /^sha256:[a-f0-9]{64}$/);
   if (process.platform !== 'win32') {
     assert.strictEqual(fs.statSync(path.dirname(filePath)).mode & 0o777, 0o700);
     assert.strictEqual(fs.statSync(filePath).mode & 0o777, 0o600);
@@ -103,13 +138,17 @@ function testDurableReplayAndIntegrity() {
 
   const reopened = createCanaryRolloutEvidenceJournalAdapter({ storageDir });
   const recovered = reopened.load();
-  assert.deepStrictEqual(recovered.evidence, [baseline, canary]);
+  assert.deepStrictEqual(recovered.events, [
+    { type: 'evidence', value: baseline },
+    { type: 'evidence', value: canary },
+    { type: 'reconciliation', value: rollback },
+  ]);
   assertDeepFrozen(recovered);
   assert.deepStrictEqual(reopened.diagnostics(), {
     version: CANARY_ROLLOUT_EVIDENCE_JOURNAL_VERSION,
     storageMode: 'private_user_data_append_only',
-    records: 2,
-    headDigest: lines[1].recordDigest,
+    records: 3,
+    headDigest: lines[2].recordDigest,
     loads: 1,
     appends: 0,
     rejections: 0,
@@ -123,11 +162,23 @@ function testInvalidDuplicateAndCorruptionFailClosed() {
   const journal = createCanaryRolloutEvidenceJournalAdapter({ storageDir });
   const accepted = evidence('accepted');
   journal.append(accepted);
+  const acceptedRollback = reconciliation(
+    'accepted-rollback',
+    accepted.jobId,
+    accepted.projectId,
+    { manualRollback: true }
+  );
+  journal.append(acceptedRollback);
   const before = fs.readFileSync(persistedPath(storageDir));
   assert.throws(
     () => journal.append(accepted),
     (error) => error.code
       === CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS.DUPLICATE_EVIDENCE
+  );
+  assert.throws(
+    () => journal.append(acceptedRollback),
+    (error) => error.code
+      === CANARY_ROLLOUT_EVIDENCE_JOURNAL_REASONS.DUPLICATE_RECONCILIATION
   );
   assert.throws(
     () => journal.append(Object.freeze({
@@ -206,12 +257,16 @@ function testDirectorySwapAfterActivationIsRejected() {
 }
 
 assert.strictEqual(
+  CANARY_ROLLOUT_EVIDENCE_JOURNAL_RECONCILIATION_RECORD_SCHEMA_VERSION,
+  'canary-rollout-evidence-journal-reconciliation-record.v1'
+);
+assert.strictEqual(
   CANARY_ROLLOUT_EVIDENCE_JOURNAL_RECORD_SCHEMA_VERSION,
   'canary-rollout-evidence-journal-record.v1'
 );
 assert.strictEqual(
   CANARY_ROLLOUT_EVIDENCE_JOURNAL_SNAPSHOT_SCHEMA_VERSION,
-  'canary-rollout-evidence-journal-snapshot.v1'
+  'canary-rollout-evidence-journal-snapshot.v2'
 );
 testDurableReplayAndIntegrity();
 testInvalidDuplicateAndCorruptionFailClosed();

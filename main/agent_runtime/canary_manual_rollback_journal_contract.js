@@ -1,0 +1,14 @@
+'use strict';
+
+const CANARY_MANUAL_ROLLBACK_JOURNAL_VERSION =
+  'canary-manual-rollback-journal.v1';
+const CANARY_MANUAL_ROLLBACK_JOURNAL_SNAPSHOT_SCHEMA_VERSION =
+  'canary-manual-rollback-journal-snapshot.v1';
+const CANARY_MANUAL_ROLLBACK_JOURNAL_REMOVE_SCHEMA_VERSION =
+  'canary-manual-rollback-journal-remove.v1';
+
+module.exports = {
+  CANARY_MANUAL_ROLLBACK_JOURNAL_REMOVE_SCHEMA_VERSION,
+  CANARY_MANUAL_ROLLBACK_JOURNAL_SNAPSHOT_SCHEMA_VERSION,
+  CANARY_MANUAL_ROLLBACK_JOURNAL_VERSION,
+};

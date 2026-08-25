@@ -35,13 +35,19 @@ function assertDeepFrozen(value, seen = new Set()) {
   }
 }
 
-function createFixture({ mode = 'canary' } = {}) {
+function createFixture({
+  mode = 'canary',
+  rollbackRecords = Object.freeze([]),
+  manualRegistrations = Object.freeze([]),
+} = {}) {
   const calls = {
     authority: 0,
     close: 0,
     mutation: 0,
+    manualJournalLoad: 0,
     promotionId: 0,
     rollout: 0,
+    rollbackStoreLoad: 0,
     status: 0,
     terminalCompleted: 0,
     terminalFailed: 0,
@@ -78,11 +84,11 @@ function createFixture({ mode = 'canary' } = {}) {
     },
   });
   const evidenceJournal = Object.freeze({
-    version: 'canary-rollout-evidence-journal.v1',
+    version: 'canary-rollout-evidence-journal.v2',
     load() {
       return Object.freeze({
-        schemaVersion: 'canary-rollout-evidence-journal-snapshot.v1',
-        evidence: Object.freeze([]),
+        schemaVersion: 'canary-rollout-evidence-journal-snapshot.v2',
+        events: Object.freeze([]),
       });
     },
     append() {
@@ -90,8 +96,48 @@ function createFixture({ mode = 'canary' } = {}) {
     },
     diagnostics() {
       return Object.freeze({
-        version: 'canary-rollout-evidence-journal.v1',
+        version: 'canary-rollout-evidence-journal.v2',
         records: 0,
+      });
+    },
+  });
+  const promotionRollbackStore = Object.freeze({
+    version: 'canary-promotion-rollback-store.v1',
+    load() {
+      calls.rollbackStoreLoad += 1;
+      return Object.freeze({
+        schemaVersion: 'canary-promotion-rollback-store-snapshot.v1',
+        records: rollbackRecords,
+      });
+    },
+    prepare() { return undefined; },
+    commit() { return undefined; },
+    cancel() { return undefined; },
+    settle() { return undefined; },
+    diagnostics() {
+      return Object.freeze({
+        version: 'canary-promotion-rollback-store.v1',
+        durability: 'private_user_data',
+        stateModel: 'prepared_committed_settled',
+      });
+    },
+  });
+  const manualRollbackJournal = Object.freeze({
+    version: 'canary-manual-rollback-journal.v1',
+    load() {
+      calls.manualJournalLoad += 1;
+      return Object.freeze({
+        schemaVersion: 'canary-manual-rollback-journal-snapshot.v1',
+        registrations: manualRegistrations,
+      });
+    },
+    append() { return undefined; },
+    remove() { return undefined; },
+    diagnostics() {
+      return Object.freeze({
+        version: 'canary-manual-rollback-journal.v1',
+        durability: 'private_user_data',
+        stateModel: 'registered_removed',
       });
     },
   });
@@ -118,6 +164,8 @@ function createFixture({ mode = 'canary' } = {}) {
     },
     cohortSeed: 'canary-production-runtime-tests-v1',
     evidenceJournal,
+    promotionRollbackStore,
+    manualRollbackJournal,
     client,
     onCanaryCompleted() {
       calls.terminalCompleted += 1;
@@ -149,6 +197,8 @@ async function testReadyRuntimeComposesOnlyProductionAdapters() {
     'version',
     'canaryEditRunner',
     'evidenceSink',
+    'reconciliationSink',
+    'manualRollback',
     'snapshot',
     'advancement',
     'diagnostics',
@@ -157,6 +207,8 @@ async function testReadyRuntimeComposesOnlyProductionAdapters() {
   assert.strictEqual(runtime.version, CANARY_EDIT_PRODUCTION_RUNTIME_VERSION);
   assert.strictEqual(Object.isFrozen(runtime.canaryEditRunner), true);
   assert.strictEqual(Object.isFrozen(runtime.evidenceSink), true);
+  assert.strictEqual(Object.isFrozen(runtime.reconciliationSink), true);
+  assert.strictEqual(Object.isFrozen(runtime.manualRollback), true);
 
   const diagnostics = runtime.diagnostics();
   assert.deepStrictEqual(Reflect.ownKeys(diagnostics), [
@@ -167,6 +219,8 @@ async function testReadyRuntimeComposesOnlyProductionAdapters() {
     'workspaceSessionPort',
     'canaryEditor',
     'promotionBackend',
+    'promotionRollbackStore',
+    'manualRollbackJournal',
     'evidenceJournal',
     'terminalObserver',
   ]);
@@ -206,8 +260,16 @@ async function testReadyRuntimeComposesOnlyProductionAdapters() {
     'canary-local-promotion-backend.v1'
   );
   assert.strictEqual(
+    diagnostics.promotionRollbackStore.version,
+    'canary-promotion-rollback-store.v1'
+  );
+  assert.strictEqual(
+    diagnostics.manualRollbackJournal.version,
+    'canary-manual-rollback-journal.v1'
+  );
+  assert.strictEqual(
     diagnostics.evidenceJournal.version,
-    'canary-rollout-evidence-journal.v1'
+    'canary-rollout-evidence-journal.v2'
   );
   assert.strictEqual(
     diagnostics.terminalObserver.version,
@@ -222,8 +284,10 @@ async function testReadyRuntimeComposesOnlyProductionAdapters() {
     authority: 0,
     close: 0,
     mutation: 0,
+    manualJournalLoad: 2,
     promotionId: 0,
     rollout: 0,
+    rollbackStoreLoad: 2,
     status: 2,
     terminalCompleted: 0,
     terminalFailed: 0,
@@ -244,6 +308,8 @@ async function testInactiveRuntimeStaysDisabled() {
   const fixture = createFixture({ mode: 'legacy' });
   assert.strictEqual(fixture.runtime.canaryEditRunner, null);
   assert.strictEqual(fixture.runtime.evidenceSink, null);
+  assert.strictEqual(fixture.runtime.reconciliationSink, null);
+  assert.strictEqual(fixture.runtime.manualRollback, null);
   const diagnostics = fixture.runtime.diagnostics();
   assert.strictEqual(diagnostics.runtime.state, 'disabled');
   assert.strictEqual(diagnostics.runtime.reason, 'mode_not_canary');
@@ -289,10 +355,57 @@ function testInvalidAndHostileOptionsAreRejected() {
   assert.strictEqual(traps, 0);
 }
 
+function rollbackAlignmentRecord(promotionId) {
+  return Object.freeze({
+    request: Object.freeze({ promotionId }),
+  });
+}
+
+function manualAlignmentRegistration(promotionId) {
+  return Object.freeze({
+    transaction: Object.freeze({
+      request: Object.freeze({ promotionId }),
+    }),
+  });
+}
+
+function testDurableRollbackStoresMustBeExactlyAligned() {
+  assert.throws(
+    () => createFixture({
+      rollbackRecords: Object.freeze([
+        rollbackAlignmentRecord('promotion-only-in-backend-store'),
+      ]),
+    }),
+    /durable manual rollback registrations are misaligned/i
+  );
+  assert.throws(
+    () => createFixture({
+      manualRegistrations: Object.freeze([
+        manualAlignmentRegistration('promotion-only-in-manual-journal'),
+      ]),
+    }),
+    /durable manual rollback registrations are misaligned/i
+  );
+  assert.throws(
+    () => createFixture({
+      rollbackRecords: Object.freeze([
+        rollbackAlignmentRecord('duplicated-promotion'),
+        rollbackAlignmentRecord('duplicated-promotion'),
+      ]),
+      manualRegistrations: Object.freeze([
+        manualAlignmentRegistration('duplicated-promotion'),
+        manualAlignmentRegistration('duplicated-promotion'),
+      ]),
+    }),
+    /durable manual rollback registrations are misaligned/i
+  );
+}
+
 async function main() {
   await testReadyRuntimeComposesOnlyProductionAdapters();
   await testInactiveRuntimeStaysDisabled();
   testInvalidAndHostileOptionsAreRejected();
+  testDurableRollbackStoresMustBeExactlyAligned();
   console.log('canary-edit-production-runtime.test.js: ok');
 }
 

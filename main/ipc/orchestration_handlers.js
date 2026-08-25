@@ -41,6 +41,7 @@ function registerOrchestrationHandlers(dependencies = {}) {
     readOrchestrationState,
     registerIpcHandler,
     renameConversationEntry,
+    rollbackCanaryJob,
     retryAssistantJob,
     deleteConversationEntry,
   } = dependencies;
@@ -62,6 +63,9 @@ function registerOrchestrationHandlers(dependencies = {}) {
     requireDependency('readOrchestrationState', readOrchestrationState);
     requireDependency('registerIpcHandler', registerIpcHandler);
     requireDependency('renameConversationEntry', renameConversationEntry);
+    if (typeof rollbackCanaryJob !== 'function') {
+      throw new Error('Orchestration IPC dependency missing: rollbackCanaryJob');
+    }
     if (typeof retryAssistantJob !== 'function') {
       throw new Error('Orchestration IPC dependency missing: retryAssistantJob');
     }
@@ -155,6 +159,12 @@ function registerOrchestrationHandlers(dependencies = {}) {
     const envelope = exactJobEnvelope(args);
     if (!envelope) return ORCHESTRATION_IPC_INVALID_INPUT;
     return publicJobResult(await cancelAssistantJob(envelope));
+  });
+
+  registerIpcHandler('orchestration:jobs:rollback-canary', async (_, ...args) => {
+    const envelope = exactJobEnvelope(args);
+    if (!envelope) return ORCHESTRATION_IPC_INVALID_INPUT;
+    return publicJobResult(await rollbackCanaryJob(envelope));
   });
 
   registerIpcHandler('orchestration:jobs:retry', async (_, ...args) => {

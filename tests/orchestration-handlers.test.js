@@ -51,6 +51,28 @@ async function run() {
         },
       };
     },
+    rollbackCanaryJob: async (input) => {
+      calls.push(['rollbackCanaryJob', input]);
+      return {
+        ok: true,
+        idempotent: false,
+        rollback: {
+          promotionId: 'canary-promotion-1',
+          reconciliationId: 'canary-reconciliation-1',
+          sourceRestored: true,
+        },
+        job: {
+          id: input.jobId,
+          status: 'completed',
+          canaryRollback: {
+            status: 'completed',
+            sourceRestored: true,
+          },
+          authorityContext: { sessionId: 'rollback-session-secret' },
+          canonicalRootPath: '/private/rollback-root',
+        },
+      };
+    },
     getJobById: (jobId) => ({
       ok: true,
       job: {
@@ -107,6 +129,10 @@ async function run() {
     /cancelAssistantJob/
   );
   assert.throws(
+    () => registerOrchestrationHandlers({ ...dependencies, rollbackCanaryJob: null }),
+    /rollbackCanaryJob/
+  );
+  assert.throws(
     () => registerOrchestrationHandlers({ ...dependencies, retryAssistantJob: 'not-a-function' }),
     /retryAssistantJob/
   );
@@ -125,6 +151,7 @@ async function run() {
     'orchestration:jobs:get',
     'orchestration:jobs:list',
     'orchestration:jobs:retry',
+    'orchestration:jobs:rollback-canary',
   ]);
 
   assert.deepStrictEqual(handlers['orchestration:conversations:list'](), {
@@ -191,6 +218,33 @@ async function run() {
   assert.deepStrictEqual(cancelCalls[0][1], { jobId: 'job-1' });
   assert.notStrictEqual(cancelCalls[0][1], cancelPayload);
 
+  const rollbackPayload = { jobId: 'job-1' };
+  const rollbackResult = await handlers['orchestration:jobs:rollback-canary'](
+    null,
+    rollbackPayload
+  );
+  assert.deepStrictEqual(rollbackResult, {
+    ok: true,
+    idempotent: false,
+    rollback: {
+      promotionId: 'canary-promotion-1',
+      reconciliationId: 'canary-reconciliation-1',
+      sourceRestored: true,
+    },
+    job: {
+      id: 'job-1',
+      status: 'completed',
+      canaryRollback: {
+        status: 'completed',
+        sourceRestored: true,
+      },
+    },
+  });
+  const rollbackCalls = calls.filter((call) => call[0] === 'rollbackCanaryJob');
+  assert.strictEqual(rollbackCalls.length, 1);
+  assert.deepStrictEqual(rollbackCalls[0][1], { jobId: 'job-1' });
+  assert.notStrictEqual(rollbackCalls[0][1], rollbackPayload);
+
   const retryPayload = { jobId: 'job-1' };
   const retryResult = await handlers['orchestration:jobs:retry'](null, retryPayload);
   assert.deepStrictEqual(retryResult, {
@@ -201,13 +255,22 @@ async function run() {
   assert.strictEqual(retryCalls.length, 1);
   assert.deepStrictEqual(retryCalls[0][1], { jobId: 'job-1' });
   assert.notStrictEqual(retryCalls[0][1], retryPayload);
-  assert.strictEqual(JSON.stringify({ cancelResult, retryResult }).includes('/private/'), false);
+  assert.strictEqual(
+    JSON.stringify({ cancelResult, rollbackResult, retryResult }).includes('/private/'),
+    false
+  );
 
   const invalidInput = { ok: false, code: 'orchestration_ipc_invalid_input' };
   const coordinatedCallsBeforeInvalid = calls.filter(
-    (call) => call[0] === 'cancelAssistantJob' || call[0] === 'retryAssistantJob'
+    (call) => call[0] === 'cancelAssistantJob'
+      || call[0] === 'rollbackCanaryJob'
+      || call[0] === 'retryAssistantJob'
   ).length;
-  for (const channel of ['orchestration:jobs:cancel', 'orchestration:jobs:retry']) {
+  for (const channel of [
+    'orchestration:jobs:cancel',
+    'orchestration:jobs:rollback-canary',
+    'orchestration:jobs:retry',
+  ]) {
     assert.deepStrictEqual(await handlers[channel](null), invalidInput);
     assert.deepStrictEqual(await handlers[channel](null, { jobId: 'job-1' }, {}), invalidInput);
     assert.deepStrictEqual(await handlers[channel](null, null), invalidInput);
@@ -239,22 +302,33 @@ async function run() {
     assert.deepStrictEqual(await handlers[channel](null, symbolPayload), invalidInput);
   }
   assert.strictEqual(
-    calls.filter((call) => call[0] === 'cancelAssistantJob' || call[0] === 'retryAssistantJob').length,
+    calls.filter((call) => call[0] === 'cancelAssistantJob'
+      || call[0] === 'rollbackCanaryJob'
+      || call[0] === 'retryAssistantJob').length,
     coordinatedCallsBeforeInvalid
   );
 
   const cancelFailure = new Error('cancel authority unavailable');
+  const rollbackFailure = new Error('rollback authority unavailable');
   const retryFailure = new Error('retry authority unavailable');
   const rejectedMap = createHandlerMap();
   registerOrchestrationHandlers({
     ...dependencies,
     cancelAssistantJob: () => { throw cancelFailure; },
     registerIpcHandler: rejectedMap.registerIpcHandler,
+    rollbackCanaryJob: async () => { throw rollbackFailure; },
     retryAssistantJob: async () => { throw retryFailure; },
   });
   await assert.rejects(
     rejectedMap.handlers['orchestration:jobs:cancel'](null, { jobId: 'job-1' }),
     (error) => error === cancelFailure
+  );
+  await assert.rejects(
+    rejectedMap.handlers['orchestration:jobs:rollback-canary'](
+      null,
+      { jobId: 'job-1' }
+    ),
+    (error) => error === rollbackFailure
   );
   await assert.rejects(
     rejectedMap.handlers['orchestration:jobs:retry'](null, { jobId: 'job-1' }),

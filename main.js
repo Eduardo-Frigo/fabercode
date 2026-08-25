@@ -131,6 +131,15 @@ const {
   createCanaryEditProductionRuntime,
 } = require('./main/services/canary_edit_production_runtime');
 const {
+  createCanaryManualRollbackJobService,
+} = require('./main/services/canary_manual_rollback_job_service');
+const {
+  createCanaryManualRollbackJournalAdapter,
+} = require('./main/services/canary_manual_rollback_journal_adapter');
+const {
+  createCanaryPromotionRollbackStoreAdapter,
+} = require('./main/services/canary_promotion_rollback_store_adapter');
+const {
   createCanaryRolloutEvidenceJournalAdapter,
 } = require('./main/services/canary_rollout_evidence_journal_adapter');
 const {
@@ -1344,6 +1353,7 @@ const {
   listConversationMessages,
   listAuthorizedJobRecoveryCandidates,
   listJobs,
+  markJobCanaryRolledBack,
   markJobCancelled,
   markJobCompleted,
   markJobFailed,
@@ -5895,6 +5905,12 @@ async function initializeCanaryEditProductionRuntime({
     const evidenceJournal = createCanaryRolloutEvidenceJournalAdapter({
       storageDir: app.getPath('userData'),
     });
+    const promotionRollbackStore = createCanaryPromotionRollbackStoreAdapter({
+      storageDir: app.getPath('userData'),
+    });
+    const manualRollbackJournal = createCanaryManualRollbackJournalAdapter({
+      storageDir: app.getPath('userData'),
+    });
     const clientActivation = createCodexAppServerProductionClientActivation({
       runtimeConfig,
       adapterConfig,
@@ -5929,14 +5945,21 @@ async function initializeCanaryEditProductionRuntime({
       promotionIdFactory: () => `canary-promotion-${crypto.randomUUID()}`,
       cohortSeed: 'faber-code-internal-canary-v1',
       evidenceJournal,
+      promotionRollbackStore,
+      manualRollbackJournal,
       onCanaryCompleted: (observation) => {
         const jobId = readAgenticDeleteDataProperty(observation, 'jobId');
+        const promotionId = readAgenticDeleteDataProperty(
+          observation,
+          'promotionId'
+        );
         const changedPaths = readAgenticDeleteDataProperty(
           observation,
           'changedPaths'
         );
         const terminalResult = markJobCompleted(jobId, {
           canary: true,
+          canaryPromotionId: promotionId,
           modifiedFiles: changedPaths,
           ...buildAssistantProcessValidationPendingFields(
             changedPaths.length > 0
@@ -5944,6 +5967,7 @@ async function initializeCanaryEditProductionRuntime({
         });
         appendAuditEvent('assistant.canary_edit_completed', {
           jobId,
+          promotionId,
           modifiedFiles: changedPaths,
         });
         return terminalResult;
@@ -7431,6 +7455,15 @@ app.whenReady().then(async () => {
     runtimeConfig: harnessRuntimeConfig,
     runtimeServices: assistantExecutionIsolationRuntimeServices,
   });
+  const canaryManualRollbackJobService = createCanaryManualRollbackJobService({
+    getAuthorizedJobById,
+    getManualRollback: () => {
+      const runtime = canaryEditProductionRuntimeInstance;
+      return runtime ? runtime.manualRollback : null;
+    },
+    markJobCanaryRolledBack,
+    audit: appendAuditEvent,
+  });
   const activeHarnessKernelId = canaryRuntimeSelection.activeKernelId;
   const contextPackHarnessProductionService = createContextPackHarnessProductionService({
     authorizeProjectBinding: (projectId, rootPath) => (
@@ -7497,6 +7530,9 @@ app.whenReady().then(async () => {
     return { ok: true, job: cancelled.job };
   };
 
+  const rollbackCanaryJob = (input) => (
+    canaryManualRollbackJobService.rollback(input)
+  );
   const retryAssistantJob = ({ jobId }) => assistantRuntime.retry({ jobId });
 
   registerOrchestrationHandlers({
@@ -7511,6 +7547,7 @@ app.whenReady().then(async () => {
     readOrchestrationState,
     registerIpcHandler,
     renameConversationEntry,
+    rollbackCanaryJob,
     retryAssistantJob,
     deleteConversationEntry,
   });
