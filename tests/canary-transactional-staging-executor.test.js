@@ -30,6 +30,7 @@ const {
   createCanaryPromotionController,
 } = require('../main/agent_runtime/canary_promotion_controller');
 const {
+  CanaryPromotionBackendAmbiguousError,
   createCanaryPromotionReceipt,
   createCanaryPromotionRevertReceipt,
 } = require('../main/agent_runtime/canary_promotion_contract');
@@ -477,6 +478,24 @@ async function testAmbiguousPromotionNeverFallsBack() {
   assert.deepStrictEqual(fixture.events, ['open', 'edit', 'promote']);
   assert.strictEqual(fixture.calls.discard.length, 0);
   assert.strictEqual(fixture.calls.revert.length, 0);
+
+  const explicitBackendAmbiguity = makeFixture({
+    promotionRejection: new CanaryPromotionBackendAmbiguousError(),
+  });
+  await assert.rejects(
+    explicitBackendAmbiguity.executor.execute(
+      explicitBackendAmbiguity.request,
+      explicitBackendAmbiguity.grant
+    ),
+    (error) => error.code
+      === CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.PROMOTION_AMBIGUOUS
+  );
+  assert.deepStrictEqual(
+    explicitBackendAmbiguity.events,
+    ['open', 'edit', 'promote']
+  );
+  assert.strictEqual(explicitBackendAmbiguity.calls.discard.length, 0);
+  assert.strictEqual(explicitBackendAmbiguity.calls.revert.length, 0);
 }
 
 async function testPostPromotionCleanupRevertsBeforeFallback() {

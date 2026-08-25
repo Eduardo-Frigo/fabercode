@@ -8,6 +8,7 @@ const {
 const {
   CANARY_PROMOTION_REQUEST_VERSION,
   CANARY_PROMOTION_REVERT_RECEIPT_VERSION,
+  CanaryPromotionBackendAmbiguousError,
   assertCanaryPromotionReceipt,
   assertCanaryPromotionRevertReceipt,
   createCanaryPromotionRequest,
@@ -18,6 +19,7 @@ const CANARY_PROMOTION_TRANSACTION_VERSION = 'canary-promotion-transaction.v1';
 
 const CANARY_PROMOTION_CONTROLLER_REASONS = Object.freeze({
   INVALID_INPUT: 'CANARY_PROMOTION_CONTROLLER_INVALID_INPUT',
+  PROMOTION_AMBIGUOUS: 'CANARY_PROMOTION_CONTROLLER_PROMOTION_AMBIGUOUS',
   PROMOTION_FAILED: 'CANARY_PROMOTION_CONTROLLER_PROMOTION_FAILED',
   PROMOTION_RECEIPT_INVALID:
     'CANARY_PROMOTION_CONTROLLER_PROMOTION_RECEIPT_INVALID',
@@ -184,7 +186,9 @@ function callNativeBackend(backend, methodName, args) {
   return new Promise((resolve, reject) => {
     const rejected = (error) => {
       preflightDataGraph(error);
-      reject(new TypeError('promotion backend rejected'));
+      reject(error instanceof CanaryPromotionBackendAmbiguousError
+        ? new CanaryPromotionBackendAmbiguousError()
+        : new TypeError('promotion backend rejected'));
     };
     try {
       Reflect.apply(Promise.prototype.then, pending, [resolve, rejected]);
@@ -246,8 +250,10 @@ function createCanaryPromotionController(options = {}) {
     let value;
     try {
       value = await callNativeBackend(dependencies.backend, 'promote', [request]);
-    } catch {
-      throw controllerError(CANARY_PROMOTION_CONTROLLER_REASONS.PROMOTION_FAILED);
+    } catch (error) {
+      throw controllerError(error instanceof CanaryPromotionBackendAmbiguousError
+        ? CANARY_PROMOTION_CONTROLLER_REASONS.PROMOTION_AMBIGUOUS
+        : CANARY_PROMOTION_CONTROLLER_REASONS.PROMOTION_FAILED);
     }
     let receipt;
     try {

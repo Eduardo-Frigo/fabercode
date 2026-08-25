@@ -31,6 +31,9 @@ const SAFE_IDENTIFIER = /^[A-Za-z0-9._:@-]{1,256}$/;
 const MAX_PATH_BYTES = 4096;
 const MAX_CHANGED_PATHS = 32;
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const PROTECTED_PATH = /(?:^|\/)(?:\.git|\.faber|node_modules|\.env(?:\..*)?)(?:\/|$)/i;
+const CANARY_PROMOTION_BACKEND_AMBIGUOUS_CODE =
+  'CANARY_PROMOTION_BACKEND_AMBIGUOUS';
 const PROMOTION_REQUEST_INPUT_KEYS = Object.freeze([
   'promotionId',
   'session',
@@ -147,6 +150,14 @@ const LIFECYCLE_RECEIPT_KEYS = Object.freeze([
   'clean',
 ]);
 
+class CanaryPromotionBackendAmbiguousError extends Error {
+  constructor() {
+    super(CANARY_PROMOTION_BACKEND_AMBIGUOUS_CODE);
+    this.name = 'CanaryPromotionBackendAmbiguousError';
+    this.code = CANARY_PROMOTION_BACKEND_AMBIGUOUS_CODE;
+  }
+}
+
 function exactDataFields(value, expectedKeys, { frozen = false } = {}) {
   const preflight = preflightDataGraph(value);
   if (!preflight.bounded || preflight.hasNativePromise || !preflight.inspectable
@@ -214,6 +225,7 @@ function canonicalChangedPaths(value, { frozen = false } = {}) {
     if (typeof changedPath !== 'string' || !changedPath || changedPath.includes('\0')
       || changedPath.includes('\\') || changedPath.startsWith('/')
       || /^[A-Za-z]:\//.test(changedPath)
+      || PROTECTED_PATH.test(changedPath)
       || changedPath.split('/').some((part) => !part || part === '.' || part === '..')
       || output.length > 0 && changedPath <= output[output.length - 1]) return null;
     output.push(changedPath);
@@ -371,6 +383,10 @@ function assertCanaryPromotionRequest(value, expected = {}) {
     throw new TypeError('Canary promotion request does not match expected authority');
   }
   return canonical;
+}
+
+function assertCanaryPromotionBackendRequest(value) {
+  return structuredPromotionRequest(value).value;
 }
 
 function createCanaryPromotionReceipt(input = {}) {
@@ -544,9 +560,12 @@ function assertCanaryPromotionRevertReceipt(value, expected = {}) {
 }
 
 module.exports = {
+  CANARY_PROMOTION_BACKEND_AMBIGUOUS_CODE,
   CANARY_PROMOTION_RECEIPT_VERSION,
   CANARY_PROMOTION_REQUEST_VERSION,
   CANARY_PROMOTION_REVERT_RECEIPT_VERSION,
+  CanaryPromotionBackendAmbiguousError,
+  assertCanaryPromotionBackendRequest,
   assertCanaryPromotionReceipt,
   assertCanaryPromotionRequest,
   assertCanaryPromotionRevertReceipt,

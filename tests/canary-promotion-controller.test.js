@@ -16,6 +16,7 @@ const {
   createCanaryPromotionController,
 } = require('../main/agent_runtime/canary_promotion_controller');
 const {
+  CanaryPromotionBackendAmbiguousError,
   createCanaryPromotionReceipt,
   createCanaryPromotionRevertReceipt,
 } = require('../main/agent_runtime/canary_promotion_contract');
@@ -213,6 +214,18 @@ async function testBackendFailuresAreSanitized() {
     promotionController.promote(promotionInput()),
     (error) => error.code === CANARY_PROMOTION_CONTROLLER_REASONS.PROMOTION_FAILED
       && !/private source|patch/i.test(error.message)
+  );
+
+  const ambiguousBackend = createBackend({
+    promoteRejection: new CanaryPromotionBackendAmbiguousError(),
+  });
+  const ambiguousController = createCanaryPromotionController({
+    backend: ambiguousBackend.backend,
+  });
+  await assert.rejects(
+    ambiguousController.promote(promotionInput()),
+    (error) => error.code
+      === CANARY_PROMOTION_CONTROLLER_REASONS.PROMOTION_AMBIGUOUS
   );
 
   const revertBackend = createBackend({

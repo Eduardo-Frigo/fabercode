@@ -212,6 +212,9 @@ function assertAgentRuntimeBoundary() {
   const canaryLocalStagingEditorAdapterSource = read(
     'main/services/canary_local_staging_editor_adapter.js'
   );
+  const canaryLocalPromotionBackendSource = read(
+    'main/services/canary_local_promotion_backend.js'
+  );
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
@@ -846,6 +849,71 @@ function assertAgentRuntimeBoundary() {
     'canary local editor must authenticate the physical staging root, reject link following, atomically settle writes, digest final paths, preserve source isolation, and deduplicate replay'
   );
   assertDoesNotMatch(
+    canaryLocalPromotionBackendSource,
+    /require\(['"](?:child_process|worker_threads|electron|net|tls|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork)\s*\(|\b(?:npm|pnpm|yarn|bun)\b/,
+    'canary local promotion must not acquire process, network, install, Electron, or environment authority'
+  );
+  assertDoesNotMatch(
+    canaryLocalPromotionBackendSource,
+    /\b(?:git|Git)\s+(?:reset|checkout|clean|restore)\b/,
+    'canary local promotion must never use broad Git rollback commands'
+  );
+  const localPromotionPrepareIndex =
+    canaryLocalPromotionBackendSource.indexOf('function preparePromotion');
+  const localPromotionSourceFirstIndex =
+    canaryLocalPromotionBackendSource.indexOf(
+      'sourceFirst = inspectSourceState(',
+      localPromotionPrepareIndex
+    );
+  const localPromotionStagingFirstIndex =
+    canaryLocalPromotionBackendSource.indexOf(
+      'stagingFirst = inspectStagingWriteSet(',
+      localPromotionSourceFirstIndex
+    );
+  const localPromotionInverseIndex =
+    canaryLocalPromotionBackendSource.indexOf(
+      'inverse = prepareInverse(',
+      localPromotionStagingFirstIndex
+    );
+  const localPromotionSourceSecondIndex =
+    canaryLocalPromotionBackendSource.indexOf(
+      'sourceSecond = inspectSourceState(',
+      localPromotionInverseIndex
+    );
+  const localPromotionStagingSecondIndex =
+    canaryLocalPromotionBackendSource.indexOf(
+      'stagingSecond = inspectStagingWriteSet(',
+      localPromotionSourceSecondIndex
+    );
+  const localPromotionWriteIndex =
+    canaryLocalPromotionBackendSource.indexOf(
+      'applyPromotion(record.roots.sourceRoot',
+      localPromotionStagingSecondIndex
+    );
+  assert.ok(
+    localPromotionPrepareIndex >= 0
+      && localPromotionSourceFirstIndex > localPromotionPrepareIndex
+      && localPromotionStagingFirstIndex > localPromotionSourceFirstIndex
+      && localPromotionInverseIndex > localPromotionStagingFirstIndex
+      && localPromotionSourceSecondIndex > localPromotionInverseIndex
+      && localPromotionStagingSecondIndex > localPromotionSourceSecondIndex
+      && localPromotionWriteIndex > localPromotionStagingSecondIndex
+      && canaryLocalPromotionBackendSource.includes(
+        'assertCanaryPromotionBackendRequest'
+      )
+      && canaryLocalPromotionBackendSource.includes(
+        'createProjectRootPhysicalIdentityDigest'
+      )
+      && canaryLocalPromotionBackendSource.includes('O_NOFOLLOW')
+      && canaryLocalPromotionBackendSource.includes('fs.renameSync(')
+      && canaryLocalPromotionBackendSource.includes('restoreBaseline(')
+      && canaryLocalPromotionBackendSource.includes('verifyBaseline(')
+      && canaryLocalPromotionBackendSource.includes(
+        'throw new CanaryPromotionBackendAmbiguousError()'
+      ),
+    'canary local promotion must authenticate both physical roots, double-check source and staging before the first atomic write, prepare an inverse patch first, and prove rollback or report ambiguity'
+  );
+  assertDoesNotMatch(
     canaryPromotionContractSource,
     /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm|reset)\s*\(/,
     'canary promotion contracts must remain pure receipt validation without ambient mutation, process, network, Electron, or broad reset authority'
@@ -899,6 +967,18 @@ function assertAgentRuntimeBoundary() {
         'return assertCanaryPromotionRevertReceipt(value, {'
       ),
     'canary promotion controller must validate before the effect frontier and accept only terminal promotion/revert receipts from a job-scoped inverse-patch backend'
+  );
+  assert.ok(
+    canaryPromotionControllerSource.includes(
+      'error instanceof CanaryPromotionBackendAmbiguousError'
+    )
+      && canaryPromotionControllerSource.includes(
+        'CANARY_PROMOTION_CONTROLLER_REASONS.PROMOTION_AMBIGUOUS'
+      )
+      && canaryPromotionContractSource.includes(
+        'CANARY_PROMOTION_BACKEND_AMBIGUOUS_CODE'
+      ),
+    'post-write ambiguity must remain distinct from pre-write promotion rejection so legacy fallback stays blocked'
   );
   assertDoesNotMatch(
     canaryStagingTrialExecutorSource,

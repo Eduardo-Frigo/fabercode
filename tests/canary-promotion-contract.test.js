@@ -18,6 +18,7 @@ const {
   CANARY_PROMOTION_REQUEST_VERSION,
   CANARY_PROMOTION_RECEIPT_VERSION,
   CANARY_PROMOTION_REVERT_RECEIPT_VERSION,
+  assertCanaryPromotionBackendRequest,
   assertCanaryPromotionReceipt,
   assertCanaryPromotionRequest,
   assertCanaryPromotionRevertReceipt,
@@ -157,6 +158,17 @@ assertDeepFrozen(current.promotionRequest);
 assert.deepStrictEqual(
   assertCanaryPromotionRequest(current.promotionRequest, current.requestInput),
   current.promotionRequest
+);
+assert.deepStrictEqual(
+  assertCanaryPromotionBackendRequest(current.promotionRequest),
+  current.promotionRequest
+);
+assert.throws(
+  () => assertCanaryPromotionBackendRequest(Object.freeze({
+    ...current.promotionRequest,
+    changedPaths: Object.freeze(['.git/index']),
+  })),
+  /promotion request/i
 );
 assert.throws(
   () => createCanaryPromotionReceipt({
