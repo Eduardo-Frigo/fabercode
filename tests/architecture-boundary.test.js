@@ -182,6 +182,9 @@ function assertAgentRuntimeBoundary() {
   const canaryStagingContractSource = read(
     'main/agent_runtime/canary_staging_contract.js'
   );
+  const canaryPromotionContractSource = read(
+    'main/agent_runtime/canary_promotion_contract.js'
+  );
   const canaryStagingTrialExecutorSource = read(
     'main/agent_runtime/canary_staging_trial_executor.js'
   );
@@ -603,6 +606,33 @@ function assertAgentRuntimeBoundary() {
         'CANARY_EDIT_CLEANUP_RECEIPT_SCHEMA_VERSION'
       ),
     'canary staging contracts must bind disjoint execution workspaces, prove staging-only writes, and translate physical discard into lifecycle cleanup evidence'
+  );
+  assertDoesNotMatch(
+    canaryPromotionContractSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm|reset)\s*\(/,
+    'canary promotion contracts must remain pure receipt validation without ambient mutation, process, network, Electron, or broad reset authority'
+  );
+  assert.ok(
+    canaryPromotionContractSource.includes(
+      "fields.get('activeOtherMutatingJobs') !== 0"
+    )
+      && canaryPromotionContractSource.includes(
+        'normalized.checkpointDigest !== session.checkpointDigest'
+      )
+      && canaryPromotionContractSource.includes(
+        'normalized.sourceRootIdentityDigest !== session.sourceRootIdentityDigest'
+      )
+      && canaryPromotionContractSource.includes(
+        "sourceAfterDigest === request.sourceStateDigest"
+      )
+      && canaryPromotionContractSource.includes(
+        "fields.get('gitIndexAfterDigest') !== request.gitIndexDigest"
+      )
+      && canaryPromotionContractSource.includes(
+        "fields.get('userDirtyAfterDigest') !== request.userDirtyDigest"
+      )
+      && canaryPromotionContractSource.includes("disposition: 'reverted'"),
+    'canary promotion must revalidate checkpoint, physical root, exclusivity, changed source, preserved index/dirty state, and job-specific revert evidence'
   );
   assertDoesNotMatch(
     canaryStagingTrialExecutorSource,
