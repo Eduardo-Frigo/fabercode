@@ -173,6 +173,9 @@ function assertAgentRuntimeBoundary() {
   const canaryRolloutSelectorSource = read(
     'main/agent_runtime/canary_rollout_selector.js'
   );
+  const canaryEditLifecycleSource = read(
+    'main/agent_runtime/canary_edit_lifecycle.js'
+  );
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
@@ -460,6 +463,26 @@ function assertAgentRuntimeBoundary() {
       && canaryRolloutSelectorSource.indexOf("if (input.projectPin === 'canary')")
         < canaryRolloutSelectorSource.indexOf('if (!input.allowlisted)'),
     'canary rollout must pin the internal, 1%, 5%, 25%, and 50% stages with kill-switch and project-pin precedence'
+  );
+  assertDoesNotMatch(
+    canaryEditLifecycleSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm)\s*\(/,
+    'canary edit lifecycle must remain a pure transition boundary without ambient mutation, process, network, or Electron authority'
+  );
+  assert.ok(
+    canaryEditLifecycleSource.includes(
+      "mutationFrontier === CANARY_EDIT_MUTATION_FRONTIERS.SOURCE"
+    )
+      && canaryEditLifecycleSource.includes("? 'reverted'")
+      && canaryEditLifecycleSource.includes(
+        "state = CANARY_EDIT_LIFECYCLE_STATES.QUARANTINED"
+      )
+      && canaryEditLifecycleSource.indexOf(
+        "state = CANARY_EDIT_LIFECYCLE_STATES.FALLBACK_READY"
+      ) < canaryEditLifecycleSource.lastIndexOf(
+        "state = CANARY_EDIT_LIFECYCLE_STATES.LEGACY_STARTED"
+      ),
+    'canary fallback must require sufficient cleanup after mutation and quarantine ambiguous source rollback before legacy starts'
   );
 }
 
