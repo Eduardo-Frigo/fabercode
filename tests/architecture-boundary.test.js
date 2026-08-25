@@ -182,6 +182,9 @@ function assertAgentRuntimeBoundary() {
   const canaryEditRunnerSource = read(
     'main/agent_runtime/canary_edit_runner.js'
   );
+  const canaryEditRuntimeCompositionSource = read(
+    'main/agent_runtime/canary_edit_runtime_composition.js'
+  );
   const canaryStagingContractSource = read(
     'main/agent_runtime/canary_staging_contract.js'
   );
@@ -828,6 +831,53 @@ function assertAgentRuntimeBoundary() {
         'CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.PROMOTION_AMBIGUOUS'
       ),
     'transactional canary fallback must prove staging discard before pre-write fallback, prove source revert after promotion, and quarantine ambiguous promotion settlement'
+  );
+  assertDoesNotMatch(
+    canaryEditRuntimeCompositionSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm|reset)\s*\(/,
+    'canary runtime composition must wire explicit ports without ambient filesystem, Git reset, process, network, or Electron authority'
+  );
+  const compositionModeIndex = canaryEditRuntimeCompositionSource.indexOf(
+    "if (runtimeConfig.configuredMode !== 'canary')"
+  );
+  const compositionSelectorIndex = canaryEditRuntimeCompositionSource.indexOf(
+    'const rolloutSelector = createCanaryRolloutSelector({'
+  );
+  const compositionPromotionIndex = canaryEditRuntimeCompositionSource.indexOf(
+    'const promotionController = createCanaryPromotionController({'
+  );
+  const compositionExecutorIndex = canaryEditRuntimeCompositionSource.indexOf(
+    'const executor = createCanaryTransactionalStagingExecutor({'
+  );
+  const compositionRunnerIndex = canaryEditRuntimeCompositionSource.indexOf(
+    'const runner = createCanaryEditRunner({'
+  );
+  const compositionLedgerIndex = canaryEditRuntimeCompositionSource.indexOf(
+    'const ledger = createCanaryRolloutEvidenceLedger(ledgerOptions);'
+  );
+  assert.ok(
+    compositionModeIndex >= 0
+      && compositionSelectorIndex > compositionModeIndex
+      && compositionPromotionIndex > compositionSelectorIndex
+      && compositionExecutorIndex > compositionPromotionIndex
+      && compositionRunnerIndex > compositionExecutorIndex
+      && compositionLedgerIndex > compositionRunnerIndex
+      && canaryEditRuntimeCompositionSource.includes(
+        "fields.get('canaryEditor'),\n      'kernelId'"
+      ),
+    'canary runtime composition must stay lazy outside canary mode and compose selector, guarded promotion, transactional staging, runner, and evidence without invoking editor accessors'
+  );
+  assert.ok(
+    canaryEditRuntimeCompositionSource.indexOf(
+      'drained = await drainExecutions();'
+    ) < canaryEditRuntimeCompositionSource.indexOf(
+      "const closeReceipt = await callAsyncPort(clientLifecycle, 'close');"
+    )
+      && canaryEditRuntimeCompositionSource.includes(
+        "state !== CANARY_EDIT_RUNTIME_COMPOSITION_STATES.READY"
+      )
+      && canaryEditRuntimeCompositionSource.includes('inFlight.add(tracked);'),
+    'canary runtime shutdown must reject new work, track native executions, drain them, and only then close its client'
   );
 }
 
@@ -1717,6 +1767,14 @@ function assertExecutionWorkspaceBoundary() {
       ].includes('canary-transactional-staging-executor.test.js')
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:canary-transactional-staging-executor'
+      )
+      && typeof packageConfig.scripts['test:canary-edit-runtime-composition']
+        === 'string'
+      && packageConfig.scripts['test:canary-edit-runtime-composition'].includes(
+        'canary-edit-runtime-composition.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:canary-edit-runtime-composition'
       )
       && packageConfig.scripts['test:codex-app-server-stdio-client'].includes(
         'codex-app-server-stdio-client.test.js'
