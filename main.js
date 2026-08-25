@@ -131,6 +131,9 @@ const {
   createCanaryEditProductionRuntime,
 } = require('./main/services/canary_edit_production_runtime');
 const {
+  createCanaryRolloutEvidenceJournalAdapter,
+} = require('./main/services/canary_rollout_evidence_journal_adapter');
+const {
   createCanaryInternalRolloutPolicy,
 } = require('./main/services/canary_internal_rollout_policy');
 const {
@@ -5889,6 +5892,9 @@ async function initializeCanaryEditProductionRuntime({
         getProjectAccess().authorizeProjectBinding(projectId, rootPath)
       ),
     });
+    const evidenceJournal = createCanaryRolloutEvidenceJournalAdapter({
+      storageDir: app.getPath('userData'),
+    });
     const clientActivation = createCodexAppServerProductionClientActivation({
       runtimeConfig,
       adapterConfig,
@@ -5922,6 +5928,7 @@ async function initializeCanaryEditProductionRuntime({
       inspectRollout: (binding) => rolloutPolicy.inspect(binding),
       promotionIdFactory: () => `canary-promotion-${crypto.randomUUID()}`,
       cohortSeed: 'faber-code-internal-canary-v1',
+      evidenceJournal,
       onCanaryCompleted: (observation) => {
         const jobId = readAgenticDeleteDataProperty(observation, 'jobId');
         const changedPaths = readAgenticDeleteDataProperty(

@@ -39,6 +39,7 @@ const OPTION_KEYS = Object.freeze([
   'inspectRollout',
   'promotionIdFactory',
   'cohortSeed',
+  'evidenceJournal',
   'client',
   'onCanaryCompleted',
   'onCanaryFailed',
@@ -115,6 +116,7 @@ function createCanaryEditProductionRuntime(options = {}) {
     workspaceSessionPort,
     canaryEditor,
     promotionBackend,
+    evidenceJournal: fields.get('evidenceJournal'),
     client: fields.get('client'),
   };
   if (fields.has('minimumCanaryJobs')) {
@@ -149,6 +151,7 @@ function createCanaryEditProductionRuntime(options = {}) {
       workspaceSessionPort: workspaceSessionPort.diagnostics(),
       canaryEditor: canaryEditor.diagnostics(),
       promotionBackend: promotionBackend.diagnostics(),
+      evidenceJournal: fields.get('evidenceJournal').diagnostics(),
       terminalObserver: terminalObserver ? terminalObserver.diagnostics() : null,
     });
   }

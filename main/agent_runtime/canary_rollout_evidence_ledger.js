@@ -17,6 +17,10 @@ const CANARY_ROLLOUT_EVIDENCE_SNAPSHOT_SCHEMA_VERSION =
   'canary-rollout-evidence-snapshot.v1';
 const CANARY_ROLLOUT_ADVANCEMENT_DECISION_SCHEMA_VERSION =
   'canary-rollout-advancement-decision.v1';
+const CANARY_ROLLOUT_EVIDENCE_JOURNAL_VERSION =
+  'canary-rollout-evidence-journal.v1';
+const CANARY_ROLLOUT_EVIDENCE_JOURNAL_SNAPSHOT_SCHEMA_VERSION =
+  'canary-rollout-evidence-journal-snapshot.v1';
 
 const TOTAL_BASIS_POINTS = 10_000;
 const DEFAULT_MINIMUM_CANARY_JOBS = 10;
@@ -53,6 +57,7 @@ const CANARY_ROLLOUT_ADVANCEMENT_REASONS = Object.freeze({
 const CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS = Object.freeze({
   DUPLICATE_EVIDENCE: 'CANARY_ROLLOUT_DUPLICATE_EVIDENCE',
   INVALID_EVIDENCE: 'CANARY_ROLLOUT_INVALID_EVIDENCE',
+  PERSISTENCE_FAILED: 'CANARY_ROLLOUT_EVIDENCE_PERSISTENCE_FAILED',
 });
 
 const STAGE_ORDER = Object.freeze([
@@ -69,6 +74,7 @@ const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const OPTION_KEYS = Object.freeze([
   'minimumCanaryJobs',
   'minimumBaselineJobs',
+  'evidenceJournal',
 ]);
 const EVIDENCE_KEYS = Object.freeze([
   'schemaVersion',
@@ -237,9 +243,90 @@ function assertStage(rolloutStage) {
   return rolloutStage;
 }
 
+function captureEvidenceJournal(value) {
+  const fields = plainDataFields(
+    value,
+    ['version', 'load', 'append', 'diagnostics'],
+    { frozen: true }
+  );
+  if (!fields
+    || fields.get('version') !== CANARY_ROLLOUT_EVIDENCE_JOURNAL_VERSION) {
+    return null;
+  }
+  for (const methodName of ['load', 'append', 'diagnostics']) {
+    const method = fields.get(methodName);
+    if (typeof method !== 'function' || util.types.isProxy(method)
+      || util.types.isGeneratorFunction(method)) return null;
+    try {
+      Function.prototype.toString.call(method);
+    } catch {
+      return null;
+    }
+  }
+  return Object.freeze({
+    receiver: value,
+    version: fields.get('version'),
+    load: fields.get('load'),
+    append: fields.get('append'),
+  });
+}
+
+function denseFrozenEvidence(value) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype
+    || !Object.isFrozen(value)) return null;
+  const keys = Reflect.ownKeys(value).filter((key) => key !== 'length');
+  if (keys.length !== value.length
+    || keys.some((key, index) => key !== String(index))) return null;
+  const entries = [];
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || descriptor.enumerable !== true
+      || !Object.hasOwn(descriptor, 'value')) return null;
+    entries.push(descriptor.value);
+  }
+  return entries;
+}
+
+function loadPersistedEvidence(journal) {
+  let snapshot;
+  try {
+    snapshot = Reflect.apply(journal.load, journal.receiver, []);
+  } catch {
+    throw ledgerError(
+      CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
+    );
+  }
+  if (util.types.isPromise(snapshot)) {
+    snapshot.catch(() => {});
+    throw ledgerError(
+      CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
+    );
+  }
+  const fields = plainDataFields(
+    snapshot,
+    ['schemaVersion', 'evidence'],
+    { frozen: true }
+  );
+  const entries = fields ? denseFrozenEvidence(fields.get('evidence')) : null;
+  if (!fields || !entries
+    || fields.get('schemaVersion')
+      !== CANARY_ROLLOUT_EVIDENCE_JOURNAL_SNAPSHOT_SCHEMA_VERSION) {
+    throw ledgerError(
+      CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
+    );
+  }
+  return entries;
+}
+
 function createCanaryRolloutEvidenceLedger(options = {}) {
   const fields = plainDataFields(options, OPTION_KEYS, { exact: false });
   if (!fields) throw new TypeError('Invalid canary rollout evidence ledger options');
+  const journal = fields.has('evidenceJournal')
+    ? captureEvidenceJournal(fields.get('evidenceJournal'))
+    : null;
+  if (fields.has('evidenceJournal') && !journal) {
+    throw new TypeError('Invalid canary rollout evidence journal');
+  }
   const minimumCanaryJobs = boundedSampleSize(
     fields.get('minimumCanaryJobs'),
     DEFAULT_MINIMUM_CANARY_JOBS,
@@ -258,6 +345,34 @@ function createCanaryRolloutEvidenceLedger(options = {}) {
   let rejections = 0;
   let duplicateEvidence = 0;
   let lastFailureCode = null;
+  let recoveredEvidence = 0;
+
+  function acceptEvidence(evidence) {
+    const state = stageStates.get(evidence.rolloutStage);
+    const nextDigest = 'sha256:' + crypto.createHash('sha256')
+      .update(state.headDigest || '')
+      .update('\n')
+      .update(canonicalEvidence(evidence))
+      .digest('hex');
+    jobIds.add(evidence.jobId);
+    acceptedEvidence += 1;
+    state.acceptedEvidence += 1;
+    state.headDigest = nextDigest;
+    if (evidence.route === 'baseline') {
+      state.baselineJobs += 1;
+      state.baselineSuccesses += evidence.succeeded ? 1 : 0;
+    } else {
+      state.canaryJobs += 1;
+      state.canarySuccesses += evidence.succeeded ? 1 : 0;
+      state.manualRollbacks += evidence.manualRollback ? 1 : 0;
+      state.corruptedJobs += evidence.corrupted ? 1 : 0;
+      state.dataLossIncidents += evidence.dataLossIncident ? 1 : 0;
+      state.securityIncidents += evidence.securityIncident ? 1 : 0;
+      state.duplicateExternalEffects += evidence.duplicateExternalEffect
+        ? 1
+        : 0;
+    }
+  }
 
   function record(value) {
     try {
@@ -272,29 +387,32 @@ function createCanaryRolloutEvidenceLedger(options = {}) {
           CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.DUPLICATE_EVIDENCE
         );
       }
-      const state = stageStates.get(evidence.rolloutStage);
-      const nextDigest = 'sha256:' + crypto.createHash('sha256')
-        .update(state.headDigest || '')
-        .update('\n')
-        .update(canonicalEvidence(evidence))
-        .digest('hex');
-      jobIds.add(evidence.jobId);
-      acceptedEvidence += 1;
-      state.acceptedEvidence += 1;
-      state.headDigest = nextDigest;
-      if (evidence.route === 'baseline') {
-        state.baselineJobs += 1;
-        state.baselineSuccesses += evidence.succeeded ? 1 : 0;
-      } else {
-        state.canaryJobs += 1;
-        state.canarySuccesses += evidence.succeeded ? 1 : 0;
-        state.manualRollbacks += evidence.manualRollback ? 1 : 0;
-        state.corruptedJobs += evidence.corrupted ? 1 : 0;
-        state.dataLossIncidents += evidence.dataLossIncident ? 1 : 0;
-        state.securityIncidents += evidence.securityIncident ? 1 : 0;
-        state.duplicateExternalEffects += evidence.duplicateExternalEffect
-          ? 1 : 0;
+      if (journal) {
+        let persisted;
+        try {
+          persisted = Reflect.apply(
+            journal.append,
+            journal.receiver,
+            [evidence]
+          );
+        } catch {
+          throw ledgerError(
+            CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
+          );
+        }
+        if (util.types.isPromise(persisted)) {
+          persisted.catch(() => {});
+          throw ledgerError(
+            CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
+          );
+        }
+        if (persisted !== undefined) {
+          throw ledgerError(
+            CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
+          );
+        }
       }
+      acceptEvidence(evidence);
       lastFailureCode = null;
       return undefined;
     } catch (error) {
@@ -310,6 +428,25 @@ function createCanaryRolloutEvidenceLedger(options = {}) {
       }
       lastFailureCode = normalized.code;
       throw normalized;
+    }
+  }
+
+  if (journal) {
+    const persistedEvidence = loadPersistedEvidence(journal);
+    for (const value of persistedEvidence) {
+      const evidence = normalizeEvidence(value);
+      if (!evidence) {
+        throw ledgerError(
+          CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
+        );
+      }
+      if (jobIds.has(evidence.jobId)) {
+        throw ledgerError(
+          CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
+        );
+      }
+      acceptEvidence(evidence);
+      recoveredEvidence += 1;
     }
   }
 
@@ -454,6 +591,8 @@ function createCanaryRolloutEvidenceLedger(options = {}) {
     return deepFreeze({
       version: CANARY_ROLLOUT_EVIDENCE_LEDGER_VERSION,
       evidenceSinkVersion: CANARY_ROLLOUT_EVIDENCE_SINK_VERSION,
+      journalVersion: journal ? journal.version : null,
+      recoveredEvidence,
       acceptedEvidence,
       acceptedByStage: Object.fromEntries(STAGE_ORDER.map(
         (stage) => [stage, stageStates.get(stage).acceptedEvidence]

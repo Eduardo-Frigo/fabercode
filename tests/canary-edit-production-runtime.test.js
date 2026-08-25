@@ -77,6 +77,24 @@ function createFixture({ mode = 'canary' } = {}) {
       return Object.freeze({ state: 'ready' });
     },
   });
+  const evidenceJournal = Object.freeze({
+    version: 'canary-rollout-evidence-journal.v1',
+    load() {
+      return Object.freeze({
+        schemaVersion: 'canary-rollout-evidence-journal-snapshot.v1',
+        evidence: Object.freeze([]),
+      });
+    },
+    append() {
+      return undefined;
+    },
+    diagnostics() {
+      return Object.freeze({
+        version: 'canary-rollout-evidence-journal.v1',
+        records: 0,
+      });
+    },
+  });
   const runtime = createCanaryEditProductionRuntime({
     runtimeConfig: createHarnessRuntimeConfig({
       env: mode === 'legacy' ? {} : { FABER_HARNESS_V2_MODE: mode },
@@ -99,6 +117,7 @@ function createFixture({ mode = 'canary' } = {}) {
       throw new Error('must remain lazy until a request exists');
     },
     cohortSeed: 'canary-production-runtime-tests-v1',
+    evidenceJournal,
     client,
     onCanaryCompleted() {
       calls.terminalCompleted += 1;
@@ -148,6 +167,7 @@ async function testReadyRuntimeComposesOnlyProductionAdapters() {
     'workspaceSessionPort',
     'canaryEditor',
     'promotionBackend',
+    'evidenceJournal',
     'terminalObserver',
   ]);
   assert.strictEqual(diagnostics.version, CANARY_EDIT_PRODUCTION_RUNTIME_VERSION);
@@ -184,6 +204,10 @@ async function testReadyRuntimeComposesOnlyProductionAdapters() {
   assert.strictEqual(
     diagnostics.promotionBackend.version,
     'canary-local-promotion-backend.v1'
+  );
+  assert.strictEqual(
+    diagnostics.evidenceJournal.version,
+    'canary-rollout-evidence-journal.v1'
   );
   assert.strictEqual(
     diagnostics.terminalObserver.version,

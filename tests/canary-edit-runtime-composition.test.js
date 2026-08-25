@@ -164,6 +164,24 @@ function createReadyOptions({
       });
     },
   });
+  const evidenceJournal = Object.freeze({
+    version: 'canary-rollout-evidence-journal.v1',
+    load() {
+      return Object.freeze({
+        schemaVersion: 'canary-rollout-evidence-journal-snapshot.v1',
+        evidence: Object.freeze([]),
+      });
+    },
+    append() {
+      return undefined;
+    },
+    diagnostics() {
+      return Object.freeze({
+        version: 'canary-rollout-evidence-journal.v1',
+        records: 0,
+      });
+    },
+  });
   return {
     calls,
     clientFixture,
@@ -178,6 +196,7 @@ function createReadyOptions({
       workspaceSessionPort,
       canaryEditor,
       promotionBackend,
+      evidenceJournal,
       client: clientFixture.client,
       ...options,
     },
@@ -258,7 +277,8 @@ async function testRequestedCanaryFailsClosedWithoutEveryAuthority() {
     ['cohortSeed', 'workspace_session_unavailable'],
     ['workspaceSessionPort', 'canary_editor_unavailable'],
     ['canaryEditor', 'promotion_backend_unavailable'],
-    ['promotionBackend', 'client_unavailable'],
+    ['promotionBackend', 'evidence_journal_unavailable'],
+    ['evidenceJournal', 'client_unavailable'],
   ];
   const partial = { runtimeConfig, adapterEnabled: true };
   for (const [field, nextReason] of dependencyOrder) {
@@ -328,6 +348,8 @@ async function testReadyCompositionIsLazyAndOwnsEvidence() {
     runnerVersion: 'canary-edit-runner.v1',
     executorVersion: 'canary-transactional-staging-executor.v1',
     ledgerVersion: 'canary-rollout-evidence-ledger.v1',
+    journalVersion: 'canary-rollout-evidence-journal.v1',
+    recoveredEvidence: 0,
     rolloutEvidenceObserver: {
       version: 'canary-rollout-evidence-observer-adapter.v1',
       evidenceSinkVersion: 'canary-rollout-evidence-sink.v1',

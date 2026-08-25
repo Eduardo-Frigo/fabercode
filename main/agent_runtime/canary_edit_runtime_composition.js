@@ -55,6 +55,7 @@ const CANARY_EDIT_RUNTIME_COMPOSITION_REASONS = Object.freeze({
   COHORT_SEED_UNAVAILABLE: 'cohort_seed_unavailable',
   COMPOSITION_FAILED: 'composition_failed',
   DRAIN_FAILED: 'drain_failed',
+  EVIDENCE_JOURNAL_UNAVAILABLE: 'evidence_journal_unavailable',
   INVALID_OPTIONS: 'invalid_options',
   INVALID_RUNTIME_CONFIG: 'invalid_runtime_config',
   KILL_SWITCH: 'kill_switch',
@@ -73,6 +74,7 @@ const OPTION_KEYS = Object.freeze([
   'workspaceSessionPort',
   'canaryEditor',
   'promotionBackend',
+  'evidenceJournal',
   'client',
   'minimumCanaryJobs',
   'minimumBaselineJobs',
@@ -294,6 +296,7 @@ function createRuntimePort({
 
   function diagnostics() {
     const runnerDiagnostics = runner ? runner.diagnostics() : null;
+    const ledgerDiagnostics = ledger ? ledger.diagnostics() : null;
     return Object.freeze({
       version: CANARY_EDIT_RUNTIME_COMPOSITION_VERSION,
       state,
@@ -310,6 +313,12 @@ function createRuntimePort({
         ? CANARY_TRANSACTIONAL_STAGING_EXECUTOR_VERSION
         : null,
       ledgerVersion: ledger ? CANARY_ROLLOUT_EVIDENCE_LEDGER_VERSION : null,
+      journalVersion: ledgerDiagnostics
+        ? ledgerDiagnostics.journalVersion
+        : null,
+      recoveredEvidence: ledgerDiagnostics
+        ? ledgerDiagnostics.recoveredEvidence
+        : 0,
       rolloutEvidenceObserver: rolloutEvidenceObserver
         ? rolloutEvidenceObserver.diagnostics()
         : null,
@@ -460,6 +469,7 @@ function createCanaryEditRuntimeComposition(options = {}) {
     ['workspaceSessionPort', 'WORKSPACE_SESSION_UNAVAILABLE'],
     ['canaryEditor', 'CANARY_EDITOR_UNAVAILABLE'],
     ['promotionBackend', 'PROMOTION_BACKEND_UNAVAILABLE'],
+    ['evidenceJournal', 'EVIDENCE_JOURNAL_UNAVAILABLE'],
     ['client', 'CLIENT_UNAVAILABLE'],
   ];
   for (const [fieldName, reasonName] of requiredAuthorities) {
@@ -505,6 +515,7 @@ function createCanaryEditRuntimeComposition(options = {}) {
     if (fields.has('minimumBaselineJobs')) {
       ledgerOptions.minimumBaselineJobs = fields.get('minimumBaselineJobs');
     }
+    ledgerOptions.evidenceJournal = fields.get('evidenceJournal');
     const ledger = createCanaryRolloutEvidenceLedger(ledgerOptions);
     const rolloutEvidenceObserver =
       createCanaryRolloutEvidenceObserverAdapter({

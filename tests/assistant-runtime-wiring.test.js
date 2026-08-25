@@ -272,6 +272,7 @@ for (const productionCanaryDependency of [
   "require('./main/services/codex_app_server_production_client_activation')",
   "require('./main/services/canary_internal_rollout_policy')",
   "require('./main/services/canary_edit_production_runtime')",
+  "require('./main/services/canary_rollout_evidence_journal_adapter')",
 ]) {
   assert.ok(
     mainSource.includes(productionCanaryDependency),
@@ -292,6 +293,8 @@ assertInOrder(
     'createCanaryInternalRolloutPolicy({',
     'authorizeProjectBinding: (projectId, rootPath) => (',
     'getProjectAccess().authorizeProjectBinding(projectId, rootPath)',
+    'const evidenceJournal = createCanaryRolloutEvidenceJournalAdapter({',
+    "storageDir: app.getPath('userData')",
     'createCodexAppServerProductionClientActivation({',
     "cwd: app.getPath('userData')",
     'clientVersion: app.getVersion()',
@@ -305,6 +308,7 @@ assertInOrder(
     'inspectRootMutation: (binding) => coordinator.inspectRootMutation(binding),',
     'inspectRollout: (binding) => rolloutPolicy.inspect(binding),',
     'promotionIdFactory: () => `canary-promotion-${crypto.randomUUID()}`',
+    'evidenceJournal,',
     'onCanaryCompleted: (observation) => {',
     "const jobId = readAgenticDeleteDataProperty(observation, 'jobId');",
     "'changedPaths'",

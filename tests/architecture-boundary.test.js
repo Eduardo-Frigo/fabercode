@@ -188,6 +188,9 @@ function assertAgentRuntimeBoundary() {
   const canaryRolloutEvidenceLedgerSource = read(
     'main/agent_runtime/canary_rollout_evidence_ledger.js'
   );
+  const canaryRolloutEvidenceJournalSource = read(
+    'main/services/canary_rollout_evidence_journal_adapter.js'
+  );
   const canaryRolloutEvidenceObserverSource = read(
     'main/agent_runtime/canary_rollout_evidence_observer_adapter.js'
   );
@@ -705,8 +708,25 @@ function assertAgentRuntimeBoundary() {
       )
       && canaryRolloutEvidenceLedgerSource.includes(
         'jobIds.has(evidence.jobId)'
-      ),
+      )
+      && canaryRolloutEvidenceLedgerSource.indexOf('journal.append,')
+        < canaryRolloutEvidenceLedgerSource.indexOf('acceptEvidence(evidence);'),
     'canary rollout advancement must use isolated per-stage evidence, global job uniqueness, zero-tolerance safety gates, and the fixed 2%, 0.5%, and 3pp thresholds'
+  );
+  assertDoesNotMatch(
+    canaryRolloutEvidenceJournalSource,
+    /require\(['"](?:child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|reset)\s*\(/,
+    'the rollout evidence journal may own its private file only, never process, network, Electron, Git, or environment authority'
+  );
+  assert.ok(
+    canaryRolloutEvidenceJournalSource.includes('fs.constants.O_NOFOLLOW')
+      && canaryRolloutEvidenceJournalSource.includes('fs.fsyncSync(descriptor)')
+      && canaryRolloutEvidenceJournalSource.includes('previousRecordDigest')
+      && canaryRolloutEvidenceJournalSource.includes("digest('hex')")
+      && canaryRolloutEvidenceJournalSource.includes('fs.chmodSync(directoryPath, 0o700)')
+      && canaryRolloutEvidenceJournalSource.includes('fs.fchmodSync(descriptor, 0o600)')
+      && canaryRolloutEvidenceJournalSource.includes('JOURNAL_CORRUPTED'),
+    'the rollout evidence journal must be private, durable, hash chained, symlink resistant, and fail closed during recovery'
   );
   assertDoesNotMatch(
     canaryEditLifecycleSource,
@@ -1325,6 +1345,9 @@ function assertAgentRuntimeBoundary() {
       ) > compositionRunnerIndex
       && canaryEditRuntimeCompositionSource.includes(
         "fields.get('canaryEditor'),\n      'kernelId'"
+      )
+      && canaryEditRuntimeCompositionSource.includes(
+        "ledgerOptions.evidenceJournal = fields.get('evidenceJournal');"
       ),
     'canary runtime composition must stay lazy outside canary mode and compose selector, guarded promotion, transactional staging, runner, and evidence without invoking editor accessors'
   );

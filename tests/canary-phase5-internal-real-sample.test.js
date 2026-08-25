@@ -36,6 +36,9 @@ const {
   createCanaryEditProductionRuntime,
 } = require('../main/services/canary_edit_production_runtime');
 const {
+  createCanaryRolloutEvidenceJournalAdapter,
+} = require('../main/services/canary_rollout_evidence_journal_adapter');
+const {
   createCanaryInternalRolloutPolicy,
 } = require('../main/services/canary_internal_rollout_policy');
 const {
@@ -267,6 +270,9 @@ async function main() {
 
   let runtime = null;
   try {
+    const evidenceJournal = createCanaryRolloutEvidenceJournalAdapter({
+      storageDir: fixtureRoot,
+    });
     runtime = createCanaryEditProductionRuntime({
       runtimeConfig,
       adapterEnabled: true,
@@ -284,6 +290,7 @@ async function main() {
       inspectRollout: rolloutPolicy.inspect,
       promotionIdFactory: () => 'phase5-internal-promotion',
       cohortSeed: 'phase5-internal-real-sample-v1',
+      evidenceJournal,
       client,
       onCanaryCompleted(observation) {
         terminalCompletions.push(observation);
@@ -344,6 +351,10 @@ async function main() {
     assert.strictEqual(snapshot.totals.dataLossIncidents, 0);
     assert.strictEqual(snapshot.totals.securityIncidents, 0);
     assert.strictEqual(snapshot.totals.duplicateExternalEffects, 0);
+    assert.strictEqual(
+      runtime.diagnostics().evidenceJournal.records,
+      2
+    );
     const advancement = runtime.advancement(CANARY_ROLLOUT_STAGES.INTERNAL);
     assert.strictEqual(advancement.allowed, true);
     assert.strictEqual(advancement.toStage, CANARY_ROLLOUT_STAGES.PERCENT_1);

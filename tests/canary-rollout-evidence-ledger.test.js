@@ -44,6 +44,33 @@ function evidence(index, overrides = {}) {
   });
 }
 
+function evidenceJournal(initialEvidence = [], { appendFailure = null } = {}) {
+  const calls = { append: 0, load: 0 };
+  const persisted = [...initialEvidence];
+  const journal = Object.freeze({
+    version: 'canary-rollout-evidence-journal.v1',
+    load() {
+      calls.load += 1;
+      return Object.freeze({
+        schemaVersion: 'canary-rollout-evidence-journal-snapshot.v1',
+        evidence: Object.freeze([...persisted]),
+      });
+    },
+    append(value) {
+      calls.append += 1;
+      if (appendFailure && appendFailure.active) {
+        throw new Error('private persistence failure');
+      }
+      persisted.push(value);
+      return undefined;
+    },
+    diagnostics() {
+      return Object.freeze({ records: persisted.length });
+    },
+  });
+  return { calls, journal, persisted };
+}
+
 function recordPopulation(ledger, {
   prefix,
   route,
@@ -351,6 +378,8 @@ function testDuplicateAndInvalidEvidenceFailClosed() {
   assert.deepStrictEqual(ledger.diagnostics(), {
     version: CANARY_ROLLOUT_EVIDENCE_LEDGER_VERSION,
     evidenceSinkVersion: CANARY_ROLLOUT_EVIDENCE_SINK_VERSION,
+    journalVersion: null,
+    recoveredEvidence: 0,
     acceptedEvidence: 1,
     acceptedByStage: {
       internal: 1,
@@ -379,6 +408,95 @@ function testDuplicateAndInvalidEvidenceFailClosed() {
   );
 }
 
+function testJournalHydrationAndPersistBeforeVisibility() {
+  const recoveredBaseline = evidence('recovered-baseline', {
+    route: 'baseline',
+  });
+  const recoveredCanary = evidence('recovered-canary');
+  const fixture = evidenceJournal([recoveredBaseline, recoveredCanary]);
+  const ledger = createCanaryRolloutEvidenceLedger({
+    minimumCanaryJobs: 1,
+    minimumBaselineJobs: 1,
+    evidenceJournal: fixture.journal,
+  });
+  assert.strictEqual(fixture.calls.load, 1);
+  assert.strictEqual(fixture.calls.append, 0);
+  assert.deepStrictEqual(
+    ledger.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL).totals,
+    {
+      baselineJobs: 1,
+      baselineSuccesses: 1,
+      baselineSuccessRateBasisPoints: 10_000,
+      canaryJobs: 1,
+      canarySuccesses: 1,
+      canarySuccessRateBasisPoints: 10_000,
+      successDeltaBasisPoints: 0,
+      manualRollbacks: 0,
+      manualRollbackRateBasisPoints: 0,
+      corruptedJobs: 0,
+      corruptedJobRateBasisPoints: 0,
+      dataLossIncidents: 0,
+      securityIncidents: 0,
+      duplicateExternalEffects: 0,
+    }
+  );
+  assert.strictEqual(ledger.diagnostics().recoveredEvidence, 2);
+  assert.strictEqual(
+    ledger.diagnostics().journalVersion,
+    'canary-rollout-evidence-journal.v1'
+  );
+
+  const next = evidence('persisted-before-visible');
+  ledger.evidenceSink.record(next);
+  assert.strictEqual(fixture.calls.append, 1);
+  assert.deepStrictEqual(fixture.persisted, [
+    recoveredBaseline,
+    recoveredCanary,
+    next,
+  ]);
+  assert.strictEqual(
+    ledger.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL).totals.canaryJobs,
+    2
+  );
+
+  const restarted = createCanaryRolloutEvidenceLedger({
+    minimumCanaryJobs: 1,
+    minimumBaselineJobs: 1,
+    evidenceJournal: fixture.journal,
+  });
+  assert.strictEqual(
+    restarted.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL).totals.canaryJobs,
+    2
+  );
+}
+
+function testJournalFailureLeavesLedgerRetryable() {
+  const appendFailure = { active: true };
+  const fixture = evidenceJournal([], { appendFailure });
+  const ledger = createCanaryRolloutEvidenceLedger({
+    minimumCanaryJobs: 1,
+    minimumBaselineJobs: 1,
+    evidenceJournal: fixture.journal,
+  });
+  const next = evidence('retry-after-persistence-failure');
+  const before = ledger.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL);
+  assert.throws(
+    () => ledger.evidenceSink.record(next),
+    (error) => error.code
+      === CANARY_ROLLOUT_EVIDENCE_LEDGER_REASONS.PERSISTENCE_FAILED
+  );
+  assert.deepStrictEqual(
+    ledger.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL),
+    before
+  );
+  appendFailure.active = false;
+  assert.strictEqual(ledger.evidenceSink.record(next), undefined);
+  assert.strictEqual(
+    ledger.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL).totals.canaryJobs,
+    1
+  );
+}
+
 function run() {
   assert.strictEqual(
     CANARY_ROLLOUT_EVIDENCE_LEDGER_VERSION,
@@ -401,6 +519,8 @@ function run() {
   testStrictRateAndBaselineThresholds();
   testZeroToleranceSignalsBlockBeforeMinimumSample();
   testDuplicateAndInvalidEvidenceFailClosed();
+  testJournalHydrationAndPersistBeforeVisibility();
+  testJournalFailureLeavesLedgerRetryable();
   console.log('canary rollout evidence ledger tests passed');
 }
 
