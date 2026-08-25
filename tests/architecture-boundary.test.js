@@ -185,6 +185,9 @@ function assertAgentRuntimeBoundary() {
   const canaryPromotionContractSource = read(
     'main/agent_runtime/canary_promotion_contract.js'
   );
+  const canaryPromotionControllerSource = read(
+    'main/agent_runtime/canary_promotion_controller.js'
+  );
   const canaryStagingTrialExecutorSource = read(
     'main/agent_runtime/canary_staging_trial_executor.js'
   );
@@ -633,6 +636,34 @@ function assertAgentRuntimeBoundary() {
       )
       && canaryPromotionContractSource.includes("disposition: 'reverted'"),
     'canary promotion must revalidate checkpoint, physical root, exclusivity, changed source, preserved index/dirty state, and job-specific revert evidence'
+  );
+  assertDoesNotMatch(
+    canaryPromotionControllerSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm|reset)\s*\(/,
+    'canary promotion controller must use an explicit backend without ambient filesystem, Git reset, process, network, or Electron authority'
+  );
+  assert.ok(
+    canaryPromotionControllerSource.includes(
+      "diagnosticFields.get('inversePatch') !== 'job_scoped'"
+    )
+      && canaryPromotionControllerSource.includes(
+        "diagnosticFields.get('rejectionFrontier') !== 'pre_write_only'"
+      )
+      && canaryPromotionControllerSource.includes(
+        "diagnosticFields.get('settlementMode') !== 'terminal_receipt'"
+      )
+      && canaryPromotionControllerSource.indexOf(
+        'request = normalizePromotionInput(input)'
+      ) < canaryPromotionControllerSource.indexOf(
+        "dependencies.backend, 'promote'"
+      )
+      && canaryPromotionControllerSource.includes(
+        'receipt = assertCanaryPromotionReceipt(value, request);'
+      )
+      && canaryPromotionControllerSource.includes(
+        'return assertCanaryPromotionRevertReceipt(value, {'
+      ),
+    'canary promotion controller must validate before the effect frontier and accept only terminal promotion/revert receipts from a job-scoped inverse-patch backend'
   );
   assertDoesNotMatch(
     canaryStagingTrialExecutorSource,
