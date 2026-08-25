@@ -203,6 +203,9 @@ function assertAgentRuntimeBoundary() {
   const canaryWorkspaceSessionPortAdapterSource = read(
     'main/services/canary_workspace_session_port_adapter.js'
   );
+  const canarySourceSnapshotProviderSource = read(
+    'main/services/canary_source_snapshot_provider.js'
+  );
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
@@ -725,6 +728,70 @@ function assertAgentRuntimeBoundary() {
         'quarantine(record);\n      throw adapterError('
       ),
     'canary workspace cleanup must prove physical rollback and root release before manufacturing a discard receipt, and quarantine every ambiguous cleanup'
+  );
+  assertDoesNotMatch(
+    canarySourceSnapshotProviderSource,
+    /require\(['"](?:fs|path|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm|reset)\s*\(/,
+    'canary source snapshot provider must inspect only its pinned reader without ambient pathname, process, network, Git CLI, or Electron authority'
+  );
+  assertDoesNotMatch(
+    canarySourceSnapshotProviderSource,
+    /workspaceRootPath|workspaceRealRootPath|\.canonicalRootPath\s*\)/,
+    'canary source snapshot provider must never reopen either source or staging by pathname'
+  );
+  const sourceSnapshotScanIndex = canarySourceSnapshotProviderSource.indexOf(
+    'const tree = await scanSourceTree(reader, limits);'
+  );
+  const sourceSnapshotPreconditionIndex =
+    canarySourceSnapshotProviderSource.indexOf(
+      'await verifyPreconditions(reader, plan, tree);',
+      sourceSnapshotScanIndex
+    );
+  const sourceSnapshotGitIndex = canarySourceSnapshotProviderSource.indexOf(
+    'const gitState = await inspectGitState(reader, tree.gitEntry);',
+    sourceSnapshotPreconditionIndex
+  );
+  const sourceSnapshotOutputIndex = canarySourceSnapshotProviderSource.indexOf(
+    'return snapshotOutput(context, plan, tree, gitState);',
+    sourceSnapshotGitIndex
+  );
+  assert.ok(
+    sourceSnapshotScanIndex >= 0
+      && sourceSnapshotPreconditionIndex > sourceSnapshotScanIndex
+      && sourceSnapshotGitIndex > sourceSnapshotPreconditionIndex
+      && sourceSnapshotOutputIndex > sourceSnapshotGitIndex
+      && canarySourceSnapshotProviderSource.includes(
+        "for (const methodName of ['list', 'inspectEntry', 'readFile'])"
+      )
+      && canarySourceSnapshotProviderSource.includes(
+        'tree.entries.filter((entry) => !planned.has(entry.path))'
+      ),
+    'canary source snapshot must traverse the pinned reader, verify edit preconditions, reject unsafe Git state, preserve user-owned paths, and only then emit checkpoint facts'
+  );
+  for (const marker of [
+    '.git/index.lock',
+    '.git/MERGE_HEAD',
+    '.git/CHERRY_PICK_HEAD',
+    '.git/rebase-apply',
+    '.git/rebase-merge',
+    '.git/sequencer',
+  ]) {
+    assert.ok(
+      canarySourceSnapshotProviderSource.includes(marker),
+      `canary source snapshot must fail closed while ${marker} exists`
+    );
+  }
+  assert.ok(
+    canarySourceSnapshotProviderSource.includes(
+      'schemaVersion: CANARY_SOURCE_CHECKPOINT_SCHEMA_VERSION'
+    )
+      && canarySourceSnapshotProviderSource.includes(
+        'workspaceAuthorityDigest: context.workspaceRequest.workspaceAuthorityDigest'
+      )
+      && canarySourceSnapshotProviderSource.includes(
+        'activeOtherMutatingJobs: 0'
+      ),
+    'canary checkpoint must bind action, physical source, isolated workspace, full source/Git/user digests, and the exclusive job owner'
   );
   assertDoesNotMatch(
     canaryPromotionContractSource,

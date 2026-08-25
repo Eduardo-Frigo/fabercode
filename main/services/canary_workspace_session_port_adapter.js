@@ -50,12 +50,13 @@ const {
   CANARY_TRANSACTIONAL_STAGING_OPEN_OUTCOME_SCHEMA_VERSION,
 } = require('../agent_runtime/canary_transactional_staging_executor');
 const {
+  CANARY_SOURCE_SNAPSHOT_PROVIDER_VERSION,
+} = require('../agent_runtime/canary_source_snapshot_contract');
+const {
   HARNESS_OPERATIONS,
   HARNESS_REQUEST_SCHEMA_VERSION,
 } = require('../agent_runtime/harness_contracts');
 
-const CANARY_SOURCE_SNAPSHOT_PROVIDER_VERSION =
-  'canary-source-snapshot-provider.v1';
 const CANARY_WORKSPACE_SESSION_PORT_ADAPTER_VERSION =
   'canary-workspace-session-port-adapter.v1';
 
