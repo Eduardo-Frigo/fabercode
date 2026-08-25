@@ -200,6 +200,9 @@ function assertAgentRuntimeBoundary() {
   const canaryTransactionalStagingExecutorSource = read(
     'main/agent_runtime/canary_transactional_staging_executor.js'
   );
+  const canaryWorkspaceSessionPortAdapterSource = read(
+    'main/services/canary_workspace_session_port_adapter.js'
+  );
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
@@ -650,6 +653,78 @@ function assertAgentRuntimeBoundary() {
         'CANARY_EDIT_CLEANUP_RECEIPT_SCHEMA_VERSION'
       ),
     'canary staging contracts must bind disjoint execution workspaces, prove staging-only writes, and translate physical discard into lifecycle cleanup evidence'
+  );
+  assertDoesNotMatch(
+    canaryWorkspaceSessionPortAdapterSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm|reset)\s*\(/,
+    'canary workspace session adapter must use explicit authorities without ambient filesystem, Git reset, process, network, or Electron access'
+  );
+  const workspacePortRootAcquireIndex =
+    canaryWorkspaceSessionPortAdapterSource.indexOf(
+      "'projectRootAuthorityRegistry.acquire'"
+    );
+  const workspacePortWorkspaceAcquireIndex =
+    canaryWorkspaceSessionPortAdapterSource.indexOf(
+      "'executionWorkspaceRegistry.acquire'",
+      workspacePortRootAcquireIndex
+    );
+  const workspacePortSnapshotIndex =
+    canaryWorkspaceSessionPortAdapterSource.indexOf(
+      "'sourceSnapshotProvider.inspect'",
+      workspacePortWorkspaceAcquireIndex
+    );
+  const workspacePortOpenOutcomeIndex =
+    canaryWorkspaceSessionPortAdapterSource.indexOf(
+      'schemaVersion: CANARY_TRANSACTIONAL_STAGING_OPEN_OUTCOME_SCHEMA_VERSION',
+      workspacePortSnapshotIndex
+    );
+  assert.ok(
+    workspacePortRootAcquireIndex >= 0
+      && workspacePortWorkspaceAcquireIndex > workspacePortRootAcquireIndex
+      && workspacePortSnapshotIndex > workspacePortWorkspaceAcquireIndex
+      && workspacePortOpenOutcomeIndex > workspacePortSnapshotIndex
+      && canaryWorkspaceSessionPortAdapterSource.includes(
+        'record.sourceRootIdentityDigest =\n      rootAuthorization.physicalRootIdentityDigest;'
+      )
+      && canaryWorkspaceSessionPortAdapterSource.includes(
+        'session = createCanaryStagingSession({'
+      ),
+    'canary workspace opening must bind execute and physical-root authority, acquire pinned root before isolated workspace, verify its snapshot, and only then emit a staging session'
+  );
+  const workspacePortDiscardStart =
+    canaryWorkspaceSessionPortAdapterSource.indexOf(
+      'async function performDiscard(record)'
+    );
+  const workspacePortDiscardRequestIndex =
+    canaryWorkspaceSessionPortAdapterSource.indexOf(
+      'createExecutionWorkspaceDiscardRequest({',
+      workspacePortDiscardStart
+    );
+  const workspacePortCleanupIndex =
+    canaryWorkspaceSessionPortAdapterSource.indexOf(
+      'const clean = await cleanupAcquisitions(record);',
+      workspacePortDiscardRequestIndex
+    );
+  const workspacePortReceiptIndex =
+    canaryWorkspaceSessionPortAdapterSource.indexOf(
+      'createExecutionWorkspaceDiscardReceipt({',
+      workspacePortCleanupIndex
+    );
+  assert.ok(
+    workspacePortDiscardStart >= 0
+      && workspacePortDiscardRequestIndex > workspacePortDiscardStart
+      && workspacePortCleanupIndex > workspacePortDiscardRequestIndex
+      && workspacePortReceiptIndex > workspacePortCleanupIndex
+      && canaryWorkspaceSessionPortAdapterSource.includes(
+        'workspaceClean = confirmedWorkspaceRollback(result);'
+      )
+      && canaryWorkspaceSessionPortAdapterSource.includes(
+        'rootClean = confirmedRootRelease(result);'
+      )
+      && canaryWorkspaceSessionPortAdapterSource.includes(
+        'quarantine(record);\n      throw adapterError('
+      ),
+    'canary workspace cleanup must prove physical rollback and root release before manufacturing a discard receipt, and quarantine every ambiguous cleanup'
   );
   assertDoesNotMatch(
     canaryPromotionContractSource,
