@@ -15,6 +15,9 @@ const {
   createCanaryRolloutEvidenceLedger,
 } = require('./canary_rollout_evidence_ledger');
 const {
+  createCanaryRolloutEvidenceObserverAdapter,
+} = require('./canary_rollout_evidence_observer_adapter');
+const {
   createCanaryRolloutSelector,
 } = require('./canary_rollout_selector');
 const {
@@ -248,6 +251,7 @@ function createRuntimePort({
   runner = null,
   executor = null,
   ledger = null,
+  rolloutEvidenceObserver = null,
   clientLifecycle = null,
 }) {
   let state = initialState;
@@ -306,6 +310,9 @@ function createRuntimePort({
         ? CANARY_TRANSACTIONAL_STAGING_EXECUTOR_VERSION
         : null,
       ledgerVersion: ledger ? CANARY_ROLLOUT_EVIDENCE_LEDGER_VERSION : null,
+      rolloutEvidenceObserver: rolloutEvidenceObserver
+        ? rolloutEvidenceObserver.diagnostics()
+        : null,
       clientState: readClientState(clientLifecycle),
       inFlightExecutions: inFlight.size,
       closing: state === CANARY_EDIT_RUNTIME_COMPOSITION_STATES.CLOSING,
@@ -491,6 +498,20 @@ function createCanaryEditRuntimeComposition(options = {}) {
     const rolloutSelector = createCanaryRolloutSelector({
       cohortSeed: fields.get('cohortSeed'),
     });
+    const ledgerOptions = {};
+    if (fields.has('minimumCanaryJobs')) {
+      ledgerOptions.minimumCanaryJobs = fields.get('minimumCanaryJobs');
+    }
+    if (fields.has('minimumBaselineJobs')) {
+      ledgerOptions.minimumBaselineJobs = fields.get('minimumBaselineJobs');
+    }
+    const ledger = createCanaryRolloutEvidenceLedger(ledgerOptions);
+    const rolloutEvidenceObserver =
+      createCanaryRolloutEvidenceObserverAdapter({
+        admissionFactsProvider: fields.get('admissionFactsProvider'),
+        rolloutSelector,
+        evidenceSink: ledger.evidenceSink,
+      });
     const promotionController = createCanaryPromotionController({
       backend: fields.get('promotionBackend'),
     });
@@ -507,20 +528,13 @@ function createCanaryEditRuntimeComposition(options = {}) {
       canaryEditor: fields.get('canaryEditor'),
       promotionController,
     });
-    const runner = createCanaryEditRunner({
+    const unobservedRunner = createCanaryEditRunner({
       authoritativeKernel: fields.get('authoritativeKernel'),
-      admissionFactsProvider: fields.get('admissionFactsProvider'),
-      rolloutSelector,
+      admissionFactsProvider: rolloutEvidenceObserver.admissionFactsProvider,
+      rolloutSelector: rolloutEvidenceObserver.rolloutSelector,
       stagedCanaryExecutor: executor,
     });
-    const ledgerOptions = {};
-    if (fields.has('minimumCanaryJobs')) {
-      ledgerOptions.minimumCanaryJobs = fields.get('minimumCanaryJobs');
-    }
-    if (fields.has('minimumBaselineJobs')) {
-      ledgerOptions.minimumBaselineJobs = fields.get('minimumBaselineJobs');
-    }
-    const ledger = createCanaryRolloutEvidenceLedger(ledgerOptions);
+    const runner = rolloutEvidenceObserver.observeRunner(unobservedRunner);
     return createRuntimePort({
       initialState: CANARY_EDIT_RUNTIME_COMPOSITION_STATES.READY,
       initialReason: CANARY_EDIT_RUNTIME_COMPOSITION_REASONS.READY,
@@ -529,6 +543,7 @@ function createCanaryEditRuntimeComposition(options = {}) {
       runner,
       executor,
       ledger,
+      rolloutEvidenceObserver,
       clientLifecycle,
     });
   } catch {

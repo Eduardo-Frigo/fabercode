@@ -43,6 +43,8 @@ function createFixture({ mode = 'canary' } = {}) {
     promotionId: 0,
     rollout: 0,
     status: 0,
+    terminalCompleted: 0,
+    terminalFailed: 0,
   };
   const authoritativeKernel = createLegacyKernelAdapter({
     plan: async () => ({ ok: true, action: null }),
@@ -98,6 +100,14 @@ function createFixture({ mode = 'canary' } = {}) {
     },
     cohortSeed: 'canary-production-runtime-tests-v1',
     client,
+    onCanaryCompleted() {
+      calls.terminalCompleted += 1;
+      return Object.freeze({ ok: true });
+    },
+    onCanaryFailed() {
+      calls.terminalFailed += 1;
+      return Object.freeze({ ok: true });
+    },
     minimumCanaryJobs: 3,
     minimumBaselineJobs: 3,
   });
@@ -138,6 +148,7 @@ async function testReadyRuntimeComposesOnlyProductionAdapters() {
     'workspaceSessionPort',
     'canaryEditor',
     'promotionBackend',
+    'terminalObserver',
   ]);
   assert.strictEqual(diagnostics.version, CANARY_EDIT_PRODUCTION_RUNTIME_VERSION);
   assert.strictEqual(diagnostics.runtime.state, 'ready');
@@ -145,6 +156,10 @@ async function testReadyRuntimeComposesOnlyProductionAdapters() {
   assert.strictEqual(
     diagnostics.runtime.canaryKernelId,
     CANARY_EDIT_PRODUCTION_KERNEL_ID
+  );
+  assert.strictEqual(
+    diagnostics.runtime.rolloutEvidenceObserver.version,
+    'canary-rollout-evidence-observer-adapter.v1'
   );
   assert.strictEqual(
     diagnostics.admissionFactsProvider.version,
@@ -170,6 +185,14 @@ async function testReadyRuntimeComposesOnlyProductionAdapters() {
     diagnostics.promotionBackend.version,
     'canary-local-promotion-backend.v1'
   );
+  assert.strictEqual(
+    diagnostics.terminalObserver.version,
+    'canary-edit-terminal-observer-adapter.v1'
+  );
+  assert.strictEqual(
+    diagnostics.terminalObserver.canaryKernelId,
+    CANARY_EDIT_PRODUCTION_KERNEL_ID
+  );
   assertDeepFrozen(diagnostics);
   assert.deepStrictEqual(fixture.calls, {
     authority: 0,
@@ -178,6 +201,8 @@ async function testReadyRuntimeComposesOnlyProductionAdapters() {
     promotionId: 0,
     rollout: 0,
     status: 2,
+    terminalCompleted: 0,
+    terminalFailed: 0,
   });
 
   const snapshot = runtime.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL);
@@ -199,10 +224,13 @@ async function testInactiveRuntimeStaysDisabled() {
   assert.strictEqual(diagnostics.runtime.state, 'disabled');
   assert.strictEqual(diagnostics.runtime.reason, 'mode_not_canary');
   assert.strictEqual(diagnostics.runtime.canaryRunnerAvailable, false);
+  assert.strictEqual(diagnostics.terminalObserver, null);
   assert.strictEqual(fixture.calls.authority, 0);
   assert.strictEqual(fixture.calls.mutation, 0);
   assert.strictEqual(fixture.calls.rollout, 0);
   assert.strictEqual(fixture.calls.promotionId, 0);
+  assert.strictEqual(fixture.calls.terminalCompleted, 0);
+  assert.strictEqual(fixture.calls.terminalFailed, 0);
   await fixture.runtime.close();
   assert.strictEqual(fixture.calls.close, 0);
 }

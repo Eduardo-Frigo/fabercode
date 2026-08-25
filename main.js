@@ -5922,6 +5922,39 @@ async function initializeCanaryEditProductionRuntime({
       inspectRollout: (binding) => rolloutPolicy.inspect(binding),
       promotionIdFactory: () => `canary-promotion-${crypto.randomUUID()}`,
       cohortSeed: 'faber-code-internal-canary-v1',
+      onCanaryCompleted: (observation) => {
+        const jobId = readAgenticDeleteDataProperty(observation, 'jobId');
+        const changedPaths = readAgenticDeleteDataProperty(
+          observation,
+          'changedPaths'
+        );
+        const terminalResult = markJobCompleted(jobId, {
+          canary: true,
+          modifiedFiles: changedPaths,
+          ...buildAssistantProcessValidationPendingFields(
+            changedPaths.length > 0
+          ),
+        });
+        appendAuditEvent('assistant.canary_edit_completed', {
+          jobId,
+          modifiedFiles: changedPaths,
+        });
+        return terminalResult;
+      },
+      onCanaryFailed: (observation) => {
+        const jobId = readAgenticDeleteDataProperty(observation, 'jobId');
+        const reason = readAgenticDeleteDataProperty(observation, 'reason');
+        const terminalResult = markJobFailed(
+          jobId,
+          reason,
+          'execute_failed'
+        );
+        appendAuditEvent('assistant.canary_edit_failed', {
+          jobId,
+          reason,
+        });
+        return terminalResult;
+      },
       client: clientSelection.client,
     });
     const runtimeDiagnostics = productionRuntime.diagnostics();

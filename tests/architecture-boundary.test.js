@@ -188,6 +188,9 @@ function assertAgentRuntimeBoundary() {
   const canaryRolloutEvidenceLedgerSource = read(
     'main/agent_runtime/canary_rollout_evidence_ledger.js'
   );
+  const canaryRolloutEvidenceObserverSource = read(
+    'main/agent_runtime/canary_rollout_evidence_observer_adapter.js'
+  );
   const canaryEditLifecycleSource = read(
     'main/agent_runtime/canary_edit_lifecycle.js'
   );
@@ -199,6 +202,9 @@ function assertAgentRuntimeBoundary() {
   );
   const canaryEditProductionRuntimeSource = read(
     'main/services/canary_edit_production_runtime.js'
+  );
+  const canaryEditTerminalObserverSource = read(
+    'main/services/canary_edit_terminal_observer_adapter.js'
   );
   const canaryStagingContractSource = read(
     'main/agent_runtime/canary_staging_contract.js'
@@ -706,6 +712,29 @@ function assertAgentRuntimeBoundary() {
     canaryEditLifecycleSource,
     /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm)\s*\(/,
     'canary edit lifecycle must remain a pure transition boundary without ambient mutation, process, network, or Electron authority'
+  );
+  assertDoesNotMatch(
+    canaryRolloutEvidenceObserverSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm|reset)\s*\(/,
+    'canary rollout observation must use captured ports without ambient host authority'
+  );
+  assert.ok(
+    canaryRolloutEvidenceObserverSource.includes(
+      'scope.facts = value;'
+    )
+      && canaryRolloutEvidenceObserverSource.includes(
+        'scope.rolloutDecision = value;'
+      )
+      && canaryRolloutEvidenceObserverSource.includes(
+        "route: rolloutDecision.selected === true ? 'canary' : 'baseline'"
+      )
+      && canaryRolloutEvidenceObserverSource.includes(
+        "corrupted = eligibility.route === 'canary';"
+      )
+      && canaryRolloutEvidenceObserverSource.includes(
+        'settleObservationBestEffort(scope, result, null);'
+      ),
+    'automatic rollout evidence must use the runner facts and cohort snapshot, attribute clean fallback to canary, and never rewrite execution on observer failure'
   );
   assert.ok(
     canaryEditLifecycleSource.includes(
@@ -1270,22 +1299,30 @@ function assertAgentRuntimeBoundary() {
   const compositionPromotionIndex = canaryEditRuntimeCompositionSource.indexOf(
     'const promotionController = createCanaryPromotionController({'
   );
+  const compositionLedgerIndex = canaryEditRuntimeCompositionSource.indexOf(
+    'const ledger = createCanaryRolloutEvidenceLedger(ledgerOptions);'
+  );
+  const compositionEvidenceObserverIndex =
+    canaryEditRuntimeCompositionSource.indexOf(
+      'createCanaryRolloutEvidenceObserverAdapter({'
+    );
   const compositionExecutorIndex = canaryEditRuntimeCompositionSource.indexOf(
     'const executor = createCanaryTransactionalStagingExecutor({'
   );
   const compositionRunnerIndex = canaryEditRuntimeCompositionSource.indexOf(
-    'const runner = createCanaryEditRunner({'
-  );
-  const compositionLedgerIndex = canaryEditRuntimeCompositionSource.indexOf(
-    'const ledger = createCanaryRolloutEvidenceLedger(ledgerOptions);'
+    'const unobservedRunner = createCanaryEditRunner({'
   );
   assert.ok(
     compositionModeIndex >= 0
       && compositionSelectorIndex > compositionModeIndex
-      && compositionPromotionIndex > compositionSelectorIndex
+      && compositionLedgerIndex > compositionSelectorIndex
+      && compositionEvidenceObserverIndex > compositionLedgerIndex
+      && compositionPromotionIndex > compositionEvidenceObserverIndex
       && compositionExecutorIndex > compositionPromotionIndex
       && compositionRunnerIndex > compositionExecutorIndex
-      && compositionLedgerIndex > compositionRunnerIndex
+      && canaryEditRuntimeCompositionSource.indexOf(
+        'rolloutEvidenceObserver.observeRunner(unobservedRunner)'
+      ) > compositionRunnerIndex
       && canaryEditRuntimeCompositionSource.includes(
         "fields.get('canaryEditor'),\n      'kernelId'"
       ),
@@ -1308,6 +1345,29 @@ function assertAgentRuntimeBoundary() {
     /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm|reset)\s*\(/,
     'canary production composition must receive explicit authorities without ambient filesystem, Git reset, process, network, or Electron authority'
   );
+  assertDoesNotMatch(
+    canaryEditTerminalObserverSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm|reset)\s*\(/,
+    'the canary terminal observer must only consume injected callbacks and safe result data'
+  );
+  const terminalFallbackIndex = canaryEditTerminalObserverSource.indexOf(
+    "=== dependencies.runner.authoritativeKernelId"
+  );
+  const terminalCompletionCallbackIndex =
+    canaryEditTerminalObserverSource.indexOf(
+      'dependencies.onCanaryCompleted,'
+    );
+  assert.ok(
+    terminalFallbackIndex >= 0
+      && terminalCompletionCallbackIndex > terminalFallbackIndex
+      && canaryEditTerminalObserverSource.includes(
+        "fields.get('mutationScope') !== 'staging'"
+      )
+      && canaryEditTerminalObserverSource.includes(
+        "ownDataValue(executionContext, 'authorityBinding', {"
+      ),
+    'the terminal observer must distinguish authoritative fallback before calling completion and bind safe canary output to private job authority'
+  );
   const productionFactsIndex = canaryEditProductionRuntimeSource.indexOf(
     'const admissionFactsProvider = createCanaryAdmissionFactsProvider({'
   );
@@ -1326,6 +1386,10 @@ function assertAgentRuntimeBoundary() {
   const productionRuntimeIndex = canaryEditProductionRuntimeSource.indexOf(
     'const runtime = createCanaryEditRuntimeComposition(runtimeOptions);'
   );
+  const productionTerminalObserverIndex =
+    canaryEditProductionRuntimeSource.indexOf(
+      'createCanaryEditTerminalObserverAdapter({'
+    );
   assert.ok(
     productionFactsIndex >= 0
       && productionSnapshotIndex > productionFactsIndex
@@ -1333,6 +1397,7 @@ function assertAgentRuntimeBoundary() {
       && productionEditorIndex > productionWorkspaceIndex
       && productionPromotionIndex > productionEditorIndex
       && productionRuntimeIndex > productionPromotionIndex
+      && productionTerminalObserverIndex > productionRuntimeIndex
       && canaryEditProductionRuntimeSource.includes(
         "CANARY_EDIT_PRODUCTION_KERNEL_ID = 'codex-app-server-canary'"
       ),
@@ -2245,6 +2310,14 @@ function assertExecutionWorkspaceBoundary() {
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:canary-rollout-evidence-ledger'
       )
+      && typeof packageConfig.scripts['test:canary-rollout-evidence-observer']
+        === 'string'
+      && packageConfig.scripts['test:canary-rollout-evidence-observer'].includes(
+        'canary-rollout-evidence-observer-adapter.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:canary-rollout-evidence-observer'
+      )
       && typeof packageConfig.scripts[
         'test:canary-transactional-staging-executor'
       ] === 'string'
@@ -2269,6 +2342,14 @@ function assertExecutionWorkspaceBoundary() {
       )
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:canary-edit-production-runtime'
+      )
+      && typeof packageConfig.scripts['test:canary-edit-terminal-observer']
+        === 'string'
+      && packageConfig.scripts['test:canary-edit-terminal-observer'].includes(
+        'canary-edit-terminal-observer-adapter.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:canary-edit-terminal-observer'
       )
       && packageConfig.scripts['test:canary-phase5-internal-real-sample'].includes(
         'canary-phase5-internal-real-sample.test.js'

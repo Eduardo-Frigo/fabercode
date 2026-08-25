@@ -247,6 +247,8 @@ async function main() {
     },
   });
   let clientCloseCalls = 0;
+  const terminalCompletions = [];
+  const terminalFailures = [];
   const client = Object.freeze({
     close() {
       clientCloseCalls += 1;
@@ -283,6 +285,14 @@ async function main() {
       promotionIdFactory: () => 'phase5-internal-promotion',
       cohortSeed: 'phase5-internal-real-sample-v1',
       client,
+      onCanaryCompleted(observation) {
+        terminalCompletions.push(observation);
+        return Object.freeze({ ok: true });
+      },
+      onCanaryFailed(observation) {
+        terminalFailures.push(observation);
+        return Object.freeze({ ok: true });
+      },
       minimumCanaryJobs: 1,
       minimumBaselineJobs: 1,
     });
@@ -294,6 +304,15 @@ async function main() {
     assert.strictEqual(result.output.mutationScope, 'staging');
     assert.deepStrictEqual(result.output.changedPaths, ['src/app.js']);
     assert.strictEqual(legacyCalls, 0);
+    assert.strictEqual(terminalCompletions.length, 1);
+    assert.deepStrictEqual(terminalCompletions[0], {
+      jobId,
+      projectId,
+      requestId: request.requestId,
+      changedPaths: ['src/app.js'],
+      writeSetDigest: result.output.writeSetDigest,
+    });
+    assert.strictEqual(terminalFailures.length, 0);
     assert.deepStrictEqual(fs.readFileSync(sourceFile), promotedSource);
     assert.deepStrictEqual(fs.readFileSync(unrelatedFile), unrelatedBytes);
     assert.deepStrictEqual(fs.readFileSync(gitHead), headBytes);
@@ -314,12 +333,6 @@ async function main() {
       jobId: 'phase5-internal-baseline-job',
       projectId: 'phase5-internal-baseline-project',
       route: 'baseline',
-      succeeded: true,
-    }));
-    runtime.evidenceSink.record(evidence({
-      jobId,
-      projectId,
-      route: 'canary',
       succeeded: true,
     }));
     const snapshot = runtime.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL);

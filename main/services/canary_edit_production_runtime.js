@@ -15,6 +15,9 @@ const {
   createCanaryLocalStagingEditorAdapter,
 } = require('./canary_local_staging_editor_adapter');
 const {
+  createCanaryEditTerminalObserverAdapter,
+} = require('./canary_edit_terminal_observer_adapter');
+const {
   createCanarySourceSnapshotProvider,
 } = require('./canary_source_snapshot_provider');
 const {
@@ -37,6 +40,8 @@ const OPTION_KEYS = Object.freeze([
   'promotionIdFactory',
   'cohortSeed',
   'client',
+  'onCanaryCompleted',
+  'onCanaryFailed',
   'minimumCanaryJobs',
   'minimumBaselineJobs',
 ]);
@@ -78,7 +83,9 @@ function exactDataFields(value, allowedKeys, requiredKeys = allowedKeys) {
 
 function createCanaryEditProductionRuntime(options = {}) {
   const fields = exactDataFields(options, OPTION_KEYS, REQUIRED_OPTION_KEYS);
-  if (!fields || typeof fields.get('adapterEnabled') !== 'boolean') {
+  if (!fields || typeof fields.get('adapterEnabled') !== 'boolean'
+    || typeof fields.get('onCanaryCompleted') !== 'function'
+    || typeof fields.get('onCanaryFailed') !== 'function') {
     throw new TypeError('Invalid canary edit production runtime options');
   }
 
@@ -117,6 +124,13 @@ function createCanaryEditProductionRuntime(options = {}) {
     runtimeOptions.minimumBaselineJobs = fields.get('minimumBaselineJobs');
   }
   const runtime = createCanaryEditRuntimeComposition(runtimeOptions);
+  const terminalObserver = runtime.canaryEditRunner
+    ? createCanaryEditTerminalObserverAdapter({
+      runner: runtime.canaryEditRunner,
+      onCanaryCompleted: fields.get('onCanaryCompleted'),
+      onCanaryFailed: fields.get('onCanaryFailed'),
+    })
+    : null;
 
   function snapshot(rolloutStage) {
     return runtime.snapshot(rolloutStage);
@@ -135,6 +149,7 @@ function createCanaryEditProductionRuntime(options = {}) {
       workspaceSessionPort: workspaceSessionPort.diagnostics(),
       canaryEditor: canaryEditor.diagnostics(),
       promotionBackend: promotionBackend.diagnostics(),
+      terminalObserver: terminalObserver ? terminalObserver.diagnostics() : null,
     });
   }
 
@@ -144,7 +159,9 @@ function createCanaryEditProductionRuntime(options = {}) {
 
   return Object.freeze({
     version: CANARY_EDIT_PRODUCTION_RUNTIME_VERSION,
-    canaryEditRunner: runtime.canaryEditRunner,
+    canaryEditRunner: terminalObserver
+      ? terminalObserver.canaryEditRunner
+      : null,
     evidenceSink: runtime.evidenceSink,
     snapshot,
     advancement,
