@@ -173,6 +173,9 @@ function assertAgentRuntimeBoundary() {
   const canaryRolloutSelectorSource = read(
     'main/agent_runtime/canary_rollout_selector.js'
   );
+  const canaryRolloutEvidenceLedgerSource = read(
+    'main/agent_runtime/canary_rollout_evidence_ledger.js'
+  );
   const canaryEditLifecycleSource = read(
     'main/agent_runtime/canary_edit_lifecycle.js'
   );
@@ -507,6 +510,38 @@ function assertAgentRuntimeBoundary() {
       && canaryRolloutSelectorSource.indexOf("if (input.projectPin === 'canary')")
         < canaryRolloutSelectorSource.indexOf('if (!input.allowlisted)'),
     'canary rollout must pin the internal, 1%, 5%, 25%, and 50% stages with kill-switch and project-pin precedence'
+  );
+  assertDoesNotMatch(
+    canaryRolloutEvidenceLedgerSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm)\s*\(/,
+    'canary rollout evidence must remain an append-only pure aggregation boundary without ambient mutation, process, network, or Electron authority'
+  );
+  assert.ok(
+    canaryRolloutEvidenceLedgerSource.includes(
+      'MANUAL_ROLLBACK_LIMIT_BASIS_POINTS = 200'
+    )
+      && canaryRolloutEvidenceLedgerSource.includes(
+        'CORRUPTED_JOB_LIMIT_BASIS_POINTS = 50'
+      )
+      && canaryRolloutEvidenceLedgerSource.includes(
+        'MAXIMUM_SUCCESS_REGRESSION_BASIS_POINTS = 300'
+      )
+      && canaryRolloutEvidenceLedgerSource.includes(
+        'state.dataLossIncidents > 0'
+      )
+      && canaryRolloutEvidenceLedgerSource.includes(
+        'state.securityIncidents > 0'
+      )
+      && canaryRolloutEvidenceLedgerSource.includes(
+        'state.duplicateExternalEffects > 0'
+      )
+      && canaryRolloutEvidenceLedgerSource.includes(
+        'STAGE_ORDER.indexOf(fromStage)'
+      )
+      && canaryRolloutEvidenceLedgerSource.includes(
+        'jobIds.has(evidence.jobId)'
+      ),
+    'canary rollout advancement must use isolated per-stage evidence, global job uniqueness, zero-tolerance safety gates, and the fixed 2%, 0.5%, and 3pp thresholds'
   );
   assertDoesNotMatch(
     canaryEditLifecycleSource,
@@ -1578,6 +1613,14 @@ function assertExecutionWorkspaceBoundary() {
       )
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:agentic-mcp-discovery-broker'
+      )
+      && typeof packageConfig.scripts['test:canary-rollout-evidence-ledger']
+        === 'string'
+      && packageConfig.scripts['test:canary-rollout-evidence-ledger'].includes(
+        'canary-rollout-evidence-ledger.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:canary-rollout-evidence-ledger'
       )
       && packageConfig.scripts['test:codex-app-server-stdio-client'].includes(
         'codex-app-server-stdio-client.test.js'
