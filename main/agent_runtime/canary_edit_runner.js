@@ -84,6 +84,14 @@ const FACT_KEYS = Object.freeze([
   'rootMutation',
   'rollout',
 ]);
+const ADMISSION_FACTS_PROVIDER_DIAGNOSTIC_KEYS = Object.freeze([
+  'version',
+  'authorityMode',
+  'checkpointMode',
+  'mutationObservation',
+  'rolloutPolicy',
+  'failureMode',
+]);
 const ROLLOUT_FACT_KEYS = Object.freeze([
   'killSwitch',
   'projectPin',
@@ -236,8 +244,8 @@ function captureAuthoritativeKernel(value) {
 
 function captureAdmissionFactsProvider(value) {
   const fields = dataFields(value, {
-    allowedKeys: ['version', 'inspect'],
-    requiredKeys: ['version', 'inspect'],
+    allowedKeys: ['version', 'inspect', 'diagnostics'],
+    requiredKeys: ['version', 'inspect', 'diagnostics'],
     exact: true,
     frozen: true,
   });
@@ -245,14 +253,43 @@ function captureAdmissionFactsProvider(value) {
     || !SAFE_IDENTIFIER.test(fields.get('version'))) {
     throw new TypeError('admissionFactsProvider must be a frozen versioned port');
   }
-  return Object.freeze({
+  const port = Object.freeze({
     receiver: value,
     version: fields.get('version'),
     inspect: inspectableFunction(
       fields.get('inspect'),
       'admissionFactsProvider.inspect'
     ),
+    diagnostics: inspectableFunction(
+      fields.get('diagnostics'),
+      'admissionFactsProvider.diagnostics'
+    ),
   });
+  let diagnostics;
+  try {
+    diagnostics = Reflect.apply(port.diagnostics, port.receiver, []);
+  } catch {
+    throw new TypeError('admissionFactsProvider.diagnostics failed');
+  }
+  if (absorbNativePromise(diagnostics)) {
+    throw new TypeError('admissionFactsProvider.diagnostics must be synchronous');
+  }
+  const diagnosticFields = dataFields(diagnostics, {
+    allowedKeys: ADMISSION_FACTS_PROVIDER_DIAGNOSTIC_KEYS,
+    requiredKeys: ADMISSION_FACTS_PROVIDER_DIAGNOSTIC_KEYS,
+    exact: true,
+    frozen: true,
+  });
+  if (!diagnosticFields
+    || diagnosticFields.get('version') !== port.version
+    || diagnosticFields.get('authorityMode') !== 'exact_job_action_root'
+    || diagnosticFields.get('checkpointMode') !== 'authority_bound'
+    || diagnosticFields.get('mutationObservation') !== 'external_exact'
+    || diagnosticFields.get('rolloutPolicy') !== 'external_exact'
+    || diagnosticFields.get('failureMode') !== 'deny') {
+    throw new TypeError('admissionFactsProvider diagnostics are invalid');
+  }
+  return port;
 }
 
 function captureRolloutSelector(value) {

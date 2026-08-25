@@ -188,6 +188,9 @@ function assertAgentRuntimeBoundary() {
   const canaryEditRuntimeCompositionSource = read(
     'main/agent_runtime/canary_edit_runtime_composition.js'
   );
+  const canaryEditProductionRuntimeSource = read(
+    'main/services/canary_edit_production_runtime.js'
+  );
   const canaryStagingContractSource = read(
     'main/agent_runtime/canary_staging_contract.js'
   );
@@ -692,6 +695,18 @@ function assertAgentRuntimeBoundary() {
     /fallbackToLegacy\s*\(/,
     'an ambiguous staged execution rejection must never trigger legacy fallback'
   );
+  assert.ok(
+    canaryEditRunnerSource.includes(
+      "diagnosticFields.get('authorityMode') !== 'exact_job_action_root'"
+    )
+      && canaryEditRunnerSource.includes(
+        "diagnosticFields.get('checkpointMode') !== 'authority_bound'"
+      )
+      && canaryEditRunnerSource.includes(
+        "diagnosticFields.get('failureMode') !== 'deny'"
+      ),
+    'canary runner must accept only an authority-bound fail-closed admission facts provider'
+  );
   assertDoesNotMatch(
     canaryStagingContractSource,
     /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm)\s*\(/,
@@ -1193,6 +1208,41 @@ function assertAgentRuntimeBoundary() {
       )
       && canaryEditRuntimeCompositionSource.includes('inFlight.add(tracked);'),
     'canary runtime shutdown must reject new work, track native executions, drain them, and only then close its client'
+  );
+  assertDoesNotMatch(
+    canaryEditProductionRuntimeSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm|reset)\s*\(/,
+    'canary production composition must receive explicit authorities without ambient filesystem, Git reset, process, network, or Electron authority'
+  );
+  const productionFactsIndex = canaryEditProductionRuntimeSource.indexOf(
+    'const admissionFactsProvider = createCanaryAdmissionFactsProvider({'
+  );
+  const productionSnapshotIndex = canaryEditProductionRuntimeSource.indexOf(
+    'const sourceSnapshotProvider = createCanarySourceSnapshotProvider();'
+  );
+  const productionWorkspaceIndex = canaryEditProductionRuntimeSource.indexOf(
+    'const workspaceSessionPort = createCanaryWorkspaceSessionPortAdapter({'
+  );
+  const productionEditorIndex = canaryEditProductionRuntimeSource.indexOf(
+    'const canaryEditor = createCanaryLocalStagingEditorAdapter({'
+  );
+  const productionPromotionIndex = canaryEditProductionRuntimeSource.indexOf(
+    'const promotionBackend = createCanaryLocalPromotionBackend();'
+  );
+  const productionRuntimeIndex = canaryEditProductionRuntimeSource.indexOf(
+    'const runtime = createCanaryEditRuntimeComposition(runtimeOptions);'
+  );
+  assert.ok(
+    productionFactsIndex >= 0
+      && productionSnapshotIndex > productionFactsIndex
+      && productionWorkspaceIndex > productionSnapshotIndex
+      && productionEditorIndex > productionWorkspaceIndex
+      && productionPromotionIndex > productionEditorIndex
+      && productionRuntimeIndex > productionPromotionIndex
+      && canaryEditProductionRuntimeSource.includes(
+        "CANARY_EDIT_PRODUCTION_KERNEL_ID = 'codex-app-server-canary'"
+      ),
+    'canary production must compose live admission, authenticated snapshots, isolated workspace edits, inverse-patch promotion, and the guarded runtime under one pinned kernel identity'
   );
 }
 
@@ -2098,6 +2148,14 @@ function assertExecutionWorkspaceBoundary() {
       )
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:canary-edit-runtime-composition'
+      )
+      && typeof packageConfig.scripts['test:canary-edit-production-runtime']
+        === 'string'
+      && packageConfig.scripts['test:canary-edit-production-runtime'].includes(
+        'canary-edit-production-runtime.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:canary-edit-production-runtime'
       )
       && packageConfig.scripts['test:codex-app-server-stdio-client'].includes(
         'codex-app-server-stdio-client.test.js'

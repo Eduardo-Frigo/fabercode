@@ -159,6 +159,16 @@ function createFactsProvider({
       if (synchronousPromise) return synchronousPromise;
       return result || facts(authorityBinding);
     },
+    diagnostics() {
+      return Object.freeze({
+        version: 'canary-admission-facts-provider.test.v1',
+        authorityMode: 'exact_job_action_root',
+        checkpointMode: 'authority_bound',
+        mutationObservation: 'external_exact',
+        rolloutPolicy: 'external_exact',
+        failureMode: 'deny',
+      });
+    },
   });
   return { calls, provider };
 }

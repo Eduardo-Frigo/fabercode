@@ -94,6 +94,16 @@ function createReadyOptions({
       calls.facts += 1;
       throw new Error('not used by composition-only tests');
     },
+    diagnostics() {
+      return Object.freeze({
+        version: 'canary-runtime-facts.test.v1',
+        authorityMode: 'exact_job_action_root',
+        checkpointMode: 'authority_bound',
+        mutationObservation: 'external_exact',
+        rolloutPolicy: 'external_exact',
+        failureMode: 'deny',
+      });
+    },
   });
   const workspaceSessionPort = Object.freeze({
     version: 'canary-runtime-workspace.test.v1',

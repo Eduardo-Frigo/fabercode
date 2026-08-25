@@ -317,6 +317,16 @@ async function testTrialExecutorIntegratesWithGuardedRunner() {
         },
       });
     },
+    diagnostics() {
+      return Object.freeze({
+        version: 'trial-integration-facts.test.v1',
+        authorityMode: 'exact_job_action_root',
+        checkpointMode: 'authority_bound',
+        mutationObservation: 'external_exact',
+        rolloutPolicy: 'external_exact',
+        failureMode: 'deny',
+      });
+    },
   });
   const runner = createCanaryEditRunner({
     authoritativeKernel: legacyKernel,
