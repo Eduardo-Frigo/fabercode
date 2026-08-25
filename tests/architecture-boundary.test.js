@@ -194,6 +194,9 @@ function assertAgentRuntimeBoundary() {
   const canaryStagingTrialExecutorSource = read(
     'main/agent_runtime/canary_staging_trial_executor.js'
   );
+  const canaryTransactionalStagingExecutorSource = read(
+    'main/agent_runtime/canary_transactional_staging_executor.js'
+  );
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
@@ -741,6 +744,90 @@ function assertAgentRuntimeBoundary() {
       && canaryStagingTrialExecutorSource.includes("sourceMutation') !== 'forbidden'")
       && canaryStagingTrialExecutorSource.includes("settlementMode') !== 'terminal'"),
     'canary staging trial must remain source-write forbidden and discard even a successful terminal edit until explicit promotion exists'
+  );
+  assertDoesNotMatch(
+    canaryTransactionalStagingExecutorSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm|reset)\s*\(/,
+    'transactional canary staging must use guarded ports without ambient filesystem, Git reset, process, network, or Electron authority'
+  );
+  const transactionalOpenIndex =
+    canaryTransactionalStagingExecutorSource.indexOf(
+      "dependencies.workspaceSessionPort,\n        'open'"
+    );
+  const transactionalEditIndex =
+    canaryTransactionalStagingExecutorSource.indexOf(
+      "dependencies.canaryEditor,\n        'execute'",
+      transactionalOpenIndex
+    );
+  const transactionalRequestIndex =
+    canaryTransactionalStagingExecutorSource.indexOf(
+      'createCanaryPromotionRequest(promotionInput);',
+      transactionalEditIndex
+    );
+  const transactionalPromoteIndex =
+    canaryTransactionalStagingExecutorSource.indexOf(
+      "dependencies.promotionController,\n        'promote'",
+      transactionalRequestIndex
+    );
+  const transactionalSourceFrontierIndex =
+    canaryTransactionalStagingExecutorSource.indexOf(
+      'scope: CANARY_EDIT_MUTATION_FRONTIERS.SOURCE',
+      transactionalPromoteIndex
+    );
+  const transactionalDiscardIndex =
+    canaryTransactionalStagingExecutorSource.indexOf(
+      "dependencies.workspaceSessionPort,\n        'discard'",
+      transactionalSourceFrontierIndex
+    );
+  const transactionalCompleteIndex =
+    canaryTransactionalStagingExecutorSource.indexOf(
+      'const completed = lifecycle.completeCanary();',
+      transactionalDiscardIndex
+    );
+  assert.ok(
+    transactionalOpenIndex >= 0
+      && transactionalEditIndex > transactionalOpenIndex
+      && transactionalRequestIndex > transactionalEditIndex
+      && transactionalPromoteIndex > transactionalRequestIndex
+      && transactionalSourceFrontierIndex > transactionalPromoteIndex
+      && transactionalDiscardIndex > transactionalSourceFrontierIndex
+      && transactionalCompleteIndex > transactionalDiscardIndex,
+    'transactional canary success must open isolated staging, edit, validate promotion authority, promote, record the source frontier, discard staging, and only then complete'
+  );
+  const stagingFallbackStart =
+    canaryTransactionalStagingExecutorSource.indexOf(
+      'async function settleStagingFallback'
+    );
+  const sourceFallbackStart =
+    canaryTransactionalStagingExecutorSource.indexOf(
+      'async function settleSourceFallback'
+    );
+  const transactionalExecuteStart =
+    canaryTransactionalStagingExecutorSource.indexOf(
+      'async function execute(request, grant)'
+    );
+  assert.ok(
+    stagingFallbackStart >= 0
+      && canaryTransactionalStagingExecutorSource.indexOf(
+        "dependencies.workspaceSessionPort,\n        'discard'",
+        stagingFallbackStart
+      ) < sourceFallbackStart
+      && canaryTransactionalStagingExecutorSource.indexOf(
+        'lifecycle.confirmCleanup(discardReceipt.lifecycleReceipt)',
+        stagingFallbackStart
+      ) < sourceFallbackStart
+      && canaryTransactionalStagingExecutorSource.indexOf(
+        "dependencies.promotionController,\n        'revert'",
+        sourceFallbackStart
+      ) < transactionalExecuteStart
+      && canaryTransactionalStagingExecutorSource.indexOf(
+        'lifecycle.confirmCleanup(revertReceipt.lifecycleReceipt)',
+        sourceFallbackStart
+      ) < transactionalExecuteStart
+      && canaryTransactionalStagingExecutorSource.includes(
+        'CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.PROMOTION_AMBIGUOUS'
+      ),
+    'transactional canary fallback must prove staging discard before pre-write fallback, prove source revert after promotion, and quarantine ambiguous promotion settlement'
   );
 }
 
@@ -1621,6 +1708,15 @@ function assertExecutionWorkspaceBoundary() {
       )
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:canary-rollout-evidence-ledger'
+      )
+      && typeof packageConfig.scripts[
+        'test:canary-transactional-staging-executor'
+      ] === 'string'
+      && packageConfig.scripts[
+        'test:canary-transactional-staging-executor'
+      ].includes('canary-transactional-staging-executor.test.js')
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:canary-transactional-staging-executor'
       )
       && packageConfig.scripts['test:codex-app-server-stdio-client'].includes(
         'codex-app-server-stdio-client.test.js'
