@@ -167,6 +167,9 @@ function assertAgentRuntimeBoundary() {
   const canaryEditAdmissionPolicySource = read(
     'main/agent_runtime/canary_edit_admission_policy.js'
   );
+  const canaryAdmissionFactsProviderSource = read(
+    'main/services/canary_admission_facts_provider.js'
+  );
   const canaryEditActionClassifierSource = read(
     'main/agent_runtime/canary_edit_action_classifier.js'
   );
@@ -502,6 +505,44 @@ function assertAgentRuntimeBoundary() {
       `canary admission must enforce the ${prerequisite} prerequisite`
     );
   }
+  assertDoesNotMatch(
+    canaryAdmissionFactsProviderSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm)\s*\(/,
+    'canary admission facts must derive a fail-closed snapshot without ambient mutation, process, network, or Electron authority'
+  );
+  const canaryFactsExecuteAuthorityIndex =
+    canaryAdmissionFactsProviderSource.indexOf(
+      'dependencies.authorityService.authorizeExecute,'
+    );
+  const canaryFactsRootAuthorityIndex =
+    canaryAdmissionFactsProviderSource.indexOf(
+      'dependencies.authorityService.authorizeProjectRootLease,'
+    );
+  const canaryFactsMutationIndex = canaryAdmissionFactsProviderSource.indexOf(
+    'dependencies.inspectRootMutation,'
+  );
+  const canaryFactsRolloutIndex = canaryAdmissionFactsProviderSource.indexOf(
+    'dependencies.inspectRollout,'
+  );
+  const canaryFactsCheckpointIndex =
+    canaryAdmissionFactsProviderSource.indexOf(
+      'const checkpointDigest = canonicalSha256Digest({'
+    );
+  assert.ok(
+    canaryFactsExecuteAuthorityIndex >= 0
+      && canaryFactsRootAuthorityIndex > canaryFactsExecuteAuthorityIndex
+      && canaryFactsMutationIndex > canaryFactsRootAuthorityIndex
+      && canaryFactsRolloutIndex > canaryFactsMutationIndex
+      && canaryFactsCheckpointIndex > canaryFactsRolloutIndex
+      && canaryAdmissionFactsProviderSource.includes(
+        'CANARY_ADMISSION_FACTS_CHECKPOINT_SCHEMA_VERSION'
+      )
+      && canaryAdmissionFactsProviderSource.includes(
+        'activeOtherMutatingJobs: 1'
+      )
+      && canaryAdmissionFactsProviderSource.includes('killSwitch: true'),
+    'canary admission facts must reauthorize the exact action and root before observations, bind the checkpoint, and deny on unavailable live state'
+  );
   assertDoesNotMatch(
     canaryEditActionClassifierSource,
     /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm)\s*\(/,
@@ -2009,6 +2050,14 @@ function assertExecutionWorkspaceBoundary() {
       )
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:agentic-process-broker'
+      )
+      && typeof packageConfig.scripts['test:canary-admission-facts-provider']
+        === 'string'
+      && packageConfig.scripts['test:canary-admission-facts-provider'].includes(
+        'canary-admission-facts-provider.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:canary-admission-facts-provider'
       )
       && packageConfig.scripts['test:agentic-git-read-broker'].includes(
         'agentic-git-read-broker-factory.test.js'
