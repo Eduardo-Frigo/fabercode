@@ -195,6 +195,13 @@ function createFakeClient({
   };
 
   const client = Object.freeze({
+    isolationProfile() {
+      return deepFreeze({
+        version: 'codex-app-server-shadow-isolation-profile.v1',
+        complete: true,
+        disabledMcpServerNames: ['figma', 'node_repl'],
+      });
+    },
     start() {
       calls.starts += 1;
       return Promise.resolve(deepFreeze({
@@ -321,6 +328,13 @@ async function testHappyPath() {
   assert.strictEqual(threadRequest.params.sandbox, 'read-only');
   assert.strictEqual(threadRequest.params.ephemeral, true);
   assert.strictEqual(threadRequest.params.model, 'shadow-model-test');
+  assert.deepStrictEqual(threadRequest.params.config, {
+    features: { apps: false, plugins: false },
+    mcp_servers: {
+      figma: { enabled: false },
+      node_repl: { enabled: false },
+    },
+  });
   assert.strictEqual(turnRequest.id, 'shadow-rpc-2');
   assert.strictEqual(turnRequest.params.threadId, 'thread-shadow-1');
   assert.strictEqual(turnRequest.params.cwd, PROJECT_ROOT);
@@ -359,6 +373,38 @@ async function testHappyPath() {
     adapter.execute(),
     (error) => error && error.code === 'AGENT_KERNEL_OPERATION_NOT_IMPLEMENTED'
   );
+}
+
+async function testStreamingAgentMessageStartDoesNotInvalidateTurn() {
+  const fake = createFakeClient({
+    notifications: [
+      itemStarted({
+        id: 'agent-message-streaming-1',
+        type: 'agentMessage',
+        text: '',
+        phase: 'final_answer',
+      }),
+      itemCompleted({
+        id: 'agent-message-streaming-1',
+        type: 'agentMessage',
+        text: 'Plano completo recebido ao final do streaming.',
+        phase: 'final_answer',
+      }),
+      turnCompleted(),
+    ],
+  });
+  const { adapter } = createAdapter({ fake });
+
+  const result = await adapter.plan(createRequest({
+    requestId: 'request-streaming-agent-message',
+  }));
+
+  assert.strictEqual(
+    result.output.response,
+    'Plano completo recebido ao final do streaming.'
+  );
+  assert.strictEqual(result.output.meta.outputItemType, 'agentMessage');
+  assert.strictEqual(fake.calls.unsubscriptions, 1);
 }
 
 async function testContextPackIsMandatoryAndScoped() {
@@ -593,6 +639,7 @@ async function run() {
   );
 
   await testHappyPath();
+  await testStreamingAgentMessageStartDoesNotInvalidateTurn();
   await testContextPackIsMandatoryAndScoped();
   await testInvalidThreadResponseFailsClosed();
   await testTerminalFailureDoesNotExposeRemoteMessage();

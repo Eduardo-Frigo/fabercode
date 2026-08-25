@@ -6,6 +6,7 @@ const { StringDecoder } = require('string_decoder');
 
 const {
   CODEX_APP_SERVER_PINNED_CLI_VERSION,
+  CODEX_APP_SERVER_SHADOW_ISOLATION_PROFILE_VERSION,
   assertCodexAppServerShadowOutboundMessage,
   createCodexAppServerInitializeRequest,
   createCodexAppServerInitializedNotification,
@@ -36,6 +37,7 @@ const CODEX_APP_SERVER_STDIO_CLIENT_REASONS = Object.freeze({
   DUPLICATE_REQUEST_ID: 'CODEX_APP_SERVER_CLIENT_DUPLICATE_REQUEST_ID',
   INVALID_PROCESS: 'CODEX_APP_SERVER_CLIENT_INVALID_PROCESS',
   INVALID_SERVER_MESSAGE: 'CODEX_APP_SERVER_CLIENT_INVALID_SERVER_MESSAGE',
+  MCP_DISCOVERY_FAILED: 'CODEX_APP_SERVER_CLIENT_MCP_DISCOVERY_FAILED',
   METHOD_NOT_AVAILABLE: 'CODEX_APP_SERVER_CLIENT_METHOD_NOT_AVAILABLE',
   NOT_READY: 'CODEX_APP_SERVER_CLIENT_NOT_READY',
   OUTBOUND_LINE_LIMIT: 'CODEX_APP_SERVER_CLIENT_OUTBOUND_LINE_LIMIT',
@@ -50,6 +52,8 @@ const CODEX_APP_SERVER_STDIO_CLIENT_REASONS = Object.freeze({
 });
 
 const OPERATIONAL_METHODS = new Set(['thread/start', 'turn/start', 'turn/interrupt']);
+const SAFE_MCP_SERVER_NAME = /^[A-Za-z0-9._-]{1,128}$/;
+const MAX_MCP_SERVERS = 128;
 
 class CodexAppServerStdioClientError extends Error {
   constructor(code, details = {}) {
@@ -205,6 +209,7 @@ function createCodexAppServerStdioClient(options = {}) {
 
   let state = CODEX_APP_SERVER_STDIO_CLIENT_STATES.IDLE;
   let verifiedCliVersion = null;
+  let isolatedMcpServerNames = null;
   let processRef = null;
   let processExited = true;
   let processExitPromise = null;
@@ -241,6 +246,16 @@ function createCodexAppServerStdioClient(options = {}) {
       inboundNotifications,
       stderrBytes,
       lastFailureCode: lastFailure ? lastFailure.code : null,
+    });
+  }
+
+  function isolationProfile() {
+    return freezeJson({
+      version: CODEX_APP_SERVER_SHADOW_ISOLATION_PROFILE_VERSION,
+      complete: isolatedMcpServerNames !== null,
+      disabledMcpServerNames: isolatedMcpServerNames === null
+        ? []
+        : [...isolatedMcpServerNames],
     });
   }
 
@@ -361,6 +376,72 @@ function createCodexAppServerStdioClient(options = {}) {
         ]);
       } catch {
         complete(new Error('version check failed'), '', '');
+      }
+    });
+  }
+
+  function discoverEnabledMcpServerNames() {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const complete = (error, stdout) => {
+        if (settled) return;
+        settled = true;
+        if (error) {
+          reject(clientError(
+            CODEX_APP_SERVER_STDIO_CLIENT_REASONS.MCP_DISCOVERY_FAILED
+          ));
+          return;
+        }
+        try {
+          const parsed = JSON.parse(String(stdout || ''));
+          if (!Array.isArray(parsed) || parsed.length > MAX_MCP_SERVERS) {
+            throw new TypeError('MCP discovery result is invalid');
+          }
+          const seen = new Set();
+          const enabled = [];
+          for (const entry of parsed) {
+            if (!isPlainObject(entry)) throw new TypeError('MCP entry is invalid');
+            const nameDescriptor = Object.getOwnPropertyDescriptor(entry, 'name');
+            const enabledDescriptor = Object.getOwnPropertyDescriptor(entry, 'enabled');
+            const name = nameDescriptor && nameDescriptor.enumerable === true
+              && Object.hasOwn(nameDescriptor, 'value')
+              ? nameDescriptor.value
+              : null;
+            const isEnabled = enabledDescriptor && enabledDescriptor.enumerable === true
+              && Object.hasOwn(enabledDescriptor, 'value')
+              ? enabledDescriptor.value
+              : null;
+            if (typeof name !== 'string' || !SAFE_MCP_SERVER_NAME.test(name)
+              || typeof isEnabled !== 'boolean' || seen.has(name)) {
+              throw new TypeError('MCP entry is invalid');
+            }
+            seen.add(name);
+            if (isEnabled) enabled.push(name);
+          }
+          resolve(Object.freeze(enabled.sort()));
+        } catch {
+          reject(clientError(
+            CODEX_APP_SERVER_STDIO_CLIENT_REASONS.MCP_DISCOVERY_FAILED
+          ));
+        }
+      };
+      try {
+        Reflect.apply(execFile, null, [
+          codexCommand,
+          ['mcp', 'list', '--json'],
+          {
+            cwd,
+            env: safeEnvironment,
+            encoding: 'utf8',
+            maxBuffer: 256 * 1024,
+            timeout: safeVersionCheckTimeoutMs,
+            windowsHide: true,
+            shell: false,
+          },
+          complete,
+        ]);
+      } catch {
+        complete(new Error('MCP discovery failed'), '', '');
       }
     });
   }
@@ -649,6 +730,7 @@ function createCodexAppServerStdioClient(options = {}) {
     state = CODEX_APP_SERVER_STDIO_CLIENT_STATES.VERIFYING;
     verifyCodexAppServerGeneratedSchemas();
     verifiedCliVersion = await verifyPinnedCliVersion();
+    isolatedMcpServerNames = await discoverEnabledMcpServerNames();
     if (state === CODEX_APP_SERVER_STDIO_CLIENT_STATES.CLOSED) {
       throw clientError(CODEX_APP_SERVER_STDIO_CLIENT_REASONS.CLOSED);
     }
@@ -766,13 +848,14 @@ function createCodexAppServerStdioClient(options = {}) {
     return closePromise;
   }
 
-  return Object.freeze({ close, request, start, status, subscribe });
+  return Object.freeze({ close, isolationProfile, request, start, status, subscribe });
 }
 
 module.exports = {
   CODEX_APP_SERVER_STDIO_CLIENT_REASONS,
   CODEX_APP_SERVER_STDIO_CLIENT_STATES,
   CODEX_APP_SERVER_STDIO_CLIENT_VERSION,
+  CODEX_APP_SERVER_SHADOW_ISOLATION_PROFILE_VERSION,
   CodexAppServerStdioClientError,
   createCodexAppServerStdioClient,
 };

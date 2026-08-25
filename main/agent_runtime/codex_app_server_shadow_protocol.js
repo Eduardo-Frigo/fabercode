@@ -5,6 +5,8 @@ const fs = require('fs');
 const path = require('path');
 
 const CODEX_APP_SERVER_SHADOW_PROTOCOL_VERSION = 'codex-app-server-shadow-protocol.v1';
+const CODEX_APP_SERVER_SHADOW_ISOLATION_PROFILE_VERSION =
+  'codex-app-server-shadow-isolation-profile.v1';
 const CODEX_APP_SERVER_PINNED_CLI_VERSION = '0.149.0-alpha.4.1';
 const SCHEMA_MANIFEST_VERSION = 'codex-app-server-generated-schema-manifest.v1';
 const SCHEMA_DIRECTORY = path.join(
@@ -28,6 +30,8 @@ const CODEX_APP_SERVER_SHADOW_ALLOWED_METHODS = deepFreeze({
   notifications: ['initialized'],
 });
 const CODEX_APP_SERVER_SHADOW_HANDSHAKE = deepFreeze(['initialize', 'initialized']);
+const SAFE_MCP_SERVER_NAME = /^[A-Za-z0-9._-]{1,128}$/;
+const MAX_DISABLED_MCP_SERVERS = 128;
 
 const ALLOWED_REQUEST_METHODS = new Set(CODEX_APP_SERVER_SHADOW_ALLOWED_METHODS.requests);
 const ALLOWED_NOTIFICATION_METHODS = new Set(
@@ -95,6 +99,72 @@ function assertRequestId(id) {
 function assertAbsoluteCwd(cwd) {
   assertNonEmptyString(cwd, 'App Server shadow cwd');
   if (!path.isAbsolute(cwd)) unsafeParams('App Server shadow cwd must be absolute');
+}
+
+function normalizeDisabledMcpServerNames(value) {
+  if (!Array.isArray(value)
+    || Object.getPrototypeOf(value) !== Array.prototype
+    || !Object.isFrozen(value)
+    || value.length > MAX_DISABLED_MCP_SERVERS) {
+    unsafeParams('App Server shadow disabled MCP servers are invalid');
+  }
+  const keys = Reflect.ownKeys(value).filter((key) => key !== 'length');
+  if (keys.length !== value.length
+    || keys.some((key, index) => key !== String(index))) {
+    unsafeParams('App Server shadow disabled MCP servers must be dense');
+  }
+  const names = keys.map((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    const name = descriptor && descriptor.enumerable === true
+      && Object.hasOwn(descriptor, 'value')
+      ? descriptor.value
+      : null;
+    if (typeof name !== 'string' || !SAFE_MCP_SERVER_NAME.test(name)) {
+      unsafeParams('App Server shadow disabled MCP server name is invalid');
+    }
+    return name;
+  });
+  if (new Set(names).size !== names.length) {
+    unsafeParams('App Server shadow MCP isolation profile is invalid');
+  }
+  return Object.freeze([...names].sort());
+}
+
+function createMcpIsolationConfig(disabledMcpServerNames) {
+  const mcpServers = {};
+  for (const name of normalizeDisabledMcpServerNames(disabledMcpServerNames)) {
+    mcpServers[name] = { enabled: false };
+  }
+  return {
+    features: { apps: false, plugins: false },
+    mcp_servers: mcpServers,
+  };
+}
+
+function assertMcpIsolationConfig(config) {
+  if (!hasExactDataKeys(config, ['features', 'mcp_servers'])
+    || !hasExactDataKeys(config.features, ['apps', 'plugins'])
+    || config.features.apps !== false
+    || config.features.plugins !== false
+    || !isPlainObject(config.mcp_servers)) {
+    unsafeParams('App Server shadow integration isolation is invalid');
+  }
+  const names = Reflect.ownKeys(config.mcp_servers);
+  if (names.some((name) => typeof name !== 'string')
+    || names.length > MAX_DISABLED_MCP_SERVERS) {
+    unsafeParams('App Server shadow MCP isolation profile is invalid');
+  }
+  for (const name of names) {
+    const descriptor = Object.getOwnPropertyDescriptor(config.mcp_servers, name);
+    if (!SAFE_MCP_SERVER_NAME.test(name)
+      || !descriptor
+      || descriptor.enumerable !== true
+      || !Object.hasOwn(descriptor, 'value')
+      || !hasExactDataKeys(descriptor.value, ['enabled'])
+      || descriptor.value.enabled !== false) {
+      unsafeParams('App Server shadow MCP isolation entry is invalid');
+    }
+  }
 }
 
 function readPinnedManifest() {
@@ -201,7 +271,7 @@ function assertThreadStartRequest(message) {
     unsafeParams('App Server thread/start params are outside the shadow profile');
   }
   const hasModel = Object.hasOwn(message.params, 'model');
-  const expectedKeys = ['cwd', 'approvalPolicy', 'sandbox', 'ephemeral'];
+  const expectedKeys = ['cwd', 'approvalPolicy', 'sandbox', 'ephemeral', 'config'];
   if (hasModel) expectedKeys.push('model');
   if (!hasExactDataKeys(message.params, expectedKeys)) {
     unsafeParams('App Server thread/start params are outside the shadow profile');
@@ -213,6 +283,7 @@ function assertThreadStartRequest(message) {
     unsafeParams('App Server shadow threads must be ephemeral, read-only, and non-approving');
   }
   if (hasModel) assertNonEmptyString(message.params.model, 'App Server shadow model');
+  assertMcpIsolationConfig(message.params.config);
 }
 
 function assertTurnStartRequest(message) {
@@ -335,7 +406,12 @@ function createCodexAppServerInitializedNotification() {
   return freezeValidatedMessage({ method: 'initialized' });
 }
 
-function createCodexAppServerShadowThreadStartRequest({ id, cwd, model } = {}) {
+function createCodexAppServerShadowThreadStartRequest({
+  id,
+  cwd,
+  model,
+  disabledMcpServerNames = Object.freeze([]),
+} = {}) {
   assertRequestId(id);
   assertAbsoluteCwd(cwd);
   const params = {
@@ -343,6 +419,7 @@ function createCodexAppServerShadowThreadStartRequest({ id, cwd, model } = {}) {
     approvalPolicy: 'never',
     sandbox: 'read-only',
     ephemeral: true,
+    config: createMcpIsolationConfig(disabledMcpServerNames),
   };
   if (model !== undefined && model !== null) {
     assertNonEmptyString(model, 'App Server shadow model');
@@ -390,6 +467,7 @@ module.exports = {
   CODEX_APP_SERVER_SCHEMA_MANIFEST,
   CODEX_APP_SERVER_SHADOW_ALLOWED_METHODS,
   CODEX_APP_SERVER_SHADOW_HANDSHAKE,
+  CODEX_APP_SERVER_SHADOW_ISOLATION_PROFILE_VERSION,
   CODEX_APP_SERVER_SHADOW_PROTOCOL_VERSION,
   CODEX_APP_SERVER_SHADOW_TRANSPORT,
   assertCodexAppServerShadowOutboundMessage,

@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const util = require('util');
 
 const { assertAgentKernel } = require('./agent_kernel');
 const {
@@ -65,11 +66,161 @@ function getKernelDiagnostics(kernel) {
   };
 }
 
+function isPlainRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || util.types.isProxy(value)) return false;
+  let prototype;
+  try {
+    prototype = Object.getPrototypeOf(value);
+  } catch {
+    return false;
+  }
+  return prototype === Object.prototype || prototype === null;
+}
+
+function inspectableFunction(value, fieldName) {
+  if (typeof value !== 'function' || util.types.isProxy(value)
+    || util.types.isGeneratorFunction(value)) {
+    throw new TypeError(`${fieldName} must be an inspectable function`);
+  }
+  try {
+    Function.prototype.toString.call(value);
+  } catch {
+    throw new TypeError(`${fieldName} must be an inspectable function`);
+  }
+  return value;
+}
+
+function inspectFrozenDiagnostics(value) {
+  if (!isPlainRecord(value) || !Object.isFrozen(value)) {
+    throw new TypeError('shadowPlanRunner.diagnostics must be synchronous frozen data');
+  }
+  const fields = new Map();
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = typeof key === 'string'
+      ? Object.getOwnPropertyDescriptor(value, key)
+      : null;
+    if (!descriptor || descriptor.enumerable !== true
+      || !Object.hasOwn(descriptor, 'value')
+      || !['string', 'number', 'boolean'].includes(typeof descriptor.value)
+        && descriptor.value !== null) {
+      throw new TypeError(
+        'shadowPlanRunner.diagnostics must contain scalar data values only'
+      );
+    }
+    fields.set(key, descriptor.value);
+  }
+  return fields;
+}
+
+function readShadowPlanRunnerDiagnostics(port) {
+  let diagnostics;
+  try {
+    diagnostics = Reflect.apply(port.diagnostics, port.receiver, []);
+  } catch {
+    throw new TypeError('shadowPlanRunner.diagnostics failed');
+  }
+  if (util.types.isPromise(diagnostics)) {
+    throw new TypeError('shadowPlanRunner.diagnostics must be synchronous frozen data');
+  }
+  const fields = inspectFrozenDiagnostics(diagnostics);
+  const version = fields.get('version');
+  const authoritativeKernelId = fields.get('authoritativeKernelId');
+  const shadowKernelId = fields.get('shadowKernelId');
+  if (version !== port.version
+    || authoritativeKernelId !== port.authoritativeKernelId
+    || shadowKernelId !== port.shadowKernelId) {
+    throw new TypeError('shadowPlanRunner diagnostics identity changed');
+  }
+  return diagnostics;
+}
+
+function captureShadowPlanRunner(value, authoritativeKernel) {
+  if (value === null || value === undefined) return null;
+  if (!isPlainRecord(value) || !Object.isFrozen(value)) {
+    throw new TypeError('shadowPlanRunner must be a frozen port');
+  }
+  const allowedKeys = new Set(['version', 'plan', 'drain', 'diagnostics']);
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => typeof key !== 'string' || !allowedKeys.has(key))) {
+    throw new TypeError('shadowPlanRunner has invalid fields');
+  }
+  const readDataValue = (key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || descriptor.enumerable !== true
+      || !Object.hasOwn(descriptor, 'value')) {
+      throw new TypeError(`shadowPlanRunner.${key} is required`);
+    }
+    return descriptor.value;
+  };
+  const version = readDataValue('version');
+  if (typeof version !== 'string'
+    || !/^[A-Za-z0-9._:@-]{1,256}$/.test(version)) {
+    throw new TypeError('shadowPlanRunner.version must be a safe identifier');
+  }
+  const port = {
+    receiver: value,
+    version,
+    plan: inspectableFunction(readDataValue('plan'), 'shadowPlanRunner.plan'),
+    diagnostics: inspectableFunction(
+      readDataValue('diagnostics'),
+      'shadowPlanRunner.diagnostics'
+    ),
+  };
+  let diagnostics;
+  try {
+    diagnostics = Reflect.apply(port.diagnostics, port.receiver, []);
+  } catch {
+    throw new TypeError('shadowPlanRunner.diagnostics failed');
+  }
+  if (util.types.isPromise(diagnostics)) {
+    throw new TypeError('shadowPlanRunner.diagnostics must be synchronous frozen data');
+  }
+  const diagnosticFields = inspectFrozenDiagnostics(diagnostics);
+  if (diagnosticFields.get('version') !== version
+    || diagnosticFields.get('authoritativeKernelId') !== authoritativeKernel.id) {
+    throw new TypeError(
+      'shadowPlanRunner.authoritativeKernelId must match legacyKernel.id'
+    );
+  }
+  const shadowKernelId = diagnosticFields.get('shadowKernelId');
+  if (typeof shadowKernelId !== 'string'
+    || !/^[A-Za-z0-9._:@-]{1,256}$/.test(shadowKernelId)
+    || shadowKernelId === authoritativeKernel.id) {
+    throw new TypeError('shadowPlanRunner.shadowKernelId is invalid');
+  }
+  port.authoritativeKernelId = authoritativeKernel.id;
+  port.shadowKernelId = shadowKernelId;
+  return Object.freeze(port);
+}
+
+function callShadowPlanRunner(port, request) {
+  let pending;
+  try {
+    pending = Reflect.apply(port.plan, port.receiver, [request]);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  if (!util.types.isPromise(pending)) {
+    return Promise.reject(new TypeError(
+      'shadowPlanRunner.plan must return a native Promise'
+    ));
+  }
+  return new Promise((resolve, reject) => {
+    try {
+      Reflect.apply(Promise.prototype.then, pending, [resolve, reject]);
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
 function createHarnessRouter({
   contextPackInjector = null,
   legacyKernel,
   runtimeConfig = null,
   requestIdFactory = defaultRequestIdFactory,
+  shadowPlanRunner = null,
 } = {}) {
   assertAgentKernel(legacyKernel);
   if (typeof requestIdFactory !== 'function') {
@@ -81,6 +232,12 @@ function createHarnessRouter({
 
   const resolvedRuntimeConfig = resolveRuntimeConfig(runtimeConfig);
   const legacyMode = 'legacy';
+  const capturedShadowPlanRunner = captureShadowPlanRunner(
+    shadowPlanRunner,
+    legacyKernel
+  );
+  const shadowActive = resolvedRuntimeConfig.configuredMode === 'shadow'
+    && capturedShadowPlanRunner !== null;
 
   async function dispatch(request) {
     assertHarnessRequest(request);
@@ -97,7 +254,9 @@ function createHarnessRouter({
 
     let result;
     if (kernelRequest.operation === HARNESS_OPERATIONS.PLAN) {
-      result = await legacyKernel.plan(kernelRequest);
+      result = shadowActive
+        ? await callShadowPlanRunner(capturedShadowPlanRunner, kernelRequest)
+        : await legacyKernel.plan(kernelRequest);
     } else if (kernelRequest.operation === HARNESS_OPERATIONS.MESSAGE) {
       result = await legacyKernel.message(kernelRequest);
     } else if (kernelRequest.operation === HARNESS_OPERATIONS.EXECUTE) {
@@ -132,26 +291,39 @@ function createHarnessRouter({
 
   function getStatus() {
     const configuredMode = resolvedRuntimeConfig.configuredMode || legacyMode;
+    const effectiveMode = shadowActive ? 'shadow' : legacyMode;
     const configFallbackReason = resolvedRuntimeConfig.diagnostics
       && resolvedRuntimeConfig.diagnostics.fallbackReason;
     const configFallbackActive = configFallbackReason === 'kill_switch'
       || configFallbackReason === 'invalid_mode';
+    let reason;
+    if (configFallbackActive) {
+      reason = configFallbackReason;
+    } else if (shadowActive) {
+      reason = 'shadow_active';
+    } else if (configuredMode === legacyMode) {
+      reason = 'legacy_default';
+    } else if (configuredMode === 'shadow') {
+      reason = 'shadow_runner_unavailable';
+    } else {
+      reason = 'phase_4_not_promoted';
+    }
     return {
       ok: true,
       runtimeConfig: resolvedRuntimeConfig,
       requestedMode: resolvedRuntimeConfig.requestedMode || configuredMode,
       configuredMode,
-      effectiveMode: legacyMode,
+      effectiveMode,
       activeKernelId: legacyKernel.id,
-      fallbackActive: configuredMode !== legacyMode
-        || resolvedRuntimeConfig.requestedMode !== legacyMode
-        || configFallbackActive,
-      reason: configFallbackReason === 'kill_switch' || configFallbackReason === 'invalid_mode'
-        ? configFallbackReason
-        : configuredMode === legacyMode
-          ? 'legacy_default'
-          : 'phase_1_legacy_fallback',
+      shadowKernelId: shadowActive
+        ? capturedShadowPlanRunner.shadowKernelId
+        : null,
+      fallbackActive: configFallbackActive || configuredMode !== effectiveMode,
+      reason,
       kernel: getKernelDiagnostics(legacyKernel),
+      shadowKernel: shadowActive
+        ? readShadowPlanRunnerDiagnostics(capturedShadowPlanRunner)
+        : null,
     };
   }
 

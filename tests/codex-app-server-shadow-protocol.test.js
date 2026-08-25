@@ -134,6 +134,7 @@ const threadStartRequest = createCodexAppServerShadowThreadStartRequest({
   id: 2,
   cwd: '/tmp/faber-shadow-project',
   model: 'gpt-5.6',
+  disabledMcpServerNames: Object.freeze(['figma', 'node_repl']),
 });
 assert.deepStrictEqual(threadStartRequest, {
   id: 2,
@@ -144,6 +145,13 @@ assert.deepStrictEqual(threadStartRequest, {
     sandbox: 'read-only',
     ephemeral: true,
     model: 'gpt-5.6',
+    config: {
+      features: { apps: false, plugins: false },
+      mcp_servers: {
+        figma: { enabled: false },
+        node_repl: { enabled: false },
+      },
+    },
   },
 });
 assertDeepFrozen(threadStartRequest);
@@ -244,6 +252,35 @@ assertErrorCode(
   () => assertCodexAppServerShadowOutboundMessage({
     ...threadStartRequest,
     params: { ...threadStartRequest.params, ephemeral: false },
+  }),
+  'CODEX_APP_SERVER_SHADOW_UNSAFE_PARAMS'
+);
+assertErrorCode(
+  () => assertCodexAppServerShadowOutboundMessage({
+    ...threadStartRequest,
+    params: {
+      ...threadStartRequest.params,
+      config: {
+        ...threadStartRequest.params.config,
+        mcp_servers: {
+          ...threadStartRequest.params.config.mcp_servers,
+          node_repl: { enabled: true },
+        },
+      },
+    },
+  }),
+  'CODEX_APP_SERVER_SHADOW_UNSAFE_PARAMS'
+);
+assertErrorCode(
+  () => assertCodexAppServerShadowOutboundMessage({
+    ...threadStartRequest,
+    params: {
+      ...threadStartRequest.params,
+      config: {
+        ...threadStartRequest.params.config,
+        features: { apps: true, plugins: false },
+      },
+    },
   }),
   'CODEX_APP_SERVER_SHADOW_UNSAFE_PARAMS'
 );

@@ -140,10 +140,74 @@ function assertAgentRuntimeBoundary() {
   const codexAppServerKernelAdapterSource = read(
     'main/agent_runtime/codex_app_server_kernel_adapter.js'
   );
+  const shadowPlanSemanticComparatorSource = read(
+    'main/agent_runtime/shadow_plan_semantic_comparator.js'
+  );
+  const shadowPlanEvidenceEvaluatorSource = read(
+    'main/agent_runtime/shadow_plan_evidence_evaluator.js'
+  );
+  const shadowPlanEvidenceCorpusSource = read(
+    'main/agent_runtime/shadow_plan_evidence_corpus.js'
+  );
+  const shadowPlanEvidenceSuiteSource = read(
+    'main/agent_runtime/shadow_plan_evidence_suite.js'
+  );
+  const shadowPlanEvidenceObserverAdapterSource = read(
+    'main/agent_runtime/shadow_plan_evidence_observer_adapter.js'
+  );
+  const shadowPlanEvaluationLedgerSource = read(
+    'main/agent_runtime/shadow_plan_evaluation_ledger.js'
+  );
+  const shadowPlanRunnerSource = read(
+    'main/agent_runtime/shadow_plan_runner.js'
+  );
+  const shadowPlanRuntimeCompositionSource = read(
+    'main/agent_runtime/shadow_plan_runtime_composition.js'
+  );
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
     'HarnessRouter must depend on the AgentKernel contract, not the legacy adapter implementation'
+  );
+  const routerPlanDispatchStart = routerSource.indexOf(
+    'if (kernelRequest.operation === HARNESS_OPERATIONS.PLAN)'
+  );
+  const routerMessageDispatchStart = routerSource.indexOf(
+    'else if (kernelRequest.operation === HARNESS_OPERATIONS.MESSAGE)',
+    routerPlanDispatchStart
+  );
+  const routerExecuteDispatchStart = routerSource.indexOf(
+    'else if (kernelRequest.operation === HARNESS_OPERATIONS.EXECUTE)',
+    routerMessageDispatchStart
+  );
+  const routerUnsupportedDispatchStart = routerSource.indexOf(
+    '} else {',
+    routerExecuteDispatchStart
+  );
+  assert.ok(
+    routerPlanDispatchStart >= 0
+      && routerMessageDispatchStart > routerPlanDispatchStart
+      && routerExecuteDispatchStart > routerMessageDispatchStart
+      && routerUnsupportedDispatchStart > routerExecuteDispatchStart,
+    'HarnessRouter must retain explicit plan, message, and execute dispatch branches'
+  );
+  assert.ok(
+    routerSource.slice(
+      routerPlanDispatchStart,
+      routerMessageDispatchStart
+    ).includes('callShadowPlanRunner(capturedShadowPlanRunner, kernelRequest)'),
+    'HarnessRouter must route shadow observation only through its plan branch'
+  );
+  assertDoesNotMatch(
+    routerSource.slice(routerMessageDispatchStart, routerUnsupportedDispatchStart),
+    /callShadowPlanRunner\s*\(/,
+    'HarnessRouter must keep message and execute fully authoritative on the legacy kernel'
+  );
+  assert.ok(
+    routerSource.includes("resolvedRuntimeConfig.configuredMode === 'shadow'")
+      && routerSource.includes("reason = 'shadow_active'")
+      && routerSource.includes("reason = 'shadow_runner_unavailable'"),
+    'HarnessRouter must activate shadow explicitly and report unavailable composition fail-closed'
   );
   assertDoesNotMatch(
     facadeSource,
@@ -175,6 +239,170 @@ function assertAgentRuntimeBoundary() {
       && codexAppServerKernelAdapterSource.includes('shadow: true')
       && codexAppServerKernelAdapterSource.includes('readOnly: true'),
     'the App Server kernel adapter must stay explicitly plan-only, shadow, and read-only'
+  );
+  assertDoesNotMatch(
+    codexAppServerKernelAdapterSource,
+    /codex_app_server_stdio_client/,
+    'the App Server kernel adapter must depend on the protocol contract, not the child-process transport implementation'
+  );
+  for (const [label, source] of [
+    ['shadow semantic comparator', shadowPlanSemanticComparatorSource],
+    ['shadow evidence evaluator', shadowPlanEvidenceEvaluatorSource],
+    ['shadow evidence corpus', shadowPlanEvidenceCorpusSource],
+    ['shadow evidence suite', shadowPlanEvidenceSuiteSource],
+    ['shadow evidence observer adapter', shadowPlanEvidenceObserverAdapterSource],
+    ['shadow evaluation ledger', shadowPlanEvaluationLedgerSource],
+    ['shadow plan runner', shadowPlanRunnerSource],
+    ['shadow runtime composition', shadowPlanRuntimeCompositionSource],
+  ]) {
+    assertDoesNotMatch(
+      source,
+      /require\(['"](?:fs|child_process|worker_threads|electron)['"]\)/,
+      `${label} must not own host I/O, process, worker, or Electron capabilities`
+    );
+  }
+  assertDoesNotMatch(
+    shadowPlanSemanticComparatorSource,
+    /\.response\b|JSON\.stringify\s*\(|localeCompare\s*\(/,
+    'shadow comparison must use structured criteria instead of plan-text equality or ordering'
+  );
+  for (const [label, source] of [
+    ['shadow evidence evaluator', shadowPlanEvidenceEvaluatorSource],
+    ['shadow evidence corpus', shadowPlanEvidenceCorpusSource],
+    ['shadow evidence suite', shadowPlanEvidenceSuiteSource],
+    ['shadow evidence observer adapter', shadowPlanEvidenceObserverAdapterSource],
+    ['shadow evaluation ledger', shadowPlanEvaluationLedgerSource],
+  ]) {
+    assertDoesNotMatch(
+      source,
+      /\.response\b|JSON\.stringify\s*\(|localeCompare\s*\(/,
+      `${label} must grade and aggregate structured evidence without plan-text equality or ordering`
+    );
+  }
+  assert.ok(
+    shadowPlanEvidenceEvaluatorSource.includes("id: 'functional_success'")
+      && shadowPlanEvidenceEvaluatorSource.includes('weightBasisPoints: 3000')
+      && shadowPlanEvidenceEvaluatorSource.includes("id: 'acceptance_coverage'")
+      && shadowPlanEvidenceEvaluatorSource.includes('weightBasisPoints: 2500'),
+    'shadow evidence evaluation must pin the versioned functional and acceptance rubric'
+  );
+  assert.ok(
+    shadowPlanEvidenceCorpusSource.includes(
+      'record.requestDigest !== inspected.requestDigest'
+    )
+      && shadowPlanEvidenceCorpusSource.includes(
+        'record.resultDigest !== inspected.resultDigest'
+      )
+      && shadowPlanEvidenceCorpusSource.includes(
+        'assertShadowPlanEvidenceGrade(grade, {'
+      )
+      && shadowPlanEvidenceCorpusSource.includes(
+        'return record.grade;'
+      ),
+    'the evidence corpus must return only rubric-valid grades bound to the exact observed request and result digests'
+  );
+  assertDoesNotMatch(
+    shadowPlanEvidenceCorpusSource,
+    /\.response\b|localeCompare\s*\(|\b(?:spawn|execFile|fork)\s*\(/,
+    'the evidence corpus must not compare plan text or own executable authority'
+  );
+  assert.ok(
+    shadowPlanEvidenceSuiteSource.includes('for (const check of checks)')
+      && shadowPlanEvidenceSuiteSource.indexOf(
+        'const receipt = await callPortWithTimeout(check, inspected.input, {'
+      ) < shadowPlanEvidenceSuiteSource.indexOf(
+        'const receipt = await callPortWithTimeout(\n          safetyAudit,'
+      )
+      && shadowPlanEvidenceSuiteSource.includes(
+        'criterionWeights.get(criterion.id) !== TOTAL_WEIGHT_BASIS_POINTS'
+      )
+      && shadowPlanEvidenceSuiteSource.includes(
+        'assertShadowPlanEvidenceGrade(grade, {'
+      )
+      && shadowPlanEvidenceSuiteSource.includes(
+        'createShadowPlanEvidenceCorpusRecord({'
+      ),
+    'the evidence suite must run weighted checks sequentially, audit safety, validate the grade, and bind observed corpus records'
+  );
+  assertDoesNotMatch(
+    shadowPlanEvidenceSuiteSource,
+    /\.response\b|JSON\.stringify\s*\(|localeCompare\s*\(|\b(?:spawn|execFile|fork)\s*\(|\bprocess\.env\b/,
+    'the evidence suite must receive observable ports without plan-text comparison or ambient executable authority'
+  );
+  assert.ok(
+    shadowPlanEvidenceObserverAdapterSource.includes(
+      'const activeByInput = new WeakMap();'
+    )
+      && shadowPlanEvidenceObserverAdapterSource.includes(
+        'callObserverWithTimeout('
+      )
+      && shadowPlanEvidenceObserverAdapterSource.includes(
+        'observerTimeoutMs >= safetyTimeoutMs'
+      )
+      && shadowPlanEvidenceObserverAdapterSource.includes(
+        '.finally(() => releaseObservation(input));'
+      )
+      && shadowPlanEvidenceObserverAdapterSource.includes(
+        "fields.get('requestId') !== identity.requestId"
+      )
+      && shadowPlanEvidenceObserverAdapterSource.includes(
+        "fields.get('kernelId') !== identity.kernelId"
+      )
+      && shadowPlanEvidenceObserverAdapterSource.includes(
+        'suite = createShadowPlanEvidenceSuite({'
+      ),
+    'the observer adapter must share one bounded identity-bound observation across checks and release it after the mandatory safety audit'
+  );
+  assertDoesNotMatch(
+    shadowPlanEvidenceObserverAdapterSource,
+    /\.response\b|JSON\.stringify\s*\(|localeCompare\s*\(|\b(?:spawn|execFile|fork)\s*\(|\bprocess\.env\b/,
+    'the observer adapter must consume injected receipts without plan-text comparison or ambient process authority'
+  );
+  assert.ok(
+    shadowPlanEvaluationLedgerSource.includes(
+      'DEFAULT_REQUIRED_PARITY_RATE_BASIS_POINTS = 9000'
+    )
+      && shadowPlanEvaluationLedgerSource.includes(
+        'DEFAULT_MAXIMUM_FUNCTIONAL_REGRESSION_BASIS_POINTS = 300'
+      )
+      && shadowPlanEvaluationLedgerSource.includes('safetyViolations > 0'),
+    'shadow evaluation promotion must require 90% parity, at most 3pp functional regression, and zero safety violations'
+  );
+  assert.ok(
+    shadowPlanRunnerSource.includes('scheduleObservation({')
+      && shadowPlanRunnerSource.indexOf('scheduleObservation({')
+        < shadowPlanRunnerSource.lastIndexOf('const authoritative = await authoritativeOutcome;')
+      && shadowPlanRunnerSource.includes('return authoritative.result;'),
+    'shadow observation must start before the runner returns the unchanged authoritative result'
+  );
+  assert.ok(
+    shadowPlanRuntimeCompositionSource.includes(
+      "EVIDENCE_GRADER_UNAVAILABLE: 'evidence_grader_unavailable'"
+    )
+      && shadowPlanRuntimeCompositionSource.indexOf(
+        'const evaluator = createShadowPlanEvidenceEvaluator({'
+      ) < shadowPlanRuntimeCompositionSource.indexOf(
+        'const shadowKernel = createCodexAppServerKernelAdapter(adapterOptions);'
+      )
+      && shadowPlanRuntimeCompositionSource.indexOf(
+        'const shadowKernel = createCodexAppServerKernelAdapter(adapterOptions);'
+      ) < shadowPlanRuntimeCompositionSource.indexOf(
+        'const runner = createShadowPlanRunner({'
+      ),
+    'shadow runtime composition must require trusted evidence before creating the App Server plan runner'
+  );
+  assert.ok(
+    shadowPlanRuntimeCompositionSource.indexOf(
+      "await observeNativePromise(runner.drain(), 'shadowPlanRunner.drain');"
+    ) < shadowPlanRuntimeCompositionSource.indexOf(
+      "const closeReceipt = await callAsyncPort(clientLifecycle, 'close');"
+    ),
+    'shadow runtime shutdown must drain bounded observations before closing its App Server client'
+  );
+  assertDoesNotMatch(
+    shadowPlanRuntimeCompositionSource,
+    /\bprocess\.env\b|\b(?:spawn|execFile|fork)\s*\(/,
+    'shadow runtime composition must receive explicit ports without ambient process or executable authority'
   );
 }
 
@@ -1060,8 +1288,74 @@ function assertExecutionWorkspaceBoundary() {
       )
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:codex-app-server-kernel-adapter'
+      )
+      && typeof packageConfig.scripts['test:shadow-plan-semantic-comparator'] === 'string'
+      && packageConfig.scripts['test:shadow-plan-semantic-comparator'].includes(
+        'shadow-plan-semantic-comparator.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:shadow-plan-semantic-comparator'
+      )
+      && typeof packageConfig.scripts['test:shadow-plan-evidence-evaluator'] === 'string'
+      && packageConfig.scripts['test:shadow-plan-evidence-evaluator'].includes(
+        'shadow-plan-evidence-evaluator.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:shadow-plan-evidence-evaluator'
+      )
+      && typeof packageConfig.scripts['test:shadow-plan-evidence-corpus'] === 'string'
+      && packageConfig.scripts['test:shadow-plan-evidence-corpus'].includes(
+        'shadow-plan-evidence-corpus.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:shadow-plan-evidence-corpus'
+      )
+      && typeof packageConfig.scripts['test:shadow-plan-evidence-suite'] === 'string'
+      && packageConfig.scripts['test:shadow-plan-evidence-suite'].includes(
+        'shadow-plan-evidence-suite.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:shadow-plan-evidence-suite'
+      )
+      && typeof packageConfig.scripts['test:shadow-plan-evidence-observer-adapter'] === 'string'
+      && packageConfig.scripts['test:shadow-plan-evidence-observer-adapter'].includes(
+        'shadow-plan-evidence-observer-adapter.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:shadow-plan-evidence-observer-adapter'
+      )
+      && typeof packageConfig.scripts['test:shadow-plan-phase4-real-sample'] === 'string'
+      && packageConfig.scripts['test:shadow-plan-phase4-real-sample'].includes(
+        'shadow-plan-phase4-real-sample.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:shadow-plan-phase4-real-sample'
+      )
+      && typeof packageConfig.scripts['test:shadow-plan-evaluation-ledger'] === 'string'
+      && packageConfig.scripts['test:shadow-plan-evaluation-ledger'].includes(
+        'shadow-plan-evaluation-ledger.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:shadow-plan-evaluation-ledger'
+      )
+      && typeof packageConfig.scripts['test:shadow-plan-runner'] === 'string'
+      && packageConfig.scripts['test:shadow-plan-runner'].includes(
+        'shadow-plan-runner.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:shadow-plan-runner'
+      )
+      && typeof packageConfig.scripts['test:shadow-plan-runtime-composition'] === 'string'
+      && packageConfig.scripts['test:shadow-plan-runtime-composition'].includes(
+        'shadow-plan-runtime-composition.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:shadow-plan-runtime-composition'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'node tests/harness-router.test.js'
       ),
-    'aggregate gates must run workspace, broker, fixed-read, discovery, and App Server transport and adapter tests'
+    'aggregate gates must run workspace, broker, fixed-read, discovery, App Server, real shadow evidence, and complete shadow runtime tests'
   );
   assertDoesNotMatch(
     isolationProviderFactorySource,

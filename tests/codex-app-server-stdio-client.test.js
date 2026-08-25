@@ -9,6 +9,7 @@ const {
 } = require('../main/agent_runtime/codex_app_server_shadow_protocol');
 const {
   CODEX_APP_SERVER_STDIO_CLIENT_REASONS,
+  CODEX_APP_SERVER_SHADOW_ISOLATION_PROFILE_VERSION,
   CODEX_APP_SERVER_STDIO_CLIENT_STATES,
   CODEX_APP_SERVER_STDIO_CLIENT_VERSION,
   createCodexAppServerStdioClient,
@@ -53,6 +54,8 @@ function emitJson(child, message, splitAt = null) {
 function createProcessHarness({
   versionOutput = `codex-cli ${CODEX_APP_SERVER_PINNED_CLI_VERSION}\n`,
   versionError = null,
+  mcpListOutput = '[]',
+  mcpListError = null,
   onMessage = null,
 } = {}) {
   const calls = {
@@ -63,7 +66,12 @@ function createProcessHarness({
 
   function execFile(command, args, options, callback) {
     calls.execFile.push({ command, args, options });
-    queueMicrotask(() => callback(versionError, versionOutput, ''));
+    const isVersion = args.length === 1 && args[0] === '--version';
+    queueMicrotask(() => callback(
+      isVersion ? versionError : mcpListError,
+      isVersion ? versionOutput : mcpListOutput,
+      ''
+    ));
     return { pid: 101 };
   }
 
@@ -164,6 +172,12 @@ async function testHappyPath() {
   assertDeepFrozen(CODEX_APP_SERVER_STDIO_CLIENT_STATES);
   assertDeepFrozen(CODEX_APP_SERVER_STDIO_CLIENT_REASONS);
   assert.strictEqual(Object.isFrozen(client), true);
+  assert.deepStrictEqual(client.isolationProfile(), {
+    version: CODEX_APP_SERVER_SHADOW_ISOLATION_PROFILE_VERSION,
+    complete: false,
+    disabledMcpServerNames: [],
+  });
+  assertDeepFrozen(client.isolationProfile());
   assert.deepStrictEqual(client.status(), {
     version: CODEX_APP_SERVER_STDIO_CLIENT_VERSION,
     state: 'idle',
@@ -204,12 +218,19 @@ async function testHappyPath() {
   assertDeepFrozen(readiness);
   assert.strictEqual(await client.start(), readiness);
 
-  assert.strictEqual(harness.calls.execFile.length, 1);
+  assert.strictEqual(harness.calls.execFile.length, 2);
   assert.deepStrictEqual(harness.calls.execFile[0].args, ['--version']);
+  assert.deepStrictEqual(harness.calls.execFile[1].args, ['mcp', 'list', '--json']);
   assert.strictEqual(harness.calls.execFile[0].command, CODEX_COMMAND);
   assert.strictEqual(harness.calls.execFile[0].options.shell, false);
   assert.strictEqual(harness.calls.execFile[0].options.cwd, PROJECT_ROOT);
   assert.deepStrictEqual(harness.calls.execFile[0].options.env, { FABER_CODEX_TEST: '1' });
+  assert.deepStrictEqual(client.isolationProfile(), {
+    version: CODEX_APP_SERVER_SHADOW_ISOLATION_PROFILE_VERSION,
+    complete: true,
+    disabledMcpServerNames: [],
+  });
+  assertDeepFrozen(client.isolationProfile());
   assert.strictEqual(harness.calls.spawn.length, 1);
   assert.strictEqual(harness.calls.spawn[0].command, CODEX_COMMAND);
   assert.deepStrictEqual(
@@ -287,6 +308,43 @@ async function testPinnedVersionMismatchFailsBeforeSpawn() {
     CODEX_APP_SERVER_STDIO_CLIENT_REASONS.VERSION_MISMATCH
   );
   await client.close();
+}
+
+async function testEnabledMcpDiscoveryIsCompleteAndFailsClosed() {
+  const harness = createProcessHarness({
+    mcpListOutput: JSON.stringify([
+      { name: 'disabled-server', enabled: false },
+      { name: 'node_repl', enabled: true },
+      { name: 'figma', enabled: true },
+    ]),
+  });
+  const client = createClient(harness);
+  await client.start();
+  assert.deepStrictEqual(client.isolationProfile(), {
+    version: CODEX_APP_SERVER_SHADOW_ISOLATION_PROFILE_VERSION,
+    complete: true,
+    disabledMcpServerNames: ['figma', 'node_repl'],
+  });
+  await client.close();
+
+  for (const fixture of [
+    { mcpListError: new Error('private MCP config path') },
+    { mcpListOutput: '{not-json' },
+    { mcpListOutput: JSON.stringify([{ name: '../unsafe', enabled: true }]) },
+  ]) {
+    const failedHarness = createProcessHarness(fixture);
+    const failedClient = createClient(failedHarness);
+    await assert.rejects(
+      failedClient.start(),
+      (error) => assertReason(
+        error,
+        CODEX_APP_SERVER_STDIO_CLIENT_REASONS.MCP_DISCOVERY_FAILED
+      )
+    );
+    assert.strictEqual(failedHarness.calls.spawn.length, 0);
+    assert.strictEqual(failedClient.isolationProfile().complete, false);
+    await failedClient.close();
+  }
 }
 
 async function testExitAfterInitializeResponseSkipsInitializedWrite() {
@@ -518,6 +576,7 @@ async function run() {
 
   await testHappyPath();
   await testPinnedVersionMismatchFailsBeforeSpawn();
+  await testEnabledMcpDiscoveryIsCompleteAndFailsClosed();
   await testExitAfterInitializeResponseSkipsInitializedWrite();
   await testStdinErrorIsContainedAndFailsClosed();
   await testInvalidJsonFailsClosed();

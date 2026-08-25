@@ -52,6 +52,151 @@ class RecordingLegacyKernel extends AgentKernel {
   }
 }
 
+function createRecordingShadowPlanRunner(authoritativeKernel, {
+  authoritativeKernelId = authoritativeKernel.id,
+} = {}) {
+  const calls = [];
+  const runner = Object.freeze({
+    version: 'recording-shadow-plan-runner.v1',
+    plan(request) {
+      calls.push(request);
+      return authoritativeKernel.plan(request);
+    },
+    drain() {
+      return Promise.resolve(this.diagnostics());
+    },
+    diagnostics() {
+      return Object.freeze({
+        version: 'recording-shadow-plan-runner.v1',
+        authoritativeKernelId,
+        shadowKernelId: 'codex-app-server-shadow',
+        plans: calls.length,
+        activeObservations: 0,
+      });
+    },
+  });
+  return { calls, runner };
+}
+
+async function testShadowModeRoutesPlanOnly() {
+  const outputs = {
+    plan: { ok: true, action: { type: 'shadow-authoritative-plan' } },
+    message: { ok: true, response: 'legacy message' },
+    execute: { ok: true, modifiedFiles: [] },
+  };
+  const kernel = new RecordingLegacyKernel(outputs);
+  const shadow = createRecordingShadowPlanRunner(kernel);
+  let sequence = 0;
+  const router = createHarnessRouter({
+    legacyKernel: kernel,
+    shadowPlanRunner: shadow.runner,
+    runtimeConfig: createHarnessRuntimeConfig({
+      env: { FABER_HARNESS_V2_MODE: 'shadow' },
+    }),
+    requestIdFactory: () => `shadow-route-${sequence += 1}`,
+  });
+
+  assert.strictEqual(await router.plan({ userMessage: 'planejar' }), outputs.plan);
+  assert.strictEqual(await router.message({ userMessage: 'conversar' }), outputs.message);
+  assert.strictEqual(
+    await router.execute({ type: 'noop' }, { rootPath: '/tmp/project' }),
+    outputs.execute
+  );
+  assert.strictEqual(shadow.calls.length, 1);
+  assert.strictEqual(shadow.calls[0].operation, HARNESS_OPERATIONS.PLAN);
+  assert.strictEqual(shadow.calls[0].requestId, 'shadow-route-1');
+  assert.deepStrictEqual(
+    kernel.calls.map(([operation]) => operation),
+    [HARNESS_OPERATIONS.PLAN, HARNESS_OPERATIONS.MESSAGE, HARNESS_OPERATIONS.EXECUTE]
+  );
+
+  const status = router.getStatus();
+  assert.strictEqual(status.configuredMode, 'shadow');
+  assert.strictEqual(status.effectiveMode, 'shadow');
+  assert.strictEqual(status.activeKernelId, 'legacy');
+  assert.strictEqual(status.shadowKernelId, 'codex-app-server-shadow');
+  assert.strictEqual(status.fallbackActive, false);
+  assert.strictEqual(status.reason, 'shadow_active');
+  assert.deepStrictEqual(status.shadowKernel, {
+    version: 'recording-shadow-plan-runner.v1',
+    authoritativeKernelId: 'legacy',
+    shadowKernelId: 'codex-app-server-shadow',
+    plans: 1,
+    activeObservations: 0,
+  });
+
+  const legacyKernel = new RecordingLegacyKernel(outputs);
+  const dormantShadow = createRecordingShadowPlanRunner(legacyKernel);
+  const legacyRouter = createHarnessRouter({
+    legacyKernel,
+    shadowPlanRunner: dormantShadow.runner,
+    runtimeConfig: createHarnessRuntimeConfig({ env: {} }),
+    requestIdFactory: () => 'legacy-with-shadow-port',
+  });
+  assert.strictEqual(await legacyRouter.plan({}), outputs.plan);
+  assert.strictEqual(dormantShadow.calls.length, 0);
+  assert.strictEqual(legacyRouter.getStatus().shadowKernel, null);
+
+  for (const mode of ['canary', 'on']) {
+    const rolloutKernel = new RecordingLegacyKernel(outputs);
+    const rolloutShadow = createRecordingShadowPlanRunner(rolloutKernel);
+    const rolloutRouter = createHarnessRouter({
+      legacyKernel: rolloutKernel,
+      shadowPlanRunner: rolloutShadow.runner,
+      runtimeConfig: createHarnessRuntimeConfig({
+        env: { FABER_HARNESS_V2_MODE: mode },
+      }),
+      requestIdFactory: () => `not-promoted-${mode}`,
+    });
+    assert.strictEqual(await rolloutRouter.plan({}), outputs.plan);
+    assert.strictEqual(rolloutShadow.calls.length, 0);
+    assert.strictEqual(rolloutRouter.getStatus().effectiveMode, 'legacy');
+  }
+
+  const killedKernel = new RecordingLegacyKernel(outputs);
+  const killedShadow = createRecordingShadowPlanRunner(killedKernel);
+  const killedRouter = createHarnessRouter({
+    legacyKernel: killedKernel,
+    shadowPlanRunner: killedShadow.runner,
+    runtimeConfig: createHarnessRuntimeConfig({
+      env: {
+        FABER_HARNESS_V2_MODE: 'shadow',
+        FABER_HARNESS_V2_KILL_SWITCH: 'true',
+      },
+    }),
+    requestIdFactory: () => 'shadow-killed',
+  });
+  assert.strictEqual(await killedRouter.plan({}), outputs.plan);
+  assert.strictEqual(killedShadow.calls.length, 0);
+  assert.strictEqual(killedRouter.getStatus().effectiveMode, 'legacy');
+  assert.strictEqual(killedRouter.getStatus().reason, 'kill_switch');
+
+  const unavailableRouter = createHarnessRouter({
+    legacyKernel: new RecordingLegacyKernel(outputs),
+    runtimeConfig: createHarnessRuntimeConfig({
+      env: { FABER_HARNESS_V2_MODE: 'shadow' },
+    }),
+    requestIdFactory: () => 'shadow-unavailable',
+  });
+  assert.strictEqual(unavailableRouter.getStatus().effectiveMode, 'legacy');
+  assert.strictEqual(unavailableRouter.getStatus().fallbackActive, true);
+  assert.strictEqual(unavailableRouter.getStatus().reason, 'shadow_runner_unavailable');
+
+  const mismatchedShadow = createRecordingShadowPlanRunner(kernel, {
+    authoritativeKernelId: 'other-legacy',
+  });
+  assert.throws(
+    () => createHarnessRouter({
+      legacyKernel: kernel,
+      shadowPlanRunner: mismatchedShadow.runner,
+      runtimeConfig: createHarnessRuntimeConfig({
+        env: { FABER_HARNESS_V2_MODE: 'shadow' },
+      }),
+    }),
+    /authoritativeKernelId/
+  );
+}
+
 async function run() {
   assert.throws(
     () => createHarnessRouter(),
@@ -134,7 +279,7 @@ async function run() {
   assert.strictEqual(status.effectiveMode, 'legacy');
   assert.strictEqual(status.activeKernelId, 'legacy');
   assert.strictEqual(status.fallbackActive, true);
-  assert.strictEqual(status.reason, 'phase_1_legacy_fallback');
+  assert.strictEqual(status.reason, 'phase_4_not_promoted');
   assert.strictEqual(status.kernel.id, 'legacy');
   assert.strictEqual(status.runtimeConfig.configuredPrimaryKernel, 'v2');
   assert.strictEqual(status.runtimeConfig.diagnostics.configuredMode, 'on');
@@ -249,6 +394,8 @@ async function run() {
     () => createHarnessRouter({ legacyKernel: kernel, requestIdFactory: 'not-a-function' }),
     /requestIdFactory/
   );
+
+  await testShadowModeRoutesPlanOnly();
 
   console.log('harness-router.test.js: ok');
 }

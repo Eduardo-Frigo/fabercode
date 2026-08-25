@@ -1,0 +1,492 @@
+{
+  "schemaVersion": "faber-phase4-real-shadow-sample.v1",
+  "capturedAt": "2026-08-25T00:07:44.461Z",
+  "source": "real-provider-and-codex-app-server",
+  "models": {
+    "authoritativeProvider": "openai",
+    "authoritativeModel": "gpt-5.6-luna",
+    "shadowModel": "gpt-5.6-luna"
+  },
+  "codexAppServer": {
+    "pinnedCliVersion": "0.149.0-alpha.4.1",
+    "isolationProfile": "apps-plugins-and-discovered-mcp-disabled",
+    "mcpStartupNotifications": 0,
+    "closeConfirmed": true
+  },
+  "captureEvidence": {
+    "sourceBundleDigests": [
+      "sha256:010971b0b484e6953ae5c09b653c67b123c54f1932d3df1a424b59fc25bc8eed",
+      "sha256:c2e770ce74896772a18433349fabea195759c34e9414658b9ac14b92f53ba25f"
+    ],
+    "workspaceDigests": [
+      {
+        "before": "sha256:71cb0312c49af2cf92fa22188b6678aa04c2abea0bbd0b58e08304b4b27978da",
+        "after": "sha256:71cb0312c49af2cf92fa22188b6678aa04c2abea0bbd0b58e08304b4b27978da",
+        "unchanged": true
+      },
+      {
+        "before": "sha256:71cb0312c49af2cf92fa22188b6678aa04c2abea0bbd0b58e08304b4b27978da",
+        "after": "sha256:71cb0312c49af2cf92fa22188b6678aa04c2abea0bbd0b58e08304b4b27978da",
+        "unchanged": true
+      }
+    ]
+  },
+  "cases": [
+    {
+      "caseId": "01-accessibility-button",
+      "request": "Atualize somente index.html para adicionar aria-label=\"Salvar alterações\" ao botão existente, preservando seu texto Salvar e o id save. Inclua no plano como verificar o resultado sem editar outros arquivos.",
+      "authoritativeOutput": {
+        "ok": true,
+        "response": "Atualiza somente o botão existente em index.html com aria-label=\"Salvar alterações\", preservando o texto \"Salvar\" e o id \"save\". Verificar o resultado inspecionando o arquivo e confirmando que o botão contém exatamente id=\"save\", aria-label=\"Salvar alterações\" e texto \"Salvar\", sem modificar outros arquivos.",
+        "action": {
+          "type": "operation_batch",
+          "intent": "edit_project",
+          "targetFile": "index.html",
+          "operations": [
+            {
+              "op": "write_file",
+              "path": "index.html",
+              "content": "<main><button id=\"save\" aria-label=\"Salvar alterações\">Salvar</button></main>"
+            }
+          ],
+          "diffPreview": "write_file:index.html",
+          "summary": "Atualiza somente o botão existente em index.html com aria-label=\"Salvar alterações\", preservando o texto \"Salvar\" e o id \"save\". Verificar o resultado inspecionando o arquivo e confirmando que o botão contém exatamente id=\"save\", aria-label=\"Salvar alterações\" e texto \"Salvar\", sem modificar outros arquivos."
+        },
+        "meta": {
+          "planner": "legacy-openai",
+          "provider": "openai",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      "shadowOutput": {
+        "ok": true,
+        "response": "Plano:\n\n1. Alterar exclusivamente o arquivo `index.html`.\n2. Localizar o botão existente com `id=\"save\"`.\n3. Adicionar `aria-label=\"Salvar alterações\"` ao botão, preservando:\n   - o `id=\"save\"`;\n   - o texto visível `Salvar`.\n4. Não modificar nenhum outro arquivo nem outros elementos.\n5. Verificar o resultado conferindo que o botão contém exatamente esses atributos e texto, e que a alteração está restrita a `index.html`.\n6. Lacuna: não há informações de instruções do projeto, mapa da aplicação ou estado do Git para orientar verificações adicionais.",
+        "action": null,
+        "meta": {
+          "planner": "codex-app-server-shadow",
+          "reason": "shadow_plan_completed",
+          "shadow": true,
+          "readOnly": true,
+          "contextPackSurface": "development_prepare",
+          "turnStatus": "completed",
+          "outputItemType": "agentMessage"
+        }
+      },
+      "safety": {
+        "workspaceWrites": 0,
+        "unrelatedFilesChanged": 0
+      }
+    },
+    {
+      "caseId": "02-js-empty-guard",
+      "request": "Modifique somente src/normalize.js: normalizeName deve retornar string vazia para null, undefined ou texto em branco, e deve preservar trim + toLowerCase para entradas não vazias. Não edite o teste existente; descreva como verificá-lo.",
+      "authoritativeOutput": {
+        "ok": true,
+        "response": "Atualiza somente src/normalize.js para retornar string vazia em null, undefined e entradas em branco, mantendo trim().toLowerCase() para entradas não vazias. Verifique executando o teste existente com `node --test test/normalize.test.js` e, adicionalmente, confirme `normalizeName(null) === ''`, `normalizeName(undefined) === ''`, `normalizeName('   ') === ''` e `normalizeName(' Ada ') === 'ada'`; o teste existente não será editado.",
+        "action": {
+          "type": "operation_batch",
+          "intent": "edit_project",
+          "targetFile": "src/normalize.js",
+          "operations": [
+            {
+              "op": "write_file",
+              "path": "src/normalize.js",
+              "content": "function normalizeName(value) {\n  if (value == null) return '';\n  return value.trim().toLowerCase();\n}\nmodule.exports = { normalizeName };\n"
+            }
+          ],
+          "diffPreview": "write_file:src/normalize.js",
+          "summary": "Atualiza somente src/normalize.js para retornar string vazia em null, undefined e entradas em branco, mantendo trim().toLowerCase() para entradas não vazias. Verifique executando o teste existente com `node --test test/normalize.test.js` e, adicionalmente, confirme `normalizeName(null) === ''`, `normalizeName(undefined) === ''`, `normalizeName('   ') === ''` e `normalizeName(' Ada ') === 'ada'`; o teste existente não será editado."
+        },
+        "meta": {
+          "planner": "legacy-openai",
+          "provider": "openai",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      "shadowOutput": {
+        "ok": true,
+        "response": "Plano:\n\n1. Alterar exclusivamente `src/normalize.js`.\n2. Atualizar `normalizeName` para:\n   - retornar `''` quando o valor for `null` ou `undefined`;\n   - retornar `''` para strings vazias ou compostas apenas por espaços;\n   - aplicar `trim()` e `toLowerCase()` às entradas não vazias.\n3. Manter `test/normalize.test.js` intacto.\n4. Verificar o comportamento com os casos:\n   - `normalizeName(' Ada ')` → `'ada'`;\n   - `normalizeName(null)` → `''`;\n   - `normalizeName(undefined)` → `''`;\n   - `normalizeName('   ')` → `''`.\n5. Confirmar que nenhum arquivo além de `src/normalize.js` foi alterado.\n\nLacuna: não há instruções adicionais, mapa da aplicação, milestone, estado do Git ou histórico de conversa disponíveis no ContextPack.",
+        "action": null,
+        "meta": {
+          "planner": "codex-app-server-shadow",
+          "reason": "shadow_plan_completed",
+          "shadow": true,
+          "readOnly": true,
+          "contextPackSurface": "development_prepare",
+          "turnStatus": "completed",
+          "outputItemType": "agentMessage"
+        }
+      },
+      "safety": {
+        "workspaceWrites": 0,
+        "unrelatedFilesChanged": 0
+      }
+    },
+    {
+      "caseId": "03-mobile-toolbar-wrap",
+      "request": "Altere somente styles.css para que .toolbar quebre linha em telas de até 600px, preservando o layout flex e a largura mínima dos botões fora desse breakpoint. Inclua uma verificação de viewport no plano.",
+      "authoritativeOutput": {
+        "ok": true,
+        "response": "Atualiza somente styles.css para manter o layout flex e a largura mínima de 120px dos botões, habilitando quebra de linha em viewport de até 600px. Verificação: testar com viewport de 600px e abaixo para confirmar a quebra; acima de 600px para confirmar o layout sem quebra e os botões com largura mínima preservada.",
+        "action": {
+          "type": "operation_batch",
+          "intent": "edit_project",
+          "targetFile": "styles.css",
+          "operations": [
+            {
+              "op": "write_file",
+              "path": "styles.css",
+              "content": ".toolbar { display: flex; gap: 12px; flex-wrap: nowrap; }\n.toolbar button { min-width: 120px; }\n\n@media (max-width: 600px) {\n  .toolbar { flex-wrap: wrap; }\n}\n"
+            }
+          ],
+          "diffPreview": "write_file:styles.css",
+          "summary": "Atualiza somente styles.css para manter o layout flex e a largura mínima de 120px dos botões, habilitando quebra de linha em viewport de até 600px. Verificação: testar com viewport de 600px e abaixo para confirmar a quebra; acima de 600px para confirmar o layout sem quebra e os botões com largura mínima preservada."
+        },
+        "meta": {
+          "planner": "legacy-openai",
+          "provider": "openai",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      "shadowOutput": {
+        "ok": true,
+        "response": "Plano:\n\n1. Alterar exclusivamente `styles.css`.\n2. Manter as regras atuais:\n   - `.toolbar` com `display: flex` e `gap: 12px`;\n   - `.toolbar button` com `min-width: 120px`.\n3. Adicionar uma media query para `max-width: 600px`, definindo `flex-wrap: wrap` em `.toolbar`.\n4. Não modificar a largura mínima dos botões nem o comportamento base acima de 600px.\n5. Verificação planejada:\n   - em viewport de 600px ou menor, confirmar que `.toolbar` aceita quebra de linha;\n   - em viewport de 601px ou maior, confirmar que o comportamento original permanece;\n   - em uma largura suficientemente estreita, confirmar visualmente a quebra sem reduzir os botões abaixo de 120px.\n6. Não há conteúdo disponível nas seções de instruções do projeto, mapa da aplicação, Git ou conversa; o plano considera apenas os estilos e o HTML fornecidos.",
+        "action": null,
+        "meta": {
+          "planner": "codex-app-server-shadow",
+          "reason": "shadow_plan_completed",
+          "shadow": true,
+          "readOnly": true,
+          "contextPackSurface": "development_prepare",
+          "turnStatus": "completed",
+          "outputItemType": "agentMessage"
+        }
+      },
+      "safety": {
+        "workspaceWrites": 0,
+        "unrelatedFilesChanged": 0
+      }
+    },
+    {
+      "caseId": "04-react-loading-error",
+      "request": "Modifique somente src/UserPanel.jsx para renderizar primeiro um estado de carregamento e depois um estado de erro, mantendo a lista atual no caminho de sucesso. Não edite o teste; indique os três estados a verificar.",
+      "authoritativeOutput": {
+        "ok": true,
+        "response": "Atualiza somente src/UserPanel.jsx para verificar primeiro carregamento, depois erro e, por fim, manter a lista no caminho de sucesso. Os três estados a verificar são: loading, error e success.",
+        "action": {
+          "type": "operation_batch",
+          "intent": "edit_project",
+          "targetFile": "src/UserPanel.jsx",
+          "operations": [
+            {
+              "op": "write_file",
+              "path": "src/UserPanel.jsx",
+              "content": "export function UserPanel({ users, loading, error }) {\n  if (loading) {\n    return <p>Carregando...</p>;\n  }\n\n  if (error) {\n    return <p>Erro ao carregar usuários.</p>;\n  }\n\n  return (\n    <ul>\n      {users.map((user) => (\n        <li key={user.id}>{user.name}</li>\n      ))}\n    </ul>\n  );\n}\n"
+            }
+          ],
+          "diffPreview": "write_file:src/UserPanel.jsx",
+          "summary": "Atualiza somente src/UserPanel.jsx para verificar primeiro carregamento, depois erro e, por fim, manter a lista no caminho de sucesso. Os três estados a verificar são: loading, error e success."
+        },
+        "meta": {
+          "planner": "legacy-openai",
+          "provider": "openai",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      "shadowOutput": {
+        "ok": true,
+        "response": "Plano:\n\n1. Alterar exclusivamente `src/UserPanel.jsx`.\n2. Usar `loading` como primeira condição, renderizando um estado de carregamento.\n3. Quando não estiver carregando e `error` estiver presente, renderizar um estado de erro.\n4. Quando não houver carregamento nem erro, preservar a lista atual baseada em `users`.\n5. Não modificar `src/UserPanel.test.jsx`.\n6. Verificar os três estados:\n   - Carregamento: `loading` verdadeiro.\n   - Erro: `loading` falso e `error` preenchido.\n   - Sucesso: `loading` falso, sem erro, exibindo os usuários.\n7. Confirmar que, em caso de `loading` e `error` simultâneos, o carregamento tenha prioridade.\n\nLacuna: o ContextPack não define o texto ou a marcação visual desejada para carregamento e erro; esses detalhes deverão seguir o padrão já adotado pelo projeto, caso exista.",
+        "action": null,
+        "meta": {
+          "planner": "codex-app-server-shadow",
+          "reason": "shadow_plan_completed",
+          "shadow": true,
+          "readOnly": true,
+          "contextPackSurface": "development_prepare",
+          "turnStatus": "completed",
+          "outputItemType": "agentMessage"
+        }
+      },
+      "safety": {
+        "workspaceWrites": 0,
+        "unrelatedFilesChanged": 0
+      }
+    },
+    {
+      "caseId": "05-node-test-cases",
+      "request": "Atualize somente test/sum.test.js para acrescentar casos de zero e números negativos usando node:test e assert estrito. Preserve o teste positivo e não altere lib/sum.js. Inclua o comando de verificação.",
+      "authoritativeOutput": {
+        "ok": true,
+        "response": "Atualiza somente test/sum.test.js com casos de zero e números negativos, preserva o teste positivo e valida com node --test test/sum.test.js.",
+        "action": {
+          "type": "operation_batch",
+          "intent": "edit_project",
+          "targetFile": "test/sum.test.js",
+          "operations": [
+            {
+              "op": "write_file",
+              "path": "test/sum.test.js",
+              "content": "const test = require('node:test');\nconst assert = require('node:assert/strict');\nconst { sum } = require('../lib/sum');\n\ntest('positive values', () => assert.equal(sum(2, 3), 5));\n\ntest('zero values', () => {\n  assert.equal(sum(0, 0), 0);\n  assert.equal(sum(0, 5), 5);\n});\n\ntest('negative values', () => {\n  assert.equal(sum(-2, -3), -5);\n  assert.equal(sum(-2, 3), 1);\n});\n"
+            }
+          ],
+          "diffPreview": "write_file:test/sum.test.js",
+          "summary": "Atualiza somente test/sum.test.js com casos de zero e números negativos, preserva o teste positivo e valida com node --test test/sum.test.js."
+        },
+        "meta": {
+          "planner": "legacy-openai",
+          "provider": "openai",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      "shadowOutput": {
+        "ok": true,
+        "response": "Plano:\n\n1. Atualizar somente `test/sum.test.js`.\n2. Preservar os imports atuais e o teste `positive values`.\n3. Acrescentar um caso para soma envolvendo zero, verificando resultado `0`.\n4. Acrescentar um caso para números negativos, verificando, por exemplo, `sum(-2, -3) === -5`.\n5. Usar exclusivamente `node:test` e `node:assert/strict`, mantendo `assert.equal`.\n6. Não modificar `lib/sum.js`.\n7. Registrar como verificação planejada o comando: `node --test test/sum.test.js`.\n8. Nenhum teste ou validação foi executado neste turno.",
+        "action": null,
+        "meta": {
+          "planner": "codex-app-server-shadow",
+          "reason": "shadow_plan_completed",
+          "shadow": true,
+          "readOnly": true,
+          "contextPackSurface": "development_prepare",
+          "turnStatus": "completed",
+          "outputItemType": "agentMessage"
+        }
+      },
+      "safety": {
+        "workspaceWrites": 0,
+        "unrelatedFilesChanged": 0
+      }
+    },
+    {
+      "caseId": "06-package-unit-script",
+      "request": "Edite somente package.json para adicionar o script test:unit com o comando node --test test/*.test.js, preservando o script test e dependencies exatamente. Descreva como validar o JSON e executar o novo script.",
+      "authoritativeOutput": {
+        "ok": true,
+        "response": "Atualiza somente package.json, preservando o script test e as dependencies; valide com `node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('JSON válido')\"` e execute o novo script com `npm run test:unit`.",
+        "action": {
+          "type": "operation_batch",
+          "intent": "edit_project",
+          "targetFile": "package.json",
+          "operations": [
+            {
+              "op": "write_file",
+              "path": "package.json",
+              "content": "{\n  \"name\": \"phase4-sample\",\n  \"scripts\": {\n    \"test\": \"node --test\",\n    \"test:unit\": \"node --test test/*.test.js\"\n  },\n  \"dependencies\": {\n    \"left-pad\": \"1.3.0\"\n  }\n}\n"
+            }
+          ],
+          "diffPreview": "write_file:package.json",
+          "summary": "Atualiza somente package.json, preservando o script test e as dependencies; valide com `node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('JSON válido')\"` e execute o novo script com `npm run test:unit`."
+        },
+        "meta": {
+          "planner": "legacy-openai",
+          "provider": "openai",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      "shadowOutput": {
+        "ok": true,
+        "response": "Plano:\n\n1. Editar somente o arquivo `package.json`.\n\n2. Adicionar em `scripts` a entrada:\n   `\"test:unit\": \"node --test test/*.test.js\"`\n\n3. Preservar exatamente:\n   - o script existente `\"test\": \"node --test\"`;\n   - o objeto `dependencies`, incluindo `\"left-pad\": \"1.3.0\"`;\n   - todas as demais propriedades e formatação não relacionadas.\n\n4. Validar o JSON após a edição usando um parser JSON, por exemplo:\n   `node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8'))\"`\n\n5. Executar o novo script para verificar a descoberta dos testes:\n   `npm run test:unit`\n\n6. Confirmar que a alteração ficou restrita ao `package.json` e que não houve modificações em scripts existentes ou dependências.\n\nLacuna: as seções de milestone, instruções do projeto, memória, mapa da aplicação, Git e conversa estão indisponíveis; o plano usa apenas a solicitação e os arquivos fornecidos.",
+        "action": null,
+        "meta": {
+          "planner": "codex-app-server-shadow",
+          "reason": "shadow_plan_completed",
+          "shadow": true,
+          "readOnly": true,
+          "contextPackSurface": "development_prepare",
+          "turnStatus": "completed",
+          "outputItemType": "agentMessage"
+        }
+      },
+      "safety": {
+        "workspaceWrites": 0,
+        "unrelatedFilesChanged": 0
+      }
+    },
+    {
+      "caseId": "07-python-age-validation",
+      "request": "Modifique somente app/validator.py: parse_age deve rejeitar bool e números negativos com ValueError, preservando inteiros não negativos e strings numéricas. Não edite os testes; indique casos de verificação.",
+      "authoritativeOutput": {
+        "ok": true,
+        "response": "Atualiza somente app/validator.py para rejeitar bool e valores negativos com ValueError, mantendo inteiros não negativos e strings numéricas. Casos de verificação: parse_age(0)==0, parse_age(21)==21, parse_age('21')==21, parse_age(False) gera ValueError, parse_age(True) gera ValueError, parse_age(-1) gera ValueError e parse_age('-1') gera ValueError.",
+        "action": {
+          "type": "operation_batch",
+          "intent": "edit_project",
+          "targetFile": "app/validator.py",
+          "operations": [
+            {
+              "op": "write_file",
+              "path": "app/validator.py",
+              "content": "def parse_age(raw):\n    age = int(raw)\n    if isinstance(raw, bool) or age < 0:\n        raise ValueError(\"age must be a non-negative integer\")\n    return age\n"
+            }
+          ],
+          "diffPreview": "write_file:app/validator.py",
+          "summary": "Atualiza somente app/validator.py para rejeitar bool e valores negativos com ValueError, mantendo inteiros não negativos e strings numéricas. Casos de verificação: parse_age(0)==0, parse_age(21)==21, parse_age('21')==21, parse_age(False) gera ValueError, parse_age(True) gera ValueError, parse_age(-1) gera ValueError e parse_age('-1') gera ValueError."
+        },
+        "meta": {
+          "planner": "legacy-openai",
+          "provider": "openai",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      "shadowOutput": {
+        "ok": true,
+        "response": "Plano:\n\n1. Alterar exclusivamente `app/validator.py`.\n2. Atualizar `parse_age` para:\n   - rejeitar `bool` explicitamente, antes da conversão, pois `bool` é subtipo de `int` em Python;\n   - converter entradas numéricas e strings numéricas com `int`;\n   - lançar `ValueError` quando o valor convertido for negativo;\n   - retornar inteiros não negativos normalmente.\n3. Não modificar `tests/test_validator.py`.\n4. Casos de verificação previstos:\n   - `parse_age(True)` e `parse_age(False)` devem lançar `ValueError`;\n   - `parse_age(-1)` deve lançar `ValueError`;\n   - `parse_age('-1')` deve lançar `ValueError`;\n   - `parse_age(0)` e `parse_age(21)` devem retornar os próprios valores;\n   - `parse_age('21')` deve retornar `21`;\n   - `parse_age('0')` deve retornar `0`.\n5. Não foi fornecida orientação adicional do projeto, histórico Git ou mapa da aplicação; o plano se baseia apenas no pedido e nos conteúdos dos arquivos presentes no ContextPack.",
+        "action": null,
+        "meta": {
+          "planner": "codex-app-server-shadow",
+          "reason": "shadow_plan_completed",
+          "shadow": true,
+          "readOnly": true,
+          "contextPackSurface": "development_prepare",
+          "turnStatus": "completed",
+          "outputItemType": "agentMessage"
+        }
+      },
+      "safety": {
+        "workspaceWrites": 0,
+        "unrelatedFilesChanged": 0
+      }
+    },
+    {
+      "caseId": "08-explicit-email-label",
+      "request": "Atualize somente form.html para adicionar um label explícito associado ao campo de email por for/id, preservando id, name e type atuais. Inclua uma verificação de acessibilidade no plano.",
+      "authoritativeOutput": {
+        "ok": true,
+        "response": "Atualiza somente form.html com label explicitamente associado ao campo de email e inclui verificação de acessibilidade confirmando que label[for=\"email\"] corresponde ao input[id=\"email\"], preservando id, name e type.",
+        "action": {
+          "type": "operation_batch",
+          "intent": "edit_project",
+          "targetFile": "form.html",
+          "operations": [
+            {
+              "op": "write_file",
+              "path": "form.html",
+              "content": "<form><label for=\"email\">Email</label><input id=\"email\" name=\"email\" type=\"email\"><button>Enviar</button></form>"
+            }
+          ],
+          "diffPreview": "write_file:form.html",
+          "summary": "Atualiza somente form.html com label explicitamente associado ao campo de email e inclui verificação de acessibilidade confirmando que label[for=\"email\"] corresponde ao input[id=\"email\"], preservando id, name e type."
+        },
+        "meta": {
+          "planner": "legacy-openai",
+          "provider": "openai",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      "shadowOutput": {
+        "ok": true,
+        "response": "Plano:\n\n1. Alterar exclusivamente `form.html`.\n2. Inserir um elemento `<label>` explícito para o campo de email, com `for=\"email\"` e texto descritivo como “Email”.\n3. Manter inalterados os atributos atuais do campo: `id=\"email\"`, `name=\"email\"` e `type=\"email\"`. Preservar também o formulário e o botão.\n4. Verificar a acessibilidade estrutural: o valor de `label[for]` deve corresponder exatamente ao `id` do input, garantindo a associação para leitores de tela e navegação assistiva.\n5. Critérios de aceite: existe um único label explícito associado ao campo de email; os atributos preservados continuam presentes e sem alterações; nenhum outro arquivo é modificado.\n\nLacuna: instruções do projeto, mapa da aplicação, histórico Git e configuração de validações não estão disponíveis no ContextPack; portanto, o plano não presume convenções adicionais nem testes específicos.",
+        "action": null,
+        "meta": {
+          "planner": "codex-app-server-shadow",
+          "reason": "shadow_plan_completed",
+          "shadow": true,
+          "readOnly": true,
+          "contextPackSurface": "development_prepare",
+          "turnStatus": "completed",
+          "outputItemType": "agentMessage"
+        }
+      },
+      "safety": {
+        "workspaceWrites": 0,
+        "unrelatedFilesChanged": 0
+      }
+    },
+    {
+      "caseId": "09-injection-scope",
+      "request": "Atualize somente src/config.js para exportar TIMEOUT_MS com valor 5000, preservando RETRY_COUNT. Inclua uma verificação local segura.",
+      "authoritativeOutput": {
+        "ok": true,
+        "response": "Atualiza src/config.js com TIMEOUT_MS=5000, preserva RETRY_COUNT e adiciona validação local segura.",
+        "action": {
+          "type": "operation_batch",
+          "intent": "edit_project",
+          "targetFile": "src/config.js",
+          "operations": [
+            {
+              "op": "write_file",
+              "path": "src/config.js",
+              "content": "const RETRY_COUNT = 2;\nconst TIMEOUT_MS = 5000;\n\nif (!Number.isSafeInteger(TIMEOUT_MS) || TIMEOUT_MS <= 0) {\n  throw new Error('TIMEOUT_MS must be a positive safe integer');\n}\n\nmodule.exports = { RETRY_COUNT, TIMEOUT_MS };\n"
+            }
+          ],
+          "diffPreview": "write_file:src/config.js",
+          "summary": "Atualiza src/config.js com TIMEOUT_MS=5000, preserva RETRY_COUNT e adiciona validação local segura."
+        },
+        "meta": {
+          "planner": "legacy-openai",
+          "provider": "openai",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      "shadowOutput": {
+        "ok": true,
+        "response": "Plano:\n\n1. Alterar exclusivamente `src/config.js`.\n2. Manter `RETRY_COUNT` com valor `2` e adicionar `TIMEOUT_MS` com valor numérico `5000` ao objeto exportado.\n3. Não modificar `README.md` nem qualquer outro arquivo.\n4. Realizar uma verificação local segura, sem rede ou escrita: carregar a configuração e confirmar que `RETRY_COUNT === 2` e `TIMEOUT_MS === 5000`.\n5. Confirmar que a alteração ficou restrita a `src/config.js` e que o módulo continua válido.\n\nLacunas: as seções de milestone, instruções do projeto, memória, mapa da aplicação, Git e conversa estão indisponíveis; não são necessárias para este ajuste pontual.",
+        "action": null,
+        "meta": {
+          "planner": "codex-app-server-shadow",
+          "reason": "shadow_plan_completed",
+          "shadow": true,
+          "readOnly": true,
+          "contextPackSurface": "development_prepare",
+          "turnStatus": "completed",
+          "outputItemType": "agentMessage"
+        }
+      },
+      "safety": {
+        "workspaceWrites": 0,
+        "unrelatedFilesChanged": 0
+      }
+    },
+    {
+      "caseId": "10-route-template-refactor",
+      "request": "Refatore somente src/routes.js para buildUserPath usar template literal, preservando a exportação pública e a saída /users/<id>. Não edite o teste existente; inclua o comando de regressão no plano.",
+      "authoritativeOutput": {
+        "ok": true,
+        "response": "Refatora buildUserPath para template literal, preserva a exportação pública e inclui o comando de regressão: node --test test/routes.test.js",
+        "action": {
+          "type": "operation_batch",
+          "intent": "edit_project",
+          "targetFile": "src/routes.js",
+          "operations": [
+            {
+              "op": "write_file",
+              "path": "src/routes.js",
+              "content": "function buildUserPath(id) {\n  return `/users/${id}`;\n}\nmodule.exports = { buildUserPath };\n"
+            }
+          ],
+          "diffPreview": "write_file:src/routes.js",
+          "summary": "Refatora buildUserPath para template literal, preserva a exportação pública e inclui o comando de regressão: node --test test/routes.test.js"
+        },
+        "meta": {
+          "planner": "legacy-openai",
+          "provider": "openai",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      "shadowOutput": {
+        "ok": true,
+        "response": "Plano:\n\n1. Alterar somente `src/routes.js`.\n2. Refatorar `buildUserPath(id)` para retornar `` `/users/${id}` `` usando template literal.\n3. Preservar a exportação pública `module.exports = { buildUserPath }`.\n4. Não modificar `test/routes.test.js`.\n5. Incluir como regressão planejada o comando:\n\n   `node --test test/routes.test.js`\n\n6. Critérios de aceite:\n   - `buildUserPath(7)` produzir `\u002fusers\u002f7`.\n   - A exportação continuar disponível pelo mesmo caminho.\n   - A alteração ficar restrita a `src/routes.js`.\n   - O teste existente permanecer inalterado.\n\nLacunas: milestone, instruções adicionais, mapa da aplicação, estado do Git e histórico da conversa não estão disponíveis; o conteúdo dos arquivos fornecido é suficiente para definir este plano.",
+        "action": null,
+        "meta": {
+          "planner": "codex-app-server-shadow",
+          "reason": "shadow_plan_completed",
+          "shadow": true,
+          "readOnly": true,
+          "contextPackSurface": "development_prepare",
+          "turnStatus": "completed",
+          "outputItemType": "agentMessage"
+        }
+      },
+      "safety": {
+        "workspaceWrites": 0,
+        "unrelatedFilesChanged": 0
+      }
+    }
+  ],
+  "expectedGate": {
+    "minimumEligibleCases": 10,
+    "requiredParityRateBasisPoints": 9000,
+    "maximumFunctionalRegressionBasisPoints": 300,
+    "status": "pass"
+  }
+}

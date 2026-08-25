@@ -14,6 +14,7 @@ const {
   createHarnessResult,
 } = require('./harness_contracts');
 const {
+  CODEX_APP_SERVER_SHADOW_ISOLATION_PROFILE_VERSION,
   createCodexAppServerShadowThreadStartRequest,
   createCodexAppServerShadowTurnInterruptRequest,
   createCodexAppServerShadowTurnStartRequest,
@@ -31,6 +32,8 @@ const MAX_NOTIFICATION_BUFFER = 256;
 const MAX_IDENTIFIER_CHARS = 1_024;
 const MAX_OUTPUT_CHARS = 1024 * 1024;
 const MAX_PROMPT_CHARS = 64 * 1024;
+const MAX_DISABLED_MCP_SERVERS = 128;
+const SAFE_MCP_SERVER_NAME = /^[A-Za-z0-9._-]{1,128}$/;
 
 const CODEX_APP_SERVER_KERNEL_ADAPTER_REASONS = Object.freeze({
   CAPACITY_EXCEEDED: 'CODEX_APP_SERVER_KERNEL_CAPACITY_EXCEEDED',
@@ -176,6 +179,43 @@ function boundedInteger(value, fallback, minimum, maximum, fieldName) {
     throw new TypeError(fieldName + ' is outside its supported bounds');
   }
   return candidate;
+}
+
+function readClientIsolationProfile(port) {
+  let profile;
+  try {
+    profile = Reflect.apply(port.isolationProfile, port.receiver, []);
+  } catch {
+    throw adapterError(
+      CODEX_APP_SERVER_KERNEL_ADAPTER_REASONS.TRANSPORT_FAILED
+    );
+  }
+  try {
+    const fields = dataFields(profile, 'App Server isolation profile', {
+      frozen: true,
+    });
+    if (fields.size !== 3
+      || fields.get('version')
+        !== CODEX_APP_SERVER_SHADOW_ISOLATION_PROFILE_VERSION
+      || fields.get('complete') !== true) {
+      throw new TypeError('App Server isolation profile is incomplete');
+    }
+    const names = denseArrayValues(
+      fields.get('disabledMcpServerNames'),
+      'App Server disabled MCP servers',
+      MAX_DISABLED_MCP_SERVERS
+    );
+    if (names.some((name) => typeof name !== 'string'
+        || !SAFE_MCP_SERVER_NAME.test(name))
+      || new Set(names).size !== names.length) {
+      throw new TypeError('App Server isolation profile is invalid');
+    }
+    return Object.freeze([...names].sort());
+  } catch {
+    throw adapterError(
+      CODEX_APP_SERVER_KERNEL_ADAPTER_REASONS.TRANSPORT_FAILED
+    );
+  }
 }
 
 function inspectableFunction(value, fieldName) {
@@ -441,7 +481,7 @@ function parseTurnStartResult(value) {
   }
 }
 
-function parseThreadItem(value, fieldName) {
+function parseThreadItem(value, fieldName, { allowIncompleteText = false } = {}) {
   const fields = dataFields(value, fieldName, { frozen: true });
   const type = safeIdentifier(fields.get('type'), fieldName + ' type');
   const id = safeIdentifier(fields.get('id'), fieldName + ' id');
@@ -449,6 +489,9 @@ function parseThreadItem(value, fieldName) {
     return Object.freeze({ blocked: true, id, type });
   }
   if (type !== 'agentMessage' && type !== 'plan') {
+    return Object.freeze({ blocked: false, output: null });
+  }
+  if (allowIncompleteText && fields.get('text') === '') {
     return Object.freeze({ blocked: false, output: null });
   }
   const text = safeOutputText(fields.get('text'), fieldName + ' text');
@@ -528,7 +571,11 @@ function parseNotification(value) {
         throw new TypeError('item completion timestamp is invalid');
       }
     }
-    const parsed = parseThreadItem(params.get('item'), method + ' item');
+    const parsed = parseThreadItem(
+      params.get('item'),
+      method + ' item',
+      { allowIncompleteText: method === 'item/started' }
+    );
     if (parsed.blocked) {
       return Object.freeze({ kind: 'blocked', threadId, turnId });
     }
@@ -693,12 +740,14 @@ async function runPlan(state, request) {
   const inspected = inspectPlanRequest(state, request);
   const prompt = buildPlanningPrompt(request, inspected);
   await callAsyncPort(state.client, 'start', []);
+  const disabledMcpServerNames = readClientIsolationProfile(state.client);
 
   const threadResult = await callAsyncPort(state.client, 'request', [
     createCodexAppServerShadowThreadStartRequest({
       id: nextRequestId(state),
       cwd: inspected.rootPath,
       model: state.model,
+      disabledMcpServerNames,
     }),
   ]);
   const threadId = parseThreadStartResult(threadResult);
@@ -793,7 +842,7 @@ class CodexAppServerKernelAdapter extends AgentKernel {
     }
     const client = captureFrozenPort(
       fields.get('client'),
-      ['start', 'request', 'subscribe', 'status'],
+      ['start', 'isolationProfile', 'request', 'subscribe', 'status'],
       'client'
     );
     const promptProjector = captureFrozenPort(
