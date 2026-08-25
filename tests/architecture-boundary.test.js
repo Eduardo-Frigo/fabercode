@@ -164,6 +164,9 @@ function assertAgentRuntimeBoundary() {
   const shadowPlanRuntimeCompositionSource = read(
     'main/agent_runtime/shadow_plan_runtime_composition.js'
   );
+  const canaryEditAdmissionPolicySource = read(
+    'main/agent_runtime/canary_edit_admission_policy.js'
+  );
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
@@ -404,6 +407,24 @@ function assertAgentRuntimeBoundary() {
     /\bprocess\.env\b|\b(?:spawn|execFile|fork)\s*\(/,
     'shadow runtime composition must receive explicit ports without ambient process or executable authority'
   );
+  assertDoesNotMatch(
+    canaryEditAdmissionPolicySource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm)\s*\(/,
+    'canary admission must remain a pure fail-closed decision boundary without ambient mutation, process, network, or Electron authority'
+  );
+  for (const prerequisite of [
+    'projectAuthorized',
+    'localEdit',
+    'installFree',
+    'networkFree',
+    'checkpointValid',
+    'rootMutationExclusive',
+  ]) {
+    assert.ok(
+      canaryEditAdmissionPolicySource.includes(prerequisite),
+      `canary admission must enforce the ${prerequisite} prerequisite`
+    );
+  }
 }
 
 function assertProjectCapabilityBoundary() {
