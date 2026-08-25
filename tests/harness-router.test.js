@@ -78,6 +78,44 @@ function createRecordingShadowPlanRunner(authoritativeKernel, {
   return { calls, runner };
 }
 
+function createRecordingCanaryEditRunner(authoritativeKernel, {
+  authoritativeKernelId = authoritativeKernel.id,
+  canaryKernelId = 'codex-app-server-canary',
+  fallbackToLegacy = false,
+  invalidResult = null,
+  output = { ok: true, modifiedFiles: ['src/canary.js'] },
+  rejection = null,
+  synchronous = false,
+} = {}) {
+  const calls = [];
+  const runner = Object.freeze({
+    version: 'recording-canary-edit-runner.v1',
+    execute(request) {
+      calls.push(request);
+      if (rejection) return Promise.reject(rejection);
+      if (fallbackToLegacy) return authoritativeKernel.execute(request);
+      const result = invalidResult || createHarnessResult({
+        requestId: request.requestId,
+        operation: request.operation,
+        kernelId: canaryKernelId,
+        output,
+        diagnostics: { canary: true },
+      });
+      return synchronous ? result : Promise.resolve(result);
+    },
+    diagnostics() {
+      return Object.freeze({
+        version: 'recording-canary-edit-runner.v1',
+        authoritativeKernelId,
+        canaryKernelId,
+        executions: calls.length,
+        activeExecutions: 0,
+      });
+    },
+  });
+  return { calls, output, runner };
+}
+
 async function testShadowModeRoutesPlanOnly() {
   const outputs = {
     plan: { ok: true, action: { type: 'shadow-authoritative-plan' } },
@@ -197,6 +235,201 @@ async function testShadowModeRoutesPlanOnly() {
   );
 }
 
+async function testCanaryModeRoutesExecuteOnly() {
+  const outputs = {
+    plan: { ok: true, action: { type: 'legacy-plan' } },
+    message: { ok: true, response: 'legacy message' },
+    execute: { ok: true, modifiedFiles: ['src/legacy.js'] },
+  };
+  const kernel = new RecordingLegacyKernel(outputs);
+  const canary = createRecordingCanaryEditRunner(kernel);
+  let sequence = 0;
+  const router = createHarnessRouter({
+    canaryEditRunner: canary.runner,
+    legacyKernel: kernel,
+    runtimeConfig: createHarnessRuntimeConfig({
+      env: { FABER_HARNESS_V2_MODE: 'canary' },
+    }),
+    requestIdFactory: () => `canary-route-${sequence += 1}`,
+  });
+
+  assert.strictEqual(await router.plan({ userMessage: 'planejar' }), outputs.plan);
+  assert.strictEqual(await router.message({ userMessage: 'conversar' }), outputs.message);
+  const executionContext = { jobId: 'job-canary-route' };
+  assert.strictEqual(
+    await router.execute(
+      { type: 'apply_file_patch' },
+      { rootPath: '/tmp/project' },
+      executionContext
+    ),
+    canary.output
+  );
+  assert.deepStrictEqual(
+    kernel.calls.map(([operation]) => operation),
+    [HARNESS_OPERATIONS.PLAN, HARNESS_OPERATIONS.MESSAGE]
+  );
+  assert.strictEqual(canary.calls.length, 1);
+  assert.strictEqual(canary.calls[0].operation, HARNESS_OPERATIONS.EXECUTE);
+  assert.strictEqual(canary.calls[0].requestId, 'canary-route-3');
+  assert.strictEqual(canary.calls[0].executionContext, executionContext);
+
+  const status = router.getStatus();
+  assert.strictEqual(status.configuredMode, 'canary');
+  assert.strictEqual(status.effectiveMode, 'canary');
+  assert.strictEqual(status.activeKernelId, 'codex-app-server-canary');
+  assert.strictEqual(status.canaryKernelId, 'codex-app-server-canary');
+  assert.strictEqual(status.shadowKernelId, null);
+  assert.strictEqual(status.fallbackActive, false);
+  assert.strictEqual(status.reason, 'canary_active');
+  assert.deepStrictEqual(status.canaryKernel, {
+    version: 'recording-canary-edit-runner.v1',
+    authoritativeKernelId: 'legacy',
+    canaryKernelId: 'codex-app-server-canary',
+    executions: 1,
+    activeExecutions: 0,
+  });
+  assert.strictEqual(status.shadowKernel, null);
+
+  const fallbackKernel = new RecordingLegacyKernel(outputs);
+  const fallback = createRecordingCanaryEditRunner(fallbackKernel, {
+    fallbackToLegacy: true,
+  });
+  const fallbackRouter = createHarnessRouter({
+    canaryEditRunner: fallback.runner,
+    legacyKernel: fallbackKernel,
+    runtimeConfig: createHarnessRuntimeConfig({
+      env: { FABER_HARNESS_V2_MODE: 'canary' },
+    }),
+    requestIdFactory: () => 'canary-clean-fallback',
+  });
+  assert.strictEqual(
+    await fallbackRouter.execute({ type: 'noop' }, { rootPath: '/tmp/project' }),
+    outputs.execute
+  );
+  assert.strictEqual(fallback.calls.length, 1);
+  assert.strictEqual(fallbackKernel.calls.length, 1);
+
+  const rejection = new Error('canary cleanup ambiguous');
+  const rejectedKernel = new RecordingLegacyKernel(outputs);
+  const rejected = createRecordingCanaryEditRunner(rejectedKernel, { rejection });
+  const rejectedRouter = createHarnessRouter({
+    canaryEditRunner: rejected.runner,
+    legacyKernel: rejectedKernel,
+    runtimeConfig: createHarnessRuntimeConfig({
+      env: { FABER_HARNESS_V2_MODE: 'canary' },
+    }),
+    requestIdFactory: () => 'canary-rejected',
+  });
+  await assert.rejects(
+    rejectedRouter.execute({ type: 'noop' }, { rootPath: '/tmp/project' }),
+    (error) => error === rejection
+  );
+  assert.strictEqual(
+    rejectedKernel.calls.length,
+    0,
+    'the router must never invent a legacy fallback after an ambiguous canary rejection'
+  );
+
+  const synchronousKernel = new RecordingLegacyKernel(outputs);
+  const synchronous = createRecordingCanaryEditRunner(synchronousKernel, {
+    synchronous: true,
+  });
+  const synchronousRouter = createHarnessRouter({
+    canaryEditRunner: synchronous.runner,
+    legacyKernel: synchronousKernel,
+    runtimeConfig: createHarnessRuntimeConfig({
+      env: { FABER_HARNESS_V2_MODE: 'canary' },
+    }),
+    requestIdFactory: () => 'canary-sync-invalid',
+  });
+  await assert.rejects(
+    synchronousRouter.execute({ type: 'noop' }, { rootPath: '/tmp/project' }),
+    /native Promise/
+  );
+  assert.strictEqual(synchronousKernel.calls.length, 0);
+
+  const wrongKernel = new RecordingLegacyKernel(outputs);
+  const wrongResult = createRecordingCanaryEditRunner(wrongKernel, {
+    invalidResult: createHarnessResult({
+      requestId: 'canary-wrong-kernel',
+      operation: HARNESS_OPERATIONS.EXECUTE,
+      kernelId: 'untrusted-kernel',
+      output: {},
+    }),
+  });
+  const wrongResultRouter = createHarnessRouter({
+    canaryEditRunner: wrongResult.runner,
+    legacyKernel: wrongKernel,
+    runtimeConfig: createHarnessRuntimeConfig({
+      env: { FABER_HARNESS_V2_MODE: 'canary' },
+    }),
+    requestIdFactory: () => 'canary-wrong-kernel',
+  });
+  await assert.rejects(
+    wrongResultRouter.execute({ type: 'noop' }, { rootPath: '/tmp/project' }),
+    /kernel id/
+  );
+  assert.strictEqual(wrongKernel.calls.length, 0);
+
+  const unavailable = createHarnessRouter({
+    legacyKernel: new RecordingLegacyKernel(outputs),
+    runtimeConfig: createHarnessRuntimeConfig({
+      env: { FABER_HARNESS_V2_MODE: 'canary' },
+    }),
+    requestIdFactory: () => 'canary-unavailable',
+  });
+  assert.strictEqual(unavailable.getStatus().effectiveMode, 'legacy');
+  assert.strictEqual(unavailable.getStatus().fallbackActive, true);
+  assert.strictEqual(unavailable.getStatus().reason, 'canary_runner_unavailable');
+
+  for (const mode of ['legacy', 'shadow', 'on']) {
+    const dormantKernel = new RecordingLegacyKernel(outputs);
+    const dormant = createRecordingCanaryEditRunner(dormantKernel);
+    const dormantRouter = createHarnessRouter({
+      canaryEditRunner: dormant.runner,
+      legacyKernel: dormantKernel,
+      runtimeConfig: createHarnessRuntimeConfig({
+        env: mode === 'legacy' ? {} : { FABER_HARNESS_V2_MODE: mode },
+      }),
+      requestIdFactory: () => `canary-dormant-${mode}`,
+    });
+    assert.strictEqual(
+      await dormantRouter.execute({ type: 'noop' }, { rootPath: '/tmp/project' }),
+      outputs.execute
+    );
+    assert.strictEqual(dormant.calls.length, 0);
+    assert.strictEqual(dormantRouter.getStatus().canaryKernel, null);
+  }
+
+  const mismatched = createRecordingCanaryEditRunner(kernel, {
+    authoritativeKernelId: 'other-legacy',
+  });
+  assert.throws(
+    () => createHarnessRouter({
+      canaryEditRunner: mismatched.runner,
+      legacyKernel: kernel,
+      runtimeConfig: createHarnessRuntimeConfig({
+        env: { FABER_HARNESS_V2_MODE: 'canary' },
+      }),
+    }),
+    /authoritativeKernelId/
+  );
+  assert.throws(
+    () => createHarnessRouter({
+      canaryEditRunner: Object.freeze({ ...canary.runner, unexpected: true }),
+      legacyKernel: kernel,
+    }),
+    /canaryEditRunner/
+  );
+  assert.throws(
+    () => createHarnessRouter({
+      canaryEditRunner: { ...canary.runner },
+      legacyKernel: kernel,
+    }),
+    /canaryEditRunner/
+  );
+}
+
 async function run() {
   assert.throws(
     () => createHarnessRouter(),
@@ -279,7 +512,7 @@ async function run() {
   assert.strictEqual(status.effectiveMode, 'legacy');
   assert.strictEqual(status.activeKernelId, 'legacy');
   assert.strictEqual(status.fallbackActive, true);
-  assert.strictEqual(status.reason, 'phase_4_not_promoted');
+  assert.strictEqual(status.reason, 'phase_5_not_promoted');
   assert.strictEqual(status.kernel.id, 'legacy');
   assert.strictEqual(status.runtimeConfig.configuredPrimaryKernel, 'v2');
   assert.strictEqual(status.runtimeConfig.diagnostics.configuredMode, 'on');
@@ -396,6 +629,7 @@ async function run() {
   );
 
   await testShadowModeRoutesPlanOnly();
+  await testCanaryModeRoutesExecuteOnly();
 
   console.log('harness-router.test.js: ok');
 }

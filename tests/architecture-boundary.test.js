@@ -213,13 +213,42 @@ function assertAgentRuntimeBoundary() {
   assertDoesNotMatch(
     routerSource.slice(routerMessageDispatchStart, routerUnsupportedDispatchStart),
     /callShadowPlanRunner\s*\(/,
-    'HarnessRouter must keep message and execute fully authoritative on the legacy kernel'
+    'HarnessRouter must keep the shadow plan runner out of message and execute'
+  );
+  assertDoesNotMatch(
+    routerSource.slice(routerMessageDispatchStart, routerExecuteDispatchStart),
+    /callCanaryEditRunner\s*\(/,
+    'HarnessRouter must keep canary editing out of message dispatch'
+  );
+  assert.ok(
+    routerSource.slice(
+      routerExecuteDispatchStart,
+      routerUnsupportedDispatchStart
+    ).includes('callCanaryEditRunner(capturedCanaryEditRunner, kernelRequest)'),
+    'HarnessRouter must route canary editing only through its explicit execute branch'
   );
   assert.ok(
     routerSource.includes("resolvedRuntimeConfig.configuredMode === 'shadow'")
       && routerSource.includes("reason = 'shadow_active'")
       && routerSource.includes("reason = 'shadow_runner_unavailable'"),
     'HarnessRouter must activate shadow explicitly and report unavailable composition fail-closed'
+  );
+  assert.ok(
+    routerSource.includes("resolvedRuntimeConfig.configuredMode === 'canary'")
+      && routerSource.includes("reason = 'canary_active'")
+      && routerSource.includes("reason = 'canary_runner_unavailable'")
+      && routerSource.includes(
+        'canaryEditRunner.execute must return a native Promise'
+      ),
+    'HarnessRouter must activate canary explicitly, require a native async runner, and report unavailable composition fail-closed'
+  );
+  assertDoesNotMatch(
+    routerSource.slice(
+      routerExecuteDispatchStart,
+      routerUnsupportedDispatchStart
+    ),
+    /catch[\s\S]{0,300}legacyKernel\.execute/,
+    'HarnessRouter must never invent a legacy fallback after an ambiguous canary failure'
   );
   assertDoesNotMatch(
     facadeSource,

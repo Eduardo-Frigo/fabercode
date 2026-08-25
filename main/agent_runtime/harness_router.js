@@ -37,7 +37,10 @@ function resolveRuntimeConfig(runtimeConfig) {
   return createHarnessRuntimeConfig({ env: {} });
 }
 
-function assertKernelResult(result, request, kernel) {
+function assertKernelResult(result, request, expectedKernelIds) {
+  const allowedKernelIds = Array.isArray(expectedKernelIds)
+    ? expectedKernelIds
+    : [expectedKernelIds.id];
   if (!result || typeof result !== 'object') {
     throw new Error('Harness kernel returned an invalid result envelope.');
   }
@@ -47,7 +50,7 @@ function assertKernelResult(result, request, kernel) {
   if (result.requestId !== request.requestId || result.operation !== request.operation) {
     throw new Error('Harness kernel returned a result for a different request.');
   }
-  if (result.kernelId !== kernel.id) {
+  if (!allowedKernelIds.includes(result.kernelId)) {
     throw new Error('Harness kernel returned a result with a mismatched kernel id.');
   }
   if (!Object.prototype.hasOwnProperty.call(result, 'output')) {
@@ -91,9 +94,9 @@ function inspectableFunction(value, fieldName) {
   return value;
 }
 
-function inspectFrozenDiagnostics(value) {
+function inspectFrozenDiagnostics(value, fieldName = 'shadowPlanRunner.diagnostics') {
   if (!isPlainRecord(value) || !Object.isFrozen(value)) {
-    throw new TypeError('shadowPlanRunner.diagnostics must be synchronous frozen data');
+    throw new TypeError(`${fieldName} must be synchronous frozen data`);
   }
   const fields = new Map();
   for (const key of Reflect.ownKeys(value)) {
@@ -105,7 +108,7 @@ function inspectFrozenDiagnostics(value) {
       || !['string', 'number', 'boolean'].includes(typeof descriptor.value)
         && descriptor.value !== null) {
       throw new TypeError(
-        'shadowPlanRunner.diagnostics must contain scalar data values only'
+        `${fieldName} must contain scalar data values only`
       );
     }
     fields.set(key, descriptor.value);
@@ -123,7 +126,7 @@ function readShadowPlanRunnerDiagnostics(port) {
   if (util.types.isPromise(diagnostics)) {
     throw new TypeError('shadowPlanRunner.diagnostics must be synchronous frozen data');
   }
-  const fields = inspectFrozenDiagnostics(diagnostics);
+  const fields = inspectFrozenDiagnostics(diagnostics, 'shadowPlanRunner.diagnostics');
   const version = fields.get('version');
   const authoritativeKernelId = fields.get('authoritativeKernelId');
   const shadowKernelId = fields.get('shadowKernelId');
@@ -176,7 +179,10 @@ function captureShadowPlanRunner(value, authoritativeKernel) {
   if (util.types.isPromise(diagnostics)) {
     throw new TypeError('shadowPlanRunner.diagnostics must be synchronous frozen data');
   }
-  const diagnosticFields = inspectFrozenDiagnostics(diagnostics);
+  const diagnosticFields = inspectFrozenDiagnostics(
+    diagnostics,
+    'shadowPlanRunner.diagnostics'
+  );
   if (diagnosticFields.get('version') !== version
     || diagnosticFields.get('authoritativeKernelId') !== authoritativeKernel.id) {
     throw new TypeError(
@@ -215,7 +221,121 @@ function callShadowPlanRunner(port, request) {
   });
 }
 
+function readCanaryEditRunnerDiagnostics(port) {
+  let diagnostics;
+  try {
+    diagnostics = Reflect.apply(port.diagnostics, port.receiver, []);
+  } catch {
+    throw new TypeError('canaryEditRunner.diagnostics failed');
+  }
+  if (util.types.isPromise(diagnostics)) {
+    throw new TypeError(
+      'canaryEditRunner.diagnostics must be synchronous frozen data'
+    );
+  }
+  const fields = inspectFrozenDiagnostics(
+    diagnostics,
+    'canaryEditRunner.diagnostics'
+  );
+  if (fields.get('version') !== port.version
+    || fields.get('authoritativeKernelId') !== port.authoritativeKernelId
+    || fields.get('canaryKernelId') !== port.canaryKernelId) {
+    throw new TypeError('canaryEditRunner diagnostics identity changed');
+  }
+  return diagnostics;
+}
+
+function captureCanaryEditRunner(value, authoritativeKernel) {
+  if (value === null || value === undefined) return null;
+  if (!isPlainRecord(value) || !Object.isFrozen(value)) {
+    throw new TypeError('canaryEditRunner must be a frozen port');
+  }
+  const allowedKeys = new Set(['version', 'execute', 'diagnostics']);
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => typeof key !== 'string' || !allowedKeys.has(key))
+    || keys.length !== allowedKeys.size) {
+    throw new TypeError('canaryEditRunner has invalid fields');
+  }
+  const readDataValue = (key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || descriptor.enumerable !== true
+      || !Object.hasOwn(descriptor, 'value')) {
+      throw new TypeError(`canaryEditRunner.${key} is required`);
+    }
+    return descriptor.value;
+  };
+  const version = readDataValue('version');
+  if (typeof version !== 'string'
+    || !/^[A-Za-z0-9._:@-]{1,256}$/.test(version)) {
+    throw new TypeError('canaryEditRunner.version must be a safe identifier');
+  }
+  const port = {
+    receiver: value,
+    version,
+    execute: inspectableFunction(
+      readDataValue('execute'),
+      'canaryEditRunner.execute'
+    ),
+    diagnostics: inspectableFunction(
+      readDataValue('diagnostics'),
+      'canaryEditRunner.diagnostics'
+    ),
+  };
+  let diagnostics;
+  try {
+    diagnostics = Reflect.apply(port.diagnostics, port.receiver, []);
+  } catch {
+    throw new TypeError('canaryEditRunner.diagnostics failed');
+  }
+  if (util.types.isPromise(diagnostics)) {
+    throw new TypeError(
+      'canaryEditRunner.diagnostics must be synchronous frozen data'
+    );
+  }
+  const diagnosticFields = inspectFrozenDiagnostics(
+    diagnostics,
+    'canaryEditRunner.diagnostics'
+  );
+  if (diagnosticFields.get('version') !== version
+    || diagnosticFields.get('authoritativeKernelId') !== authoritativeKernel.id) {
+    throw new TypeError(
+      'canaryEditRunner.authoritativeKernelId must match legacyKernel.id'
+    );
+  }
+  const canaryKernelId = diagnosticFields.get('canaryKernelId');
+  if (typeof canaryKernelId !== 'string'
+    || !/^[A-Za-z0-9._:@-]{1,256}$/.test(canaryKernelId)
+    || canaryKernelId === authoritativeKernel.id) {
+    throw new TypeError('canaryEditRunner.canaryKernelId is invalid');
+  }
+  port.authoritativeKernelId = authoritativeKernel.id;
+  port.canaryKernelId = canaryKernelId;
+  return Object.freeze(port);
+}
+
+function callCanaryEditRunner(port, request) {
+  let pending;
+  try {
+    pending = Reflect.apply(port.execute, port.receiver, [request]);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  if (!util.types.isPromise(pending)) {
+    return Promise.reject(new TypeError(
+      'canaryEditRunner.execute must return a native Promise'
+    ));
+  }
+  return new Promise((resolve, reject) => {
+    try {
+      Reflect.apply(Promise.prototype.then, pending, [resolve, reject]);
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
 function createHarnessRouter({
+  canaryEditRunner = null,
   contextPackInjector = null,
   legacyKernel,
   runtimeConfig = null,
@@ -236,8 +356,14 @@ function createHarnessRouter({
     shadowPlanRunner,
     legacyKernel
   );
+  const capturedCanaryEditRunner = captureCanaryEditRunner(
+    canaryEditRunner,
+    legacyKernel
+  );
   const shadowActive = resolvedRuntimeConfig.configuredMode === 'shadow'
     && capturedShadowPlanRunner !== null;
+  const canaryActive = resolvedRuntimeConfig.configuredMode === 'canary'
+    && capturedCanaryEditRunner !== null;
 
   async function dispatch(request) {
     assertHarnessRequest(request);
@@ -253,6 +379,7 @@ function createHarnessRouter({
     }
 
     let result;
+    let expectedKernelIds = [legacyKernel.id];
     if (kernelRequest.operation === HARNESS_OPERATIONS.PLAN) {
       result = shadowActive
         ? await callShadowPlanRunner(capturedShadowPlanRunner, kernelRequest)
@@ -260,12 +387,20 @@ function createHarnessRouter({
     } else if (kernelRequest.operation === HARNESS_OPERATIONS.MESSAGE) {
       result = await legacyKernel.message(kernelRequest);
     } else if (kernelRequest.operation === HARNESS_OPERATIONS.EXECUTE) {
-      result = await legacyKernel.execute(kernelRequest);
+      if (canaryActive) {
+        result = await callCanaryEditRunner(capturedCanaryEditRunner, kernelRequest);
+        expectedKernelIds = [
+          legacyKernel.id,
+          capturedCanaryEditRunner.canaryKernelId,
+        ];
+      } else {
+        result = await legacyKernel.execute(kernelRequest);
+      }
     } else {
       throw new Error(`Harness operation not supported: ${kernelRequest.operation}`);
     }
 
-    assertKernelResult(result, kernelRequest, legacyKernel);
+    assertKernelResult(result, kernelRequest, expectedKernelIds);
     return result.output;
   }
 
@@ -291,7 +426,11 @@ function createHarnessRouter({
 
   function getStatus() {
     const configuredMode = resolvedRuntimeConfig.configuredMode || legacyMode;
-    const effectiveMode = shadowActive ? 'shadow' : legacyMode;
+    const effectiveMode = shadowActive
+      ? 'shadow'
+      : canaryActive
+        ? 'canary'
+        : legacyMode;
     const configFallbackReason = resolvedRuntimeConfig.diagnostics
       && resolvedRuntimeConfig.diagnostics.fallbackReason;
     const configFallbackActive = configFallbackReason === 'kill_switch'
@@ -301,12 +440,16 @@ function createHarnessRouter({
       reason = configFallbackReason;
     } else if (shadowActive) {
       reason = 'shadow_active';
+    } else if (canaryActive) {
+      reason = 'canary_active';
     } else if (configuredMode === legacyMode) {
       reason = 'legacy_default';
     } else if (configuredMode === 'shadow') {
       reason = 'shadow_runner_unavailable';
+    } else if (configuredMode === 'canary') {
+      reason = 'canary_runner_unavailable';
     } else {
-      reason = 'phase_4_not_promoted';
+      reason = 'phase_5_not_promoted';
     }
     return {
       ok: true,
@@ -314,13 +457,21 @@ function createHarnessRouter({
       requestedMode: resolvedRuntimeConfig.requestedMode || configuredMode,
       configuredMode,
       effectiveMode,
-      activeKernelId: legacyKernel.id,
+      activeKernelId: canaryActive
+        ? capturedCanaryEditRunner.canaryKernelId
+        : legacyKernel.id,
+      canaryKernelId: canaryActive
+        ? capturedCanaryEditRunner.canaryKernelId
+        : null,
       shadowKernelId: shadowActive
         ? capturedShadowPlanRunner.shadowKernelId
         : null,
       fallbackActive: configFallbackActive || configuredMode !== effectiveMode,
       reason,
       kernel: getKernelDiagnostics(legacyKernel),
+      canaryKernel: canaryActive
+        ? readCanaryEditRunnerDiagnostics(capturedCanaryEditRunner)
+        : null,
       shadowKernel: shadowActive
         ? readShadowPlanRunnerDiagnostics(capturedShadowPlanRunner)
         : null,
