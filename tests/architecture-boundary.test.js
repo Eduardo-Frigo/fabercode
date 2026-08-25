@@ -182,6 +182,9 @@ function assertAgentRuntimeBoundary() {
   const canaryStagingContractSource = read(
     'main/agent_runtime/canary_staging_contract.js'
   );
+  const canaryStagingTrialExecutorSource = read(
+    'main/agent_runtime/canary_staging_trial_executor.js'
+  );
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
@@ -600,6 +603,48 @@ function assertAgentRuntimeBoundary() {
         'CANARY_EDIT_CLEANUP_RECEIPT_SCHEMA_VERSION'
       ),
     'canary staging contracts must bind disjoint execution workspaces, prove staging-only writes, and translate physical discard into lifecycle cleanup evidence'
+  );
+  assertDoesNotMatch(
+    canaryStagingTrialExecutorSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm)\s*\(/,
+    'canary staging trial executor must use explicit ports without ambient filesystem, process, network, or Electron authority'
+  );
+  const trialOpenIndex = canaryStagingTrialExecutorSource.indexOf(
+    "dependencies.workspaceSessionPort,\n        'open'"
+  );
+  const trialWriteFrontierIndex = canaryStagingTrialExecutorSource.indexOf(
+    'const writeFrontier = lifecycle.noteWrite({'
+  );
+  const trialEditIndex = canaryStagingTrialExecutorSource.indexOf(
+    "dependencies.canaryEditor,\n        'execute'"
+  );
+  const trialFallbackIndex = canaryStagingTrialExecutorSource.indexOf(
+    'const fallback = lifecycle.requestFallback({ reason: fallbackReason });'
+  );
+  const trialDiscardIndex = canaryStagingTrialExecutorSource.indexOf(
+    "dependencies.workspaceSessionPort,\n        'discard'"
+  );
+  const trialCleanupIndex = canaryStagingTrialExecutorSource.indexOf(
+    'const cleanup = lifecycle.confirmCleanup(discardReceipt.lifecycleReceipt);'
+  );
+  const trialSignalIndex = canaryStagingTrialExecutorSource.indexOf(
+    'schemaVersion: CANARY_EDIT_RUNNER_FALLBACK_SIGNAL_SCHEMA_VERSION'
+  );
+  assert.ok(
+    trialOpenIndex >= 0
+      && trialWriteFrontierIndex > trialOpenIndex
+      && trialEditIndex > trialWriteFrontierIndex
+      && trialFallbackIndex > trialEditIndex
+      && trialDiscardIndex > trialFallbackIndex
+      && trialCleanupIndex > trialDiscardIndex
+      && trialSignalIndex > trialCleanupIndex,
+    'canary staging trial must open, mark the write frontier, settle editing, request fallback, verify discard, confirm cleanup, and only then emit fallback-ready'
+  );
+  assert.ok(
+    canaryStagingTrialExecutorSource.includes("? 'promotion_unavailable'")
+      && canaryStagingTrialExecutorSource.includes("sourceMutation') !== 'forbidden'")
+      && canaryStagingTrialExecutorSource.includes("settlementMode') !== 'terminal'"),
+    'canary staging trial must remain source-write forbidden and discard even a successful terminal edit until explicit promotion exists'
   );
 }
 
