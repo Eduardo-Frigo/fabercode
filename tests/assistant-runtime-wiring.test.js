@@ -267,21 +267,74 @@ assertInOrder(
   'executor cleanup must be confirmed before delete/root barriers and authority revocation'
 );
 
+for (const productionCanaryDependency of [
+  "require('./main/runtime/codex_app_server_runtime_config')",
+  "require('./main/services/codex_app_server_production_client_activation')",
+  "require('./main/services/canary_internal_rollout_policy')",
+  "require('./main/services/canary_edit_production_runtime')",
+]) {
+  assert.ok(
+    mainSource.includes(productionCanaryDependency),
+    `main process canary wiring is missing: ${productionCanaryDependency}`
+  );
+}
+
+const canaryInitializationSource = extractFunctionDeclaration(
+  mainSource,
+  'initializeCanaryEditProductionRuntime'
+);
+assertInOrder(
+  canaryInitializationSource,
+  [
+    "runtimeConfig.configuredMode !== 'canary'",
+    '!runtimeServices',
+    'createCodexAppServerRuntimeConfig({ env: process.env })',
+    'createCanaryInternalRolloutPolicy({',
+    'authorizeProjectBinding: (projectId, rootPath) => (',
+    'getProjectAccess().authorizeProjectBinding(projectId, rootPath)',
+    'createCodexAppServerProductionClientActivation({',
+    "cwd: app.getPath('userData')",
+    'clientVersion: app.getVersion()',
+    'environment: Object.freeze({ ...process.env })',
+    'clientSelection = await clientActivation.start();',
+    'if (clientSelection.ready !== true || !clientSelection.client)',
+    'productionRuntime = createCanaryEditProductionRuntime({',
+    'authorityService,',
+    'projectRootAuthorityRegistry: runtimeServices.projectRootAuthorityRegistry,',
+    'executionWorkspaceRegistry: runtimeServices.executionWorkspaceRegistry,',
+    'inspectRootMutation: (binding) => coordinator.inspectRootMutation(binding),',
+    'inspectRollout: (binding) => rolloutPolicy.inspect(binding),',
+    'promotionIdFactory: () => `canary-promotion-${crypto.randomUUID()}`',
+    'client: clientSelection.client,',
+    'if (!productionRuntime.canaryEditRunner',
+    'await productionRuntime.close();',
+    'canaryEditProductionRuntimeInstance = productionRuntime;',
+    'activeKernelId: CANARY_EDIT_PRODUCTION_KERNEL_ID,',
+  ],
+  'canary startup must require the portable sandbox, exact internal authorization, pinned client readiness, and a ready production runner before changing kernel identity'
+);
+assert.ok(
+  canaryInitializationSource.includes(
+    'await closeUnownedCodexAppServerSelection(clientSelection);'
+  ),
+  'a ready App Server client must be closed if ownership cannot transfer to the canary runtime'
+);
+assertInOrder(
+  canaryInitializationSource,
+  [
+    'runtimeServices.diagnostics()',
+    "isolationDiagnostics.state === 'ready'",
+    "runtimeConfig.configuredMode !== 'canary'",
+    '!isolationReady',
+    'createCodexAppServerProductionClientActivation({',
+  ],
+  'canary activation must not start a client unless the portable isolation service set is positively ready'
+);
+
 assertInOrder(
   mainSource,
   [
     'const legacyHarnessKernel = createLegacyKernelAdapter({',
-    'const contextPackHarnessProductionService = createContextPackHarnessProductionService({',
-    'authorizeProjectBinding: (projectId, rootPath) => (',
-    'getProjectAccess().authorizeProjectBinding(projectId, rootPath)',
-    'authorizeExecutionBinding: (binding) => (',
-    'assistantJobAuthorityServiceInstance',
-    'getProjectRootAuthorityRegistry: () => (',
-    'executionIsolationRuntimeServices',
-    'getActiveMemory: (input) => resolveActiveMemoryContext(input),',
-    'const harnessRouter = createHarnessRouter({',
-    'contextPackInjector: contextPackHarnessProductionService.contextPackInjector,',
-    'runtimeConfig: createHarnessRuntimeConfig({ env: process.env })',
     'let agenticDeleteJournalAuthenticator = null;',
     'try {',
     'agenticDeleteJournalAuthenticator = createTransactionJournalAuthenticator({',
@@ -327,6 +380,7 @@ assertInOrder(
     'agenticDeleteRuntimeServiceInstance = agenticDeleteRuntimeService;',
     'const assistantPlanningAuthorizer = createAssistantPlanningAuthorizer({',
     'const assistantExecutionIsolationRuntimeServices = executionIsolationRuntimeServices;',
+    'let harnessRouter = null;',
     'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
     'maxActiveJobs: MAX_JOBS_STORED,',
     'beforeAuthorityRelease: beforeAgenticDeleteAuthorityRelease,',
@@ -337,11 +391,33 @@ assertInOrder(
     'jobSessionService: assistantExecutionIsolationRuntimeServices.jobSessionService,',
     'harnessRouter.execute(action, projectInfo, executionContext)',
     'assistantExecutionCoordinatorInstance = assistantExecutionCoordinator;',
+    'const harnessRuntimeConfig = createHarnessRuntimeConfig({ env: process.env });',
+    'const canaryRuntimeSelection = await initializeCanaryEditProductionRuntime({',
+    'authoritativeKernel: legacyHarnessKernel,',
+    'authorityService: assistantJobAuthorityService,',
+    'coordinator: assistantExecutionCoordinator,',
+    'runtimeConfig: harnessRuntimeConfig,',
+    'runtimeServices: assistantExecutionIsolationRuntimeServices,',
+    'const activeHarnessKernelId = canaryRuntimeSelection.activeKernelId;',
+    'const contextPackHarnessProductionService = createContextPackHarnessProductionService({',
+    'authorizeProjectBinding: (projectId, rootPath) => (',
+    'getProjectAccess().authorizeProjectBinding(projectId, rootPath)',
+    'authorizeExecutionBinding: (binding) => (',
+    'assistantJobAuthorityServiceInstance',
+    'getProjectRootAuthorityRegistry: () => (',
+    'executionIsolationRuntimeServices',
+    'getActiveMemory: (input) => resolveActiveMemoryContext(input),',
+    'kernelId: activeHarnessKernelId,',
+    'harnessRouter = createHarnessRouter({',
+    'canaryEditRunner: canaryRuntimeSelection.canaryEditRunner,',
+    'contextPackInjector: contextPackHarnessProductionService.contextPackInjector,',
+    'runtimeConfig: harnessRuntimeConfig,',
     'const assistantRuntime = createAssistantRuntimeFacade({',
     'authorizePlanningPayload: (input) => (',
     'agenticDeleteStartupRecoveryHealthy',
     '? assistantPlanningAuthorizer.authorize(input)',
     ': assistantRecoveryRequiredResult()',
+    'kernelId: activeHarnessKernelId,',
     'registerAssistantHandlers({',
     'assistantRuntime,',
   ],
@@ -404,12 +480,16 @@ assertInOrder(
   mainSource,
   [
     'function beginPortableIsolationHelperShutdown(event) {',
+    'const canaryRuntime = canaryEditProductionRuntimeInstance;',
     'const runtimeServices = executionIsolationRuntimeServices;',
     'event.preventDefault()',
+    'canaryEditProductionRuntimeInstance = null;',
     'portableIsolationHelperProviderSelection = null;',
     'executionIsolationRuntimeServices = null;',
+    'await canaryRuntime.close()',
     'await runtimeServices.dispose()',
     'await runtime.dispose()',
+    'canaryRuntimeClosed',
     'zeroOrphanShutdownConfirmed',
     'portableIsolationHelperActivationRuntime = null;',
     'portableIsolationHelperShutdownComplete = true;',

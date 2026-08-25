@@ -126,6 +126,16 @@ const {
   createAssistantJobAuthorityService,
 } = require('./main/services/assistant_job_authority_service');
 const { createArtifactStoreService } = require('./main/services/artifact_store_service');
+const {
+  CANARY_EDIT_PRODUCTION_KERNEL_ID,
+  createCanaryEditProductionRuntime,
+} = require('./main/services/canary_edit_production_runtime');
+const {
+  createCanaryInternalRolloutPolicy,
+} = require('./main/services/canary_internal_rollout_policy');
+const {
+  createCodexAppServerProductionClientActivation,
+} = require('./main/services/codex_app_server_production_client_activation');
 const { createCommandRunner } = require('./main/services/command_runner');
 const { createCortexRuntimeJobService } = require('./main/services/cortex_runtime_job_service');
 const { createCortexLearningPayloadService } = require('./main/services/cortex_learning_payload_service');
@@ -251,6 +261,9 @@ const { createAttachmentContextService } = require('./main/runtime/attachment_co
 const {
   createAnchoredMutationRuntimeConfig,
 } = require('./main/runtime/anchored_mutation_runtime_config');
+const {
+  createCodexAppServerRuntimeConfig,
+} = require('./main/runtime/codex_app_server_runtime_config');
 const {
   createExecutionIsolationRuntimeConfig,
 } = require('./main/runtime/execution_isolation_runtime_config');
@@ -1199,6 +1212,7 @@ let agenticDeleteStartupRecoveryHealthy = false;
 let assistantExecutionCoordinatorInstance = null;
 let assistantJobAuthorityServiceInstance = null;
 let assistantRuntimeLifecycleReason = null;
+let canaryEditProductionRuntimeInstance = null;
 let portableIsolationHelperActivationRuntime = null;
 let portableIsolationHelperProviderSelection = null;
 let executionIsolationRuntimeServices = null;
@@ -5814,30 +5828,203 @@ async function initializePortableIsolationHelperActivation() {
   }
 }
 
+function createLegacyCanaryRuntimeSelection(authoritativeKernel, reason) {
+  return Object.freeze({
+    activeKernelId: authoritativeKernel.id,
+    canaryEditRunner: null,
+    reason,
+  });
+}
+
+async function closeUnownedCodexAppServerSelection(selection) {
+  const client = readAgenticDeleteDataProperty(selection, 'client');
+  const close = readAgenticDeleteDataProperty(client, 'close');
+  if (!client || typeof close !== 'function') return true;
+  try {
+    const receipt = await Reflect.apply(close, client, []);
+    return readAgenticDeleteDataProperty(receipt, 'closed') === true
+      && readAgenticDeleteDataProperty(receipt, 'exited') === true;
+  } catch {
+    return false;
+  }
+}
+
+async function initializeCanaryEditProductionRuntime({
+  authoritativeKernel,
+  authorityService,
+  coordinator,
+  runtimeConfig,
+  runtimeServices,
+}) {
+  let isolationDiagnostics = null;
+  try {
+    isolationDiagnostics = runtimeServices
+      ? runtimeServices.diagnostics()
+      : null;
+  } catch { /* an unreadable isolation state is never eligible */ }
+  const isolationReady = Boolean(
+    isolationDiagnostics && isolationDiagnostics.state === 'ready'
+  );
+  if (runtimeConfig.configuredMode !== 'canary'
+    || !runtimeServices || !isolationReady) {
+    const reason = runtimeConfig.configuredMode !== 'canary'
+      ? 'canary_mode_inactive'
+      : 'execution_isolation_unavailable';
+    try {
+      appendAuditEvent('assistant.canary_edit_activation', {
+        state: 'disabled',
+        reason,
+      });
+    } catch { /* a failed audit write cannot enable the canary */ }
+    return createLegacyCanaryRuntimeSelection(authoritativeKernel, reason);
+  }
+
+  let clientSelection = null;
+  let productionRuntime = null;
+  try {
+    const adapterConfig = createCodexAppServerRuntimeConfig({ env: process.env });
+    const rolloutPolicy = createCanaryInternalRolloutPolicy({
+      runtimeConfig,
+      authorizeProjectBinding: (projectId, rootPath) => (
+        getProjectAccess().authorizeProjectBinding(projectId, rootPath)
+      ),
+    });
+    const clientActivation = createCodexAppServerProductionClientActivation({
+      runtimeConfig,
+      adapterConfig,
+      cwd: app.getPath('userData'),
+      clientVersion: app.getVersion(),
+      environment: Object.freeze({ ...process.env }),
+    });
+    clientSelection = await clientActivation.start();
+    try {
+      appendAuditEvent(
+        'assistant.codex_app_server_activation',
+        clientActivation.diagnostics()
+      );
+    } catch { /* activation remains fail closed when audit persistence fails */ }
+    if (clientSelection.ready !== true || !clientSelection.client) {
+      await closeUnownedCodexAppServerSelection(clientSelection);
+      return createLegacyCanaryRuntimeSelection(
+        authoritativeKernel,
+        'app_server_not_ready'
+      );
+    }
+
+    productionRuntime = createCanaryEditProductionRuntime({
+      runtimeConfig,
+      adapterEnabled: adapterConfig.enabled,
+      authoritativeKernel,
+      authorityService,
+      projectRootAuthorityRegistry: runtimeServices.projectRootAuthorityRegistry,
+      executionWorkspaceRegistry: runtimeServices.executionWorkspaceRegistry,
+      inspectRootMutation: (binding) => coordinator.inspectRootMutation(binding),
+      inspectRollout: (binding) => rolloutPolicy.inspect(binding),
+      promotionIdFactory: () => `canary-promotion-${crypto.randomUUID()}`,
+      cohortSeed: 'faber-code-internal-canary-v1',
+      client: clientSelection.client,
+    });
+    const runtimeDiagnostics = productionRuntime.diagnostics();
+    if (!productionRuntime.canaryEditRunner
+      || runtimeDiagnostics.runtime.state !== 'ready') {
+      await productionRuntime.close();
+      await closeUnownedCodexAppServerSelection(clientSelection);
+      clientSelection = null;
+      productionRuntime = null;
+      return createLegacyCanaryRuntimeSelection(
+        authoritativeKernel,
+        'canary_runtime_not_ready'
+      );
+    }
+
+    clientSelection = null;
+    canaryEditProductionRuntimeInstance = productionRuntime;
+    try {
+      appendAuditEvent('assistant.canary_edit_activation', {
+        state: 'ready',
+        activeKernelId: CANARY_EDIT_PRODUCTION_KERNEL_ID,
+        policy: rolloutPolicy.diagnostics(),
+        runtime: runtimeDiagnostics.runtime,
+      });
+    } catch { /* runtime ownership is independent from audit persistence */ }
+    return Object.freeze({
+      activeKernelId: CANARY_EDIT_PRODUCTION_KERNEL_ID,
+      canaryEditRunner: productionRuntime.canaryEditRunner,
+      reason: 'ready',
+    });
+  } catch {
+    if (productionRuntime) {
+      try { await productionRuntime.close(); } catch { /* fail closed below */ }
+    }
+    if (clientSelection) {
+      await closeUnownedCodexAppServerSelection(clientSelection);
+    }
+    if (canaryEditProductionRuntimeInstance === productionRuntime) {
+      canaryEditProductionRuntimeInstance = null;
+    }
+    try {
+      appendAuditEvent('assistant.canary_edit_activation', {
+        state: 'blocked',
+        reason: 'initialization_failed',
+      });
+    } catch { /* initialization already failed closed */ }
+    return createLegacyCanaryRuntimeSelection(
+      authoritativeKernel,
+      'initialization_failed'
+    );
+  }
+}
+
 function beginPortableIsolationHelperShutdown(event) {
   const runtime = portableIsolationHelperActivationRuntime;
+  const canaryRuntime = canaryEditProductionRuntimeInstance;
   const runtimeServices = executionIsolationRuntimeServices;
-  if (!runtime || portableIsolationHelperShutdownComplete) return false;
+  if ((!runtime && !canaryRuntime) || portableIsolationHelperShutdownComplete) {
+    return false;
+  }
   if (event && typeof event.preventDefault === 'function') event.preventDefault();
+  canaryEditProductionRuntimeInstance = null;
   portableIsolationHelperProviderSelection = null;
   executionIsolationRuntimeServices = null;
   if (portableIsolationHelperShutdownPromise) return true;
 
   portableIsolationHelperShutdownPromise = Promise.resolve()
     .then(async () => {
+      let canaryRuntimeReceipt = null;
       let runtimeServicesReceipt = null;
       let activationReceipt = null;
+      if (canaryRuntime) {
+        try {
+          canaryRuntimeReceipt = await canaryRuntime.close();
+        } catch { /* service disposal still proceeds to revoke helper authority */ }
+      }
       if (runtimeServices) {
         try {
           runtimeServicesReceipt = await runtimeServices.dispose();
         } catch { /* activation disposal remains the final fail-closed cleanup */ }
       }
-      try {
-        activationReceipt = await runtime.dispose();
-      } catch { /* shutdown is audited as unconfirmed below */ }
-      return Object.freeze({ runtimeServicesReceipt, activationReceipt });
+      if (runtime) {
+        try {
+          activationReceipt = await runtime.dispose();
+        } catch { /* shutdown is audited as unconfirmed below */ }
+      }
+      return Object.freeze({
+        canaryRuntimeReceipt,
+        runtimeServicesReceipt,
+        activationReceipt,
+      });
     })
-    .then(({ runtimeServicesReceipt, activationReceipt }) => {
+    .then(({
+      canaryRuntimeReceipt,
+      runtimeServicesReceipt,
+      activationReceipt,
+    }) => {
+      const canaryRuntimeClosed = !canaryRuntime || Boolean(
+        canaryRuntimeReceipt
+          && canaryRuntimeReceipt.closed === true
+          && canaryRuntimeReceipt.drained === true
+          && canaryRuntimeReceipt.clientClosed === true
+      );
       const runtimeServicesDisposed = !runtimeServices || Boolean(
         runtimeServicesReceipt && runtimeServicesReceipt.disposed === true
       );
@@ -5845,21 +6032,27 @@ function beginPortableIsolationHelperShutdown(event) {
         runtimeServicesReceipt
           && runtimeServicesReceipt.zeroOrphanShutdownConfirmed === true
       );
-      const activationDisposed = Boolean(
+      const activationDisposed = !runtime || Boolean(
         activationReceipt && activationReceipt.disposed === true
       );
-      const activationZeroOrphan = Boolean(
-        activationReceipt && activationReceipt.zeroOrphanShutdownConfirmed === true
+      const activationZeroOrphan = !runtime || Boolean(
+        activationReceipt
+          && activationReceipt.zeroOrphanShutdownConfirmed === true
       );
       appendAuditEvent('assistant.portable_isolation_helper_shutdown', {
-        disposed: runtimeServicesDisposed && activationDisposed,
+        disposed:
+          canaryRuntimeClosed && runtimeServicesDisposed && activationDisposed,
+        canaryRuntimeClosed,
         runtimeServicesDisposed,
         activationDisposed,
         zeroOrphanShutdownConfirmed:
-          runtimeServicesZeroOrphan && activationZeroOrphan,
+          canaryRuntimeClosed
+          && runtimeServicesZeroOrphan
+          && activationZeroOrphan,
       });
     })
     .finally(() => {
+      canaryEditProductionRuntimeInstance = null;
       executionIsolationRuntimeServices = null;
       portableIsolationHelperActivationRuntime = null;
       portableIsolationHelperShutdownComplete = true;
@@ -7004,31 +7197,6 @@ app.whenReady().then(async () => {
     message: handleLegacyHarnessMessage,
     execute: handleLegacyHarnessExecute,
   });
-  const contextPackHarnessProductionService = createContextPackHarnessProductionService({
-    authorizeProjectBinding: (projectId, rootPath) => (
-      getProjectAccess().authorizeProjectBinding(projectId, rootPath)
-    ),
-    authorizeExecutionBinding: (binding) => (
-      assistantJobAuthorityServiceInstance
-        ? assistantJobAuthorityServiceInstance.authorizeProjectRootLease(binding)
-        : Object.freeze({ authorized: false })
-    ),
-    getProjectRootAuthorityRegistry: () => (
-      executionIsolationRuntimeServices
-        ? executionIsolationRuntimeServices.projectRootAuthorityRegistry
-        : null
-    ),
-    getActiveMemory: (input) => resolveActiveMemoryContext(input),
-    applicationMapService,
-    milestoneService,
-    gitService: projectGitService,
-    kernelId: legacyHarnessKernel.id,
-  });
-  const harnessRouter = createHarnessRouter({
-    contextPackInjector: contextPackHarnessProductionService.contextPackInjector,
-    legacyKernel: legacyHarnessKernel,
-    runtimeConfig: createHarnessRuntimeConfig({ env: process.env }),
-  });
 
   let agenticDeleteJournalAuthenticator = null;
   let agenticDeleteJournalAuthenticatorErrorCode = null;
@@ -7178,6 +7346,7 @@ app.whenReady().then(async () => {
     audit: (event) => appendAuditEvent('assistant.agentic_domain_read_capability', event),
   });
   agenticDomainReadBrokerFactoryInstance = agenticDomainReadBrokerFactory;
+  let harnessRouter = null;
   const assistantExecutionCoordinator = createAssistantExecutionCoordinator({
     authorityService: assistantJobAuthorityService,
     maxActiveJobs: MAX_JOBS_STORED,
@@ -7196,9 +7365,12 @@ app.whenReady().then(async () => {
         jobSessionService: assistantExecutionIsolationRuntimeServices.jobSessionService,
       });
     },
-    executeAction: (action, projectInfo, executionContext) => (
-      harnessRouter.execute(action, projectInfo, executionContext)
-    ),
+    executeAction: (action, projectInfo, executionContext) => {
+      if (!harnessRouter) {
+        throw new TypeError('Harness router unavailable');
+      }
+      return harnessRouter.execute(action, projectInfo, executionContext);
+    },
     onAuthorityRevoked: (jobId, reason) => {
       abortActiveJobExecution(jobId, reason);
       if (assistantRuntimeLifecycleReason) {
@@ -7211,6 +7383,42 @@ app.whenReady().then(async () => {
   });
   assistantExecutionCoordinatorInstance = assistantExecutionCoordinator;
 
+  const harnessRuntimeConfig = createHarnessRuntimeConfig({ env: process.env });
+  const canaryRuntimeSelection = await initializeCanaryEditProductionRuntime({
+    authoritativeKernel: legacyHarnessKernel,
+    authorityService: assistantJobAuthorityService,
+    coordinator: assistantExecutionCoordinator,
+    runtimeConfig: harnessRuntimeConfig,
+    runtimeServices: assistantExecutionIsolationRuntimeServices,
+  });
+  const activeHarnessKernelId = canaryRuntimeSelection.activeKernelId;
+  const contextPackHarnessProductionService = createContextPackHarnessProductionService({
+    authorizeProjectBinding: (projectId, rootPath) => (
+      getProjectAccess().authorizeProjectBinding(projectId, rootPath)
+    ),
+    authorizeExecutionBinding: (binding) => (
+      assistantJobAuthorityServiceInstance
+        ? assistantJobAuthorityServiceInstance.authorizeProjectRootLease(binding)
+        : Object.freeze({ authorized: false })
+    ),
+    getProjectRootAuthorityRegistry: () => (
+      executionIsolationRuntimeServices
+        ? executionIsolationRuntimeServices.projectRootAuthorityRegistry
+        : null
+    ),
+    getActiveMemory: (input) => resolveActiveMemoryContext(input),
+    applicationMapService,
+    milestoneService,
+    gitService: projectGitService,
+    kernelId: activeHarnessKernelId,
+  });
+  harnessRouter = createHarnessRouter({
+    canaryEditRunner: canaryRuntimeSelection.canaryEditRunner,
+    contextPackInjector: contextPackHarnessProductionService.contextPackInjector,
+    legacyKernel: legacyHarnessKernel,
+    runtimeConfig: harnessRuntimeConfig,
+  });
+
   const assistantRuntime = createAssistantRuntimeFacade({
     authorizePlanningPayload: (input) => (
       agenticDeleteStartupRecoveryHealthy
@@ -7219,7 +7427,7 @@ app.whenReady().then(async () => {
     ),
     coordinator: assistantExecutionCoordinator,
     harnessRouter,
-    kernelId: legacyHarnessKernel.id,
+    kernelId: activeHarnessKernelId,
   });
 
   registerAssistantHandlers({
