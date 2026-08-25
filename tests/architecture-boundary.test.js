@@ -2270,6 +2270,12 @@ function assertExecutionWorkspaceBoundary() {
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:canary-edit-production-runtime'
       )
+      && packageConfig.scripts['test:canary-phase5-internal-real-sample'].includes(
+        'canary-phase5-internal-real-sample.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:canary-phase5-internal-real-sample'
+      )
       && packageConfig.scripts['test:codex-app-server-runtime-config'].includes(
         'codex-app-server-runtime-config.test.js'
       )
