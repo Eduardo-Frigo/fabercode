@@ -176,6 +176,9 @@ function assertAgentRuntimeBoundary() {
   const canaryEditLifecycleSource = read(
     'main/agent_runtime/canary_edit_lifecycle.js'
   );
+  const canaryEditRunnerSource = read(
+    'main/agent_runtime/canary_edit_runner.js'
+  );
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
@@ -512,6 +515,50 @@ function assertAgentRuntimeBoundary() {
         "state = CANARY_EDIT_LIFECYCLE_STATES.LEGACY_STARTED"
       ),
     'canary fallback must require sufficient cleanup after mutation and quarantine ambiguous source rollback before legacy starts'
+  );
+  assertDoesNotMatch(
+    canaryEditRunnerSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm)\s*\(/,
+    'canary runner must orchestrate explicit trusted ports without ambient filesystem, process, network, or Electron authority'
+  );
+  const canaryClassificationIndex = canaryEditRunnerSource.indexOf(
+    'const classification = classifyCanaryEditAction(actionValue);'
+  );
+  const canaryFactsIndex = canaryEditRunnerSource.indexOf(
+    'const factsSnapshot = inspectFacts('
+  );
+  const canaryRolloutIndex = canaryEditRunnerSource.indexOf(
+    'const rolloutDecision = selectRollout('
+  );
+  const canaryAdmissionIndex = canaryEditRunnerSource.indexOf(
+    'const admissionDecision = decideAdmission('
+  );
+  const canaryGrantIndex = canaryEditRunnerSource.indexOf(
+    'const grant = Object.freeze({'
+  );
+  const canaryEffectFrontierIndex = canaryEditRunnerSource.lastIndexOf(
+    'dependencies.stagedCanaryExecutor.execute,'
+  );
+  assert.ok(
+    canaryClassificationIndex >= 0
+      && canaryFactsIndex > canaryClassificationIndex
+      && canaryRolloutIndex > canaryFactsIndex
+      && canaryAdmissionIndex > canaryRolloutIndex
+      && canaryGrantIndex > canaryAdmissionIndex
+      && canaryEffectFrontierIndex > canaryGrantIndex,
+    'canary runner must classify, snapshot trusted facts, select rollout, admit, and grant before entering staging execution'
+  );
+  assert.ok(
+    canaryEditRunnerSource.includes("workspaceIsolation') !== 'per_job_staging'")
+      && canaryEditRunnerSource.includes("networkMode') !== 'disabled'")
+      && canaryEditRunnerSource.includes("installMode') !== 'disabled'")
+      && canaryEditRunnerSource.includes("promotionMode') !== 'explicit_checkpointed'"),
+    'canary runner must accept only per-job staging executors with network and install disabled and explicit checkpointed promotion'
+  );
+  assertDoesNotMatch(
+    canaryEditRunnerSource.slice(canaryEffectFrontierIndex),
+    /fallbackToLegacy\s*\(/,
+    'canary runner must never start legacy fallback after entering the staged execution frontier'
   );
 }
 
