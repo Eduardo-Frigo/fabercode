@@ -4,11 +4,16 @@ const assert = require('assert');
 
 const { AgentKernel } = require('../main/agent_runtime/agent_kernel');
 const {
+  CANARY_EDIT_RUNNER_FALLBACK_SIGNAL_SCHEMA_VERSION,
   CANARY_EDIT_RUNNER_EXECUTION_GRANT_SCHEMA_VERSION,
   CANARY_EDIT_RUNNER_REASONS,
   CANARY_EDIT_RUNNER_VERSION,
   createCanaryEditRunner,
 } = require('../main/agent_runtime/canary_edit_runner');
+const {
+  CANARY_EDIT_CLEANUP_RECEIPT_SCHEMA_VERSION,
+  CANARY_EDIT_MUTATION_FRONTIERS,
+} = require('../main/agent_runtime/canary_edit_lifecycle');
 const {
   CANARY_ROLLOUT_STAGES,
   createCanaryRolloutSelector,
@@ -200,6 +205,34 @@ function createStagedExecutor({
   return { calls, executor };
 }
 
+function fallbackSignal(authorityBinding, overrides = {}) {
+  const stagingId = overrides.stagingId || 'canary-staging-fallback-a';
+  const mutationFrontier = overrides.mutationFrontier
+    || CANARY_EDIT_MUTATION_FRONTIERS.STAGING;
+  const disposition = mutationFrontier === CANARY_EDIT_MUTATION_FRONTIERS.SOURCE
+    ? 'reverted'
+    : 'discarded';
+  return deepFreeze({
+    schemaVersion: CANARY_EDIT_RUNNER_FALLBACK_SIGNAL_SCHEMA_VERSION,
+    status: 'fallback_ready',
+    requestId: overrides.requestId || 'canary-clean-fallback',
+    jobId: authorityBinding.jobId,
+    stagingId,
+    mutationFrontier,
+    reason: 'canary_execution_failed',
+    cleanupReceipt: mutationFrontier === CANARY_EDIT_MUTATION_FRONTIERS.NONE
+      ? null
+      : {
+        schemaVersion: CANARY_EDIT_CLEANUP_RECEIPT_SCHEMA_VERSION,
+        jobId: authorityBinding.jobId,
+        stagingId,
+        disposition,
+        clean: true,
+      },
+    ...overrides,
+  });
+}
+
 function fixture(overrides = {}) {
   const authoritativeKernel = overrides.authoritativeKernel || new RecordingKernel();
   const authorityBinding = overrides.authorityBinding || binding();
@@ -259,6 +292,7 @@ async function testEligibleEditUsesOnlyStagedCanary() {
     rolloutDenied: 0,
     admissionDenied: 0,
     canaryFailed: 0,
+    cleanFallbacks: 0,
     lastDecisionReason: 'canary_completed',
   });
   assertDeepFrozen(current.runner.diagnostics());
@@ -391,6 +425,85 @@ async function testCanaryFailureNeverStartsLegacyFallback() {
   assert.strictEqual(syncCurrent.authoritativeKernel.calls.length, 0);
 }
 
+async function testVerifiedCleanupAllowsLegacyFallback() {
+  const authorityBinding = binding({ jobId: 'job-canary-clean-fallback' });
+  const staged = createStagedExecutor({
+    resultFactory() {
+      return fallbackSignal(authorityBinding);
+    },
+  });
+  const current = fixture({ authorityBinding, stagedExecutorFixture: staged });
+  const result = await current.runner.execute(request({
+    requestId: 'canary-clean-fallback',
+    authorityBinding,
+  }));
+  assert.strictEqual(result.kernelId, 'legacy');
+  assert.strictEqual(staged.calls.length, 1);
+  assert.strictEqual(current.authoritativeKernel.calls.length, 1);
+  assert.strictEqual(current.runner.diagnostics().cleanFallbacks, 1);
+  assert.strictEqual(current.runner.diagnostics().legacyFallbacks, 1);
+  assert.strictEqual(
+    current.runner.diagnostics().lastDecisionReason,
+    'canary_execution_failed'
+  );
+
+  const preWriteBinding = binding({ jobId: 'job-canary-prewrite-fallback' });
+  const preWrite = createStagedExecutor({
+    resultFactory() {
+      return fallbackSignal(preWriteBinding, {
+        requestId: 'canary-prewrite-fallback',
+        mutationFrontier: CANARY_EDIT_MUTATION_FRONTIERS.NONE,
+        cleanupReceipt: null,
+      });
+    },
+  });
+  const preWriteCurrent = fixture({
+    authorityBinding: preWriteBinding,
+    stagedExecutorFixture: preWrite,
+  });
+  const preWriteResult = await preWriteCurrent.runner.execute(request({
+    requestId: 'canary-prewrite-fallback',
+    authorityBinding: preWriteBinding,
+  }));
+  assert.strictEqual(preWriteResult.kernelId, 'legacy');
+  assert.strictEqual(preWriteCurrent.runner.diagnostics().cleanFallbacks, 1);
+}
+
+async function testInsufficientCleanupNeverStartsLegacy() {
+  const authorityBinding = binding({ jobId: 'job-canary-bad-cleanup' });
+  const staged = createStagedExecutor({
+    resultFactory() {
+      return fallbackSignal(authorityBinding, {
+        requestId: 'canary-bad-cleanup',
+        mutationFrontier: CANARY_EDIT_MUTATION_FRONTIERS.SOURCE,
+        cleanupReceipt: {
+          schemaVersion: CANARY_EDIT_CLEANUP_RECEIPT_SCHEMA_VERSION,
+          jobId: authorityBinding.jobId,
+          stagingId: 'canary-staging-fallback-a',
+          disposition: 'discarded',
+          clean: true,
+        },
+      });
+    },
+  });
+  const current = fixture({ authorityBinding, stagedExecutorFixture: staged });
+  await assert.rejects(
+    current.runner.execute(request({
+      requestId: 'canary-bad-cleanup',
+      authorityBinding,
+    })),
+    (error) => error.code === CANARY_EDIT_RUNNER_REASONS.CANARY_FALLBACK_INVALID
+  );
+  assert.strictEqual(current.authoritativeKernel.calls.length, 0);
+  assert.strictEqual(current.runner.diagnostics().cleanFallbacks, 0);
+  assert.strictEqual(current.runner.diagnostics().legacyFallbacks, 0);
+  assert.strictEqual(current.runner.diagnostics().canaryFailed, 1);
+  assert.strictEqual(
+    current.runner.diagnostics().lastDecisionReason,
+    'canary_fallback_invalid'
+  );
+}
+
 async function testMismatchedCanaryResultFailsClosed() {
   const staged = createStagedExecutor({
     resultFactory(harnessRequest) {
@@ -457,12 +570,18 @@ async function run() {
     CANARY_EDIT_RUNNER_EXECUTION_GRANT_SCHEMA_VERSION,
     'canary-edit-execution-grant.v1'
   );
+  assert.strictEqual(
+    CANARY_EDIT_RUNNER_FALLBACK_SIGNAL_SCHEMA_VERSION,
+    'canary-edit-fallback-signal.v1'
+  );
   assert.strictEqual(Object.isFrozen(CANARY_EDIT_RUNNER_REASONS), true);
   testConstructionRejectsUntrustedPorts();
   await testEligibleEditUsesOnlyStagedCanary();
   await testUnsupportedActionFallsBackBeforeAuthorityInspection();
   await testRolloutAndAdmissionDenialsFallbackBeforeCanary();
   await testUnavailableFactsFallbackBeforeCanary();
+  await testVerifiedCleanupAllowsLegacyFallback();
+  await testInsufficientCleanupNeverStartsLegacy();
   await testCanaryFailureNeverStartsLegacyFallback();
   await testMismatchedCanaryResultFailsClosed();
   console.log('canary edit runner tests passed');

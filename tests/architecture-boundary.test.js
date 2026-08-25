@@ -558,10 +558,33 @@ function assertAgentRuntimeBoundary() {
       && canaryEditRunnerSource.includes("promotionMode') !== 'explicit_checkpointed'"),
     'canary runner must accept only per-job staging executors with network and install disabled and explicit checkpointed promotion'
   );
+  const canaryFallbackSignalIndex = canaryEditRunnerSource.indexOf(
+    'const signal = normalizeFallbackSignal(result, request, authorityBinding);',
+    canaryEffectFrontierIndex
+  );
+  const canaryFallbackVerificationIndex = canaryEditRunnerSource.indexOf(
+    'if (!signal || !verifyCleanFallback(signal))',
+    canaryFallbackSignalIndex
+  );
+  const canaryPostFrontierLegacyIndex = canaryEditRunnerSource.indexOf(
+    'return fallbackToLegacy(request, signal.reason);',
+    canaryFallbackVerificationIndex
+  );
+  assert.ok(
+    canaryFallbackSignalIndex > canaryEffectFrontierIndex
+      && canaryFallbackVerificationIndex > canaryFallbackSignalIndex
+      && canaryPostFrontierLegacyIndex > canaryFallbackVerificationIndex
+      && canaryEditRunnerSource.includes('lifecycle.confirmCleanup(signal.cleanupReceipt)')
+      && canaryEditRunnerSource.includes('const legacy = lifecycle.startLegacy();'),
+    'canary runner must start post-frontier legacy fallback only after an exact signal passes lifecycle cleanup and legacy-start transitions'
+  );
   assertDoesNotMatch(
-    canaryEditRunnerSource.slice(canaryEffectFrontierIndex),
+    canaryEditRunnerSource.slice(
+      canaryEffectFrontierIndex,
+      canaryFallbackSignalIndex
+    ),
     /fallbackToLegacy\s*\(/,
-    'canary runner must never start legacy fallback after entering the staged execution frontier'
+    'an ambiguous staged execution rejection must never trigger legacy fallback'
   );
   assertDoesNotMatch(
     canaryStagingContractSource,

@@ -24,6 +24,11 @@ const {
   CANARY_ROLLOUT_SELECTOR_VERSION,
 } = require('./canary_rollout_selector');
 const {
+  CANARY_EDIT_LIFECYCLE_CODES,
+  CANARY_EDIT_MUTATION_FRONTIERS,
+  createCanaryEditLifecycle,
+} = require('./canary_edit_lifecycle');
+const {
   HARNESS_OPERATIONS,
   HARNESS_RESULT_SCHEMA_VERSION,
   assertHarnessRequest,
@@ -32,9 +37,12 @@ const {
 const CANARY_EDIT_RUNNER_VERSION = 'canary-edit-runner.v1';
 const CANARY_EDIT_RUNNER_EXECUTION_GRANT_SCHEMA_VERSION =
   'canary-edit-execution-grant.v1';
+const CANARY_EDIT_RUNNER_FALLBACK_SIGNAL_SCHEMA_VERSION =
+  'canary-edit-fallback-signal.v1';
 
 const CANARY_EDIT_RUNNER_REASONS = Object.freeze({
   CANARY_EXECUTION_FAILED: 'CANARY_EDIT_RUNNER_CANARY_EXECUTION_FAILED',
+  CANARY_FALLBACK_INVALID: 'CANARY_EDIT_RUNNER_CANARY_FALLBACK_INVALID',
   CANARY_INVALID_RESULT: 'CANARY_EDIT_RUNNER_CANARY_INVALID_RESULT',
   INVALID_REQUEST: 'CANARY_EDIT_RUNNER_INVALID_REQUEST',
   LEGACY_INVALID_RESULT: 'CANARY_EDIT_RUNNER_LEGACY_INVALID_RESULT',
@@ -42,6 +50,17 @@ const CANARY_EDIT_RUNNER_REASONS = Object.freeze({
 
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const SAFE_IDENTIFIER = /^[A-Za-z0-9._:@-]{1,256}$/;
+const SAFE_FALLBACK_REASON = /^[a-z][a-z0-9_:-]{0,79}$/;
+const FALLBACK_SIGNAL_KEYS = Object.freeze([
+  'schemaVersion',
+  'status',
+  'requestId',
+  'jobId',
+  'stagingId',
+  'mutationFrontier',
+  'reason',
+  'cleanupReceipt',
+]);
 const RESULT_KEYS = Object.freeze([
   'schemaVersion',
   'requestId',
@@ -479,6 +498,39 @@ function decideAdmission(authorityBinding, classification, factsSnapshot) {
   return decision;
 }
 
+function normalizeFallbackSignal(value, request, authorityBinding) {
+  const fields = dataFields(value, {
+    allowedKeys: FALLBACK_SIGNAL_KEYS,
+    requiredKeys: FALLBACK_SIGNAL_KEYS,
+    exact: true,
+    frozen: true,
+  });
+  const mutationFrontier = fields && fields.get('mutationFrontier');
+  const cleanupReceipt = fields && fields.get('cleanupReceipt');
+  if (!fields
+    || fields.get('schemaVersion')
+      !== CANARY_EDIT_RUNNER_FALLBACK_SIGNAL_SCHEMA_VERSION
+    || fields.get('status') !== 'fallback_ready'
+    || fields.get('requestId') !== request.requestId
+    || fields.get('jobId') !== authorityBinding.jobId
+    || typeof fields.get('stagingId') !== 'string'
+    || !SAFE_IDENTIFIER.test(fields.get('stagingId'))
+    || !Object.values(CANARY_EDIT_MUTATION_FRONTIERS).includes(mutationFrontier)
+    || typeof fields.get('reason') !== 'string'
+    || !SAFE_FALLBACK_REASON.test(fields.get('reason'))
+    || mutationFrontier === CANARY_EDIT_MUTATION_FRONTIERS.NONE
+      && cleanupReceipt !== null
+    || mutationFrontier !== CANARY_EDIT_MUTATION_FRONTIERS.NONE
+      && cleanupReceipt === null) return null;
+  return Object.freeze({
+    jobId: fields.get('jobId'),
+    stagingId: fields.get('stagingId'),
+    mutationFrontier,
+    reason: fields.get('reason'),
+    cleanupReceipt,
+  });
+}
+
 function validateKernelResult(value, request, kernelId, reason) {
   const fields = dataFields(value, {
     allowedKeys: RESULT_KEYS,
@@ -526,6 +578,7 @@ function createCanaryEditRunner(options = {}) {
   let rolloutDenied = 0;
   let admissionDenied = 0;
   let canaryFailed = 0;
+  let cleanFallbacks = 0;
   let lastDecisionReason = null;
 
   function diagnostics() {
@@ -541,6 +594,7 @@ function createCanaryEditRunner(options = {}) {
       rolloutDenied,
       admissionDenied,
       canaryFailed,
+      cleanFallbacks,
       lastDecisionReason,
     });
   }
@@ -560,6 +614,39 @@ function createCanaryEditRunner(options = {}) {
       dependencies.authoritativeKernel.id,
       CANARY_EDIT_RUNNER_REASONS.LEGACY_INVALID_RESULT
     );
+  }
+
+  function verifyCleanFallback(signal) {
+    const lifecycle = createCanaryEditLifecycle({
+      jobId: signal.jobId,
+      stagingId: signal.stagingId,
+    });
+    if (signal.mutationFrontier !== CANARY_EDIT_MUTATION_FRONTIERS.NONE) {
+      const stagedWrite = lifecycle.noteWrite({
+        scope: CANARY_EDIT_MUTATION_FRONTIERS.STAGING,
+      });
+      if (!stagedWrite.ok) return false;
+      if (signal.mutationFrontier === CANARY_EDIT_MUTATION_FRONTIERS.SOURCE) {
+        const sourceWrite = lifecycle.noteWrite({
+          scope: CANARY_EDIT_MUTATION_FRONTIERS.SOURCE,
+        });
+        if (!sourceWrite.ok) return false;
+      }
+    }
+    const fallback = lifecycle.requestFallback({ reason: signal.reason });
+    if (signal.mutationFrontier === CANARY_EDIT_MUTATION_FRONTIERS.NONE) {
+      if (!fallback.ok
+        || fallback.code !== CANARY_EDIT_LIFECYCLE_CODES.FALLBACK_READY) return false;
+    } else {
+      if (fallback.ok
+        || fallback.code !== CANARY_EDIT_LIFECYCLE_CODES.CLEANUP_REQUIRED) return false;
+      const cleanup = lifecycle.confirmCleanup(signal.cleanupReceipt);
+      if (!cleanup.ok
+        || cleanup.code !== CANARY_EDIT_LIFECYCLE_CODES.FALLBACK_READY) return false;
+    }
+    const legacy = lifecycle.startLegacy();
+    return legacy.ok === true
+      && legacy.code === CANARY_EDIT_LIFECYCLE_CODES.LEGACY_STARTED;
   }
 
   async function execute(value) {
@@ -636,6 +723,17 @@ function createCanaryEditRunner(options = {}) {
       lastDecisionReason = 'canary_failed';
       throw runnerError(CANARY_EDIT_RUNNER_REASONS.CANARY_EXECUTION_FAILED);
     }
+    if (ownDataValue(result, 'schemaVersion', { enumerable: true })
+      === CANARY_EDIT_RUNNER_FALLBACK_SIGNAL_SCHEMA_VERSION) {
+      const signal = normalizeFallbackSignal(result, request, authorityBinding);
+      if (!signal || !verifyCleanFallback(signal)) {
+        canaryFailed += 1;
+        lastDecisionReason = 'canary_fallback_invalid';
+        throw runnerError(CANARY_EDIT_RUNNER_REASONS.CANARY_FALLBACK_INVALID);
+      }
+      cleanFallbacks += 1;
+      return fallbackToLegacy(request, signal.reason);
+    }
     try {
       validateKernelResult(
         result,
@@ -661,6 +759,7 @@ function createCanaryEditRunner(options = {}) {
 }
 
 module.exports = {
+  CANARY_EDIT_RUNNER_FALLBACK_SIGNAL_SCHEMA_VERSION,
   CANARY_EDIT_RUNNER_EXECUTION_GRANT_SCHEMA_VERSION,
   CANARY_EDIT_RUNNER_REASONS,
   CANARY_EDIT_RUNNER_VERSION,
