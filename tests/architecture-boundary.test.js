@@ -206,6 +206,12 @@ function assertAgentRuntimeBoundary() {
   const canarySourceSnapshotProviderSource = read(
     'main/services/canary_source_snapshot_provider.js'
   );
+  const canaryStagingWriteSetContractSource = read(
+    'main/agent_runtime/canary_staging_write_set_contract.js'
+  );
+  const canaryLocalStagingEditorAdapterSource = read(
+    'main/services/canary_local_staging_editor_adapter.js'
+  );
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
@@ -792,6 +798,52 @@ function assertAgentRuntimeBoundary() {
         'activeOtherMutatingJobs: 0'
       ),
     'canary checkpoint must bind action, physical source, isolated workspace, full source/Git/user digests, and the exclusive job owner'
+  );
+  assertDoesNotMatch(
+    canaryStagingWriteSetContractSource,
+    /require\(['"](?:fs|path|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm|rename)\s*\(/,
+    'canary staging write-set contract must remain a pure canonical digest contract'
+  );
+  assertDoesNotMatch(
+    canaryLocalStagingEditorAdapterSource,
+    /require\(['"](?:child_process|worker_threads|electron|net|tls|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork)\s*\(|\b(?:npm|pnpm|yarn|bun)\b/,
+    'canary local editor must not acquire process, network, install, Electron, or environment authority'
+  );
+  assertDoesNotMatch(
+    canaryLocalStagingEditorAdapterSource,
+    /(?:path\.join|fs\.[A-Za-z]+)\([^\n)]*source(?:Real)?RootPath/,
+    'canary local editor must never address the authorized source root with a filesystem operation'
+  );
+  const localEditorRootIndex = canaryLocalStagingEditorAdapterSource.indexOf(
+    'const root = captureWorkspaceRoot(context.session);'
+  );
+  const localEditorApplyIndex = canaryLocalStagingEditorAdapterSource.indexOf(
+    'for (const operation of context.plan)',
+    localEditorRootIndex
+  );
+  const localEditorWriteSetIndex = canaryLocalStagingEditorAdapterSource.indexOf(
+    'const entries = Object.freeze(changedPaths.map',
+    localEditorApplyIndex
+  );
+  const localEditorReceiptIndex = canaryLocalStagingEditorAdapterSource.indexOf(
+    'const writeReceipt = createCanaryStagingWriteReceipt({',
+    localEditorWriteSetIndex
+  );
+  assert.ok(
+    localEditorRootIndex >= 0
+      && localEditorApplyIndex > localEditorRootIndex
+      && localEditorWriteSetIndex > localEditorApplyIndex
+      && localEditorReceiptIndex > localEditorWriteSetIndex
+      && canaryLocalStagingEditorAdapterSource.includes('O_NOFOLLOW')
+      && canaryLocalStagingEditorAdapterSource.includes(
+        'createProjectRootPhysicalIdentityDigest'
+      )
+      && canaryLocalStagingEditorAdapterSource.includes('fs.renameSync(')
+      && canaryLocalStagingEditorAdapterSource.includes('sourceMutated: false')
+      && canaryLocalStagingEditorAdapterSource.includes(
+        "settlements.get(context.session.stagingId)"
+      ),
+    'canary local editor must authenticate the physical staging root, reject link following, atomically settle writes, digest final paths, preserve source isolation, and deduplicate replay'
   );
   assertDoesNotMatch(
     canaryPromotionContractSource,
