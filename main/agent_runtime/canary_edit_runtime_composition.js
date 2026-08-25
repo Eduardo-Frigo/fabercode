@@ -46,6 +46,7 @@ const CANARY_EDIT_RUNTIME_COMPOSITION_REASONS = Object.freeze({
   AUTHORITATIVE_KERNEL_UNAVAILABLE: 'authoritative_kernel_unavailable',
   CANARY_EDITOR_UNAVAILABLE: 'canary_editor_unavailable',
   CLIENT_CLOSE_FAILED: 'client_close_failed',
+  CLIENT_NOT_READY: 'client_not_ready',
   CLIENT_UNAVAILABLE: 'client_unavailable',
   CLOSED: 'closed',
   COHORT_SEED_UNAVAILABLE: 'cohort_seed_unavailable',
@@ -393,12 +394,14 @@ function unavailableRuntime({
   reason,
   runtimeConfig = null,
   adapterEnabled = false,
+  clientLifecycle = null,
 }) {
   return createRuntimePort({
     initialState: state,
     initialReason: reason,
     runtimeConfig,
     adapterEnabled,
+    clientLifecycle,
   });
 }
 
@@ -463,6 +466,26 @@ function createCanaryEditRuntimeComposition(options = {}) {
       });
     }
   }
+  let clientLifecycle;
+  try {
+    clientLifecycle = captureClientLifecycle(fields.get('client'));
+  } catch {
+    return unavailableRuntime({
+      state: CANARY_EDIT_RUNTIME_COMPOSITION_STATES.BLOCKED,
+      reason: CANARY_EDIT_RUNTIME_COMPOSITION_REASONS.COMPOSITION_FAILED,
+      runtimeConfig,
+      adapterEnabled,
+    });
+  }
+  if (readClientState(clientLifecycle) !== 'ready') {
+    return unavailableRuntime({
+      state: CANARY_EDIT_RUNTIME_COMPOSITION_STATES.BLOCKED,
+      reason: CANARY_EDIT_RUNTIME_COMPOSITION_REASONS.CLIENT_NOT_READY,
+      runtimeConfig,
+      adapterEnabled,
+      clientLifecycle,
+    });
+  }
 
   try {
     const rolloutSelector = createCanaryRolloutSelector({
@@ -498,7 +521,6 @@ function createCanaryEditRuntimeComposition(options = {}) {
       ledgerOptions.minimumBaselineJobs = fields.get('minimumBaselineJobs');
     }
     const ledger = createCanaryRolloutEvidenceLedger(ledgerOptions);
-    const clientLifecycle = captureClientLifecycle(fields.get('client'));
     return createRuntimePort({
       initialState: CANARY_EDIT_RUNTIME_COMPOSITION_STATES.READY,
       initialReason: CANARY_EDIT_RUNTIME_COMPOSITION_REASONS.READY,
@@ -515,6 +537,7 @@ function createCanaryEditRuntimeComposition(options = {}) {
       reason: CANARY_EDIT_RUNTIME_COMPOSITION_REASONS.COMPOSITION_FAILED,
       runtimeConfig,
       adapterEnabled,
+      clientLifecycle,
     });
   }
 }

@@ -140,6 +140,12 @@ function assertAgentRuntimeBoundary() {
   const codexAppServerKernelAdapterSource = read(
     'main/agent_runtime/codex_app_server_kernel_adapter.js'
   );
+  const codexAppServerRuntimeConfigSource = read(
+    'main/runtime/codex_app_server_runtime_config.js'
+  );
+  const codexAppServerProductionClientActivationSource = read(
+    'main/services/codex_app_server_production_client_activation.js'
+  );
   const shadowPlanSemanticComparatorSource = read(
     'main/agent_runtime/shadow_plan_semantic_comparator.js'
   );
@@ -333,6 +339,57 @@ function assertAgentRuntimeBoundary() {
     codexAppServerKernelAdapterSource,
     /codex_app_server_stdio_client/,
     'the App Server kernel adapter must depend on the protocol contract, not the child-process transport implementation'
+  );
+  assertDoesNotMatch(
+    codexAppServerRuntimeConfigSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm)\s*\(/,
+    'App Server runtime configuration must only normalize explicit environment data without gaining host execution authority'
+  );
+  assert.ok(
+    codexAppServerRuntimeConfigSource.includes("'FABER_APP_SERVER_ADAPTER'")
+      && codexAppServerRuntimeConfigSource.includes("'FABER_CODEX_COMMAND'")
+      && codexAppServerRuntimeConfigSource.includes(
+        "reason: CODEX_APP_SERVER_RUNTIME_CONFIG_REASONS.DEFAULT_DISABLED"
+      )
+      && codexAppServerRuntimeConfigSource.includes(
+        'commandPath: null'
+      ),
+    'App Server activation must default off and require an explicit absolute command path without leaking ignored paths'
+  );
+  assertDoesNotMatch(
+    codexAppServerProductionClientActivationSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork)\s*\(/,
+    'production App Server activation must delegate process ownership to the pinned stdio client and receive environment explicitly'
+  );
+  const clientActivationStartIndex =
+    codexAppServerProductionClientActivationSource.indexOf(
+      "const receipt = await callNativeAsync(client, 'start');"
+    );
+  const clientActivationStatusIndex =
+    codexAppServerProductionClientActivationSource.indexOf(
+      'const status = readClientStatus(client);',
+      clientActivationStartIndex
+    );
+  const clientActivationIsolationIndex =
+    codexAppServerProductionClientActivationSource.indexOf(
+      '|| !validIsolationProfile(client)'
+    );
+  const clientActivationCleanupIndex =
+    codexAppServerProductionClientActivationSource.indexOf(
+      'cleanupConfirmed = await cleanupClient();'
+    );
+  assert.ok(
+    clientActivationStartIndex >= 0
+      && clientActivationStatusIndex > clientActivationStartIndex
+      && clientActivationIsolationIndex > clientActivationStatusIndex
+      && clientActivationCleanupIndex > clientActivationIsolationIndex
+      && codexAppServerProductionClientActivationSource.includes(
+        'CODEX_APP_SERVER_PINNED_CLI_VERSION'
+      )
+      && codexAppServerProductionClientActivationSource.includes(
+        "['shadow', 'canary'].includes(runtimeConfig.configuredMode)"
+      ),
+    'production App Server activation must require pinned readiness and complete isolation before selection, cleaning every failed client'
   );
   for (const [label, source] of [
     ['shadow semantic comparator', shadowPlanSemanticComparatorSource],
@@ -1281,6 +1338,17 @@ function assertAgentRuntimeBoundary() {
       ),
     'canary production must compose live admission, authenticated snapshots, isolated workspace edits, inverse-patch promotion, and the guarded runtime under one pinned kernel identity'
   );
+  assert.ok(
+    canaryEditRuntimeCompositionSource.includes(
+      "CLIENT_NOT_READY: 'client_not_ready'"
+    )
+      && canaryEditRuntimeCompositionSource.indexOf(
+        "readClientState(clientLifecycle) !== 'ready'"
+      ) < canaryEditRuntimeCompositionSource.indexOf(
+        'const rolloutSelector = createCanaryRolloutSelector({'
+      ),
+    'canary composition must reject an unready App Server client before constructing editing or rollout authority'
+  );
 }
 
 function assertProjectCapabilityBoundary() {
@@ -2202,11 +2270,23 @@ function assertExecutionWorkspaceBoundary() {
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:canary-edit-production-runtime'
       )
+      && packageConfig.scripts['test:codex-app-server-runtime-config'].includes(
+        'codex-app-server-runtime-config.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:codex-app-server-runtime-config'
+      )
       && packageConfig.scripts['test:codex-app-server-stdio-client'].includes(
         'codex-app-server-stdio-client.test.js'
       )
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:codex-app-server-stdio-client'
+      )
+      && packageConfig.scripts['test:codex-app-server-production-client'].includes(
+        'codex-app-server-production-client-activation.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:codex-app-server-production-client'
       )
       && typeof packageConfig.scripts['test:codex-app-server-kernel-adapter'] === 'string'
       && packageConfig.scripts['test:codex-app-server-kernel-adapter'].includes(

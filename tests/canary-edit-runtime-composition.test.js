@@ -43,7 +43,7 @@ function deferred() {
   return { promise, reject, resolve };
 }
 
-function createClient({ closeFailure = null } = {}) {
+function createClient({ closeFailure = null, state = 'ready' } = {}) {
   const calls = { close: 0, status: 0 };
   const client = Object.freeze({
     close() {
@@ -59,7 +59,7 @@ function createClient({ closeFailure = null } = {}) {
     },
     status() {
       calls.status += 1;
-      return Object.freeze({ state: 'idle' });
+      return Object.freeze({ state });
     },
   });
   return { calls, client };
@@ -275,6 +275,15 @@ async function testRequestedCanaryFailsClosedWithoutEveryAuthority() {
   assert.strictEqual(fixture.calls.promote, 0);
   assert.strictEqual(fixture.clientFixture.calls.close, 0);
 
+  const idleClient = createClient({ state: 'idle' });
+  const idleFixture = createReadyOptions({ clientFixture: idleClient });
+  const idleRuntime = createCanaryEditRuntimeComposition(idleFixture.options);
+  assertUnavailable(
+    idleRuntime,
+    CANARY_EDIT_RUNTIME_COMPOSITION_STATES.BLOCKED,
+    CANARY_EDIT_RUNTIME_COMPOSITION_REASONS.CLIENT_NOT_READY
+  );
+
   let kernelGetterCalls = 0;
   const unsafeEditor = {
     version: fixture.options.canaryEditor.version,
@@ -319,7 +328,7 @@ async function testReadyCompositionIsLazyAndOwnsEvidence() {
     runnerVersion: 'canary-edit-runner.v1',
     executorVersion: 'canary-transactional-staging-executor.v1',
     ledgerVersion: 'canary-rollout-evidence-ledger.v1',
-    clientState: 'idle',
+    clientState: 'ready',
     inFlightExecutions: 0,
     closing: false,
     closed: false,

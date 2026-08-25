@@ -72,7 +72,7 @@ function createFixture({ mode = 'canary' } = {}) {
     },
     status() {
       calls.status += 1;
-      return Object.freeze({ state: 'idle' });
+      return Object.freeze({ state: 'ready' });
     },
   });
   const runtime = createCanaryEditProductionRuntime({
@@ -177,7 +177,7 @@ async function testReadyRuntimeComposesOnlyProductionAdapters() {
     mutation: 0,
     promotionId: 0,
     rollout: 0,
-    status: 1,
+    status: 2,
   });
 
   const snapshot = runtime.snapshot(CANARY_ROLLOUT_STAGES.INTERNAL);
