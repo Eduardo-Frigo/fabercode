@@ -11,6 +11,7 @@ const {
 } = require('../capabilities/sandbox_backend_contract');
 const {
   assertExecutionWorkspaceAcquireRequest,
+  portablePathsOverlap,
   preflightDataGraph,
 } = require('../capabilities/execution_workspace_contract');
 const {
@@ -21,7 +22,7 @@ const {
   assertCanaryStagingWriteReceipt,
 } = require('./canary_staging_contract');
 
-const CANARY_PROMOTION_REQUEST_VERSION = 'canary-promotion-request.v1';
+const CANARY_PROMOTION_REQUEST_VERSION = 'canary-promotion-request.v2';
 const CANARY_PROMOTION_RECEIPT_VERSION = 'canary-promotion-receipt.v1';
 const CANARY_PROMOTION_REVERT_RECEIPT_VERSION =
   'canary-promotion-revert-receipt.v1';
@@ -61,9 +62,12 @@ const PROMOTION_REQUEST_KEYS = Object.freeze([
   'jobId',
   'checkpointDigest',
   'sourceRootPath',
+  'sourceRealRootPath',
   'sourceRootIdentityDigest',
   'workspaceAuthorityDigest',
   'workspaceRootIdentityDigest',
+  'workspaceRootPath',
+  'workspaceRealRootPath',
   'actionDigest',
   'writeSetDigest',
   'changedPaths',
@@ -264,6 +268,17 @@ function structuredPromotionRequest(value) {
     || !safeIdentifier(fields.get('projectId'))
     || !safeIdentifier(fields.get('jobId'))
     || !boundedAbsolutePath(fields.get('sourceRootPath'))
+    || !boundedAbsolutePath(fields.get('sourceRealRootPath'))
+    || !boundedAbsolutePath(fields.get('workspaceRootPath'))
+    || !boundedAbsolutePath(fields.get('workspaceRealRootPath'))
+    || fields.get('sourceRootIdentityDigest')
+      === fields.get('workspaceRootIdentityDigest')
+    || [fields.get('sourceRootPath'), fields.get('sourceRealRootPath')].some(
+      (sourcePath) => [
+        fields.get('workspaceRootPath'),
+        fields.get('workspaceRealRootPath'),
+      ].some((workspacePath) => portablePathsOverlap(sourcePath, workspacePath))
+    )
     || fields.get('rootMutationExclusive') !== true) {
     throw new TypeError('Invalid canary promotion request');
   }
@@ -322,9 +337,12 @@ function createCanaryPromotionRequest(input = {}) {
     jobId: session.jobId,
     checkpointDigest: session.checkpointDigest,
     sourceRootPath: session.sourceRootPath,
+    sourceRealRootPath: session.sourceRealRootPath,
     sourceRootIdentityDigest: session.sourceRootIdentityDigest,
     workspaceAuthorityDigest: session.workspaceAuthorityDigest,
     workspaceRootIdentityDigest: session.workspaceRootIdentityDigest,
+    workspaceRootPath: session.workspaceRootPath,
+    workspaceRealRootPath: session.workspaceRealRootPath,
     actionDigest: writeReceipt.actionDigest,
     writeSetDigest: writeReceipt.writeSetDigest,
     changedPaths: Object.freeze([...writeReceipt.changedPaths]),

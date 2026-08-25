@@ -194,7 +194,7 @@ async function testPromotionAndRevertRoundTrip() {
   assert.deepStrictEqual(controller.diagnostics(), {
     version: CANARY_PROMOTION_CONTROLLER_VERSION,
     backendVersion: 'canary-promotion-backend.test.v1',
-    promotionContract: 'canary-promotion-request.v1',
+    promotionContract: 'canary-promotion-request.v2',
     revertContract: 'canary-promotion-revert-receipt.v1',
   });
   assertDeepFrozen(controller.diagnostics());

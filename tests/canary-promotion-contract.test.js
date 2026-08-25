@@ -121,7 +121,7 @@ function fixture(overrides = {}) {
   };
 }
 
-assert.strictEqual(CANARY_PROMOTION_REQUEST_VERSION, 'canary-promotion-request.v1');
+assert.strictEqual(CANARY_PROMOTION_REQUEST_VERSION, 'canary-promotion-request.v2');
 assert.strictEqual(CANARY_PROMOTION_RECEIPT_VERSION, 'canary-promotion-receipt.v1');
 assert.strictEqual(
   CANARY_PROMOTION_REVERT_RECEIPT_VERSION,
@@ -138,9 +138,12 @@ assert.deepStrictEqual(current.promotionRequest, {
   jobId: current.binding.jobId,
   checkpointDigest: current.checkpoint.checkpointDigest,
   sourceRootPath: current.binding.canonicalRootPath,
+  sourceRealRootPath: current.binding.realRootPath,
   sourceRootIdentityDigest: current.session.sourceRootIdentityDigest,
   workspaceAuthorityDigest: current.session.workspaceAuthorityDigest,
   workspaceRootIdentityDigest: current.session.workspaceRootIdentityDigest,
+  workspaceRootPath: current.session.workspaceRootPath,
+  workspaceRealRootPath: current.session.workspaceRealRootPath,
   actionDigest: current.writeReceipt.actionDigest,
   writeSetDigest: current.writeReceipt.writeSetDigest,
   changedPaths: ['src/app.js', 'src/styles.css'],
@@ -154,6 +157,23 @@ assertDeepFrozen(current.promotionRequest);
 assert.deepStrictEqual(
   assertCanaryPromotionRequest(current.promotionRequest, current.requestInput),
   current.promotionRequest
+);
+assert.throws(
+  () => createCanaryPromotionReceipt({
+    request: Object.freeze({
+      ...current.promotionRequest,
+      workspaceRootPath: current.promotionRequest.sourceRootPath,
+    }),
+    sourceAfterDigest: digest('5'),
+    inversePatchDigest: digest('6'),
+    branchHeadAfterDigest: current.promotionRequest.branchHeadDigest,
+    gitIndexAfterDigest: current.promotionRequest.gitIndexDigest,
+    userDirtyAfterDigest: current.promotionRequest.userDirtyDigest,
+    conflictChecked: true,
+    sourceMutated: true,
+    promotionApplied: true,
+  }),
+  /promotion request|root|workspace/i
 );
 
 const promotionReceipt = createCanaryPromotionReceipt({
