@@ -170,6 +170,9 @@ function assertAgentRuntimeBoundary() {
   const canaryEditActionClassifierSource = read(
     'main/agent_runtime/canary_edit_action_classifier.js'
   );
+  const canaryRolloutSelectorSource = read(
+    'main/agent_runtime/canary_rollout_selector.js'
+  );
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
@@ -441,6 +444,22 @@ function assertAgentRuntimeBoundary() {
       )
       && canaryEditActionClassifierSource.includes('EXTERNAL_EFFECT_FLAGS'),
     'canary classification must permit only bounded local text edits and reject requested external effects'
+  );
+  assertDoesNotMatch(
+    canaryRolloutSelectorSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm)\s*\(/,
+    'canary rollout selection must remain a pure deterministic boundary without ambient mutation, process, network, or Electron authority'
+  );
+  assert.ok(
+    canaryRolloutSelectorSource.includes("PERCENT_1: '1_percent'")
+      && canaryRolloutSelectorSource.includes("PERCENT_5: '5_percent'")
+      && canaryRolloutSelectorSource.includes("PERCENT_25: '25_percent'")
+      && canaryRolloutSelectorSource.includes("PERCENT_50: '50_percent'")
+      && canaryRolloutSelectorSource.indexOf('if (input.killSwitch)')
+        < canaryRolloutSelectorSource.indexOf("if (input.projectPin === 'legacy')")
+      && canaryRolloutSelectorSource.indexOf("if (input.projectPin === 'canary')")
+        < canaryRolloutSelectorSource.indexOf('if (!input.allowlisted)'),
+    'canary rollout must pin the internal, 1%, 5%, 25%, and 50% stages with kill-switch and project-pin precedence'
   );
 }
 
