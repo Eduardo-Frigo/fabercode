@@ -3115,6 +3115,42 @@ function assertExecutionWorkspaceBoundary() {
       && coordinatorSource.includes("purpose: 'execution'"),
     'execution must authorize, acquire, and refresh from the pinned project root'
   );
+  const coordinatorRootMutationStart = coordinatorSource.indexOf(
+    '  function inspectRootMutation(inputBinding) {'
+  );
+  const coordinatorRootMutationEnd = coordinatorSource.indexOf(
+    '  function diagnostics()',
+    coordinatorRootMutationStart
+  );
+  const coordinatorRootMutationSource = coordinatorSource.slice(
+    coordinatorRootMutationStart,
+    coordinatorRootMutationEnd
+  );
+  assert.ok(
+    coordinatorSource.includes(
+      "ASSISTANT_EXECUTION_COORDINATOR_VERSION = 'assistant-execution-coordinator.v4'"
+    )
+      && coordinatorRootMutationStart >= 0
+      && coordinatorRootMutationEnd > coordinatorRootMutationStart
+      && coordinatorRootMutationSource.indexOf(
+        'binding = immutableAuthorityBinding(inputBinding);'
+      ) < coordinatorRootMutationSource.indexOf(
+        'const owner = recordsByJobId.get(binding.jobId);'
+      )
+      && coordinatorRootMutationSource.includes(
+        "owner.state !== 'executing'"
+      )
+      && coordinatorRootMutationSource.includes(
+        'record.binding.canonicalRootPath !== binding.canonicalRootPath'
+      )
+      && coordinatorRootMutationSource.includes(
+        'activeOtherMutatingJobs += 1;'
+      )
+      && coordinatorRootMutationSource.includes(
+        'return rootMutationObservation(binding, 1);'
+      ),
+    'the coordinator must expose an exact synchronous root-mutation observation that counts concurrent execution and denies stale, unhealthy, or releasing authority'
+  );
   assert.ok(
     coordinatorSource.includes("Object.defineProperty(context, 'projectRootLease'")
       && coordinatorSource.includes('enumerable: false'),

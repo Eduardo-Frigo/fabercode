@@ -11,7 +11,7 @@ const {
   EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
 } = require('../services/execution_isolation_authorized_job_executor');
 
-const ASSISTANT_EXECUTION_COORDINATOR_VERSION = 'assistant-execution-coordinator.v3';
+const ASSISTANT_EXECUTION_COORDINATOR_VERSION = 'assistant-execution-coordinator.v4';
 const DEFAULT_MAX_ACTIVE_JOBS = 1_024;
 const HARD_MAX_ACTIVE_JOBS = 10_000;
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
@@ -2204,6 +2204,41 @@ function createAssistantExecutionCoordinator(options = {}) {
     return Object.freeze({ ok: true, cleared: records.length });
   }
 
+  function rootMutationObservation(binding, activeOtherMutatingJobs) {
+    return Object.freeze({
+      canonicalRootPath: binding.canonicalRootPath,
+      ownerJobId: binding.jobId,
+      activeOtherMutatingJobs,
+    });
+  }
+
+  function inspectRootMutation(inputBinding) {
+    let binding;
+    try {
+      binding = immutableAuthorityBinding(inputBinding);
+    } catch {
+      throw new TypeError('root mutation observation requires an exact binding');
+    }
+    const owner = recordsByJobId.get(binding.jobId);
+    if (!authorityHealthy || clearing || releaseBarrierActive
+      || !owner || owner.state !== 'executing'
+      || owner.executionRevocationRequested
+      || !authorityBindingsMatch(owner.binding, binding)) {
+      return rootMutationObservation(binding, 1);
+    }
+    let activeOtherMutatingJobs = 0;
+    for (const record of recordsByJobId.values()) {
+      if (record === owner
+        || record.binding.canonicalRootPath !== binding.canonicalRootPath) {
+        continue;
+      }
+      if (record.state === 'executing' || executionLifecycleActive(record)) {
+        activeOtherMutatingJobs += 1;
+      }
+    }
+    return rootMutationObservation(binding, activeOtherMutatingJobs);
+  }
+
   function diagnostics() {
     let readyJobs = 0;
     let executingJobs = 0;
@@ -2231,6 +2266,7 @@ function createAssistantExecutionCoordinator(options = {}) {
     createPlanningJob,
     diagnostics,
     execute,
+    inspectRootMutation,
     onJobTerminal,
     retry,
     revokeJob,

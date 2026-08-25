@@ -326,7 +326,97 @@ async function createRetryWaitingJob(
   return jobId;
 }
 
+async function testExactRootMutationObservation() {
+  const gates = new Map();
+  const entered = new Map();
+  const bindings = new Map();
+  const observations = new Map();
+  let harness;
+  harness = createHarness({
+    executeAction: async (_action, _projectInfo, context) => {
+      bindings.set(context.jobId, context.authorityBinding);
+      observations.set(
+        context.jobId,
+        harness.coordinator.inspectRootMutation(context.authorityBinding)
+      );
+      entered.get(context.jobId).resolve();
+      await gates.get(context.jobId).promise;
+      return { ok: true, modifiedFiles: ['src/app.js'] };
+    },
+  });
+  assert.strictEqual(
+    typeof harness.coordinator.inspectRootMutation,
+    'function'
+  );
+  const firstJobId = await createReadyJob(harness, 'root-observer-first');
+  const secondJobId = await createReadyJob(harness, 'root-observer-second');
+  for (const jobId of [firstJobId, secondJobId]) {
+    gates.set(jobId, deferred());
+    entered.set(jobId, deferred());
+  }
+
+  const firstExecution = harness.coordinator.execute({ jobId: firstJobId });
+  await entered.get(firstJobId).promise;
+  assert.deepStrictEqual(observations.get(firstJobId), {
+    canonicalRootPath: '/workspace/project-a',
+    ownerJobId: firstJobId,
+    activeOtherMutatingJobs: 0,
+  });
+
+  const secondExecution = harness.coordinator.execute({ jobId: secondJobId });
+  await entered.get(secondJobId).promise;
+  assert.deepStrictEqual(observations.get(secondJobId), {
+    canonicalRootPath: '/workspace/project-a',
+    ownerJobId: secondJobId,
+    activeOtherMutatingJobs: 1,
+  });
+  const firstConcurrentObservation = harness.coordinator.inspectRootMutation(
+    bindings.get(firstJobId)
+  );
+  assert.deepStrictEqual(firstConcurrentObservation, {
+    canonicalRootPath: '/workspace/project-a',
+    ownerJobId: firstJobId,
+    activeOtherMutatingJobs: 1,
+  });
+  assert.strictEqual(Object.isFrozen(firstConcurrentObservation), true);
+
+  gates.get(firstJobId).resolve();
+  assert.strictEqual((await firstExecution).ok, true);
+  assert.deepStrictEqual(
+    harness.coordinator.inspectRootMutation(bindings.get(secondJobId)),
+    {
+      canonicalRootPath: '/workspace/project-a',
+      ownerJobId: secondJobId,
+      activeOtherMutatingJobs: 0,
+    }
+  );
+  assert.deepStrictEqual(
+    harness.coordinator.inspectRootMutation(Object.freeze({
+      ...bindings.get(secondJobId),
+      jobId: 'job-not-owned-by-coordinator',
+    })),
+    {
+      canonicalRootPath: '/workspace/project-a',
+      ownerJobId: 'job-not-owned-by-coordinator',
+      activeOtherMutatingJobs: 1,
+    }
+  );
+
+  gates.get(secondJobId).resolve();
+  assert.strictEqual((await secondExecution).ok, true);
+  assert.strictEqual(
+    harness.coordinator.inspectRootMutation(bindings.get(secondJobId))
+      .activeOtherMutatingJobs,
+    1
+  );
+  assert.throws(
+    () => harness.coordinator.inspectRootMutation(Object.freeze({})),
+    /binding|root mutation/i
+  );
+}
+
 async function run() {
+  await testExactRootMutationObservation();
   assert.throws(
     () => createHarness({ createAuthorizedJobExecutor: {} }),
     /createAuthorizedJobExecutor must be a function when supplied/,
