@@ -170,6 +170,9 @@ function assertAgentRuntimeBoundary() {
   const canaryAdmissionFactsProviderSource = read(
     'main/services/canary_admission_facts_provider.js'
   );
+  const canaryInternalRolloutPolicySource = read(
+    'main/services/canary_internal_rollout_policy.js'
+  );
   const canaryEditActionClassifierSource = read(
     'main/agent_runtime/canary_edit_action_classifier.js'
   );
@@ -545,6 +548,40 @@ function assertAgentRuntimeBoundary() {
       )
       && canaryAdmissionFactsProviderSource.includes('killSwitch: true'),
     'canary admission facts must reauthorize the exact action and root before observations, bind the checkpoint, and deny on unavailable live state'
+  );
+  assertDoesNotMatch(
+    canaryInternalRolloutPolicySource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm)\s*\(/,
+    'the internal canary rollout policy must receive project authorization explicitly without ambient filesystem, process, network, or Electron authority'
+  );
+  const internalRolloutModeIndex = canaryInternalRolloutPolicySource.indexOf(
+    "runtimeConfig.configuredMode === 'canary'"
+  );
+  const internalRolloutBindingIndex = canaryInternalRolloutPolicySource.indexOf(
+    'const binding = normalizeBinding(inputBinding);'
+  );
+  const internalRolloutAuthorizationIndex =
+    canaryInternalRolloutPolicySource.indexOf(
+      'authorization = Reflect.apply(authorizeProjectBinding, undefined, ['
+    );
+  const internalRolloutMatchIndex = canaryInternalRolloutPolicySource.indexOf(
+    'authorizationMatches(authorization, binding)'
+  );
+  assert.ok(
+    canaryInternalRolloutPolicySource.includes(
+      "'canary-internal-rollout-policy.v1'"
+    )
+      && internalRolloutModeIndex >= 0
+      && internalRolloutBindingIndex > internalRolloutModeIndex
+      && internalRolloutAuthorizationIndex > internalRolloutBindingIndex
+      && internalRolloutMatchIndex > internalRolloutAuthorizationIndex
+      && canaryInternalRolloutPolicySource.includes(
+        "projectPin: canaryActive ? null : 'legacy'"
+      )
+      && canaryInternalRolloutPolicySource.includes(
+        'rolloutStage: CANARY_ROLLOUT_STAGES.INTERNAL'
+      ),
+    'initial canary rollout must be canary-mode-only, exact-binding authorized, internal-only, and pinned to legacy otherwise'
   );
   assertDoesNotMatch(
     canaryEditActionClassifierSource,
@@ -2108,6 +2145,14 @@ function assertExecutionWorkspaceBoundary() {
       )
       && packageConfig.scripts['test:harness-runtime'].includes(
         'test:canary-admission-facts-provider'
+      )
+      && typeof packageConfig.scripts['test:canary-internal-rollout-policy']
+        === 'string'
+      && packageConfig.scripts['test:canary-internal-rollout-policy'].includes(
+        'canary-internal-rollout-policy.test.js'
+      )
+      && packageConfig.scripts['test:harness-runtime'].includes(
+        'test:canary-internal-rollout-policy'
       )
       && packageConfig.scripts['test:agentic-git-read-broker'].includes(
         'agentic-git-read-broker-factory.test.js'
