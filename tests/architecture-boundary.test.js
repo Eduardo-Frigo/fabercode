@@ -179,6 +179,9 @@ function assertAgentRuntimeBoundary() {
   const canaryEditRunnerSource = read(
     'main/agent_runtime/canary_edit_runner.js'
   );
+  const canaryStagingContractSource = read(
+    'main/agent_runtime/canary_staging_contract.js'
+  );
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
@@ -559,6 +562,21 @@ function assertAgentRuntimeBoundary() {
     canaryEditRunnerSource.slice(canaryEffectFrontierIndex),
     /fallbackToLegacy\s*\(/,
     'canary runner must never start legacy fallback after entering the staged execution frontier'
+  );
+  assertDoesNotMatch(
+    canaryStagingContractSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm)\s*\(/,
+    'canary staging contracts must remain pure receipt validation without ambient mutation, process, network, or Electron authority'
+  );
+  assert.ok(
+    canaryStagingContractSource.includes('assertExecutionWorkspaceLease(')
+      && canaryStagingContractSource.includes('portablePathsOverlap(sourcePath, workspacePath)')
+      && canaryStagingContractSource.includes("fields.get('sourceMutated') !== false")
+      && canaryStagingContractSource.includes('assertExecutionWorkspaceDiscardReceipt(')
+      && canaryStagingContractSource.includes(
+        'CANARY_EDIT_CLEANUP_RECEIPT_SCHEMA_VERSION'
+      ),
+    'canary staging contracts must bind disjoint execution workspaces, prove staging-only writes, and translate physical discard into lifecycle cleanup evidence'
   );
 }
 
