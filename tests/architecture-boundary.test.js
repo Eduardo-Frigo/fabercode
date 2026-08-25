@@ -167,6 +167,9 @@ function assertAgentRuntimeBoundary() {
   const canaryEditAdmissionPolicySource = read(
     'main/agent_runtime/canary_edit_admission_policy.js'
   );
+  const canaryEditActionClassifierSource = read(
+    'main/agent_runtime/canary_edit_action_classifier.js'
+  );
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
@@ -425,6 +428,20 @@ function assertAgentRuntimeBoundary() {
       `canary admission must enforce the ${prerequisite} prerequisite`
     );
   }
+  assertDoesNotMatch(
+    canaryEditActionClassifierSource,
+    /require\(['"](?:fs|child_process|worker_threads|electron|net|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm)\s*\(/,
+    'canary edit classification must remain a pure data boundary without ambient mutation, process, network, or Electron authority'
+  );
+  assert.ok(
+    canaryEditActionClassifierSource.includes("'mkdir', 'write_file', 'append_file'")
+      && canaryEditActionClassifierSource.includes('MAX_OPERATIONS = 32')
+      && canaryEditActionClassifierSource.includes(
+        'MAX_TOTAL_CONTENT_BYTES = 2 * 1024 * 1024'
+      )
+      && canaryEditActionClassifierSource.includes('EXTERNAL_EFFECT_FLAGS'),
+    'canary classification must permit only bounded local text edits and reject requested external effects'
+  );
 }
 
 function assertProjectCapabilityBoundary() {
