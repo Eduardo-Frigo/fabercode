@@ -486,6 +486,9 @@ function createContextPackProductionSourceReaders(options = {}) {
       active.acceptanceCriteria
         ? `Critérios de aceite: ${compactInline(active.acceptanceCriteria, 1_500)}`
         : '',
+      active.validationCommands
+        ? `Validação obrigatória: ${compactInline(active.validationCommands, 1_500)}`
+        : '',
       pendingTasks.length ? `Pendências: ${pendingTasks.join('; ')}.` : 'Sem tarefas pendentes.',
     ].filter(Boolean).join(' ');
     const contentDigest = requiredContentDigest(

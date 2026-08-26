@@ -119,6 +119,16 @@ assert.match(
   'Commit action should pass only selected staged files forward'
 );
 assert.match(
+  gitSource,
+  /commitProjectGitFiles[\s\S]*linkCreatedCommitToActiveMilestone\(projectInfo, result\)/,
+  'A created commit should enter the verified active-milestone linking flow'
+);
+assert.match(
+  gitSource,
+  /listMilestones[\s\S]*status === 'active'[\s\S]*linkMilestoneCommit[\s\S]*result\.latest\.hash/,
+  'Milestone linking must use the real hash returned after commit creation'
+);
+assert.match(
   deploySource,
   /Revisar publicação[\s\S]*Clonar \/ importar[\s\S]*Comandos manuais/,
   'GitHub deploy module should own publish, clone and manual command actions'

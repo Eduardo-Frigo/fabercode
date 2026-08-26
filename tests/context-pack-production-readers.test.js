@@ -93,6 +93,7 @@ async function run() {
           summary: 'Conectar contexto governado.',
           status: 'active',
           acceptanceCriteria: 'Toda memória possui provenance.',
+          validationCommands: 'npm test\nnpm run build',
           tasks: [
             { id: 'task-1', title: 'Criar leitores', status: 'done' },
             { id: 'task-2', title: 'Conectar runtime', status: 'pending' },
@@ -173,6 +174,7 @@ async function run() {
   assert(byId.get(CONTEXT_PACK_SECTION_IDS.APPLICATION_MAP).summary.includes('2 nós'));
   assert(byId.get(CONTEXT_PACK_SECTION_IDS.MILESTONE).summary.includes('Milestone ativa 3:'));
   assert(byId.get(CONTEXT_PACK_SECTION_IDS.MILESTONE).summary.includes('Toda memória possui provenance'));
+  assert(byId.get(CONTEXT_PACK_SECTION_IDS.MILESTONE).summary.includes('npm test'));
   assert(byId.get(CONTEXT_PACK_SECTION_IDS.GIT).summary.includes('src/index.js'));
   assert(byId.get(CONTEXT_PACK_SECTION_IDS.MEMORY).summary.includes('Preservar mapa'));
   assert.strictEqual(byId.get(CONTEXT_PACK_SECTION_IDS.INSTRUCTIONS).citations.length, 2);

@@ -1,6 +1,8 @@
 const defaultFs = require('fs');
 const defaultPath = require('path');
 
+const SAFE_GIT_COMMIT_HASH = /^[a-f0-9]{7,64}$/i;
+
 function createProjectGitService(dependencies = {}) {
   const {
     fs = defaultFs,
@@ -181,6 +183,87 @@ function createProjectGitService(dependencies = {}) {
       ok: true,
       isGitRepo: true,
       commits,
+    };
+  }
+
+  async function resolveProjectGitCommit(rootPath, commitHash) {
+    requireDependency('runCommand', runCommand);
+
+    const safeRoot = String(rootPath || '').trim();
+    const requestedHash = String(commitHash || '').trim();
+    if (!safeRoot) return { ok: false, message: 'rootPath é obrigatório.' };
+    if (!SAFE_GIT_COMMIT_HASH.test(requestedHash)) {
+      return {
+        ok: false,
+        code: 'git_commit_invalid',
+        message: 'Hash de commit inválido.',
+      };
+    }
+
+    const inside = await runCommand(
+      'git',
+      ['-C', safeRoot, 'rev-parse', '--is-inside-work-tree'],
+      { timeoutMs: 1400 },
+    );
+    if (!inside.ok || !/true/i.test(String(inside.stdout || '').trim())) {
+      return {
+        ok: false,
+        code: 'git_repository_unavailable',
+        message: 'Projeto não é um repositório Git.',
+      };
+    }
+
+    const resolvedResult = await runCommand(
+      'git',
+      ['-C', safeRoot, 'rev-parse', '--verify', `${requestedHash}^{commit}`],
+      { timeoutMs: 2400 },
+    );
+    const resolvedHash = String(resolvedResult.stdout || '').trim().toLowerCase();
+    if (!resolvedResult.ok || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(resolvedHash)) {
+      return {
+        ok: false,
+        code: 'git_commit_not_found',
+        message: 'O commit solicitado não existe neste projeto.',
+      };
+    }
+
+    const metadataResult = await runCommand(
+      'git',
+      [
+        '-C',
+        safeRoot,
+        'show',
+        '-s',
+        '--date=iso-strict',
+        '--pretty=format:%H%x1f%s%x1f%cI',
+        resolvedHash,
+        '--',
+      ],
+      { timeoutMs: 2400 },
+    );
+    const [observedHash = '', subject = '', createdAt = ''] = String(
+      metadataResult.stdout || '',
+    ).split('\x1f');
+    if (!metadataResult.ok
+      || observedHash.trim().toLowerCase() !== resolvedHash
+      || !subject.trim()
+      || !createdAt.trim()
+      || Number.isNaN(Date.parse(createdAt.trim()))) {
+      return {
+        ok: false,
+        code: 'git_commit_metadata_unavailable',
+        message: 'Não foi possível verificar os metadados do commit.',
+      };
+    }
+
+    return {
+      ok: true,
+      isGitRepo: true,
+      commit: {
+        hash: resolvedHash,
+        message: subject.trim().slice(0, 4_096),
+        createdAt: createdAt.trim(),
+      },
     };
   }
 
@@ -826,6 +909,7 @@ function createProjectGitService(dependencies = {}) {
     getProjectGitWorktree,
     getProjectGitStatus,
     getProjectGitCommits,
+    resolveProjectGitCommit,
     initProjectGitRepository,
     normalizeGitRemoteUrl,
     parseNumstatLine,

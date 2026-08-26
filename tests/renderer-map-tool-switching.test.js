@@ -81,6 +81,21 @@ function createDocument(ids) {
   const elements = new Map();
   ids.forEach((id) => elements.set(id, createElement(id)));
 
+  const mapChatLog = elements.get('map-chat-log');
+  if (mapChatLog) {
+    let mapChatLogHtml = '';
+    Object.defineProperty(mapChatLog, 'innerHTML', {
+      enumerable: true,
+      get() {
+        return mapChatLogHtml;
+      },
+      set(value) {
+        mapChatLogHtml = String(value);
+        this.children = [];
+      },
+    });
+  }
+
   const container = elements.get('workspace-map-region');
   container.querySelector = (selector) => {
     if (!selector || selector[0] !== '#') return null;
@@ -203,7 +218,90 @@ const terminalController = {
 const renderPlanService = createApplicationMapRenderPlanService({ now: () => 1724000000000 });
 
 const api = {
-  renderApplicationMap: async () => ({ ok: true }),
+  renderApplicationMapCalls: 0,
+  renderApplicationMap: async () => {
+    api.renderApplicationMapCalls += 1;
+    return { ok: true };
+  },
+  analyzeMapChatSession: async () => ({ ok: true, response: 'Análise dedicada do mapa.' }),
+  sendMapChatSessionMessageCalls: [],
+  sendMapChatSessionMessage: async (payload) => {
+    api.sendMapChatSessionMessageCalls.push(payload);
+    return {
+      ok: true,
+      response: 'Preparei uma mudança para sua aprovação.',
+      proposalDraft: {
+        schemaVersion: 'application-map-patch.v1',
+        operations: [{
+          kind: 'upsert_node',
+          node: { id: 'node-checkout', type: 'text', title: 'Checkout' },
+        }],
+      },
+    };
+  },
+  previewMapChatApplicationMapPatchCalls: [],
+  previewMapChatApplicationMapPatch: async (payload) => {
+    api.previewMapChatApplicationMapPatchCalls.push(payload);
+    return {
+      ok: true,
+      proposal: {
+        proposalId: 'proposal-map-1',
+        revision: 1,
+        patchDigest: 'sha256:' + 'c'.repeat(64),
+        status: 'pending',
+      },
+    };
+  },
+  analyzeMapRenderSessionCalls: [],
+  analyzeMapRenderSession: async (payload) => {
+    api.analyzeMapRenderSessionCalls.push(payload);
+    return { ok: true, response: 'Análise dedicada do mapa.' };
+  },
+  previewMapRenderMilestonesCalls: [],
+  previewMapRenderMilestones: async (payload) => {
+    api.previewMapRenderMilestonesCalls.push(payload);
+    return {
+      ok: true,
+      proposal: {
+        proposalId: 'proposal-1',
+        revision: 1,
+        patchDigest: 'sha256:' + 'a'.repeat(64),
+        status: 'pending',
+      },
+    };
+  },
+  approveMapChatProposalCalls: [],
+  approveMapChatProposal: async (payload) => {
+    api.approveMapChatProposalCalls.push(payload);
+    if (payload.proposalId === 'proposal-map-1') {
+      return {
+        ok: true,
+        proposal: {
+          proposalId: 'proposal-map-1',
+          revision: 3,
+          patchDigest: 'sha256:' + 'c'.repeat(64),
+          status: 'applied',
+        },
+      };
+    }
+    return {
+      ok: true,
+      proposal: {
+        proposalId: 'proposal-1',
+        revision: 3,
+        patchDigest: 'sha256:' + 'a'.repeat(64),
+        status: 'applied',
+      },
+    };
+  },
+  rejectMapChatProposalCalls: [],
+  rejectMapChatProposal: async (payload) => {
+    api.rejectMapChatProposalCalls.push(payload);
+    return {
+      ok: true,
+      proposal: { ...payload, revision: payload.expectedRevision + 1, status: 'rejected' },
+    };
+  },
   buildApplicationMapRenderPlanCalls: [],
   buildApplicationMapRenderPlan: async (payload) => {
     api.buildApplicationMapRenderPlanCalls.push(payload);
@@ -215,8 +313,16 @@ const api = {
     api.sendAssistantMessageCalls += 1;
     return { ok: true, response: 'ok' };
   },
-  saveMilestones: async () => ({ ok: true }),
-  renderMilestones: async () => ({ ok: true }),
+  saveMilestonesCalls: 0,
+  saveMilestones: async () => {
+    api.saveMilestonesCalls += 1;
+    return { ok: true };
+  },
+  renderMilestonesCalls: 0,
+  renderMilestones: async () => {
+    api.renderMilestonesCalls += 1;
+    return { ok: true };
+  },
   listMilestones: async () => ({ ok: true, milestones: [{ id: 'm1', number: 1, title: 'Milestone 1', summary: 'Resumo', status: 'active', tasks: [] }] }),
   getMilestoneGitStatus: async () => ({ ok: true, matchedModified: [], otherModified: [] }),
   listConversations: async () => ({ ok: true, conversationsByProject: {} }),
@@ -235,17 +341,36 @@ const api = {
     api.addConversationMessagePayloads.push(payload);
     return { ok: true };
   },
-  saveApplicationMap: async () => ({ ok: true }),
-  getApplicationMap: async () => ({ ok: true, map: { nodes: [], edges: [] } }),
+  saveApplicationMapCalls: [],
+  saveApplicationMap: async (payload) => {
+    api.saveApplicationMapCalls.push(payload);
+    return { ok: true };
+  },
+  getApplicationMapCalls: [],
+  getApplicationMap: async (payload) => {
+    api.getApplicationMapCalls.push(payload);
+    return {
+      ok: true,
+      map: {
+        nodes: [{ id: 'node-checkout', type: 'text', title: 'Checkout' }],
+        edges: [],
+        viewport: { x: 0, y: 0 },
+        zoom: 1,
+      },
+    };
+  },
 };
 
 const canvasController = {
+  loadMapDataCalls: [],
   setTool() {},
   addNodeAtCenter() {},
   resetZoom() {},
   clearMap() {},
   drawEdges() {},
-  loadMapData() {},
+  loadMapData(map) {
+    this.loadMapDataCalls.push(map);
+  },
   getMapData() {
     return { nodes: [], edges: [] };
   },
@@ -365,6 +490,7 @@ function findDescendant(root, predicate) {
   assert.strictEqual(renderSessionView.classList.contains('hidden'), false, 'Render session should open after clicking render');
   assert.strictEqual(renderBackButton.disabled, false, 'Render back button should be available in session view');
   assert.strictEqual(api.buildApplicationMapRenderPlanCalls.length, 1, 'Render flow should delegate planning exactly once');
+  assert.strictEqual(api.analyzeMapRenderSessionCalls.length, 1, 'Render flow should use the dedicated read-only AI session');
   assert.strictEqual(
     api.buildApplicationMapRenderPlanCalls[0].rootPath,
     '/tmp/project',
@@ -383,6 +509,62 @@ function findDescendant(root, predicate) {
     true,
     'Render messages must remain isolated from the main development chat'
   );
+
+  const mapChatNew = documentRef.getElementById('btn-map-chat-new');
+  const mapRendersBeforeChat = api.renderApplicationMapCalls;
+  await mapChatNew.click();
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  assert.strictEqual(
+    api.renderApplicationMapCalls,
+    mapRendersBeforeChat,
+    'Opening read-only Map Chat must not render or mutate project documentation',
+  );
+  const mapChatTextarea = documentRef.getElementById('map-chat-textarea');
+  mapChatTextarea.value = 'Adicione o checkout ao mapa.';
+  await documentRef.getElementById('btn-map-chat-send').click();
+  await flush();
+  assert.strictEqual(api.sendMapChatSessionMessageCalls.length, 1, 'Map Chat must use the dedicated read-only session');
+  assert.strictEqual(api.previewMapChatApplicationMapPatchCalls.length, 1, 'Structured output must become one durable preview');
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(api.previewMapChatApplicationMapPatchCalls[0])),
+    {
+      projectId: 'project-1',
+      rootPath: '/tmp/project',
+      conversationId: 'c1',
+      operations: [{
+        kind: 'upsert_node',
+        node: { id: 'node-checkout', type: 'text', title: 'Checkout' },
+      }],
+    },
+  );
+  const mapProposalCard = findDescendant(
+    documentRef.getElementById('map-chat-log'),
+    (element) => element.className === 'map-chat-proposal-card',
+  );
+  assert.ok(mapProposalCard, 'A durable map proposal must render a review card');
+  const approveMapProposal = findDescendant(
+    mapProposalCard,
+    (element) => element.className === 'map-chat-proposal-approve',
+  );
+  assert.ok(approveMapProposal, 'Map proposal card must expose explicit approval');
+  assert.strictEqual(api.saveApplicationMapCalls.length, 0, 'Preview must never bypass the domain with autosave');
+  await approveMapProposal.click();
+  await flush();
+  const mapApproval = api.approveMapChatProposalCalls.find(
+    (payload) => payload.proposalId === 'proposal-map-1',
+  );
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(mapApproval)), {
+    projectId: 'project-1',
+    rootPath: '/tmp/project',
+    conversationId: 'c1',
+    proposalId: 'proposal-map-1',
+    expectedRevision: 1,
+    patchDigest: 'sha256:' + 'c'.repeat(64),
+  });
+  assert.strictEqual(api.saveApplicationMapCalls.length, 0, 'Approval must remain inside the map domain service');
+  assert.strictEqual(api.getApplicationMapCalls.length >= 1, true, 'Applied proposal must reload canonical map state');
+  assert.strictEqual(canvasController.loadMapDataCalls.at(-1).nodes[0].id, 'node-checkout');
+  assert.strictEqual(approveMapProposal.disabled, true, 'Applied proposal must not be reusable');
 
   body.classList.add('mode-terminal');
   await btnMilestones.click();
@@ -453,6 +635,7 @@ function findDescendant(root, predicate) {
   assert.strictEqual(api.addConversationMessageCalls, messageCountBeforeAnalysis, 'Opening tutorial analysis must not persist messages');
 
   assert.strictEqual(await controller.generateTutorialRenderDraft(), true, 'Tutorial should generate a local development plan');
+  assert.strictEqual(api.previewMapRenderMilestonesCalls.length >= 1, true, 'Ready render plans must create a durable preview');
   assert.strictEqual(api.sendAssistantMessageCalls, providerCallsBeforeTutorial, 'Tutorial rendering must not call an AI provider');
   assert.strictEqual(api.addConversationCalls, conversationCountBeforeAnalysis + 1, 'Tutorial rendering should persist its own history');
   assert.strictEqual(api.addConversationPayloads.at(-1).meta.source, 'map_render', 'Tutorial rendering must use the map_render source');
@@ -463,6 +646,23 @@ function findDescendant(root, predicate) {
     'Tutorial plan should render its five complete milestones'
   );
   assert.strictEqual(documentRef.getElementById('btn-map-render-save').classList.contains('hidden'), false, 'Ready tutorial plan should expose Save to Milestones');
+  await documentRef.getElementById('btn-map-render-save').click();
+  await flush();
+  const milestoneApprovals = api.approveMapChatProposalCalls.filter(
+    (payload) => payload.proposalId === 'proposal-1',
+  );
+  assert.strictEqual(milestoneApprovals.length, 1, 'Save must approve the durable proposal exactly once');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(milestoneApprovals[0])), {
+    projectId: 'project-1',
+    rootPath: '/tmp/project',
+    conversationId: 'c1',
+    proposalId: 'proposal-1',
+    expectedRevision: 1,
+    patchDigest: 'sha256:' + 'a'.repeat(64),
+  });
+  assert.strictEqual(api.saveMilestonesCalls, 0, 'Renderer must not bypass proposal approval with direct milestone writes');
+  assert.strictEqual(api.renderMilestonesCalls, 0, 'Renderer must not render milestones outside the approved domain operation');
+  assert.strictEqual(documentRef.getElementById('btn-map-render-save').classList.contains('hidden'), true, 'Applied proposals must hide the Save action');
 
   console.log('renderer-map-tool-switching.test.js: ok');
 })().catch((error) => {

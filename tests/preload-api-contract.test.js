@@ -82,16 +82,24 @@ const preservedFeatureFunctionNames = [
   // Milestones.
   'listMilestones',
   'getMilestone',
-  'saveMilestones',
   'updateMilestoneStatus',
   'updateMilestoneTask',
   'linkMilestoneCommit',
+  'completeMilestoneAfterValidation',
   'getMilestoneGitStatus',
   'renderMilestones',
   // Application-map chat and persisted conversations.
   'routePersonaRequest',
   'buildPlan',
   'sendAssistantMessage',
+  'sendMapChatSessionMessage',
+  'analyzeMapChatSession',
+  'analyzeMapRenderSession',
+  'sendMapRenderSessionMessage',
+  'previewMapChatApplicationMapPatch',
+  'previewMapRenderMilestones',
+  'approveMapChatProposal',
+  'rejectMapChatProposal',
   'listConversations',
   'addConversation',
   'renameConversation',
@@ -451,11 +459,6 @@ async function assertInvoke(methodName, args, expectedChannel, expectedArgs = ar
     'milestones:get'
   );
   await assertInvoke(
-    'saveMilestones',
-    [{ rootPath: '/tmp/app', milestones: [{ id: 'milestone-1', tasks: [] }] }],
-    'milestones:save'
-  );
-  await assertInvoke(
     'updateMilestoneStatus',
     [{ rootPath: '/tmp/app', milestoneId: 'milestone-1', status: 'active' }],
     'milestones:update-status'
@@ -476,6 +479,15 @@ async function assertInvoke(methodName, args, expectedChannel, expectedArgs = ar
     'milestones:link-commit'
   );
   await assertInvoke(
+    'completeMilestoneAfterValidation',
+    [{
+      rootPath: '/tmp/app',
+      milestoneId: 'milestone-1',
+      jobId: 'job-validated-1',
+    }],
+    'milestones:complete-after-validation'
+  );
+  await assertInvoke(
     'getMilestoneGitStatus',
     [{ rootPath: '/tmp/app', milestoneId: 'milestone-1' }],
     'milestones:git-status'
@@ -491,6 +503,89 @@ async function assertInvoke(methodName, args, expectedChannel, expectedArgs = ar
     isMapChat: true,
   };
   await assertInvoke('sendAssistantMessage', [mapChatPayload], 'assistant:message');
+  const mapChatSessionPayload = {
+    projectId: 'project-1',
+    rootPath: '/tmp/app',
+    conversationId: 'conversation-1',
+    userMessage: 'Quais partes do mapa ainda precisam de definição?',
+    locale: 'pt-BR',
+  };
+  await assertInvoke(
+    'sendMapChatSessionMessage',
+    [mapChatSessionPayload],
+    'application-map:chat:message'
+  );
+  await assertInvoke(
+    'analyzeMapChatSession',
+    [{
+      projectId: 'project-1',
+      rootPath: '/tmp/app',
+      conversationId: 'conversation-1',
+      locale: 'pt-BR',
+    }],
+    'application-map:chat:analyze'
+  );
+  await assertInvoke(
+    'analyzeMapRenderSession',
+    [{
+      projectId: 'project-1',
+      rootPath: '/tmp/app',
+      conversationId: 'render-conversation-1',
+      userMessage: 'Executar a análise inicial do mapa.',
+      locale: 'pt-BR',
+    }],
+    'application-map:render:analyze'
+  );
+  await assertInvoke(
+    'sendMapRenderSessionMessage',
+    [{
+      projectId: 'project-1',
+      rootPath: '/tmp/app',
+      conversationId: 'render-conversation-1',
+      userMessage: 'Refinar acessibilidade.',
+      locale: 'pt-BR',
+      attachments: [],
+    }],
+    'application-map:render:message'
+  );
+  const mapProposalDecision = {
+    projectId: 'project-1',
+    rootPath: '/tmp/app',
+    conversationId: 'render-conversation-1',
+    proposalId: 'proposal-1',
+    expectedRevision: 1,
+    patchDigest: 'sha256:' + 'a'.repeat(64),
+  };
+  await assertInvoke(
+    'previewMapChatApplicationMapPatch',
+    [{
+      projectId: 'project-1',
+      rootPath: '/tmp/app',
+      conversationId: 'chat-conversation-1',
+      operations: [{ kind: 'remove_node', nodeId: 'node-old' }],
+    }],
+    'application-map:proposal:map:preview'
+  );
+  await assertInvoke(
+    'previewMapRenderMilestones',
+    [{
+      projectId: 'project-1',
+      rootPath: '/tmp/app',
+      conversationId: 'render-conversation-1',
+      milestones: [],
+    }],
+    'application-map:proposal:milestones:preview'
+  );
+  await assertInvoke(
+    'approveMapChatProposal',
+    [mapProposalDecision],
+    'application-map:proposal:approve'
+  );
+  await assertInvoke(
+    'rejectMapChatProposal',
+    [mapProposalDecision],
+    'application-map:proposal:reject'
+  );
   await assertInvoke('listConversations', [], 'orchestration:conversations:list');
   await assertInvoke(
     'addConversation',

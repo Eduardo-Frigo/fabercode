@@ -15,6 +15,24 @@ const mainSource = fs.readFileSync(path.join(rootDir, 'main.js'), 'utf8');
 const tutorialRenderStart = applicationMapSource.indexOf('generateTutorialRenderDraftHandler = async');
 const tutorialRenderEnd = applicationMapSource.indexOf('async function sendRenderChatMessage', tutorialRenderStart);
 const tutorialRenderSource = applicationMapSource.slice(tutorialRenderStart, tutorialRenderEnd);
+const mapChatSendStart = applicationMapSource.indexOf('async function sendMapChatMessage(userText)');
+const mapChatSendEnd = applicationMapSource.indexOf('if (btnMapChatSend && mapChatTextarea)', mapChatSendStart);
+const mapChatSendSource = applicationMapSource.slice(mapChatSendStart, mapChatSendEnd);
+const mapChatAnalysisStart = applicationMapSource.indexOf('async function triggerMapAnalysis()');
+const mapChatAnalysisEnd = applicationMapSource.indexOf('async function sendMapChatMessage(userText)', mapChatAnalysisStart);
+const mapChatAnalysisSource = applicationMapSource.slice(mapChatAnalysisStart, mapChatAnalysisEnd);
+const renderDraftStart = applicationMapSource.indexOf('async function generateRenderDraft(userRequest');
+const renderDraftEnd = applicationMapSource.indexOf('generateTutorialRenderDraftHandler = async', renderDraftStart);
+const renderDraftSource = applicationMapSource.slice(renderDraftStart, renderDraftEnd);
+const renderChatStart = applicationMapSource.indexOf('async function sendRenderChatMessage(userText)');
+const renderChatEnd = applicationMapSource.indexOf('async function saveRenderMilestones()', renderChatStart);
+const renderChatSource = applicationMapSource.slice(renderChatStart, renderChatEnd);
+const rebuildRenderStart = applicationMapSource.indexOf('async function rebuildRenderDraft(');
+const rebuildRenderEnd = applicationMapSource.indexOf('async function generateRenderDraft(', rebuildRenderStart);
+const rebuildRenderSource = applicationMapSource.slice(rebuildRenderStart, rebuildRenderEnd);
+const saveRenderStart = applicationMapSource.indexOf('async function saveRenderMilestones()');
+const saveRenderEnd = applicationMapSource.indexOf('async function loadMapConversations()', saveRenderStart);
+const saveRenderSource = applicationMapSource.slice(saveRenderStart, saveRenderEnd);
 const tutorialDevelopmentStart = appSource.indexOf('async function simulateTutorialDevelopmentConversation');
 const tutorialDevelopmentEnd = appSource.indexOf('function appendChangeCard', tutorialDevelopmentStart);
 const tutorialDevelopmentSource = appSource.slice(tutorialDevelopmentStart, tutorialDevelopmentEnd);
@@ -448,6 +466,86 @@ assert.ok(
     && mainSource.includes('createApplicationMapRenderPlanService(')
     && mainSource.includes('renderPlanService: applicationMapRenderPlanService'),
   'production must compose and inject the application-map render-plan service',
+);
+assert.ok(
+  mapChatSendStart >= 0 && mapChatSendEnd > mapChatSendStart,
+  'map chat send function must remain present'
+);
+assert.match(
+  mapChatSendSource,
+  /await\s+api\.sendMapChatSessionMessage\s*\(/,
+  'renderer map chat must use the dedicated session boundary'
+);
+for (const forbiddenRendererConcern of [
+  'api.sendAssistantMessage',
+  'api.addConversationMessage',
+  'systemGuidance',
+  'getRenderMapMarkdown',
+  'attachments',
+]) {
+  assert.strictEqual(
+    mapChatSendSource.includes(forbiddenRendererConcern),
+    false,
+    `renderer map chat must not own ${forbiddenRendererConcern}`
+  );
+}
+assert.ok(
+  mapChatAnalysisStart >= 0 && mapChatAnalysisEnd > mapChatAnalysisStart,
+  'initial map analysis function must remain present'
+);
+assert.match(
+  mapChatAnalysisSource,
+  /await\s+api\.analyzeMapChatSession\s*\(/,
+  'initial map analysis must use the dedicated session boundary'
+);
+for (const forbiddenAnalysisConcern of [
+  'api.sendAssistantMessage',
+  'api.addConversationMessage',
+  'systemGuidance',
+  'api.readProjectFile',
+  'analyzeMapImagePrompt',
+]) {
+  assert.strictEqual(
+    mapChatAnalysisSource.includes(forbiddenAnalysisConcern),
+    false,
+    `renderer initial map analysis must not own ${forbiddenAnalysisConcern}`
+  );
+}
+assert.match(
+  renderDraftSource,
+  /await\s+api\.analyzeMapRenderSession\s*\(/,
+  'render analysis must use the dedicated read-only session boundary'
+);
+assert.match(
+  renderChatSource,
+  /await\s+api\.sendMapRenderSessionMessage\s*\(/,
+  'render refinement must use the dedicated read-only session boundary'
+);
+for (const renderSource of [renderDraftSource, renderChatSource]) {
+  assert.strictEqual(renderSource.includes('api.sendAssistantMessage'), false);
+  assert.strictEqual(renderSource.includes('buildRenderPrompt('), false);
+}
+assert.doesNotMatch(
+  applicationMapSource,
+  /function\s+buildRenderPrompt\s*\(/,
+  'critical map-render prompt construction must not live in the renderer'
+);
+assert.match(
+  rebuildRenderSource,
+  /await\s+api\.previewMapRenderMilestones\s*\(/,
+  'ready render drafts must create a durable structured preview'
+);
+assert.match(
+  saveRenderSource,
+  /await\s+api\.approveMapChatProposal\s*\(/,
+  'saving render milestones must approve the exact durable proposal'
+);
+assert.strictEqual(saveRenderSource.includes('api.saveMilestones'), false);
+assert.strictEqual(saveRenderSource.includes('api.renderMilestones'), false);
+assert.ok(
+  saveRenderSource.indexOf('window.faberConfirm')
+    < saveRenderSource.indexOf('api.approveMapChatProposal'),
+  'human confirmation must happen before proposal approval'
 );
 assert.ok(
   progressiveSource.includes('canvas.focusNodes([tutorialWelcomeNodeId, tutorialDesignSystemNodeId]'),

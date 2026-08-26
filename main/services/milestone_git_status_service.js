@@ -52,8 +52,30 @@ function createMilestoneGitStatusService(dependencies = {}) {
     }
   }
 
+  async function linkExistingMilestoneCommit(rootPath, milestoneId, commitHash) {
+    if (!gitService || typeof gitService.resolveProjectGitCommit !== 'function') {
+      return { ok: false, message: 'gitService dependency missing' };
+    }
+    if (!milestoneService || typeof milestoneService.linkVerifiedCommit !== 'function') {
+      return { ok: false, message: 'milestoneService dependency missing' };
+    }
+
+    try {
+      const verified = await gitService.resolveProjectGitCommit(rootPath, commitHash);
+      if (!verified || verified.ok !== true || !verified.commit) return verified;
+      return milestoneService.linkVerifiedCommit(rootPath, milestoneId, verified.commit);
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'git_commit_verification_failed',
+        message: error && error.message ? error.message : String(error || ''),
+      };
+    }
+  }
+
   return {
     getMilestoneGitStatus,
+    linkExistingMilestoneCommit,
   };
 }
 

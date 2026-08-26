@@ -12,6 +12,10 @@ const coordinatorSource = fs.readFileSync(
   path.join(rootDir, 'main', 'agent_runtime', 'assistant_execution_coordinator.js'),
   'utf8'
 );
+const personaOrchestratorSource = fs.readFileSync(
+  path.join(rootDir, 'cortex', 'orchestration', 'persona_orchestrator.js'),
+  'utf8'
+);
 
 function assertInOrder(source, fragments, message) {
   let cursor = -1;
@@ -68,6 +72,34 @@ for (const functionName of [
     `${functionName} must preserve the ContextPack trust boundary across provider roles`
   );
 }
+
+const directPersonaChatSource = extractFunctionDeclaration(mainSource, 'requestDirectPersonaChat');
+assert.ok(
+  directPersonaChatSource.includes('isMapChat = false')
+    && directPersonaChatSource.includes('getMapChatReadOnlySystemGuidance(')
+    && directPersonaChatSource.includes('getMapRenderReadOnlySystemGuidance('),
+  'direct Map Chat responses must receive the main-owned read-only system profile'
+);
+assertInOrder(
+  directPersonaChatSource,
+  [
+    'const mapChatSystemGuidance = isMapChat',
+    'getMapChatReadOnlySystemGuidance(',
+    'getMapRenderReadOnlySystemGuidance(',
+    'const systemPrompt =',
+    'mapChatSystemGuidance,',
+    'promptProjection ? promptProjection.trustedPrompt :',
+  ],
+  'Map Chat read-only guidance must be fixed in the system role before trusted ContextPack context'
+);
+const naturalRouteSource = extractFunctionDeclaration(
+  personaOrchestratorSource,
+  'buildNaturalRouteOnlyResponse'
+);
+assert.ok(
+  naturalRouteSource.includes('isMapChat: payload.isMapChat === true'),
+  'the map-only surface marker must reach direct persona chat'
+);
 
 assertInOrder(
   mainSource,
@@ -452,6 +484,62 @@ assertInOrder(
     'assistantRuntime,',
   ],
   'main process must compose authorization, coordination, the low-level router, and IPC in order'
+);
+
+assertInOrder(
+  mainSource,
+  [
+    "require('./main/services/map_chat_session_service')",
+    "require('./main/ipc/map_chat_handlers')",
+    'const assistantRuntime = createAssistantRuntimeFacade({',
+    'const mapChatSessionService = createMapChatSessionService({',
+    'assistantRuntime,',
+    'applicationMapService,',
+    'authorizeProjectBinding: (projectId, rootPath) => (',
+    'getProjectAccess().authorizeProjectBinding(projectId, rootPath)',
+    'conversationStore: orchestrationStateStore,',
+    'milestoneService,',
+    'registerMapChatHandlers({',
+    'mapChatSessionService,',
+    'registerIpcHandler,',
+  ],
+  'main process must compose the dedicated read-only Map Chat session boundary'
+);
+
+assertInOrder(
+  mainSource,
+  [
+    "require('./main/services/map_chat_proposal_store')",
+    "require('./main/services/map_chat_proposal_service')",
+    "require('./main/ipc/map_chat_proposal_handlers')",
+    'const mapChatProposalStore = createMapChatProposalStore({',
+    "storageDir: app.getPath('userData'),",
+    'const mapChatProposalService = createMapChatProposalService({',
+    'applicationMapService,',
+    'authorizeProjectBinding: (projectId, rootPath) => (',
+    'conversationStore: orchestrationStateStore,',
+    'milestoneService,',
+    'proposalStore: mapChatProposalStore,',
+    'registerMapChatProposalHandlers({',
+    'mapChatProposalService,',
+    'registerIpcHandler,',
+  ],
+  'main process must compose durable structured Map Chat proposal approvals'
+);
+
+assertInOrder(
+  mainSource,
+  [
+    "require('./main/services/milestone_validation_service')",
+    'const milestoneValidationService = createMilestoneValidationService({',
+    'getAuthorizedJobById,',
+    'milestoneService,',
+    'registerMilestoneHandlers({',
+    'milestoneGitStatusService,',
+    'milestoneService,',
+    'milestoneValidationService,',
+  ],
+  'milestone completion must be composed from durable validated jobs and verified Git commits'
 );
 
 assertInOrder(

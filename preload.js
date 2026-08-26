@@ -69,6 +69,22 @@ contextBridge.exposeInMainWorld('localcodeApi', {
   routePersonaRequest: (payload) => ipcRenderer.invoke('assistant:route', payload),
   buildPlan: (payload) => ipcRenderer.invoke('assistant:plan', payload),
   sendAssistantMessage: (payload) => ipcRenderer.invoke('assistant:message', payload),
+  sendMapChatSessionMessage: (payload) =>
+    ipcRenderer.invoke('application-map:chat:message', payload),
+  analyzeMapChatSession: (payload) =>
+    ipcRenderer.invoke('application-map:chat:analyze', payload),
+  analyzeMapRenderSession: (payload) =>
+    ipcRenderer.invoke('application-map:render:analyze', payload),
+  sendMapRenderSessionMessage: (payload) =>
+    ipcRenderer.invoke('application-map:render:message', payload),
+  previewMapChatApplicationMapPatch: (payload) =>
+    ipcRenderer.invoke('application-map:proposal:map:preview', payload),
+  previewMapRenderMilestones: (payload) =>
+    ipcRenderer.invoke('application-map:proposal:milestones:preview', payload),
+  approveMapChatProposal: (payload) =>
+    ipcRenderer.invoke('application-map:proposal:approve', payload),
+  rejectMapChatProposal: (payload) =>
+    ipcRenderer.invoke('application-map:proposal:reject', payload),
   executePlan: (payload) => ipcRenderer.invoke('assistant:execute', payload),
   listTools: () => ipcRenderer.invoke('tools:list'),
   listConversations: () => ipcRenderer.invoke('orchestration:conversations:list'),
@@ -134,10 +150,10 @@ contextBridge.exposeInMainWorld('localcodeApi', {
   getApplicationMapSummary: (payload) => ipcRenderer.invoke('application-map:summary', payload),
   listMilestones: (payload) => ipcRenderer.invoke('milestones:list', payload),
   getMilestone: (payload) => ipcRenderer.invoke('milestones:get', payload),
-  saveMilestones: (payload) => ipcRenderer.invoke('milestones:save', payload),
   updateMilestoneStatus: (payload) => ipcRenderer.invoke('milestones:update-status', payload),
   updateMilestoneTask: (payload) => ipcRenderer.invoke('milestones:update-task', payload),
   linkMilestoneCommit: (payload) => ipcRenderer.invoke('milestones:link-commit', payload),
+  completeMilestoneAfterValidation: (payload) => ipcRenderer.invoke('milestones:complete-after-validation', payload),
   getMilestoneGitStatus: (payload) => ipcRenderer.invoke('milestones:git-status', payload),
   renderMilestones: (payload) => ipcRenderer.invoke('milestones:render', payload),
   checkForUpdates: () => ipcRenderer.invoke('app:update:check'),

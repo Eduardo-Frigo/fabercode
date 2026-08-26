@@ -326,6 +326,7 @@ function createPersonaOrchestrator(dependencies = {}) {
         activeMemory,
         routeDecision,
         contextPackPromptProjection: payload.contextPackPromptProjection || null,
+        isMapChat: payload.isMapChat === true,
       });
       const response = result && result.response ? String(result.response).trim() : '';
       if (response) return response;
@@ -561,6 +562,7 @@ function createPersonaOrchestrator(dependencies = {}) {
         contextHint: enrichedContextHint,
         conversationMessages,
         contextPackPromptProjection: contextPackPromptProjection || null,
+        isMapChat: payload.isMapChat === true,
       },
       activeMemory
     );
@@ -885,6 +887,7 @@ function createPersonaOrchestrator(dependencies = {}) {
         contextHint: enrichedContextHint,
         conversationMessages,
         contextPackPromptProjection: contextPackPromptProjection || null,
+        isMapChat: payload.isMapChat === true,
       },
       activeMemory
     );

@@ -19,6 +19,7 @@ function mergeDiffStatsEntry(target, relPath, entry) {
 
 async function run() {
   const calls = [];
+  const realCommitHash = 'a'.repeat(40);
   const fakeFs = {
     openSync: (filePath) => filePath.endsWith('new-image.bin') ? 101 : 102,
     readSync: (fd, buffer) => {
@@ -46,6 +47,15 @@ async function run() {
     if (key === 'rev-parse --is-inside-work-tree') return { ok: true, stdout: 'true\n' };
     if (key === 'remote get-url origin') return { ok: true, stdout: 'git@github.com:owner/repo.git\n' };
     if (key === 'rev-parse --abbrev-ref HEAD') return { ok: true, stdout: 'main\n' };
+    if (key === `rev-parse --verify ${realCommitHash}^{commit}`) {
+      return { ok: true, stdout: `${realCommitHash}\n` };
+    }
+    if (key === `show -s --date=iso-strict --pretty=format:%H%x1f%s%x1f%cI ${realCommitHash} --`) {
+      return {
+        ok: true,
+        stdout: `${realCommitHash}\x1ffeat: verified commit\x1f2026-08-25T15:00:00-03:00`,
+      };
+    }
     if (key === 'log -1 --pretty=format:%H%n%s%n%cr') {
       return { ok: true, stdout: 'abc123\nInitial commit\n2 hours ago' };
     }
@@ -117,6 +127,25 @@ async function run() {
   assert.strictEqual(service.normalizeGitRemoteUrl('https://github.com/owner/repo.git'), 'https://github.com/owner/repo');
   assert.strictEqual(service.parseDiffHunkFirstLine('@@ -11,0 +12,2 @@'), 12);
   assert.strictEqual(service.parsePorcelainStatusLine(' M src/app.js').status, 'modified');
+
+  const resolvedCommit = await service.resolveProjectGitCommit('/tmp/project', realCommitHash);
+  assert.deepStrictEqual(resolvedCommit, {
+    ok: true,
+    isGitRepo: true,
+    commit: {
+      hash: realCommitHash,
+      message: 'feat: verified commit',
+      createdAt: '2026-08-25T15:00:00-03:00',
+    },
+  });
+  assert.deepStrictEqual(
+    await service.resolveProjectGitCommit('/tmp/project', 'not-a-hash'),
+    {
+      ok: false,
+      code: 'git_commit_invalid',
+      message: 'Hash de commit inválido.',
+    },
+  );
 
   const status = await service.getProjectGitStatus('/tmp/project');
   assert.strictEqual(status.ok, true);

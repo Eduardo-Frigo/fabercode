@@ -3,6 +3,7 @@ function registerMilestoneHandlers(dependencies = {}) {
     authorizeProjectRoot,
     milestoneService,
     milestoneGitStatusService,
+    milestoneValidationService,
     registerIpcHandler,
     appendAuditEvent = () => {},
   } = dependencies;
@@ -14,6 +15,7 @@ function registerMilestoneHandlers(dependencies = {}) {
   requireDependency('authorizeProjectRoot', authorizeProjectRoot);
   requireDependency('milestoneService', milestoneService);
   requireDependency('milestoneGitStatusService', milestoneGitStatusService);
+  requireDependency('milestoneValidationService', milestoneValidationService);
   requireDependency('registerIpcHandler', registerIpcHandler);
 
   registerIpcHandler('milestones:list', (_, payload = {}) => {
@@ -29,12 +31,6 @@ function registerMilestoneHandlers(dependencies = {}) {
     const m = list.find((x) => x.id === payload.milestoneId);
     if (!m) return { ok: false, message: 'Milestone not found' };
     return { ok: true, milestone: m };
-  });
-
-  registerIpcHandler('milestones:save', (_, payload = {}) => {
-    const auth = authorizeProjectRoot(payload && payload.rootPath ? String(payload.rootPath) : '');
-    if (!auth.ok) return auth;
-    return milestoneService.saveMilestones(auth.rootPath, payload.milestones || []);
   });
 
   registerIpcHandler('milestones:update-status', (_, payload = {}) => {
@@ -57,10 +53,23 @@ function registerMilestoneHandlers(dependencies = {}) {
   registerIpcHandler('milestones:link-commit', (_, payload = {}) => {
     const auth = authorizeProjectRoot(payload && payload.rootPath ? String(payload.rootPath) : '');
     if (!auth.ok) return auth;
-    return milestoneService.linkMilestoneCommit(
+    const commitHash = payload && payload.commit && typeof payload.commit.hash === 'string'
+      ? payload.commit.hash
+      : '';
+    return milestoneGitStatusService.linkExistingMilestoneCommit(
       auth.rootPath,
       payload.milestoneId || '',
-      payload.commit || {}
+      commitHash,
+    );
+  });
+
+  registerIpcHandler('milestones:complete-after-validation', (_, payload = {}) => {
+    const auth = authorizeProjectRoot(payload && payload.rootPath ? String(payload.rootPath) : '');
+    if (!auth.ok) return auth;
+    return milestoneValidationService.completeMilestoneFromJob(
+      auth.rootPath,
+      payload.milestoneId || '',
+      payload.jobId || '',
     );
   });
 

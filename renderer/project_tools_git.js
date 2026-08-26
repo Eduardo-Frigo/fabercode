@@ -300,6 +300,35 @@
       createToolButton,
       openFile,
     };
+
+    async function linkCreatedCommitToActiveMilestone(projectInfo, result) {
+      if (!projectInfo || !projectInfo.rootPath
+        || !result || !result.latest || !result.latest.hash
+        || typeof api.listMilestones !== 'function'
+        || typeof api.linkMilestoneCommit !== 'function') return null;
+      try {
+        const listed = await api.listMilestones({ rootPath: projectInfo.rootPath });
+        const active = listed && listed.ok && Array.isArray(listed.milestones)
+          ? listed.milestones.filter((milestone) => milestone && milestone.status === 'active')
+          : [];
+        if (active.length !== 1 || !active[0].id) return null;
+        const linked = await api.linkMilestoneCommit({
+          rootPath: projectInfo.rootPath,
+          milestoneId: active[0].id,
+          commit: { hash: result.latest.hash },
+        });
+        if (linked && linked.ok && typeof window.dispatchEvent === 'function'
+          && typeof window.CustomEvent === 'function') {
+          window.dispatchEvent(new window.CustomEvent('faber:milestones-updated', {
+            detail: { rootPath: projectInfo.rootPath },
+          }));
+        }
+        return linked;
+      } catch {
+        return null;
+      }
+    }
+
     const githubDeployTool = createProjectGithubDeployTool({
       api,
       appendGitStepEmpty,
@@ -666,6 +695,7 @@
             appendTransientAssistantMessage((result && result.message) || uiText('gitCommitFailed', 'Não consegui criar o commit.'));
             return;
           }
+          await linkCreatedCommitToActiveMilestone(projectInfo, result);
           updateStatus(uiText('gitCommitCreated', 'Commit local criado'));
           openGitStepKey = 'committed';
           await renderGitTool();

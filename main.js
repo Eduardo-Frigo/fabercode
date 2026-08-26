@@ -90,6 +90,17 @@ const { createLegacyKernelAdapter } = require('./main/agent_runtime/legacy_kerne
 const {
   createCapabilityDelegationBinding,
 } = require('./main/capabilities/capability_delegation_contracts');
+const {
+  createMapChatSessionService,
+  getMapChatReadOnlySystemGuidance,
+  getMapRenderReadOnlySystemGuidance,
+} = require('./main/services/map_chat_session_service');
+const {
+  createMapChatProposalStore,
+} = require('./main/services/map_chat_proposal_store');
+const {
+  createMapChatProposalService,
+} = require('./main/services/map_chat_proposal_service');
 const { registerAccountHandlers } = require('./main/ipc/account_handlers');
 const { registerAiHandlers } = require('./main/ipc/ai_handlers');
 const { registerAssistantHandlers } = require('./main/ipc/assistant_handlers');
@@ -104,6 +115,10 @@ const { registerPreviewHandlers } = require('./main/ipc/preview_handlers');
 const { registerProjectHandlers } = require('./main/ipc/project_handlers');
 const { registerTerminalHandlers } = require('./main/ipc/terminal_handlers');
 const { registerApplicationMapHandlers } = require('./main/ipc/application_map_handlers');
+const { registerMapChatHandlers } = require('./main/ipc/map_chat_handlers');
+const {
+  registerMapChatProposalHandlers,
+} = require('./main/ipc/map_chat_proposal_handlers');
 const { registerMilestoneHandlers } = require('./main/ipc/milestone_handlers');
 const { registerSystemHandlers } = require('./main/ipc/system_handlers');
 const { registerUpdateHandlers } = require('./main/ipc/update_handlers');
@@ -114,6 +129,9 @@ const {
 } = require('./main/services/application_map_render_plan_service');
 const { createMilestoneService } = require('./main/services/milestone_service');
 const { createMilestoneGitStatusService } = require('./main/services/milestone_git_status_service');
+const {
+  createMilestoneValidationService,
+} = require('./main/services/milestone_validation_service');
 const { createIpcSecurity } = require('./main/security/ipc_security');
 const { createProjectAccess } = require('./main/security/project_access');
 const { createSecretStore } = require('./main/security/secret_store');
@@ -2393,6 +2411,7 @@ async function requestDirectPersonaChat({
   activeMemory = null,
   routeDecision = null,
   contextPackPromptProjection = null,
+  isMapChat = false,
 } = {}) {
   const promptProjection = normalizeContextPackPromptProjection(contextPackPromptProjection);
   const provider = getSelectedAiProvider();
@@ -2450,6 +2469,13 @@ async function requestDirectPersonaChat({
     activeMemory && activeMemory.decision && (activeMemory.decision.routeContextText || activeMemory.decision.briefingContextText)
       ? clipText(activeMemory.decision.routeContextText || activeMemory.decision.briefingContextText, 1600)
       : '';
+  const mapChatSystemGuidance = isMapChat
+    ? (!(contextHint && typeof contextHint === 'object' && contextHint.surface === 'map_render')
+        ? getMapChatReadOnlySystemGuidance(
+            contextHint && typeof contextHint === 'object' ? contextHint.locale : null
+          )
+        : getMapRenderReadOnlySystemGuidance(contextHint.locale))
+    : '';
 
   const systemPrompt = [
     'Você é o Faber Code conversando diretamente com o usuário.',
@@ -2460,6 +2486,7 @@ async function requestDirectPersonaChat({
     'Se a mensagem for conversa comum, responda normalmente.',
     'Se o pedido for técnico, explique de forma simples que o usuário pode confirmar digitando "pode executar" ou "confirmar".',
     'Mantenha a resposta curta o bastante para caber bem no chat.',
+    mapChatSystemGuidance,
     promptProjection ? promptProjection.trustedPrompt : '',
   ].filter(Boolean).join(' ');
 
@@ -5127,6 +5154,7 @@ const ASSISTANT_PROCESS_EXECUTION_POLICY = PROCESS_EXECUTION_POLICIES.SUSPENDED;
 function buildAssistantProcessValidationPendingFields(fileMutationApplied = false) {
   return {
     verified: false,
+    validationVerified: false,
     validationPending: true,
     validationPendingReason: PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
     validationPendingChecks: [...PROCESS_EXECUTION_PENDING_CHECKS],
@@ -5247,6 +5275,28 @@ const applicationMapRenderService = createApplicationMapRenderService({ fs, path
 const applicationMapRenderPlanService = createApplicationMapRenderPlanService();
 const milestoneService = createMilestoneService({ fs, path });
 const milestoneGitStatusService = createMilestoneGitStatusService({ gitService: projectGitService, milestoneService });
+const milestoneValidationService = createMilestoneValidationService({
+  getAuthorizedJobById,
+  milestoneService,
+});
+
+function completeActiveMilestoneAfterValidatedJob(rootPath, jobId) {
+  try {
+    const completion = milestoneValidationService.completeActiveMilestoneFromJob(
+      rootPath,
+      jobId,
+    );
+    if (completion && completion.ok === true) {
+      appendAuditEvent('milestones.completed_after_validation', {
+        jobId,
+        rootPath,
+      });
+    }
+    return completion;
+  } catch {
+    return null;
+  }
+}
 
 const githubIntegrationService = createGithubIntegrationService({
   fs,
@@ -5965,6 +6015,12 @@ async function initializeCanaryEditProductionRuntime({
             changedPaths.length > 0
           ),
         });
+        if (terminalResult && terminalResult.ok === true) {
+          completeActiveMilestoneAfterValidatedJob(
+            terminalResult.job.rootPath,
+            jobId,
+          );
+        }
         appendAuditEvent('assistant.canary_edit_completed', {
           jobId,
           promotionId,
@@ -6274,8 +6330,9 @@ app.whenReady().then(async () => {
 
   registerMilestoneHandlers({
     authorizeProjectRoot,
-    milestoneService,
     milestoneGitStatusService,
+    milestoneService,
+    milestoneValidationService,
     registerIpcHandler,
     appendAuditEvent,
   });
@@ -6686,11 +6743,14 @@ app.whenReady().then(async () => {
               toolRuns: agenticToolRuns.slice(0, 20),
               ...buildAssistantProcessValidationPendingFields(changedFiles.length > 0),
             });
-            markJobCompleted(jobId, {
+            const terminalResult = markJobCompleted(jobId, {
               agentic: true,
               modifiedFiles: changedFiles,
               ...buildAssistantProcessValidationPendingFields(changedFiles.length > 0),
             });
+            if (terminalResult && terminalResult.ok === true) {
+              completeActiveMilestoneAfterValidatedJob(rootPath, jobId);
+            }
           }
           appendAuditEvent('assistant.agentic_execute_success', {
             rootPath,
@@ -6975,7 +7035,7 @@ app.whenReady().then(async () => {
                 Array.isArray(result.modifiedFiles) && result.modifiedFiles.length > 0
               ),
             });
-            markJobCompleted(jobId, {
+            const terminalResult = markJobCompleted(jobId, {
               modifiedFiles: result.modifiedFiles || [],
               qualitySummary: qualityReport && qualityReport.summary ? qualityReport.summary : null,
               visualValidation: visualValidationReport || null,
@@ -6985,6 +7045,9 @@ app.whenReady().then(async () => {
                 Array.isArray(result.modifiedFiles) && result.modifiedFiles.length > 0
               ),
             });
+            if (terminalResult && terminalResult.ok === true) {
+              completeActiveMilestoneAfterValidatedJob(rootPath, jobId);
+            }
           }
           appendAuditEvent('assistant.execute_success', {
             rootPath,
@@ -7503,8 +7566,41 @@ app.whenReady().then(async () => {
     kernelId: activeHarnessKernelId,
   });
 
+  const mapChatSessionService = createMapChatSessionService({
+    assistantRuntime,
+    applicationMapService,
+    authorizeProjectBinding: (projectId, rootPath) => (
+      getProjectAccess().authorizeProjectBinding(projectId, rootPath)
+    ),
+    conversationStore: orchestrationStateStore,
+    milestoneService,
+  });
+
+  const mapChatProposalStore = createMapChatProposalStore({
+    storageDir: app.getPath('userData'),
+  });
+  const mapChatProposalService = createMapChatProposalService({
+    applicationMapService,
+    authorizeProjectBinding: (projectId, rootPath) => (
+      getProjectAccess().authorizeProjectBinding(projectId, rootPath)
+    ),
+    conversationStore: orchestrationStateStore,
+    milestoneService,
+    proposalStore: mapChatProposalStore,
+  });
+
   registerAssistantHandlers({
     assistantRuntime,
+    registerIpcHandler,
+  });
+
+  registerMapChatHandlers({
+    mapChatSessionService,
+    registerIpcHandler,
+  });
+
+  registerMapChatProposalHandlers({
+    mapChatProposalService,
     registerIpcHandler,
   });
 

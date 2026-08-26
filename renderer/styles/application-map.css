@@ -1385,6 +1385,76 @@ body.mode-milestones #workspace-map-render-panel {
   opacity: 0.68;
 }
 
+.map-chat-proposal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid rgba(124, 154, 255, 0.38);
+  border-radius: 10px;
+  background: rgba(75, 104, 198, 0.11);
+}
+
+.map-chat-proposal-card.is-applied {
+  border-color: rgba(80, 201, 133, 0.5);
+  background: rgba(80, 201, 133, 0.1);
+}
+
+.map-chat-proposal-card.is-rejected {
+  opacity: 0.7;
+}
+
+.map-chat-proposal-title {
+  font-size: 0.82rem;
+  color: var(--text-primary, #f4f4f4);
+}
+
+.map-chat-proposal-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.72));
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.map-chat-proposal-status {
+  font-size: 0.72rem;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.62));
+}
+
+.map-chat-proposal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.map-chat-proposal-actions button {
+  min-height: 32px;
+  border-radius: 8px;
+  padding: 6px 11px;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.map-chat-proposal-reject {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: transparent;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.72));
+}
+
+.map-chat-proposal-approve {
+  border: 1px solid rgba(80, 201, 133, 0.55);
+  background: rgba(80, 201, 133, 0.16);
+  color: #88e5af;
+}
+
+.map-chat-proposal-actions button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .map-chat-composer {
   display: flex;
   gap: 8px;

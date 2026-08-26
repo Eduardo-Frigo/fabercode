@@ -355,6 +355,171 @@
         return bubble;
       }
 
+      function describeMapProposalOperation(operation) {
+        if (!operation || typeof operation !== 'object') {
+          return uiText('mapProposalUnknownOperation', 'Operação estruturada');
+        }
+        if (operation.kind === 'upsert_node') {
+          const node = operation.node || {};
+          return uiText('mapProposalUpsertNode', 'Adicionar ou atualizar nó: {value}', {
+            value: node.title || node.id || uiText('untitled', 'Sem título'),
+          });
+        }
+        if (operation.kind === 'remove_node') {
+          return uiText('mapProposalRemoveNode', 'Remover nó: {value}', {
+            value: operation.nodeId || '',
+          });
+        }
+        if (operation.kind === 'upsert_edge') {
+          const edge = operation.edge || {};
+          return uiText('mapProposalUpsertEdge', 'Adicionar ou atualizar conexão: {value}', {
+            value: edge.id || '',
+          });
+        }
+        if (operation.kind === 'remove_edge') {
+          return uiText('mapProposalRemoveEdge', 'Remover conexão: {value}', {
+            value: operation.edgeId || '',
+          });
+        }
+        if (operation.kind === 'set_viewport') {
+          return uiText('mapProposalSetViewport', 'Atualizar enquadramento do mapa');
+        }
+        return uiText('mapProposalUnknownOperation', 'Operação estruturada');
+      }
+
+      async function appendMapChatProposalPreview({
+        projectId,
+        rootPath,
+        conversationId,
+        proposalDraft,
+      }) {
+        if (!proposalDraft || proposalDraft.schemaVersion !== 'application-map-patch.v1'
+          || !Array.isArray(proposalDraft.operations) || !proposalDraft.operations.length
+          || !api || typeof api.previewMapChatApplicationMapPatch !== 'function') return null;
+
+        let preview;
+        try {
+          preview = await api.previewMapChatApplicationMapPatch({
+            projectId,
+            rootPath,
+            conversationId,
+            operations: proposalDraft.operations,
+          });
+        } catch (error) {
+          console.error('[appendMapChatProposalPreview] preview failed:', error);
+          return null;
+        }
+        if (!preview || !preview.ok || !preview.proposal
+          || preview.proposal.status !== 'pending') return null;
+
+        let receipt = preview.proposal;
+        const card = document.createElement('section');
+        card.className = 'map-chat-proposal-card';
+
+        const title = document.createElement('strong');
+        title.className = 'map-chat-proposal-title';
+        title.textContent = uiText('mapProposalReviewTitle', 'Prévia de alteração do mapa');
+        card.appendChild(title);
+
+        const list = document.createElement('ul');
+        list.className = 'map-chat-proposal-list';
+        proposalDraft.operations.forEach((operation) => {
+          const item = document.createElement('li');
+          item.textContent = describeMapProposalOperation(operation);
+          list.appendChild(item);
+        });
+        card.appendChild(list);
+
+        const status = document.createElement('span');
+        status.className = 'map-chat-proposal-status';
+        status.textContent = uiText('mapProposalPending', 'Aguardando sua aprovação');
+        card.appendChild(status);
+
+        const actions = document.createElement('div');
+        actions.className = 'map-chat-proposal-actions';
+        const rejectButton = document.createElement('button');
+        rejectButton.type = 'button';
+        rejectButton.className = 'map-chat-proposal-reject';
+        rejectButton.textContent = uiText('reject', 'Rejeitar');
+        const approveButton = document.createElement('button');
+        approveButton.type = 'button';
+        approveButton.className = 'map-chat-proposal-approve';
+        approveButton.textContent = uiText('approve', 'Aprovar');
+        actions.append(rejectButton, approveButton);
+        card.appendChild(actions);
+
+        const setBusy = (busy) => {
+          rejectButton.disabled = busy;
+          approveButton.disabled = busy;
+        };
+        const decisionPayload = () => ({
+          projectId,
+          rootPath,
+          conversationId,
+          proposalId: receipt.proposalId,
+          expectedRevision: receipt.revision,
+          patchDigest: receipt.patchDigest,
+        });
+
+        rejectButton.addEventListener('click', async () => {
+          if (!receipt || receipt.status !== 'pending') return;
+          setBusy(true);
+          status.textContent = uiText('mapProposalRejecting', 'Rejeitando proposta...');
+          try {
+            const result = await api.rejectMapChatProposal(decisionPayload());
+            if (!result || !result.ok || !result.proposal) {
+              throw new Error(result && (result.code || result.message) || 'proposal_reject_failed');
+            }
+            receipt = result.proposal;
+            card.classList.add('is-rejected');
+            status.textContent = uiText('mapProposalRejected', 'Proposta rejeitada');
+          } catch (error) {
+            console.error('[appendMapChatProposalPreview] rejection failed:', error);
+            status.textContent = uiText('mapProposalDecisionFailed', 'Não foi possível concluir a decisão.');
+            setBusy(false);
+          }
+        });
+
+        approveButton.addEventListener('click', async () => {
+          if (!receipt || receipt.status !== 'pending') return;
+          const confirmed = window.faberConfirm
+            ? await window.faberConfirm(uiText(
+                'mapProposalConfirm',
+                'Aplicar esta alteração ao mapa? A base será revalidada antes da escrita.',
+              ))
+            : true;
+          if (!confirmed) return;
+          setBusy(true);
+          status.textContent = uiText('mapProposalApplying', 'Revalidando e aplicando proposta...');
+          try {
+            const result = await api.approveMapChatProposal(decisionPayload());
+            if (!result || !result.ok || !result.proposal) {
+              throw new Error(result && (result.code || result.message) || 'proposal_apply_failed');
+            }
+            receipt = result.proposal;
+            card.classList.add('is-applied');
+            status.textContent = uiText('mapProposalApplied', 'Alteração aplicada ao mapa');
+            const canonical = await api.getApplicationMap({ rootPath });
+            if (canonical && canonical.ok && canonical.map && canvasController) {
+              canvasController.loadMapData(canonical.map);
+            }
+            window.dispatchEvent(new CustomEvent('faber:application-map-updated', {
+              detail: { rootPath },
+            }));
+          } catch (error) {
+            console.error('[appendMapChatProposalPreview] approval failed:', error);
+            status.textContent = uiText('mapProposalDecisionFailed', 'Não foi possível concluir a decisão.');
+            setBusy(false);
+          }
+        });
+
+        if (mapChatLog) {
+          mapChatLog.appendChild(card);
+          mapChatLog.scrollTop = mapChatLog.scrollHeight;
+        }
+        return card;
+      }
+
       prepareTutorialMapConversationHandler = () => {
         if (inspector && inspector.classList.contains('open')) closeInspector();
         setMapSidePanelMode('mode-map-chat');
@@ -1126,7 +1291,9 @@
         if (renderPanelSave) {
           renderPanelSave.classList.toggle(
             'hidden',
-            !isSessionView || !renderDraft || !renderDraft.ready || !renderDraft.milestones || !renderDraft.milestones.length
+            !isSessionView || !renderDraft || !renderDraft.ready
+              || !renderDraft.milestones || !renderDraft.milestones.length
+              || !renderDraft.proposal || renderDraft.proposal.status !== 'pending'
           );
           renderPanelSave.disabled = renderWorkflowBusy;
         }
@@ -1236,42 +1403,25 @@
         }
       };
 
-      function buildRenderPrompt(mapData, documentation, userRequest = '', conversationMessages = []) {
-        const renderMarkdown = getRenderMapMarkdown(mapData);
-        const recentConversation = Array.isArray(conversationMessages) && conversationMessages.length
-          ? conversationMessages.slice(-8).map((message) => `- ${message.role}: ${message.text || message.content || ''}`).join('\n')
-          : uiText('renderNoConversationHistory', '(sem histórico adicional)');
-
-        return [
-          responseLanguageInstruction(),
-          'Você é o Assistente de Renderização do Mapa da Aplicação no Faber Code.',
-          'Sua missão é analisar o mapa exportado e os markdowns do projeto para transformar a idealização em um plano de desenvolvimento executável.',
-          'Não substitua os markdowns e não entregue apenas um resumo. Organize as informações em sequência de implementação, cite os markdowns relevantes por caminho e explique quais decisões sustentam cada etapa.',
-          'O resultado deve ajudar o painel de milestones e o chat de desenvolvimento: cada etapa precisa ter tarefas acionáveis, critérios claros e referências aos documentos do mapa que devem ser consultados.',
-          'Se houver lacunas, diga quais informações bloqueiam ou enfraquecem o plano e como o usuário pode completá-las neste chat de render.',
-          'Responda em linguagem clara e objetiva. Se o usuário estiver corrigindo algo, destaque exatamente o que mudou no plano.',
-          '',
-          'QUADRO DO MAPA EM MARKDOWN:',
-          '```markdown',
-          renderMarkdown,
-          '```',
-          '',
-          'MARKDOWNS ENCONTRADOS:',
-          documentation.combinedText || uiText('renderNoMarkdownFound', '(nenhum markdown foi encontrado ainda)'),
-          '',
-          'HISTÓRICO CURTO DO CHAT DE RENDER:',
-          recentConversation,
-          '',
-          'PEDIDO ATUAL DO USUÁRIO:',
-          userRequest || uiText('renderInitialRequest', '(início da renderização)'),
-          '',
-          responseLanguageInstruction(),
-        ].join('\n');
+      function getPersistableRenderMilestones(milestones = []) {
+        return (Array.isArray(milestones) ? milestones : []).map((milestone) => {
+          const { changeMarker, ...cleanMilestone } = milestone || {};
+          return {
+            ...cleanMilestone,
+            tasks: Array.isArray(cleanMilestone.tasks)
+              ? cleanMilestone.tasks.map((task) => {
+                  const { isRefinement, ...cleanTask } = task || {};
+                  return cleanTask;
+                })
+              : [],
+          };
+        });
       }
 
       async function rebuildRenderDraft(mapData, documentation, assistantSummary, options = {}) {
+        const projectId = getSelectedProjectId();
         const rootPath = options.rootPath || getSelectedProjectInfo()?.rootPath || '';
-        if (!rootPath) {
+        if (!projectId || !rootPath || !activeRenderConversationId) {
           throw new Error(uiText('projectRootRequired', 'Selecione um projeto antes de gerar o plano.'));
         }
         if (!api || typeof api.buildApplicationMapRenderPlan !== 'function') {
@@ -1295,12 +1445,36 @@
           throw new Error(plan && plan.message ? plan.message : 'Application map render-plan failed.');
         }
 
+        const plannedMilestones = Array.isArray(plan.milestones) ? plan.milestones : [];
+        let proposal = null;
+        if (plan.ready === true && plannedMilestones.length) {
+          if (!api || typeof api.previewMapRenderMilestones !== 'function') {
+            throw new Error('Map render milestone preview service unavailable.');
+          }
+          const preview = await api.previewMapRenderMilestones({
+            projectId,
+            rootPath,
+            conversationId: activeRenderConversationId,
+            milestones: getPersistableRenderMilestones(plannedMilestones),
+          });
+          if (!preview || !preview.ok || !preview.proposal
+            || preview.proposal.status !== 'pending') {
+            throw new Error(
+              preview && (preview.message || preview.code)
+                ? preview.message || preview.code
+                : 'Map render milestone preview failed.',
+            );
+          }
+          proposal = preview.proposal;
+        }
+
         renderDraft = {
           assistantSummary: assistantSummary || uiText('renderFallbackDiagnostic', 'A IA não retornou uma resposta; o diagnóstico foi preparado com a documentação disponível.'),
           checks: Array.isArray(plan.checks) ? plan.checks : [],
           missing: Array.isArray(plan.missing) ? plan.missing : [],
           ready: plan.ready === true,
-          milestones: Array.isArray(plan.milestones) ? plan.milestones : [],
+          milestones: plannedMilestones,
+          proposal,
           documents,
           renderMarkdown: getRenderMapMarkdown(mapData),
         };
@@ -1311,8 +1485,9 @@
 
       async function generateRenderDraft(userRequest = '') {
         const projectInfo = getSelectedProjectInfo();
+        const projectId = getSelectedProjectId();
         const rootPath = projectInfo?.rootPath || '';
-        if (!rootPath || renderWorkflowBusy) return;
+        if (!projectId || !rootPath || renderWorkflowBusy) return;
 
         renderWorkflowBusy = true;
         await createRenderConversation();
@@ -1367,28 +1542,23 @@
             'renderInitialAnalysisRequest',
             'Executar a análise inicial do mapa.',
           );
-          const renderPrompt = buildRenderPrompt(mapData, documentation, resolvedUserRequest, renderMessages);
 
           let assistantSummary = '';
+          let assistantSummaryPersisted = false;
           try {
-            const response = await api.sendAssistantMessage({
-              projectInfo,
-              userMessage: renderPrompt,
-              contextHint: `${uiText(
-                'renderConsultativeContext',
-                'Você deve atuar de forma consultiva, diagnosticando lacunas do mapa para apoiar o planejamento e a futura geração de milestones.',
-              )}\n${responseLanguageInstruction()}`,
-              conversationMessages: Array.isArray(renderMessages)
-                ? renderMessages.map((message) => ({ role: message.role, text: message.content }))
-                : [],
-              attachments: [],
-              isMapChat: true,
+            const response = await api.analyzeMapRenderSession({
+              projectId,
+              rootPath,
+              conversationId: activeRenderConversationId,
+              userMessage: resolvedUserRequest,
+              locale: getLocale(),
             });
             if (response && response.ok && response.response) {
               assistantSummary = response.response;
+              assistantSummaryPersisted = true;
             }
           } catch (error) {
-            console.error('[generateRenderDraft] sendAssistantMessage failed:', error);
+            console.error('[generateRenderDraft] analyzeMapRenderSession failed:', error);
           }
           if (renderTicker && renderTicker.analyzeStep) {
             renderTicker.analyzeStep.classList.remove('active');
@@ -1425,7 +1595,7 @@
           nextMessages.push(...generatedMessages);
           renderMessages = nextMessages;
           syncRenderConversationState();
-          for (const message of generatedMessages) {
+          for (const message of generatedMessages.slice(assistantSummaryPersisted ? 1 : 0)) {
             await persistRenderConversationMessage(message.role, message.content);
           }
 
@@ -1482,8 +1652,9 @@
 
       generateTutorialRenderDraftHandler = async () => {
         const projectInfo = getSelectedProjectInfo();
+        const projectId = getSelectedProjectId();
         const rootPath = projectInfo?.rootPath || '';
-        if (!rootPath || renderWorkflowBusy) return false;
+        if (!projectId || !rootPath || renderWorkflowBusy) return false;
 
         renderWorkflowBusy = true;
         await createRenderConversation(tutorialText('render.conversationTitle'));
@@ -1523,6 +1694,21 @@
           if (renderTicker && renderTicker.analyzeStep) renderTicker.analyzeStep.classList.add('active');
           const assistantSummary = tutorialText('render.assistantSummary');
           const checkLabels = tutorialValue('render.checks', []);
+          const tutorialMilestones = buildTutorialRenderMilestones(mapData);
+          const preview = await api.previewMapRenderMilestones({
+            projectId,
+            rootPath,
+            conversationId: activeRenderConversationId,
+            milestones: getPersistableRenderMilestones(tutorialMilestones),
+          });
+          if (!preview || !preview.ok || !preview.proposal
+            || preview.proposal.status !== 'pending') {
+            throw new Error(
+              preview && (preview.message || preview.code)
+                ? preview.message || preview.code
+                : 'Map render milestone preview failed.',
+            );
+          }
 
           renderDraft = {
             assistantSummary,
@@ -1533,7 +1719,8 @@
             })),
             missing: [],
             ready: true,
-            milestones: buildTutorialRenderMilestones(mapData),
+            milestones: tutorialMilestones,
+            proposal: preview.proposal,
             documents: documentation.documents,
             renderMarkdown: getRenderMapMarkdown(mapData),
           };
@@ -1583,8 +1770,9 @@
         if (!messageText || renderWorkflowBusy) return;
 
         const projectInfo = getSelectedProjectInfo();
+        const projectId = getSelectedProjectId();
         const rootPath = projectInfo?.rootPath || '';
-        if (!rootPath) return;
+        if (!projectId || !rootPath) return;
 
         renderWorkflowBusy = true;
 
@@ -1593,7 +1781,6 @@
         }
 
         const mapData = canvasController ? canvasController.getMapData() : { nodes: [], edges: [] };
-        const history = Array.isArray(renderMessages) ? renderMessages.slice() : [];
         const outgoingAttachments = Array.isArray(renderAttachments)
           ? renderAttachments.map((attachment) => ({
               path: attachment.path,
@@ -1610,7 +1797,6 @@
         if (renderSessionSend) renderSessionSend.disabled = true;
         if (renderSessionTextarea) renderSessionTextarea.disabled = true;
         if (renderAttachButton) renderAttachButton.disabled = true;
-        await persistRenderConversationMessage('user', messageText);
         renderAttachments = [];
         renderRenderAttachmentList();
         syncRenderConversationState();
@@ -1625,13 +1811,13 @@
         let documentation = null;
         try {
           documentation = await collectRenderDocumentation(rootPath, mapData);
-          const response = await api.sendAssistantMessage({
-            projectInfo,
-            userMessage: buildRenderPrompt(mapData, documentation, messageText, history),
-            contextHint: 'Você deve refinar o plano de renderização com foco em clareza, cobertura das lacunas e qualidade das milestones.',
-            conversationMessages: history.map((message) => ({ role: message.role, text: message.content })),
+          const response = await api.sendMapRenderSessionMessage({
+            projectId,
+            rootPath,
+            conversationId: activeRenderConversationId,
+            userMessage: messageText,
+            locale: getLocale(),
             attachments: outgoingAttachments,
-            isMapChat: true,
           });
 
           if (thinking) thinking.remove();
@@ -1641,7 +1827,6 @@
             : uiText('renderRefineFailed', 'Não consegui refinar o plano neste momento.');
           renderMessages.push({ role: 'assistant', content: assistantText });
           renderRenderMessage('assistant', assistantText);
-          await persistRenderConversationMessage('assistant', assistantText);
 
           const renderTranscript = renderMessages
             .map((message) => `${message.role}: ${message.content || ''}`)
@@ -1698,8 +1883,13 @@
 
       async function saveRenderMilestones() {
         const projectInfo = getSelectedProjectInfo();
+        const projectId = getSelectedProjectId();
         const rootPath = projectInfo?.rootPath || '';
-        if (!rootPath || !renderDraft || !renderDraft.ready || !Array.isArray(renderDraft.milestones) || !renderDraft.milestones.length) {
+        const proposal = renderDraft && renderDraft.proposal;
+        if (!projectId || !rootPath || !activeRenderConversationId
+          || !renderDraft || !renderDraft.ready
+          || !Array.isArray(renderDraft.milestones) || !renderDraft.milestones.length
+          || !proposal || proposal.status !== 'pending') {
           alert(tutorialText('render.incomplete'));
           return;
         }
@@ -1714,28 +1904,28 @@
         if (renderPanelStatus) renderPanelStatus.textContent = savingStatus;
 
         try {
-          const milestonesForSave = renderDraft.milestones.map((milestone) => {
-            const { changeMarker, ...cleanMilestone } = milestone || {};
-            return {
-              ...cleanMilestone,
-              tasks: Array.isArray(cleanMilestone.tasks)
-                ? cleanMilestone.tasks.map((task) => {
-                    const { isRefinement, ...cleanTask } = task || {};
-                    return cleanTask;
-                  })
-                : [],
-            };
+          const saveResult = await api.approveMapChatProposal({
+            projectId,
+            rootPath,
+            conversationId: activeRenderConversationId,
+            proposalId: proposal.proposalId,
+            expectedRevision: proposal.revision,
+            patchDigest: proposal.patchDigest,
           });
-          const saveResult = await api.saveMilestones({ rootPath, milestones: milestonesForSave });
           if (!saveResult || !saveResult.ok) {
-            throw new Error(saveResult && saveResult.message ? saveResult.message : tutorialText('development.unknownFailure'));
+            throw new Error(
+              saveResult && (saveResult.message || saveResult.code)
+                ? saveResult.message || saveResult.code
+                : tutorialText('development.unknownFailure'),
+            );
           }
-          await api.renderMilestones({ rootPath });
+          renderDraft.proposal = saveResult.proposal;
           window.dispatchEvent(new CustomEvent('faber:milestones-updated', { detail: { rootPath } }));
           const savedStatus = tutorialText('render.saved');
           if (renderSessionStatus) renderSessionStatus.textContent = savedStatus;
           if (renderPanelStatus) renderPanelStatus.textContent = savedStatus;
           syncRenderConversationState();
+          renderRenderPanel();
         } catch (error) {
           console.error('[saveRenderMilestones] failed:', error);
           const failureStatus = tutorialText('render.saveFailure', { message: error.message || String(error) });
@@ -1957,20 +2147,22 @@
 
       async function triggerMapAnalysis() {
         const projectId = getSelectedProjectId();
-        const projectInfo = getSelectedProjectInfo();
-        const rootPath = projectInfo?.rootPath || '';
-        if (!projectId || !rootPath) return;
+        const rootPath = getSelectedProjectInfo()?.rootPath || '';
+        if (!projectId || !rootPath || !activeConversationId) return;
 
-        // Append status ticker to chat log
         const ticker = document.createElement('div');
         ticker.className = 'map-chat-status-ticker';
         ticker.id = 'map-chat-status-ticker';
-        ticker.innerHTML = `
-          <div class="ticker-step" id="step-export-md"><span class="status-dot"></span> <span>${uiText('renderExportingMarkdowns', 'Exportando os Markdowns do mapa...')}</span></div>
-          <div class="ticker-step" id="step-send-images"><span class="status-dot"></span> <span>${uiText('renderSendingImages', 'Preparando imagens e referências...')}</span></div>
-          <div class="ticker-step" id="step-analyze-info"><span class="status-dot"></span> <span>${uiText('renderAnalyzingInfo', 'Analisando as informações do projeto...')}</span></div>
-          <div class="ticker-step" id="step-contextualized"><span class="status-dot"></span> <span>${uiText('renderContextReady', 'Contexto preparado. Iniciando o planejamento...')}</span></div>
-        `;
+        ticker.innerHTML = [
+          '<div class="ticker-step" id="step-export-md"><span class="status-dot"></span> <span>'
+            + uiText('mapReadingCurrentState', 'Lendo o estado atual do mapa...') + '</span></div>',
+          '<div class="ticker-step" id="step-send-images"><span class="status-dot"></span> <span>'
+            + uiText('renderSendingImages', 'Preparando imagens e referências...') + '</span></div>',
+          '<div class="ticker-step" id="step-analyze-info"><span class="status-dot"></span> <span>'
+            + uiText('renderAnalyzingInfo', 'Analisando as informações do projeto...') + '</span></div>',
+          '<div class="ticker-step" id="step-contextualized"><span class="status-dot"></span> <span>'
+            + uiText('renderContextReady', 'Contexto preparado. Iniciando o planejamento...') + '</span></div>',
+        ].join('');
         if (mapChatLog) {
           mapChatLog.appendChild(ticker);
           mapChatLog.scrollTop = mapChatLog.scrollHeight;
@@ -1981,295 +2173,87 @@
         const stepAnalyzeInfo = document.getElementById('step-analyze-info');
         const stepContextualized = document.getElementById('step-contextualized');
 
-        const mapData = canvasController ? canvasController.getMapData() : { nodes: [], edges: [] };
-        const imageDescriptions = {}; // Map node.id -> description text
-
-        // --- PASSO 1: Exportando markdowns ---
-        if (stepExportMd) stepExportMd.classList.add('active');
         try {
-          await api.renderApplicationMap({ rootPath });
+          if (stepExportMd) stepExportMd.classList.add('active');
           if (stepExportMd) {
             stepExportMd.classList.remove('active');
             stepExportMd.classList.add('completed');
           }
-        } catch (err) {
-          console.error('[triggerMapAnalysis] Export markdown error:', err);
-          if (stepExportMd) stepExportMd.classList.remove('active');
-        }
 
-        // --- PASSO 2: Enviando imagens ---
-        if (stepSendImages) stepSendImages.classList.add('active');
-        const imageNodes = mapData.nodes.filter(n => n && (n.type === 'image' || n.assetId));
-        if (imageNodes.length > 0) {
-          const spanText = stepSendImages.querySelector('span:not(.status-dot)');
-          for (let i = 0; i < imageNodes.length; i++) {
-            const node = imageNodes[i];
-            const assetId = node.assetId || node.content;
-            if (!assetId) continue;
-
-            if (spanText) {
-              spanText.textContent = uiText('renderImagesSendingProgress', 'Enviando imagens ({current}/{total})...', {
-                current: i + 1,
-                total: imageNodes.length,
-              });
-            }
-
-            const imgPath = window.electron ? window.electron.pathJoin(rootPath, assetId) : `${rootPath}/${assetId}`;
-            const imgAttachments = [{
-              path: imgPath,
-              type: assetId.endsWith('.png') ? 'image/png' : assetId.endsWith('.jpg') ? 'image/jpeg' : 'image/jpeg',
-              name: assetId
-            }];
-
-            try {
-              const response = await api.sendAssistantMessage({
-                projectInfo,
-                userMessage: `${uiText(
-                  'analyzeMapImagePrompt',
-                  'Analise esta imagem do mapa da aplicação ({name}) e descreva seu conteúdo técnico, elementos de UI/UX, fluxos e informações de design.',
-                  { name: assetId },
-                )}\n${responseLanguageInstruction()}`,
-                contextHint: `${uiText(
-                  'analyzeMapImageContext',
-                  'Você é um assistente técnico de UI/UX. Descreva com precisão o que está visível e sua relação com o desenvolvimento de software.',
-                )}\n${responseLanguageInstruction()}`,
-                conversationMessages: [],
-                attachments: imgAttachments,
-                isMapChat: true
-              });
-              if (response && response.ok && response.response) {
-                imageDescriptions[node.id] = response.response;
-              } else {
-                imageDescriptions[node.id] = uiText('imageAnalysisUnavailable', 'A IA não conseguiu analisar a imagem.');
-              }
-            } catch (err) {
-              console.error('[triggerMapAnalysis] Image analysis error for ' + assetId, err);
-              imageDescriptions[node.id] = uiText('imageVisionError', 'Erro de análise de imagem: {message}', { message: err.message || String(err) });
+          if (stepSendImages) {
+            stepSendImages.classList.add('active');
+            stepSendImages.classList.remove('active');
+            stepSendImages.classList.add('completed');
+            const label = stepSendImages.querySelector('span:not(.status-dot)');
+            if (label) {
+              label.textContent = uiText('renderReferencesPrepared', 'Referências preparadas');
             }
           }
-        }
-        if (stepSendImages) {
-          stepSendImages.classList.remove('active');
-          stepSendImages.classList.add('completed');
-          const spanText = stepSendImages.querySelector('span:not(.status-dot)');
-          if (spanText) spanText.textContent = uiText('renderImagesSent', 'Imagens enviadas');
-        }
+          if (stepAnalyzeInfo) stepAnalyzeInfo.classList.add('active');
 
-        // --- PASSO 3: Analisando informações ---
-        if (stepAnalyzeInfo) stepAnalyzeInfo.classList.add('active');
-
-        // Compile group-centric prompt content
-        let promptText = 'Por favor, analise as informações consolidadas do mapa da minha aplicação.\n\n';
-        promptText += 'O mapa da aplicação foi exportado para a pasta `docs/application-map/` no meu workspace.\n';
-        promptText += 'Aqui estão as informações detalhadas estruturadas por grupo:\n\n';
-
-        const rootNodes = mapData.nodes.filter(n => !n.parentId);
-        const childNodes = mapData.nodes.filter(n => n.parentId);
-        const groups = rootNodes.filter(n => n.type === 'group' || n.type === 'folder');
-
-        for (const g of groups) {
-          const fileBasename = g.title.toLowerCase().replace(/[^a-z0-9_-]/g, '-') + '.md';
-          const relativePath = 'docs/application-map/' + fileBasename;
-          let markdownContent = '';
-
-          try {
-            const readResult = await api.readProjectFile({ projectInfo, relativePath });
-            if (readResult && readResult.ok) {
-              markdownContent = readResult.content;
-            }
-          } catch (err) {
-            console.warn('[triggerMapAnalysis] Failed to read group markdown: ' + relativePath, err);
-          }
-
-          promptText += `### GRUPO: ${g.title}\n`;
-          if (markdownContent) {
-            promptText += `${markdownContent}\n\n`;
-          } else {
-            promptText += `*(Grupo sem documentação markdown)*\n\n`;
-          }
-
-          // Add descriptions of images belonging to this group
-          const groupImages = childNodes.filter(c => c.parentId === g.id && (c.type === 'image' || c.assetId));
-          if (groupImages.length > 0) {
-            promptText += `#### Imagens deste Grupo:\n`;
-            groupImages.forEach(img => {
-              const desc = imageDescriptions[img.id] || '(Nenhuma descrição disponível)';
-              promptText += `- **Imagem [${img.title}]:** ${desc}\n`;
-            });
-            promptText += '\n';
-          }
-          promptText += '---\n\n';
-        }
-
-        // Orphan/Standalone Nodes
-        const standalones = rootNodes.filter(n => n.type !== 'group' && n.type !== 'folder');
-        const orphanImages = standalones.filter(n => n.type === 'image' || n.assetId);
-        const orphanTexts = standalones.filter(n => n.type !== 'image' && !n.assetId);
-
-        if (orphanTexts.length > 0 || orphanImages.length > 0) {
-          promptText += `### ITENS AVULSOS (SEM GRUPO)\n`;
-          orphanTexts.forEach(n => {
-            promptText += `- **[${n.type.toUpperCase()}]** ${n.title}`;
-            if (n.description) promptText += ` — ${n.description}`;
-            if (n.content) promptText += ` (Conteúdo: \`${n.content}\`)`;
-            promptText += '\n';
-          });
-          if (orphanImages.length > 0) {
-            promptText += `\n#### Imagens Avulsas:\n`;
-            orphanImages.forEach(img => {
-              const desc = imageDescriptions[img.id] || '(Nenhuma descrição disponível)';
-              promptText += `- **Imagem [${img.title}]:** ${desc}\n`;
-            });
-          }
-          promptText += '\n---\n\n';
-        }
-
-        // Read auxiliary files (README.md, decisions.md, open-questions.md)
-        const auxFiles = [
-          { name: 'README.md', path: 'docs/application-map/README.md' },
-          { name: 'Decisões', path: 'docs/application-map/decisions.md' },
-          { name: 'Dúvidas e Perguntas', path: 'docs/application-map/open-questions.md' }
-        ];
-        promptText += '### OUTROS ARQUIVOS DE CONTEXTO DO MAPA:\n\n';
-        for (const file of auxFiles) {
-          try {
-            const readResult = await api.readProjectFile({ projectInfo, relativePath: file.path });
-            if (readResult && readResult.ok) {
-              promptText += `#### ${file.name} (${file.path}):\n${readResult.content}\n\n`;
-            }
-          } catch (err) {
-            console.warn('[triggerMapAnalysis] Failed to read auxiliary file: ' + file.path, err);
-          }
-        }
-
-        promptText += '\nCom base em todos os markdowns estruturados por grupo e nas descrições de imagens fornecidas acima:\n';
-        promptText += '1. Faça um resumo curto provando que você compreendeu as informações do mapa (UI/UX, design system, Front End, Backend, etc.).\n';
-        promptText += '2. Comente o que você vê que eu planejo criar.\n';
-        promptText += '3. Diga quais pontos do planejamento você acha que estão faltando para eu finalizar a modelagem do meu projeto.\n';
-
-        const systemGuidance = 
-          `${responseLanguageInstruction()}\n\n` +
-          `Você é o Assistente de Modelagem do Mapa da Aplicação no Faber Code.\n` +
-          `O usuário está editando o mapa e solicitou ajuda.\n\n` +
-          `DIRETRIZES IMPORTANTES PARA SUAS RESPOSTAS:\n` +
-          `1. Você NÃO deve tentar criar a aplicação, sugerir geração de código ou planejar tarefas de desenvolvimento de backend/frontend.\n` +
-          `2. Seu foco exclusivo é ajudar o usuário a compreender e planejar que tipo de aplicação quer criar, auxiliando a documentar e definir os markdowns (textos, notas e referências visuais) necessários para desenhar e fechar a modelagem do projeto no Mapa da Aplicação.\n` +
-          `3. Você pode ler arquivos do projeto para contextualizar a sua resposta, porém não execute tarefas ou scripts de alteração de código fonte.\n` +
-          `4. Responda em linguagem natural, amigável, clara e objetiva.\n` +
-          `5. No início da sua resposta, prove ao usuário que compreendeu o planejamento iniciando com uma frase explicativa como "Entendido, então você deseja criar uma aplicação com o..." seguida por um resumo curto.\n` +
-          `6. NUNCA diga frases como "Entendi. Vou trabalhar nisso agora e te volto com resultado real" e NUNCA aja como se fosse criar a aplicação.\n\n` +
-          responseLanguageInstruction();
-
-        try {
-          const response = await api.sendAssistantMessage({
-            projectInfo,
-            userMessage: promptText,
-            contextHint: systemGuidance,
-            conversationMessages: [],
-            attachments: [], // Attachments are already processed and described in the prompt text
-            isMapChat: true
+          const response = await api.analyzeMapChatSession({
+            projectId,
+            rootPath,
+            conversationId: activeConversationId,
+            locale: getLocale(),
           });
 
           if (stepAnalyzeInfo) {
             stepAnalyzeInfo.classList.remove('active');
             stepAnalyzeInfo.classList.add('completed');
           }
-
           if (stepContextualized) {
             stepContextualized.classList.add('active');
             stepContextualized.classList.add('completed');
           }
 
-          // Delay slightly so the user sees the completed state
-          await new Promise(r => setTimeout(r, 600));
-          if (ticker) ticker.remove();
-
+          await new Promise((resolve) => setTimeout(resolve, 600));
+          ticker.remove();
           if (response && response.ok && response.response) {
             appendMapChatMessage('assistant', response.response);
             mapChatMessages.push({ role: 'assistant', content: response.response });
-
-            if (activeConversationId) {
-              await api.addConversationMessage({
+            if (response.proposalDraft) {
+              await appendMapChatProposalPreview({
                 projectId,
+                rootPath,
                 conversationId: activeConversationId,
-                role: 'assistant',
-                text: response.response
+                proposalDraft: response.proposalDraft,
               });
             }
           } else {
-            appendMapChatMessage('assistant', uiText('assistantUnavailable', 'Desculpe, não consegui obter uma resposta da IA neste momento.'));
+            appendMapChatMessage(
+              'assistant',
+              uiText('assistantUnavailable', 'Desculpe, não consegui obter uma resposta da IA neste momento.'),
+            );
           }
-        } catch (err) {
-          if (ticker) ticker.remove();
-          appendMapChatMessage('assistant', uiText('aiCommunicationError', 'Erro ao comunicar com a IA: {message}', { message: err.message || String(err) }));
+        } catch (error) {
+          ticker.remove();
+          appendMapChatMessage('assistant', uiText(
+            'aiCommunicationError',
+            'Erro ao comunicar com a IA: {message}',
+            { message: error.message || String(error) },
+          ));
         }
       }
-
       async function sendMapChatMessage(userText) {
-        if (!userText.trim()) return;
-
-        appendMapChatMessage('user', userText);
-        mapChatMessages.push({ role: 'user', content: userText });
-
+        const messageText = String(userText || '').trim();
+        if (!messageText) return;
         const projectId = getSelectedProjectId();
-        if (activeConversationId) {
-          try {
-            await api.addConversationMessage({
-              projectId,
-              conversationId: activeConversationId,
-              role: 'user',
-              text: userText
-            });
-          } catch (err) {
-            console.error('[sendMapChatMessage] Save user error:', err);
-          }
-        }
+        const rootPath = getSelectedProjectInfo()?.rootPath || '';
+        if (!projectId || !rootPath || !activeConversationId) return;
+
+        appendMapChatMessage('user', messageText);
+        mapChatMessages.push({ role: 'user', content: messageText });
 
         const thinking = showMapChatThinking();
 
-        const mapData = canvasController ? canvasController.getMapData() : { nodes: [], edges: [] };
-        
-        const mapMarkdown = getRenderMapMarkdown(mapData);
-
-        const systemGuidance = 
-          `${responseLanguageInstruction()}\n\n` +
-          `Você é o Assistente de Modelagem do Mapa da Aplicação no Faber Code.\n` +
-          `O usuário está editando o mapa e solicitou ajuda.\n\n` +
-          `Aqui está o estado atual do board mapeado pelo usuário em formato Markdown:\n` +
-          `\`\`\`markdown\n` +
-          `${mapMarkdown}\n` +
-          `\`\`\`\n\n` +
-          `DIRETRIZES IMPORTANTES PARA SUAS RESPOSTAS:\n` +
-          `1. Você NÃO deve tentar criar a aplicação, sugerir geração de código ou planejar tarefas de desenvolvimento de backend/frontend.\n` +
-          `2. Seu foco exclusivo é ajudar o usuário a compreender e planejar que tipo de aplicação quer criar, auxiliando a documentar e definir os markdowns (textos, notas e referências visuais) necessários para desenhar e fechar a modelagem do projeto no Mapa da Aplicação.\n` +
-          `3. Você pode ler arquivos do projeto para contextualizar a sua resposta, porém não execute tarefas ou scripts de alteração de código fonte.\n` +
-          `4. Responda em linguagem natural, amigável, clara e objetiva.\n` +
-          `5. No início da sua resposta, prove ao usuário que compreendeu o planejamento iniciando com uma frase explicativa como "Entendido, então você deseja criar uma aplicação com o..." seguida por um resumo curto.\n` +
-          `6. NUNCA diga frases como "Entendi. Vou trabalhar nisso agora e te volto com resultado real" e NUNCA aja como se fosse criar a aplicação.\n\n` +
-          responseLanguageInstruction();
-
-        const mapAttachments = [];
-        const projectInfo = getSelectedProjectInfo();
-        const rootPath = projectInfo?.rootPath || '';
-        if (rootPath) {
-          const uniqueAssetIds = [...new Set(mapData.nodes.filter(n => n.assetId).map(n => n.assetId))];
-          uniqueAssetIds.forEach(assetId => {
-            mapAttachments.push({
-              path: window.electron ? window.electron.pathJoin(rootPath, assetId) : `${rootPath}/${assetId}`,
-              type: assetId.endsWith('.png') ? 'image/png' : assetId.endsWith('.jpg') ? 'image/jpeg' : 'image/jpeg',
-              name: assetId
-            });
-          });
-        }
-
         try {
-          const response = await api.sendAssistantMessage({
-            projectInfo: projectInfo,
-            userMessage: userText,
-            contextHint: systemGuidance,
-            conversationMessages: mapChatMessages.map(m => ({ role: m.role, text: m.content })),
-            attachments: mapAttachments,
-            isMapChat: true
+          const response = await api.sendMapChatSessionMessage({
+            projectId,
+            rootPath,
+            conversationId: activeConversationId,
+            userMessage: messageText,
+            locale: getLocale(),
           });
 
           hideMapChatThinking();
@@ -2277,18 +2261,13 @@
           if (response && response.ok && response.response) {
             appendMapChatMessage('assistant', response.response);
             mapChatMessages.push({ role: 'assistant', content: response.response });
-
-            if (activeConversationId) {
-              try {
-                await api.addConversationMessage({
-                  projectId,
-                  conversationId: activeConversationId,
-                  role: 'assistant',
-                  text: response.response
-                });
-              } catch (err) {
-                console.error('[sendMapChatMessage] Save assistant error:', err);
-              }
+            if (response.proposalDraft) {
+              await appendMapChatProposalPreview({
+                projectId,
+                rootPath,
+                conversationId: activeConversationId,
+                proposalDraft: response.proposalDraft,
+              });
             }
           } else {
             appendMapChatMessage('assistant', uiText('assistantUnavailable', 'Desculpe, não consegui obter uma resposta da IA neste momento.'));

@@ -13,9 +13,6 @@ const FIXTURE_DIR = path.join(__dirname, 'fixtures', 'persistence');
 // These assertions intentionally record current limitations. Replacing them must be
 // an explicit persistence migration with compatibility coverage, not a silent change.
 const KNOWN_BASELINE = Object.freeze({
-  applicationMap: Object.freeze({
-    rendererZoomIsDroppedBySaveMap: true,
-  }),
   milestones: Object.freeze({
     draftArrayIsHiddenUntilRender: true,
   }),
@@ -89,7 +86,11 @@ function testApplicationMapRendererV1() {
 
   withTempRoot('faber-persistence-map-', (tempRoot) => {
     const mapPath = path.join(tempRoot, '.faber', 'application-map.json');
+    const assetsIndexPath = path.join(tempRoot, '.faber', 'map-assets-index.json');
+    const assetsFixture = readFixture('map-assets-index-v1.json');
     writeJson(mapPath, fixture);
+    writeJson(assetsIndexPath, assetsFixture);
+    const assetsIndexBytes = fs.readFileSync(assetsIndexPath, 'utf8');
 
     const mapService = createApplicationMapService({ fs, path });
     const renderService = createApplicationMapRenderService({ fs, path, mapService });
@@ -105,15 +106,19 @@ function testApplicationMapRendererV1() {
     assert.deepStrictEqual(saved.map.nodes, fixture.nodes);
     assert.deepStrictEqual(saved.map.edges, fixture.edges);
     assert.deepStrictEqual(saved.map.viewport, fixture.viewport);
+    assert.strictEqual(saved.map.zoom, fixture.zoom);
     assertIsoTimestamp(saved.map.updatedAt, 'saveMap must persist an ISO updatedAt');
-
-    assert.strictEqual(KNOWN_BASELINE.applicationMap.rendererZoomIsDroppedBySaveMap, true);
-    assert.strictEqual(
-      Object.hasOwn(saved.map, 'zoom'),
-      false,
-      'KNOWN_BASELINE: saveMap currently drops the renderer v1 top-level zoom field'
-    );
     assert.deepStrictEqual(mapService.getMap(tempRoot), saved.map);
+    assert.strictEqual(
+      saved.map.nodes.find((node) => node.id === 'map-node-brand-reference').assetId,
+      'Map assets/references/brand-board.png',
+      'renderer asset references must survive the map round-trip'
+    );
+    assert.strictEqual(
+      fs.readFileSync(assetsIndexPath, 'utf8'),
+      assetsIndexBytes,
+      'saving the map must not rewrite its durable asset index'
+    );
 
     const rendered = renderService.renderMap(tempRoot);
     assert.strictEqual(rendered.ok, true);

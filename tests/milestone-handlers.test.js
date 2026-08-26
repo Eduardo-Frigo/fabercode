@@ -27,10 +27,6 @@ function createFixture() {
       calls.push(['listMilestones', rootPath]);
       return milestones;
     },
-    saveMilestones: (rootPath, input) => {
-      calls.push(['saveMilestones', rootPath, input]);
-      return { ok: true, milestones: input };
-    },
     updateMilestoneStatus: (rootPath, milestoneId, status) => {
       calls.push(['updateMilestoneStatus', rootPath, milestoneId, status]);
       return { ok: true, milestoneId, status };
@@ -38,10 +34,6 @@ function createFixture() {
     updateMilestoneTask: (rootPath, milestoneId, taskId, task) => {
       calls.push(['updateMilestoneTask', rootPath, milestoneId, taskId, task]);
       return { ok: true, milestoneId, taskId, task };
-    },
-    linkMilestoneCommit: (rootPath, milestoneId, commit) => {
-      calls.push(['linkMilestoneCommit', rootPath, milestoneId, commit]);
-      return { ok: true, milestoneId, commit };
     },
     renderMilestones: (rootPath) => {
       calls.push(['renderMilestones', rootPath]);
@@ -53,6 +45,17 @@ function createFixture() {
     getMilestoneGitStatus: (rootPath, milestoneId) => {
       calls.push(['getMilestoneGitStatus', rootPath, milestoneId]);
       return { ok: true, milestoneId, status: 'clean' };
+    },
+    linkExistingMilestoneCommit: async (rootPath, milestoneId, commitHash) => {
+      calls.push(['linkExistingMilestoneCommit', rootPath, milestoneId, commitHash]);
+      return { ok: true, milestoneId, commitHash };
+    },
+  };
+
+  const milestoneValidationService = {
+    completeMilestoneFromJob: (rootPath, milestoneId, jobId) => {
+      calls.push(['completeMilestoneFromJob', rootPath, milestoneId, jobId]);
+      return { ok: true, milestoneId, jobId };
     },
   };
 
@@ -66,6 +69,7 @@ function createFixture() {
     },
     milestoneService,
     milestoneGitStatusService,
+    milestoneValidationService,
     registerIpcHandler,
     appendAuditEvent: (type, payload) => audits.push({ type, payload }),
   });
@@ -77,17 +81,17 @@ function lastServiceCall(calls) {
   return calls.filter(([name]) => name !== 'authorizeProjectRoot').at(-1);
 }
 
-function run() {
+async function run() {
   const fixture = createFixture();
   const { audits, calls, handlers, milestones, renderResults } = fixture;
 
   assert.deepStrictEqual(Object.keys(handlers).sort(), [
+    'milestones:complete-after-validation',
     'milestones:get',
     'milestones:git-status',
     'milestones:link-commit',
     'milestones:list',
     'milestones:render',
-    'milestones:save',
     'milestones:update-status',
     'milestones:update-task',
   ]);
@@ -109,24 +113,16 @@ function run() {
   });
   assert.deepStrictEqual(missing, { ok: false, message: 'Milestone not found' });
 
-  const newMilestones = [{ id: 'milestone-3', title: 'Hardening' }];
-  handlers['milestones:save'](null, { rootPath: '/allowed', milestones: newMilestones });
-  assert.deepStrictEqual(lastServiceCall(calls), [
-    'saveMilestones',
-    '/authorized/project',
-    newMilestones,
-  ]);
-
   handlers['milestones:update-status'](null, {
     rootPath: '/allowed',
     milestoneId: 'milestone-1',
-    status: 'in_progress',
+    status: 'active',
   });
   assert.deepStrictEqual(lastServiceCall(calls), [
     'updateMilestoneStatus',
     '/authorized/project',
     'milestone-1',
-    'in_progress',
+    'active',
   ]);
 
   const task = { title: 'Add tests', completed: true };
@@ -144,17 +140,34 @@ function run() {
     task,
   ]);
 
-  const commit = { hash: 'abc123', subject: 'feat: finish milestone' };
-  handlers['milestones:link-commit'](null, {
+  const commit = {
+    hash: 'a'.repeat(40),
+    message: 'spoofed renderer metadata',
+    createdAt: '1900-01-01T00:00:00.000Z',
+  };
+  await handlers['milestones:link-commit'](null, {
     rootPath: '/allowed',
     milestoneId: 'milestone-1',
     commit,
   });
   assert.deepStrictEqual(lastServiceCall(calls), [
-    'linkMilestoneCommit',
+    'linkExistingMilestoneCommit',
     '/authorized/project',
     'milestone-1',
-    commit,
+    commit.hash,
+  ]);
+
+  const completion = handlers['milestones:complete-after-validation'](null, {
+    rootPath: '/allowed',
+    milestoneId: 'milestone-1',
+    jobId: 'job-validated-1',
+  });
+  assert.strictEqual(completion.ok, true);
+  assert.deepStrictEqual(lastServiceCall(calls), [
+    'completeMilestoneFromJob',
+    '/authorized/project',
+    'milestone-1',
+    'job-validated-1',
   ]);
 
   const gitStatus = handlers['milestones:git-status'](null, {
@@ -185,17 +198,20 @@ function run() {
   const deniedCases = [
     ['milestones:list', {}],
     ['milestones:get', { milestoneId: 'milestone-1' }],
-    ['milestones:save', { milestones: newMilestones }],
     ['milestones:update-status', { milestoneId: 'milestone-1', status: 'done' }],
     ['milestones:update-task', { milestoneId: 'milestone-1', taskId: 'task-1', task }],
     ['milestones:link-commit', { milestoneId: 'milestone-1', commit }],
+    ['milestones:complete-after-validation', {
+      milestoneId: 'milestone-1',
+      jobId: 'job-validated-1',
+    }],
     ['milestones:git-status', { milestoneId: 'milestone-1' }],
     ['milestones:render', {}],
   ];
 
   for (const [channel, payload] of deniedCases) {
     const serviceCallsBefore = calls.filter(([name]) => name !== 'authorizeProjectRoot').length;
-    const result = handlers[channel](null, { ...payload, rootPath: '/denied' });
+    const result = await handlers[channel](null, { ...payload, rootPath: '/denied' });
     assert.deepStrictEqual(result, { ok: false, message: 'Projeto não autorizado.' });
     assert.strictEqual(
       calls.filter(([name]) => name !== 'authorizeProjectRoot').length,
@@ -211,4 +227,7 @@ function run() {
   console.log('milestone-handlers.test.js: ok');
 }
 
-run();
+run().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

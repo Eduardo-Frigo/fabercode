@@ -125,6 +125,42 @@ async function run() {
   assert.strictEqual(routerGreetingCalled, true);
   assert.strictEqual(directGreetingCalled, true);
 
+  let directMapChatPayload = null;
+  const mapChatHarness = createHarness({
+    flowFactory: createPersonaOrchestrator,
+    requestPersonaRouteDecision: async () => {
+      throw new Error('Map Chat must not enter the general routing model');
+    },
+    requestDirectPersonaChat: async (payload) => {
+      directMapChatPayload = payload;
+      return {
+        ok: true,
+        response: 'Mapa analisado sem mutações.',
+        meta: { planner: 'direct_persona_chat', reason: 'direct_chat_response' },
+      };
+    },
+  });
+  const mapChatPlan = await mapChatHarness.flow.handleAssistantMessage({
+    projectInfo: { id: 'project-1', rootPath: '/tmp/project' },
+    userMessage: 'Analise o mapa.',
+    isMapChat: true,
+    contextHint: {
+      surface: 'map_chat',
+      access: 'read_only',
+      locale: 'pt-BR',
+    },
+  });
+  assert.strictEqual(mapChatPlan.ok, true);
+  assert.strictEqual(mapChatPlan.action, null);
+  assert.strictEqual(mapChatPlan.meta.noJob, true);
+  assert.ok(directMapChatPayload, 'Map Chat must reach direct persona chat');
+  assert.strictEqual(
+    directMapChatPayload.isMapChat,
+    true,
+    'Map Chat marker must reach the main-owned system prompt builder',
+  );
+  assert.strictEqual(directMapChatPayload.contextHint.surface, 'map_chat');
+
   const executeHarness = createHarness({
     buildPlanWithCortexRuntime: async () => ({
       ok: true,
