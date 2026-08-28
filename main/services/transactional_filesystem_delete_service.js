@@ -61,6 +61,10 @@ const MAX_PROJECT_ROOT_SCAN_LIST_ENTRIES =
   HARD_MAX_DELEGATION_CONSTRAINTS.maxFilesPerDecision
   + HARD_MAX_DELEGATION_CONSTRAINTS.maxDirectoriesPerDecision + 1;
 const SAFE_TRANSACTION_ID = /^[A-Za-z0-9_-]{16,128}$/;
+const PRIVATE_MUTATION_METADATA_PATHS = Object.freeze([
+  '.faber/transactions',
+  '.faber/transaction-heads',
+]);
 const TERMINAL_SUCCESS = new Set(['success', 'completed']);
 const TERMINAL_ROLLBACK = new Set([
   'failed',
@@ -795,6 +799,14 @@ function createTransactionalFilesystemDeleteService(options = {}) {
 
   function projectRootEntryExists(rootReader, relativePath) {
     return inspectProjectRootEntry(rootReader, relativePath).found;
+  }
+
+  function privateMutationMetadataExists(binding, rootReader) {
+    return PRIVATE_MUTATION_METADATA_PATHS.some((relativePath) => (
+      rootReader === null
+        ? lstatExists(fs, path.join(binding.realRootPath, ...relativePath.split('/')))
+        : projectRootEntryExists(rootReader, relativePath)
+    ));
   }
 
   function sameDirectoryInspection(left, right) {
@@ -2118,17 +2130,14 @@ function createTransactionalFilesystemDeleteService(options = {}) {
       return { discovered, retainedUnknown: 1, recoveredOrphanHeads };
     }
     if (probe.state !== ANCHORED_FILESYSTEM_MUTATION_PROBE_STATES.ENFORCED) {
-      // An unavailable backend may safely report an empty root as recovered,
-      // but existing private metadata must be retained fail-closed. There is
-      // deliberately no mutable pathname fallback.
+      // An unavailable backend may safely report no retained delete state when
+      // the two transactional namespaces are absent. Other private Faber data,
+      // such as conversation memory, is unrelated to deletion recovery. Any
+      // exact transactional namespace remains retained fail-closed, and a
+      // pinned root reader avoids mutable pathname inspection when available.
       return {
         discovered,
-        retainedUnknown: rootReader === null
-          ? (lstatExists(
-            fs,
-            path.join(binding.realRootPath, '.faber')
-          ) ? 1 : 0)
-          : (projectRootEntryExists(rootReader, '.faber') ? 1 : 0),
+        retainedUnknown: privateMutationMetadataExists(binding, rootReader) ? 1 : 0,
         recoveredOrphanHeads,
       };
     }

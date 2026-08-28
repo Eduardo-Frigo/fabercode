@@ -44,6 +44,8 @@
 
     let draft = null;
     let workspaceLayoutBuilder = null;
+    let openAiCatalogModels = [];
+    let openAiCatalogRequestId = 0;
 
     function translate(key, fallback = '') {
       return typeof options.t === 'function' ? options.t(key, fallback) : fallback || key;
@@ -342,6 +344,7 @@
       : null;
 
     function closeEditor() {
+      openAiCatalogRequestId += 1;
       if (elements.editor) elements.editor.classList.add('hidden');
       if (elements.editorId) elements.editorId.value = '';
       if (elements.editorKind) elements.editorKind.value = '';
@@ -349,6 +352,9 @@
       if (elements.editorLabel) elements.editorLabel.value = '';
       if (elements.editorModelPreset) elements.editorModelPreset.value = '';
       if (elements.editorModel) elements.editorModel.value = '';
+      if (elements.modelCatalog) elements.modelCatalog.classList.add('hidden');
+      if (elements.modelCatalogRefresh) elements.modelCatalogRefresh.disabled = false;
+      if (elements.modelCatalogStatus) elements.modelCatalogStatus.textContent = '';
       if (elements.editorKey) elements.editorKey.value = '';
       if (elements.editorWebsite) elements.editorWebsite.value = '';
     }
@@ -360,17 +366,94 @@
       elements.editorModelPreset.value = values.includes(current) ? current : '';
     }
 
+    function isOfficialOpenAiRow(row) {
+      return Boolean(row && row.id === 'builtin:openai');
+    }
+
+    function setModelCatalogStatus(key, fallback, replacements = {}) {
+      if (!elements.modelCatalogStatus) return;
+      elements.modelCatalogStatus.textContent = translateMessage(key, fallback, replacements);
+    }
+
+    function setModelCatalogVisibility(row) {
+      if (!elements.modelCatalog) return;
+      const visible = isOfficialOpenAiRow(row);
+      elements.modelCatalog.classList.toggle('hidden', !visible);
+      if (!visible && elements.modelCatalogStatus) {
+        elements.modelCatalogStatus.textContent = '';
+      }
+    }
+
     function renderModelPresetOptions(row) {
       if (!elements.editorModelPreset) return;
       const currentModel = row && row.model ? row.model : '';
       elements.editorModelPreset.innerHTML = '';
-      buildModelPresetOptions(row, currentModel).forEach((entry) => {
+      const catalogModels = isOfficialOpenAiRow(row) ? openAiCatalogModels : [];
+      buildModelPresetOptions(row, currentModel, catalogModels).forEach((entry) => {
         const option = document.createElement('option');
         option.value = entry.value;
         option.textContent = entry.label;
         elements.editorModelPreset.appendChild(option);
       });
       syncModelPresetSelection();
+    }
+
+    async function refreshOpenAiModelCatalog(row) {
+      if (!isOfficialOpenAiRow(row)) return;
+      setModelCatalogVisibility(row);
+      if (!api || typeof api.listOpenAiModels !== 'function') {
+        setModelCatalogStatus(
+          'modelsRefreshUnavailable',
+          'A atualização automática não está disponível nesta versão.'
+        );
+        return;
+      }
+
+      const requestId = ++openAiCatalogRequestId;
+      if (elements.modelCatalogRefresh) elements.modelCatalogRefresh.disabled = true;
+      setModelCatalogStatus('modelsLoading', 'Consultando os modelos disponíveis na OpenAI…');
+      try {
+        const result = await api.listOpenAiModels();
+        if (requestId !== openAiCatalogRequestId) return;
+        if (!result || !result.ok) {
+          const code = String((result && result.code) || '');
+          if (code === 'OPENAI_MODEL_CATALOG_CREDENTIAL_MISSING') {
+            setModelCatalogStatus(
+              'modelsKeyRequired',
+              'Salve uma chave OpenAI e tente atualizar novamente.'
+            );
+          } else {
+            setModelCatalogStatus(
+              'modelsUnavailable',
+              'Catálogo indisponível agora. As sugestões e o campo customizado continuam funcionando.'
+            );
+          }
+          return;
+        }
+
+        openAiCatalogModels = Array.isArray(result.models) ? result.models : [];
+        if (elements.editorId && elements.editorId.value === 'builtin:openai') {
+          renderModelPresetOptions({
+            ...row,
+            model: elements.editorModel ? elements.editorModel.value : row.model,
+          });
+        }
+        setModelCatalogStatus(
+          'modelsLoaded',
+          '{count} modelos disponíveis carregados. Você ainda pode digitar qualquer ID.',
+          { count: openAiCatalogModels.length }
+        );
+      } catch {
+        if (requestId !== openAiCatalogRequestId) return;
+        setModelCatalogStatus(
+          'modelsUnavailable',
+          'Catálogo indisponível agora. As sugestões e o campo customizado continuam funcionando.'
+        );
+      } finally {
+        if (requestId === openAiCatalogRequestId && elements.modelCatalogRefresh) {
+          elements.modelCatalogRefresh.disabled = false;
+        }
+      }
     }
 
     function setHelpLink(provider) {
@@ -397,6 +480,17 @@
       if (elements.editorWebsite) elements.editorWebsite.value = row.website || '';
       if (elements.editorProvider) elements.editorProvider.disabled = row.kind === 'builtin' || row.kind === 'asset';
       renderModelPresetOptions(row);
+      setModelCatalogVisibility(row);
+      if (isOfficialOpenAiRow(row)) {
+        if (row.hasKey) {
+          void refreshOpenAiModelCatalog(row);
+        } else {
+          setModelCatalogStatus(
+            'modelsKeyRequired',
+            'Salve uma chave OpenAI e tente atualizar novamente.'
+          );
+        }
+      }
       setHelpLink(row.providerHint || row.provider);
     }
 
@@ -1126,6 +1220,14 @@
 
       if (elements.editorModel) {
         elements.editorModel.addEventListener('input', syncModelPresetSelection);
+      }
+
+      if (elements.modelCatalogRefresh) {
+        elements.modelCatalogRefresh.addEventListener('click', async () => {
+          const rowId = elements.editorId ? String(elements.editorId.value || '') : '';
+          const row = getDraftApiRows().find((entry) => entry.id === rowId);
+          if (row) await refreshOpenAiModelCatalog(row);
+        });
       }
 
       if (elements.editorProvider) {

@@ -71,11 +71,12 @@
 
   const MODEL_PRESETS = {
     openai: [
-      { value: 'gpt-5-codex', labelKey: 'modelGpt5Codex', fallback: 'GPT-5 Codex - recomendado para código' },
+      { value: 'gpt-5.6-sol', labelKey: 'modelGpt56Sol', fallback: 'GPT-5.6 Sol - capacidade máxima' },
+      { value: 'gpt-5.6-terra', labelKey: 'modelGpt56Terra', fallback: 'GPT-5.6 Terra - inteligência e custo equilibrados' },
+      { value: 'gpt-5.6-luna', labelKey: 'modelGpt56Luna', fallback: 'GPT-5.6 Luna - rápido e econômico' },
+      { value: 'gpt-5.5', labelKey: 'modelGpt55', fallback: 'GPT-5.5 - alternativa anterior' },
       { value: 'gpt-5.4', labelKey: 'modelGpt54', fallback: 'GPT-5.4 - raciocínio avançado' },
       { value: 'gpt-5.4-mini', labelKey: 'modelGpt54Mini', fallback: 'GPT-5.4 Mini - rápido e econômico' },
-      { value: 'gpt-5.2', labelKey: 'modelGpt52', fallback: 'GPT-5.2 - alternativa estável' },
-      { value: 'gpt-4.1-mini', labelKey: 'modelGpt41Mini', fallback: 'GPT-4.1 Mini - opção econômica legada' },
     ],
     gemini: [
       { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
@@ -102,15 +103,33 @@
     return normalizeKnownProvider(row.provider || row.providerHint || row.providerName || '');
   }
 
-  function buildModelPresetOptions(rowOrProvider, currentModel = '') {
+  function buildModelPresetOptions(rowOrProvider, currentModel = '', discoveredModels = []) {
     const provider = inferModelPresetProvider(rowOrProvider);
     const presets = (MODEL_PRESETS[provider] || []).map((item) => ({
       ...item,
       label: item.labelKey ? textFor(item.labelKey, item.fallback) : item.label,
     }));
+    const seen = new Set(presets.map((item) => item.value));
+    const discovered = provider === 'openai' && Array.isArray(discoveredModels)
+      ? discoveredModels.reduce((options, entry) => {
+          const rawId = entry && typeof entry === 'object' ? entry.id : entry;
+          const id = String(rawId || '').trim();
+          if (!/^[A-Za-z0-9._:-]{1,160}$/.test(id) || seen.has(id)) return options;
+          seen.add(id);
+          options.push({
+            value: id,
+            label: id + ' · ' + textFor('modelDiscovered', 'disponível na sua conta'),
+          });
+          return options;
+        }, [])
+      : [];
     const current = String(currentModel || '').trim();
-    const hasCurrentPreset = presets.some((item) => item.value === current);
-    const options = [{ value: '', label: textFor('modelCustom', 'Modelo customizado') }, ...presets];
+    const hasCurrentPreset = seen.has(current);
+    const options = [
+      { value: '', label: textFor('modelCustom', 'Modelo customizado') },
+      ...presets,
+      ...discovered,
+    ];
     if (current && !hasCurrentPreset) options.push({ value: current, label: current });
     return options;
   }

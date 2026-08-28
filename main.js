@@ -66,6 +66,7 @@ const {
   createRemoteProviderClients,
   extractOpenAiResponsesText,
   resolveOpenAiBaseUrl,
+  resolveOpenAiResponsesReasoningEffort,
   shouldUseOpenAiResponsesApi,
 } = require('./cortex/providers/remote_clients');
 const { createRwkvProviderClient } = require('./cortex/providers/rwkv_client');
@@ -241,6 +242,7 @@ const { createFaberCapabilityAdapterService } = require('./main/services/faber_c
 const { createExternalMcpServerRegistryService } = require('./main/services/external_mcp_server_registry_service');
 const { createExternalMcpPresetRegistryService } = require('./main/services/external_mcp_preset_registry_service');
 const { createExternalMcpDiscoveryCacheService } = require('./main/services/external_mcp_discovery_cache_service');
+const { createOpenAiModelCatalogService } = require('./main/services/openai_model_catalog_service');
 const { createLocalDiagnosticsService } = require('./main/services/local_diagnostics_service');
 const { createHostRequirementsService } = require('./main/services/host_requirements_service');
 const { createCortexMemoryManagementService } = require('./main/services/cortex_memory_management_service');
@@ -1077,6 +1079,10 @@ const {
   setSelectedProvider: setSelectedAiProvider,
   writeSettings: writeAiRuntimeSettings,
 } = aiRuntimeSettings;
+
+const openAiModelCatalogService = createOpenAiModelCatalogService({
+  fetchImpl: fetch,
+});
 
 const postgresUserStore = createPostgresUserStore({
   databaseUrl: FABER_DATABASE_URL,
@@ -3349,6 +3355,7 @@ async function requestAgenticModelTurn({
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 90000));
+      const reasoningEffort = resolveOpenAiResponsesReasoningEffort(effectiveModel);
       const body = {
         model: effectiveModel,
         input,
@@ -3357,7 +3364,7 @@ async function requestAgenticModelTurn({
         tool_choice: 'auto',
         store: true,
         max_output_tokens: 4096,
-        reasoning: { effort: /\bcodex\b/i.test(effectiveModel) ? 'low' : 'minimal' },
+        reasoning: reasoningEffort ? { effort: reasoningEffort } : undefined,
         text: { verbosity: /\bcodex\b/i.test(effectiveModel) ? 'medium' : 'low' },
       };
       if (previousResponseId) {
@@ -8420,9 +8427,12 @@ app.whenReady().then(async () => {
   });
   assistantExecutionCoordinatorInstance = assistantExecutionCoordinator;
 
-  const harnessRuntimeConfig = createHarnessRuntimeConfig({ env: process.env });
+  const harnessRolloutEnvironment = Object.freeze({ ...process.env });
+  const harnessRuntimeConfig = createHarnessRuntimeConfig({
+    env: harnessRolloutEnvironment,
+  });
   const defaultOnRolloutRuntimeConfig = createDefaultOnRolloutRuntimeConfig({
-    env: process.env,
+    env: harnessRolloutEnvironment,
   });
   const defaultOnRolloutPolicy = createDefaultOnRolloutPolicy({
     stableReleaseVersions: defaultOnRolloutRuntimeConfig.stableReleaseVersions,
@@ -8638,6 +8648,7 @@ app.whenReady().then(async () => {
     getEffectivePexelsApiKey,
     getEffectiveSambaNovaApiKey,
     getEffectiveSambaNovaModel,
+    listOpenAiModels: (options) => openAiModelCatalogService.list(options),
     maskApiKeyTail,
     normalizeAiProviderName,
     readAiRuntimeSettings,

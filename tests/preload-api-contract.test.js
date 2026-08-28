@@ -39,6 +39,8 @@ const api = exposed.localcodeApi;
 assert.ok(api, 'localcodeApi should be exposed through contextBridge');
 
 const preservedFeatureFunctionNames = [
+  // Dynamic AI model catalog.
+  'listOpenAiModels',
   // Cortex memory.
   'getCortexLearning',
   'learnWithCortex',
@@ -310,6 +312,7 @@ async function assertInvoke(methodName, args, expectedChannel, expectedArgs = ar
   await assertInvoke('publishProjectToGithub', [{ rootPath: '/tmp/app' }], 'project:github:publish');
   await assertInvoke('openProjectLatestVersion', [{ rootPath: '/tmp/app' }], 'project:git:open-latest');
   await assertInvoke('openProjectDeploy', [{ rootPath: '/tmp/app' }], 'project:deploy:open');
+  await assertInvoke('listOpenAiModels', [], 'ai:models:list');
 
   await assertInvoke('listAutomataContracts', [{ projectId: 'project-1' }], 'automata:contracts:list');
   await assertInvoke('getAutomataContractSummary', [{ projectId: 'project-1' }], 'automata:contracts:summary');

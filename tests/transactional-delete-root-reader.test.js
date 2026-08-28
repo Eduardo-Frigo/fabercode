@@ -258,6 +258,63 @@ try {
   fs.rmSync(rootPath, { recursive: true, force: true });
 }
 
+// Conversation memory shares the private `.faber` parent but is not delete
+// recovery metadata. An unavailable mutation backend must remain fail-closed
+// for the exact transactional namespaces without blocking harmless memory.
+{
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'faber-root-reader-memory-'));
+  try {
+    fs.mkdirSync(path.join(projectRoot, '.faber', 'memory'), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, '.faber', 'memory', 'project.jsonl'), '{}\n');
+    const authorityBinding = binding(projectRoot);
+    const readerEvents = [];
+    const forbiddenEvents = [];
+    const rootReader = createRootReader(authorityBinding.realRootPath, readerEvents);
+    const service = createTransactionalFilesystemDeleteService({
+      authorizeLifecycle(candidate) { return { authorized: true, binding: candidate }; },
+      authorizeRoot(candidate) {
+        return {
+          authorized: true,
+          projectId: candidate.projectId,
+          canonicalRootPath: candidate.canonicalRootPath,
+          realRootPath: candidate.realRootPath,
+        };
+      },
+      authorizeEffectFrontier(candidate) { return { authorized: true, binding: candidate }; },
+      getProjectRootReader: () => rootReader,
+      fs: guardedPathnameFs(forbiddenEvents),
+    });
+
+    assert.deepStrictEqual(service.recoverProject({ binding: authorityBinding }), {
+      ok: true,
+      recovered: 0,
+      retainedCommitted: 0,
+      retainedUnknown: 0,
+    });
+    assert(readerEvents.includes('inspect:.faber/transactions'));
+    assert(readerEvents.includes('inspect:.faber/transaction-heads'));
+    assert.deepStrictEqual(forbiddenEvents, []);
+
+    fs.mkdirSync(path.join(projectRoot, '.faber', 'transactions'));
+    assert.deepStrictEqual(service.recoverProject({ binding: authorityBinding }), {
+      ok: false,
+      recovered: 0,
+      retainedCommitted: 0,
+      retainedUnknown: 1,
+    });
+    fs.rmdirSync(path.join(projectRoot, '.faber', 'transactions'));
+    fs.mkdirSync(path.join(projectRoot, '.faber', 'transaction-heads'));
+    assert.deepStrictEqual(service.recoverProject({ binding: authorityBinding }), {
+      ok: false,
+      recovered: 0,
+      retainedCommitted: 0,
+      retainedUnknown: 1,
+    });
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+}
+
 function createReaderBackedService(rootPathInput, getProjectRootReader, forbiddenEvents) {
   const authorityBinding = binding(rootPathInput);
   let transactionSerial = 0;

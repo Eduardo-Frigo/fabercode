@@ -8,7 +8,7 @@
     "shadowModel": "gpt-5.6-luna"
   },
   "codexAppServer": {
-    "pinnedCliVersion": "0.149.0-alpha.4.1",
+    "pinnedCliVersion": "0.150.0-alpha.12.2",
     "isolationProfile": "apps-plugins-and-discovered-mcp-disabled",
     "mcpStartupNotifications": 0,
     "closeConfirmed": true

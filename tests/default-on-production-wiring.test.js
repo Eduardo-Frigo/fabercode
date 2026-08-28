@@ -71,7 +71,7 @@ assertInOrder(
 );
 
 const startupStart = mainSource.indexOf(
-  'const harnessRuntimeConfig = createHarnessRuntimeConfig({ env: process.env });'
+  'const harnessRolloutEnvironment = Object.freeze({ ...process.env });'
 );
 const startupEnd = mainSource.indexOf(
   'const assistantRuntime = createAssistantRuntimeFacade({',
@@ -83,8 +83,11 @@ const startupSource = mainSource.slice(startupStart, startupEnd);
 assertInOrder(
   startupSource,
   [
+    'const harnessRolloutEnvironment = Object.freeze({ ...process.env });',
+    'const harnessRuntimeConfig = createHarnessRuntimeConfig({',
+    'env: harnessRolloutEnvironment,',
     'const defaultOnRolloutRuntimeConfig = createDefaultOnRolloutRuntimeConfig({',
-    'env: process.env,',
+    'env: harnessRolloutEnvironment,',
     'const defaultOnRolloutPolicy = createDefaultOnRolloutPolicy({',
     'stableReleaseVersions: defaultOnRolloutRuntimeConfig.stableReleaseVersions,',
     'const defaultOnRolloutFactsService = createDefaultOnRolloutFactsService({',
@@ -125,6 +128,11 @@ assertInOrder(
     'defaultOnRolloutFactsService.resolve(identity)',
   ],
   'production must build and persist the immutable job rollout decision before V2 routing'
+);
+assert.strictEqual(
+  startupSource.includes('env: process.env,'),
+  false,
+  'production must never pass the Node process.env host object into strict rollout config'
 );
 
 assertInOrder(

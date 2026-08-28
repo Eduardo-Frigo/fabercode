@@ -179,6 +179,21 @@ const agenticModelTurnSource = extractFunctionDeclaration(
   mainSource,
   'requestAgenticModelTurn'
 );
+assert.ok(
+  mainSource.includes('resolveOpenAiResponsesReasoningEffort,'),
+  'production must import the shared Responses reasoning capability resolver'
+);
+assert.ok(
+  agenticModelTurnSource.includes(
+    'resolveOpenAiResponsesReasoningEffort(effectiveModel)'
+  ),
+  'the agentic Responses route must use the same model capability resolver as provider chat'
+);
+assert.strictEqual(
+  agenticModelTurnSource.includes("'minimal'"),
+  false,
+  'the agentic Responses route must not retain a model-obsolete minimal effort literal'
+);
 assertInOrder(
   agenticModelTurnSource,
   [
@@ -673,8 +688,11 @@ assertInOrder(
     'jobSessionService: assistantExecutionIsolationRuntimeServices.jobSessionService,',
     'harnessRouter.execute(action, projectInfo, executionContext)',
     'assistantExecutionCoordinatorInstance = assistantExecutionCoordinator;',
-    'const harnessRuntimeConfig = createHarnessRuntimeConfig({ env: process.env });',
+    'const harnessRolloutEnvironment = Object.freeze({ ...process.env });',
+    'const harnessRuntimeConfig = createHarnessRuntimeConfig({',
+    'env: harnessRolloutEnvironment,',
     'const defaultOnRolloutRuntimeConfig = createDefaultOnRolloutRuntimeConfig({',
+    'env: harnessRolloutEnvironment,',
     'const defaultOnRolloutPolicy = createDefaultOnRolloutPolicy({',
     'const defaultOnRolloutFactsService = createDefaultOnRolloutFactsService({',
     'const defaultOnRolloutSafetyInterlock = createDefaultOnRolloutSafetyInterlock({',

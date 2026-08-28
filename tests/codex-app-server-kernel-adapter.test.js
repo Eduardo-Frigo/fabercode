@@ -207,7 +207,7 @@ function createFakeClient({
       return Promise.resolve(deepFreeze({
         ok: true,
         clientVersion: '0.1.3',
-        codexCliVersion: '0.149.0-alpha.4.1',
+        codexCliVersion: '0.150.0-alpha.12.2',
         initializeResult: {},
       }));
     },
@@ -237,8 +237,8 @@ function createFakeClient({
       return deepFreeze({
         version: 'codex-app-server-stdio-client.v1',
         state: 'ready',
-        pinnedCliVersion: '0.149.0-alpha.4.1',
-        verifiedCliVersion: '0.149.0-alpha.4.1',
+        pinnedCliVersion: '0.150.0-alpha.12.2',
+        verifiedCliVersion: '0.150.0-alpha.12.2',
         running: true,
         pendingRequests: 0,
         inboundNotifications: notifications.length,

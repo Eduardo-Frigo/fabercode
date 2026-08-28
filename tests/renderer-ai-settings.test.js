@@ -108,8 +108,24 @@ const customOpenAiOptions = settings.buildComposerProviderOptionsFromSettings({
 assert.ok(customOpenAiOptions.some((entry) => entry.value === 'custom:openai-staging'));
 
 const openAiModelOptions = settings.buildModelPresetOptions('openai');
-assert.strictEqual(openAiModelOptions[1].value, 'gpt-5-codex');
+assert.strictEqual(openAiModelOptions[1].value, 'gpt-5.6-sol');
+assert.ok(openAiModelOptions.some((entry) => entry.value === 'gpt-5.6-terra'));
 assert.ok(openAiModelOptions.some((entry) => entry.value === 'gpt-5.4-mini'));
+assert.ok(!openAiModelOptions.some((entry) => entry.value === 'gpt-5-codex'));
+
+const discoveredOpenAiModelOptions = settings.buildModelPresetOptions(
+  'openai',
+  'gpt-5.6-sol',
+  [
+    { id: 'gpt-6-future', created: 200 },
+    { id: 'gpt-5.6-sol', created: 100 },
+  ],
+);
+assert.ok(discoveredOpenAiModelOptions.some((entry) => entry.value === 'gpt-6-future'));
+assert.strictEqual(
+  discoveredOpenAiModelOptions.filter((entry) => entry.value === 'gpt-5.6-sol').length,
+  1,
+);
 
 const customCurrentModelOptions = settings.buildModelPresetOptions('openai', 'custom-code-model');
 assert.ok(customCurrentModelOptions.some((entry) => entry.value === 'custom-code-model'));

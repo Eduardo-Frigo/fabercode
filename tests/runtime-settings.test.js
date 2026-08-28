@@ -12,6 +12,7 @@ const {
   sanitizePanelFontScale,
   sanitizeWelcomeQuoteLastAuthor,
 } = require('../cortex/providers/runtime_settings');
+const { createMainRuntimeConfig } = require('../main/runtime/runtime_config');
 
 function createSecretHarness() {
   return {
@@ -26,6 +27,17 @@ function createSecretHarness() {
 function run() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'faber-runtime-settings-'));
   try {
+    const mainRuntimeConfig = createMainRuntimeConfig({
+      cwd: tempRoot,
+      dirname: path.join(__dirname, '..'),
+      env: {},
+      fs,
+      normalizeAiProviderName,
+      path,
+      platform: process.platform,
+    });
+    assert.strictEqual(mainRuntimeConfig.OPENAI_MODEL_BRAIN_ENV, 'gpt-5.6-sol');
+
     const secrets = createSecretHarness();
     const service = createAiRuntimeSettingsService({
       aiProviderEnv: 'mock',
@@ -54,7 +66,9 @@ function run() {
     assert.strictEqual(sanitizePanelFontScale(117), 115);
     assert.strictEqual(sanitizePanelFontScale(180), 120);
     assert.strictEqual(sanitizeWelcomeQuoteLastAuthor(' Sócrates '), 'Sócrates');
-    assert.strictEqual(sanitizeOpenAiModelName(' gpt-5.3-codex '), 'gpt-5-codex');
+    assert.strictEqual(sanitizeOpenAiModelName(' gpt-5.3-codex '), 'gpt-5.3-codex');
+    assert.strictEqual(sanitizeOpenAiModelName(' gpt-5.6-sol '), 'gpt-5.6-sol');
+    assert.strictEqual(sanitizeOpenAiModelName(' gpt-5.6-terra '), 'gpt-5.6-terra');
 
     const initial = service.readSettings();
     assert.strictEqual(initial.selectedProvider, 'mock');
@@ -105,7 +119,12 @@ function run() {
     service.writeSettings({
       openaiModel: 'gpt-5.3-codex',
     });
-    assert.strictEqual(service.getEffectiveOpenAiModel(), 'gpt-5-codex');
+    assert.strictEqual(service.getEffectiveOpenAiModel(), 'gpt-5.3-codex');
+
+    service.writeSettings({
+      openaiModel: 'gpt-5.6-terra',
+    });
+    assert.strictEqual(service.getEffectiveOpenAiModel(), 'gpt-5.6-terra');
 
     const storePath = path.join(tempRoot, 'ai-runtime-settings.json');
     const stored = JSON.parse(fs.readFileSync(storePath, 'utf8'));

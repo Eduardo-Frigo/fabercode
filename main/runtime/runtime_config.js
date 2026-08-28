@@ -23,7 +23,7 @@ function createMainRuntimeConfig({
   const AI_PROVIDER_ENV = normalizeAiProviderName(env.AI_PROVIDER || 'mock');
   const OPENAI_API_BASE_URL = env.OPENAI_API_BASE_URL || 'https://api.openai.com/v1';
   const OPENAI_API_KEY = env.OPENAI_API_KEY || '';
-  const OPENAI_MODEL_BRAIN_ENV = env.OPENAI_MODEL_BRAIN || 'gpt-5-codex';
+  const OPENAI_MODEL_BRAIN_ENV = env.OPENAI_MODEL_BRAIN || 'gpt-5.6-sol';
   const PEXELS_API_KEY = env.PEXELS_API_KEY || env.PEXELS_ACCESS_KEY || '';
   const FABER_PLATFORM_PEXELS_API_KEY = env.FABER_PLATFORM_PEXELS_API_KEY || '';
   const FABER_PLATFORM_MEDIA_ENDPOINT = env.FABER_PLATFORM_MEDIA_ENDPOINT || '';

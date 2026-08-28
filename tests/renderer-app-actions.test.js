@@ -54,6 +54,7 @@ function createHarness({
     learnWithCortex: [],
     sendAssistantMessage: [],
     showPending: [],
+    updateStatus: [],
     startJobPolling: [],
     stopJobPolling: 0,
     hideJobProgress: 0,
@@ -143,7 +144,7 @@ function createHarness({
       startJobPolling: (jobId) => calls.startJobPolling.push(jobId),
       stopJobPolling: () => { calls.stopJobPolling += 1; },
       hideJobProgress: () => { calls.hideJobProgress += 1; },
-      updateStatus: () => {},
+      updateStatus: (message) => calls.updateStatus.push(message),
       watchLatestProjectJob: () => () => {},
     },
     controllers: { composerApprovalModeController },
@@ -256,6 +257,30 @@ async function run() {
   assert.strictEqual(missingJob.calls.executePlan.length, 0);
   assert.strictEqual(missingJob.state.pendingAction, null);
   assert.strictEqual(missingJob.state.pendingActionJobId, null);
+
+  const recoveryBlocked = createHarness({
+    plan: {
+      ok: false,
+      code: 'assistant_recovery_required',
+      message: 'A recuperação segura precisa ser concluída antes de novas ações.',
+    },
+  });
+  await recoveryBlocked.controller.onSend();
+  assert.strictEqual(
+    recoveryBlocked.calls.appendMessage.some((entry) => (
+      entry[0] === 'assistant'
+      && entry[1] === 'A recuperação segura precisa ser concluída antes de novas ações.'
+    )),
+    true,
+  );
+  assert.strictEqual(
+    recoveryBlocked.calls.updateStatus.at(-1),
+    'A recuperação segura precisa ser concluída antes de novas ações.',
+  );
+  assert.strictEqual(
+    recoveryBlocked.calls.updateStatus.includes('Nenhuma alteração foi preparada nesta rodada.'),
+    false,
+  );
 
   missingJob.state.pendingAction = { rootPath: '/workspace/project', jobId: 'forged-job' };
   missingJob.state.pendingActionJobId = null;

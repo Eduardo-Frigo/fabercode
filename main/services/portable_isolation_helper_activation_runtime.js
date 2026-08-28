@@ -25,6 +25,9 @@ const {
   createPortableIsolationHelperClient,
 } = require('./portable_isolation_helper_client');
 const {
+  createPortableIsolationHelperDevelopmentDistribution,
+} = require('./portable_isolation_helper_development_distribution');
+const {
   createPortableIsolationHelperHostLauncher,
 } = require('./portable_isolation_helper_host_launcher');
 const {
@@ -523,10 +526,71 @@ function createPortableIsolationHelperActivationRuntime(options = {}) {
   );
 }
 
+function bindDevelopmentDistributionLifecycle(runtime, distribution) {
+  let disposePromise = null;
+
+  function dispose() {
+    if (disposePromise) return disposePromise;
+    disposePromise = Promise.resolve().then(async () => {
+      let runtimeReceipt;
+      try {
+        runtimeReceipt = await runtime.dispose();
+      } catch (error) {
+        try { distribution.dispose(); } catch { /* preserve runtime failure */ }
+        throw error;
+      }
+      let resourcesRemoved = false;
+      try {
+        const distributionReceipt = distribution.dispose();
+        resourcesRemoved = Boolean(
+          distributionReceipt
+          && distributionReceipt.disposed === true
+          && distributionReceipt.resourcesRemoved === true
+        );
+      } catch {
+        resourcesRemoved = false;
+      }
+      if (resourcesRemoved) return runtimeReceipt;
+      return Object.freeze({
+        version: PORTABLE_ISOLATION_HELPER_ACTIVATION_DISPOSE_RECEIPT_VERSION,
+        disposed: true,
+        zeroOrphanShutdownConfirmed: false,
+      });
+    });
+    return disposePromise;
+  }
+
+  return Object.freeze({
+    version: runtime.version,
+    start: () => runtime.start(),
+    diagnostics: () => runtime.diagnostics(),
+    dispose,
+  });
+}
+
 function createProductionPortableIsolationHelperActivationRuntime(options = {}) {
-  return createPortableIsolationHelperActivationRuntimeFromNormalized(
-    normalizeOptions(options, { production: true })
+  const normalized = normalizeOptions(options, { production: true });
+  if (normalized.packaged) {
+    return createPortableIsolationHelperActivationRuntimeFromNormalized(normalized);
+  }
+  const developmentDistribution =
+    createPortableIsolationHelperDevelopmentDistribution({
+      applicationVersion: normalized.applicationVersion,
+      electronVersion: normalized.electronVersion,
+      platform: normalized.platform,
+      architecture: normalized.architecture,
+      projectRootPath: path.resolve(__dirname, '../..'),
+    });
+  const runtime = createPortableIsolationHelperActivationRuntimeFromNormalized(
+    Object.freeze({
+      ...normalized,
+      resourcesPath: developmentDistribution.resourcesPath,
+      packaged: true,
+      createSignatureVerifier:
+        developmentDistribution.createSignatureVerifier,
+    })
   );
+  return bindDevelopmentDistributionLifecycle(runtime, developmentDistribution);
 }
 
 module.exports = {

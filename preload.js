@@ -119,6 +119,7 @@ contextBridge.exposeInMainWorld('localcodeApi', {
   callExternalMcpTool: (payload) => ipcRenderer.invoke('external-mcp:tools:call', payload),
   getAiStatus: () => ipcRenderer.invoke('ai:status'),
   getAiSettings: () => ipcRenderer.invoke('ai:settings:get'),
+  listOpenAiModels: () => ipcRenderer.invoke('ai:models:list'),
   saveAiSettings: (payload) => ipcRenderer.invoke('ai:settings:save', payload),
   getAiProvider: () => ipcRenderer.invoke('ai:provider:get'),
   setAiProvider: (provider) => ipcRenderer.invoke('ai:provider:set', { provider }),

@@ -34,6 +34,7 @@ function registerAiHandlers(dependencies = {}) {
     getEffectivePexelsApiKey,
     getEffectiveSambaNovaApiKey,
     getEffectiveSambaNovaModel,
+    listOpenAiModels,
     maskApiKeyTail,
     normalizeAiProviderName,
     readAiRuntimeSettings,
@@ -62,6 +63,7 @@ function registerAiHandlers(dependencies = {}) {
     requireDependency('getEffectivePexelsApiKey', getEffectivePexelsApiKey);
     requireDependency('getEffectiveSambaNovaApiKey', getEffectiveSambaNovaApiKey);
     requireDependency('getEffectiveSambaNovaModel', getEffectiveSambaNovaModel);
+    requireDependency('listOpenAiModels', listOpenAiModels);
     requireDependency('maskApiKeyTail', maskApiKeyTail);
     requireDependency('normalizeAiProviderName', normalizeAiProviderName);
     requireDependency('readAiRuntimeSettings', readAiRuntimeSettings);
@@ -145,6 +147,34 @@ function registerAiHandlers(dependencies = {}) {
 
   registerIpcHandler('ai:settings:get', async () => {
     return buildSettingsResponse(readAiRuntimeSettings());
+  });
+
+  registerIpcHandler('ai:models:list', async () => {
+    try {
+      const result = await listOpenAiModels({
+        apiKey: getEffectiveOpenAiApiKey(),
+        baseUrl: OPENAI_API_BASE_URL,
+      });
+      const models = Array.isArray(result && result.models) ? result.models : [];
+      appendAuditEvent('ai.models_discovered', {
+        count: models.length,
+        providerOrigin: String((result && result.providerOrigin) || ''),
+      });
+      return {
+        ok: true,
+        models,
+        providerOrigin: String((result && result.providerOrigin) || ''),
+      };
+    } catch (error) {
+      const code = String((error && error.code) || 'OPENAI_MODEL_CATALOG_REQUEST_FAILED');
+      appendAuditEvent('ai.models_discovery_failed', { code });
+      return {
+        ok: false,
+        code,
+        models: [],
+        message: String((error && error.message) || 'Não foi possível atualizar os modelos da OpenAI.'),
+      };
+    }
   });
 
   registerIpcHandler('ai:settings:save', async (_, payload) => {

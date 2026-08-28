@@ -77,7 +77,7 @@ function createClient({ closeFailure = null } = {}) {
       return Object.freeze({
         version: 'test-client.v1',
         state: 'idle',
-        pinnedCliVersion: '0.149.0-alpha.4.1',
+        pinnedCliVersion: '0.150.0-alpha.12.2',
         verifiedCliVersion: null,
         running: false,
         pendingRequests: 0,

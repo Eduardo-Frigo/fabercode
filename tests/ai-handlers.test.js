@@ -85,6 +85,7 @@ async function run() {
     ],
   };
   const audit = [];
+  const modelCatalogCalls = [];
   const { handlers, registerIpcHandler } = createHandlerMap();
 
   const deps = {
@@ -105,6 +106,16 @@ async function run() {
     getEffectivePexelsApiKey: () => settings.pexelsApiKey || 'env-pexels-9999',
     getEffectiveSambaNovaApiKey: () => settings.sambanovaApiKey || '',
     getEffectiveSambaNovaModel: () => settings.sambanovaModel || 'samba-default',
+    listOpenAiModels: async (options) => {
+      modelCatalogCalls.push(options);
+      return {
+        models: [
+          { id: 'gpt-5.6-sol', created: 30, ownedBy: 'openai', shutdownDate: null },
+          { id: 'gpt-5.6-terra', created: 20, ownedBy: 'openai', shutdownDate: null },
+        ],
+        providerOrigin: 'https://api.openai.com',
+      };
+    },
     maskApiKeyTail,
     normalizeAiProviderName,
     readAiRuntimeSettings: () => ({ ...settings, customApis: sanitizeCustomApiProfiles(settings.customApis) }),
@@ -133,6 +144,7 @@ async function run() {
   registerAiHandlers(deps);
 
   assert.deepStrictEqual(Object.keys(handlers).sort(), [
+    'ai:models:list',
     'ai:provider:get',
     'ai:provider:set',
     'ai:settings:get',
@@ -153,6 +165,22 @@ async function run() {
   assert.deepStrictEqual(initialSettings.disabledBuiltInProviders, []);
   assert.strictEqual(initialSettings.customApis[0].hasKey, true);
   assert.strictEqual(initialSettings.customApis[0].keyMasked, '**************1234');
+
+  const catalog = await handlers['ai:models:list']();
+  assert.strictEqual(catalog.ok, true);
+  assert.deepStrictEqual(catalog.models.map((model) => model.id), [
+    'gpt-5.6-sol',
+    'gpt-5.6-terra',
+  ]);
+  assert.deepStrictEqual(modelCatalogCalls, [{
+    apiKey: 'env-openai-9999',
+    baseUrl: 'https://api.openai.com/v1',
+  }]);
+  assert.ok(audit.some((event) => (
+    event.type === 'ai.models_discovered'
+      && event.payload.count === 2
+      && !Object.prototype.hasOwnProperty.call(event.payload, 'apiKey')
+  )));
 
   const saved = await handlers['ai:settings:save'](null, {
     provider: 'openai',

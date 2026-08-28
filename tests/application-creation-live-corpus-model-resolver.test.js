@@ -3,6 +3,7 @@
 const assert = require('assert');
 
 const {
+  DEFAULT_LIVE_CORPUS_MODEL_CANDIDATES,
   createApplicationCreationLiveCorpusModelResolver,
   selectKnownResponsesModel,
 } = require('../main/services/application_creation_live_corpus_model_resolver');
@@ -31,6 +32,11 @@ async function expectCode(promise, code) {
 }
 
 async function run() {
+  assert.deepStrictEqual(DEFAULT_LIVE_CORPUS_MODEL_CANDIDATES.slice(0, 3), [
+    'gpt-5.6-sol',
+    'gpt-5.6-terra',
+    'gpt-5.6-luna',
+  ]);
   assert.strictEqual(
     selectKnownResponsesModel(
       ['gpt-5-codex', 'gpt-5.4', 'gpt-4.1'],

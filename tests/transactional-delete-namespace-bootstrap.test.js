@@ -229,8 +229,8 @@ withProject((rootPath) => {
   assert.deepStrictEqual(blockedCalls, []);
 });
 
-// Unsupported remains harmless for an empty root and fail-closed when any
-// private metadata already exists; it never mutates by pathname.
+// Unsupported remains harmless without delete metadata, even when unrelated
+// private memory exists, and fail-closed for an exact transactional namespace.
 withProject((rootPath) => {
   const binding = bindingFor(rootPath, 'd');
   const empty = createTransactionalFilesystemDeleteService({
@@ -249,7 +249,14 @@ withProject((rootPath) => {
     retainedCommitted: 0,
     retainedUnknown: 0,
   });
-  fs.mkdirSync(path.join(rootPath, '.faber'));
+  fs.mkdirSync(path.join(rootPath, '.faber', 'memory'), { recursive: true });
+  assert.deepStrictEqual(empty.recoverProject({ binding }), {
+    ok: true,
+    recovered: 0,
+    retainedCommitted: 0,
+    retainedUnknown: 0,
+  });
+  fs.mkdirSync(path.join(rootPath, '.faber', 'transactions'));
   assert.deepStrictEqual(empty.recoverProject({ binding }), {
     ok: false,
     recovered: 0,

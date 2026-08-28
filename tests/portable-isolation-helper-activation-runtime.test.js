@@ -319,6 +319,45 @@ async function assertInactive(config, expectedReason) {
       true
     );
 
+    const developmentState = {
+      forks: [],
+      processes: [],
+      messages: [],
+      kills: 0,
+    };
+    const developmentResourcesHint = tempDirectory();
+    const development = createProductionPortableIsolationHelperActivationRuntime({
+      config: runtimeConfig('enabled', false),
+      resourcesPath: developmentResourcesHint,
+      packaged: false,
+      platform: 'darwin',
+      architecture: 'arm64',
+      applicationVersion: '0.1.3',
+      electronVersion: '42.1.0',
+      forkUtilityProcess(modulePath, args, options) {
+        developmentState.forks.push(Object.freeze({ modulePath, args, options }));
+        const process = new FakeUtilityProcess(developmentState);
+        developmentState.processes.push(process);
+        return process;
+      },
+      channelTimeoutMs: 500,
+    });
+    const developmentSelection = await development.start();
+    assert.strictEqual(developmentSelection.diagnostics.status, 'enforced');
+    assert.strictEqual(developmentSelection.diagnostics.reasonCode, 'ENFORCED');
+    assert.strictEqual(developmentState.forks.length, 1);
+    const developmentResourceRoot = path.dirname(
+      path.dirname(developmentState.forks[0].modulePath)
+    );
+    assert.notStrictEqual(developmentResourceRoot, developmentResourcesHint);
+    assert.strictEqual(fs.existsSync(developmentResourceRoot), true);
+    assert.strictEqual(development.diagnostics().state, 'active');
+    assert.strictEqual(
+      (await development.dispose()).zeroOrphanShutdownConfirmed,
+      true
+    );
+    assert.strictEqual(fs.existsSync(developmentResourceRoot), false);
+
     const active = activationHarness();
     assert.ok(Object.isFrozen(active.runtime));
     assert.deepStrictEqual(Reflect.ownKeys(active.runtime), [

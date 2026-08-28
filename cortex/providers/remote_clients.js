@@ -58,9 +58,14 @@ function summarizeOpenAiResponsesShape(data = {}, maxTokens = null) {
 function resolveOpenAiResponsesReasoningEffort(model = '', requestOptions = {}) {
   const normalizedModel = String(model || '').toLowerCase();
   const isCodexModel = /\bcodex\b/.test(normalizedModel);
+  const modernGptMatch = /^gpt-(\d+)(?:\.(\d+))?(?:[.\-]|$)/.exec(normalizedModel);
+  const isModernGptModel = Boolean(
+    modernGptMatch && Number.parseInt(modernGptMatch[1], 10) >= 5
+  );
   const normalizeEffortForModel = (value) => {
     const effort = String(value || '').trim().toLowerCase();
     if (!effort) return '';
+    if (isModernGptModel && effort === 'minimal') return 'low';
     if (isCodexModel && effort === 'none') {
       return 'low';
     }
@@ -77,8 +82,8 @@ function resolveOpenAiResponsesReasoningEffort(model = '', requestOptions = {}) 
 
   if (isCodexModel) return 'low';
   if (/gpt-5-pro/.test(normalizedModel)) return 'high';
-  if (/gpt-5\.1/.test(normalizedModel)) return 'low';
-  if (/gpt-5|o[134]/.test(normalizedModel)) return 'minimal';
+  if (isModernGptModel) return 'low';
+  if (/o[134]/.test(normalizedModel)) return 'minimal';
   return '';
 }
 
@@ -777,6 +782,7 @@ module.exports = {
     normalizeMessagesForOpenAiResponses,
     normalizeProviderKey,
     resolveOpenAiBaseUrl,
+    resolveOpenAiResponsesReasoningEffort,
     resolveOpenAiTextFormat,
     resolveOpenAiTextVerbosity,
     resolveNumPredict,

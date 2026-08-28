@@ -19,10 +19,7 @@ function sanitizeModelName(rawValue) {
 }
 
 function sanitizeOpenAiModelName(rawValue) {
-  const value = sanitizeModelName(rawValue);
-  const normalized = value.toLowerCase();
-  if (normalized === 'gpt-5.3-codex' || normalized === 'gpt-5-3-codex') return 'gpt-5-codex';
-  return value;
+  return sanitizeModelName(rawValue);
 }
 
 function sanitizeInterfaceLanguage(rawValue) {

@@ -7,7 +7,7 @@ const path = require('path');
 const CODEX_APP_SERVER_SHADOW_PROTOCOL_VERSION = 'codex-app-server-shadow-protocol.v1';
 const CODEX_APP_SERVER_SHADOW_ISOLATION_PROFILE_VERSION =
   'codex-app-server-shadow-isolation-profile.v1';
-const CODEX_APP_SERVER_PINNED_CLI_VERSION = '0.149.0-alpha.4.1';
+const CODEX_APP_SERVER_PINNED_CLI_VERSION = '0.150.0-alpha.12.2';
 const SCHEMA_MANIFEST_VERSION = 'codex-app-server-generated-schema-manifest.v1';
 const SCHEMA_DIRECTORY = path.join(
   __dirname,

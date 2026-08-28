@@ -8,6 +8,7 @@ const {
   normalizeMessagesForOpenAiResponses,
   normalizeProviderKey,
   resolveOpenAiBaseUrl,
+  resolveOpenAiResponsesReasoningEffort,
   resolveOpenAiTextFormat,
   resolveOpenAiTextVerbosity,
   resolveNumPredict,
@@ -99,6 +100,23 @@ function createHarness(overrides = {}) {
 }
 
 async function run() {
+  assert.strictEqual(
+    resolveOpenAiResponsesReasoningEffort('gpt-5.6-terra', {
+      reasoning: { effort: 'minimal' },
+    }),
+    'low'
+  );
+  assert.strictEqual(
+    resolveOpenAiResponsesReasoningEffort('gpt-5.7-sol'),
+    'low',
+    'future GPT-5 minor releases must start from the broadly supported low effort'
+  );
+  assert.strictEqual(
+    resolveOpenAiResponsesReasoningEffort('gpt-6-terra'),
+    'low',
+    'future GPT major releases must not inherit an obsolete minimal default'
+  );
+
   const flushEventLoop = () => new Promise((resolve) => setImmediate(resolve));
 
   assert.strictEqual(normalizeProviderKey('Google Gemini'), 'gemini');
@@ -107,6 +125,8 @@ async function run() {
   assert.strictEqual(normalizeProviderKey('DeepSeek'), null);
   assert.strictEqual(resolveOpenAiBaseUrl('https://api.openai.com/v1/chat/completions'), 'https://api.openai.com/v1');
   assert.strictEqual(shouldUseOpenAiResponsesApi('gpt-5-codex'), true);
+  assert.strictEqual(shouldUseOpenAiResponsesApi('gpt-5.6-sol'), true);
+  assert.strictEqual(shouldUseOpenAiResponsesApi('gpt-5.6-terra'), true);
   assert.strictEqual(shouldUseOpenAiResponsesApi('gpt-5.4-mini'), true);
   assert.strictEqual(shouldUseOpenAiResponsesApi('o3-mini'), true);
   assert.strictEqual(shouldUseOpenAiResponsesApi('gpt-4.1'), false);
@@ -224,6 +244,32 @@ async function run() {
   assert.deepStrictEqual(openaiCodex.calls[0].body.reasoning, { effort: 'low' });
   assert.strictEqual(openaiCodex.calls[0].body.instructions, 'Você edita código.');
   assert.strictEqual(openaiCodex.calls[0].body.input, 'Olá');
+
+  const openaiSol = createHarness();
+  openaiSol.responses.push(createResponse({
+    json: { output_text: ' Sol OK ' },
+  }));
+  const openaiSolText = await openaiSol.clients.callOpenAiChat('gpt-5.6-sol', [
+    { role: 'user', content: 'Implemente com cuidado.' },
+  ]);
+  assert.strictEqual(openaiSolText, 'Sol OK');
+  assert.strictEqual(openaiSol.calls[0].url, 'https://openai.test/v1/responses');
+  assert.strictEqual(openaiSol.calls[0].body.model, 'gpt-5.6-sol');
+  assert.deepStrictEqual(openaiSol.calls[0].body.reasoning, { effort: 'low' });
+
+  const openaiTerra = createHarness();
+  openaiTerra.responses.push(createResponse({
+    json: { output_text: ' Terra OK ' },
+  }));
+  const openaiTerraText = await openaiTerra.clients.callOpenAiChat('gpt-5.6-terra', [
+    { role: 'user', content: 'Implemente com custo equilibrado.' },
+  ], 1000, {
+    reasoning: { effort: 'minimal' },
+  });
+  assert.strictEqual(openaiTerraText, 'Terra OK');
+  assert.strictEqual(openaiTerra.calls[0].url, 'https://openai.test/v1/responses');
+  assert.strictEqual(openaiTerra.calls[0].body.model, 'gpt-5.6-terra');
+  assert.deepStrictEqual(openaiTerra.calls[0].body.reasoning, { effort: 'low' });
 
   const openaiCodexStructured = createHarness();
   openaiCodexStructured.responses.push(createResponse({

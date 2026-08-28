@@ -507,13 +507,22 @@
       renderAttachments();
     
       const suppressInterim = shouldSuppressInterimAssistantPlanMessage(plan);
+      const planFailureMessage = plan && plan.ok === false && typeof plan.message === 'string'
+        ? plan.message.trim()
+        : '';
       if (!suppressInterim && plan && plan.response) {
         appendMessage('assistant', plan.response);
+      } else if (!suppressInterim && planFailureMessage) {
+        appendMessage('assistant', planFailureMessage, { persistToConversation: true });
       }
       if (plan && plan.automataContractSuggestion && automataContractsController) {
         automataContractsController.appendContractPreview(plan.automataContractSuggestion);
       }
-      if (plan && plan.ok && plan.action) {
+      if (plan && plan.ok === false) {
+        updateStatus(
+          planFailureMessage || uiText('aiDisconnected', 'IA desconectada ou indisponível.')
+        );
+      } else if (plan && plan.ok && plan.action) {
         if (plan.action.targetFile) {
           updateStatus(
             uiText('problemRootFound', 'Encontrei a raiz do problema em {file}.', {

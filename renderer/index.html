@@ -1075,8 +1075,13 @@
 
               <label class="ai-settings-field" for="ai-settings-editor-model">
                 <span>Modelo customizado</span>
-                <input id="ai-settings-editor-model" type="text" placeholder="Ex: gpt-5-codex / gemini-2.0-flash" autocomplete="off" />
+                <input id="ai-settings-editor-model" type="text" placeholder="Ex: gpt-5.6-sol / gemini-2.0-flash" autocomplete="off" />
               </label>
+
+              <div id="ai-settings-model-catalog" class="ai-settings-model-catalog hidden">
+                <button id="ai-settings-model-catalog-refresh" type="button" class="btn btn-muted">Atualizar modelos da API</button>
+                <small id="ai-settings-model-catalog-status" aria-live="polite">O campo customizado sempre permanece disponível.</small>
+              </div>
 
               <label class="ai-settings-field" for="ai-settings-editor-key">
                 <span>API Key</span>
