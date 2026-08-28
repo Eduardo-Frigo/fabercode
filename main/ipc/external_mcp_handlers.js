@@ -165,15 +165,43 @@ function registerExternalMcpHandlers(dependencies = {}) {
     if (!session.ok) return session;
     const bridge = createBridge();
     try {
-      const result = await bridge.callTool({
-        serverId: payload.serverId || '',
-        toolName: payload.toolName || '',
-        arguments: payload.arguments || payload.args || {},
+      const serverId = payload.serverId || '';
+      const toolName = payload.toolName || '';
+      const discovery = await bridge.discoverTools({
+        serverId,
         projectSession: session.projectSession,
+        refresh: false,
       });
+      const tools = discovery && discovery.ok && discovery.data
+        && Array.isArray(discovery.data.tools)
+        ? discovery.data.tools
+        : [];
+      const normalizedToolName = String(toolName || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_.:-]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+      const selectedTool = tools.find((tool) => tool && (
+        tool.name === toolName || tool.normalizedName === normalizedToolName
+      ));
+      const result = selectedTool && selectedTool.allowed === true
+        && selectedTool.permission === 'write'
+        ? {
+          ok: false,
+          status: 'blocked',
+          message: 'Escritas MCP externas exigem aprovação nativa fresca e vinculada ao digest.',
+          errors: ['external_mcp_native_approval_required'],
+          artifacts: [],
+        }
+        : await bridge.callTool({
+          serverId,
+          toolName,
+          arguments: payload.arguments || payload.args || {},
+          projectSession: session.projectSession,
+        });
       audit('external_mcp.tool_called', {
-        serverId: payload.serverId || '',
-        toolName: payload.toolName || '',
+        serverId,
+        toolName,
         ok: Boolean(result.ok),
         artifactCount: Array.isArray(result.artifacts) ? result.artifacts.length : 0,
       });

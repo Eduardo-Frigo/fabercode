@@ -244,6 +244,58 @@ async function run() {
   assert.ok(!agenticHarness.calls.phases.some((entry) => entry.phase === 'execute_pending'));
   assert.ok(agenticHarness.calls.phases.some((entry) => entry.phase === 'awaiting_user_confirmation'));
 
+  let unifiedCreatePayload = null;
+  let legacyCreatePlannerCalls = 0;
+  const unifiedCreateHarness = createHarness({
+    flowFactory: createPersonaOrchestrator,
+    resolveProductRoute: async () => ({
+      ok: true,
+      decision: 'execute',
+      response: 'Vou criar a aplicação.',
+      executionMessage: 'criar uma aplicação Next.js com backend',
+      productRoute: {
+        capability: 'create_project',
+        mode: 'cortex_scaffold',
+        executionIntent: 'init_project',
+        projectState: 'empty_project',
+      },
+      meta: {
+        planner: 'product_orchestrator',
+        reason: 'scaffold_create_ready',
+      },
+    }),
+    buildAgenticExecutionPlan: async (payload) => {
+      unifiedCreatePayload = payload;
+      return {
+        ok: true,
+        response: 'Criação preparada pelo loop unificado.',
+        action: { type: 'agentic_tool_loop', rootPath: payload.projectInfo.rootPath },
+        meta: {
+          planner: 'agentic_tool_loop',
+          reason: 'agentic_tool_loop_ready',
+        },
+      };
+    },
+    buildPlanWithCortexRuntime: async () => {
+      legacyCreatePlannerCalls += 1;
+      return {
+        ok: true,
+        response: 'Criação preparada pelo caminho antigo.',
+        action: { type: 'execute_operation_batch', operations: [] },
+        meta: { planner: 'cortex_runtime', reason: 'project_blueprint_ready' },
+      };
+    },
+  });
+  const unifiedCreatePlan = await unifiedCreateHarness.flow.handleAssistantMessage({
+    projectInfo: { id: 'project-1', rootPath: '/tmp/project' },
+    userMessage: 'crie uma aplicação Next.js com backend',
+  });
+  assert.strictEqual(unifiedCreatePlan.action.type, 'agentic_tool_loop');
+  assert.ok(unifiedCreatePayload, 'create/init must reach the unified agentic loop');
+  assert.strictEqual(unifiedCreatePayload.routeDecision.productRoute.capability, 'create_project');
+  assert.strictEqual(unifiedCreatePayload.routeDecision.productRoute.executionIntent, 'init_project');
+  assert.strictEqual(legacyCreatePlannerCalls, 0, 'create/init must not require the legacy blueprint planner');
+
   let retryCreateCalls = 0;
   const retryHarness = createHarness({
     createAssistantJob: () => {

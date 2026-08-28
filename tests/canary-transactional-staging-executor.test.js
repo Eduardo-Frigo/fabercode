@@ -80,9 +80,11 @@ function assertDeepFrozen(value, seen = new Set()) {
 }
 
 function makeFixture({
+  abortAt = null,
   discardRejection = null,
   editorRejection = null,
   editorResultOverride = null,
+  initiallyAborted = false,
   invalidPromotionReceipt = false,
   openOutcomeOverride = null,
   promotionRegistrationFailure = null,
@@ -90,6 +92,14 @@ function makeFixture({
   revertRejection = null,
 } = {}) {
   const events = [];
+  const abortController = new AbortController();
+  if (initiallyAborted) abortController.abort('default_on_rollout_interrupted');
+  function recordEvent(event) {
+    events.push(event);
+    if (abortAt === event && !abortController.signal.aborted) {
+      abortController.abort('default_on_rollout_interrupted');
+    }
+  }
   const binding = createCapabilityDelegationBinding({
     projectId: 'project-transaction-a',
     canonicalRootPath: '/workspace/project-transaction-a',
@@ -102,7 +112,7 @@ function makeFixture({
   const executionContext = {
     jobId: binding.jobId,
     requestedMode: 'delegate_task',
-    signal: Object.freeze({ aborted: false }),
+    signal: abortController.signal,
   };
   Object.defineProperty(executionContext, 'authorityBinding', {
     configurable: false,
@@ -233,7 +243,7 @@ function makeFixture({
     version: 'canary-transactional-workspace.test.v1',
     open(harnessRequest, executionGrant) {
       calls.open.push({ harnessRequest, executionGrant });
-      events.push('open');
+      recordEvent('open');
       return Promise.resolve(openOutcomeOverride || Object.freeze({
         schemaVersion: CANARY_TRANSACTIONAL_STAGING_OPEN_OUTCOME_SCHEMA_VERSION,
         ok: true,
@@ -248,7 +258,7 @@ function makeFixture({
     },
     discard(sessionValue) {
       calls.discard.push(sessionValue);
-      events.push('discard');
+      recordEvent('discard');
       if (discardRejection) return Promise.reject(discardRejection);
       return Promise.resolve(Object.freeze({
         receipt: discardReceipt,
@@ -269,7 +279,7 @@ function makeFixture({
     kernelId: binding.kernelId,
     execute(harnessRequest, executionGrant, stagingSession) {
       calls.edit.push({ harnessRequest, executionGrant, stagingSession });
-      events.push('edit');
+      recordEvent('edit');
       if (editorRejection) return Promise.reject(editorRejection);
       return Promise.resolve(Object.freeze({
         schemaVersion: CANARY_TRANSACTIONAL_STAGING_EDIT_OUTCOME_SCHEMA_VERSION,
@@ -294,7 +304,7 @@ function makeFixture({
     version: 'canary-transactional-promotion-backend.test.v1',
     promote(promotionRequest) {
       calls.promote.push(promotionRequest);
-      events.push('promote');
+      recordEvent('promote');
       if (promotionRejection) return Promise.reject(promotionRejection);
       const receipt = createCanaryPromotionReceipt({
         request: promotionRequest,
@@ -313,7 +323,7 @@ function makeFixture({
     },
     revert(input) {
       calls.revert.push(input);
-      events.push('revert');
+      recordEvent('revert');
       if (revertRejection) return Promise.reject(revertRejection);
       return Promise.resolve(createCanaryPromotionRevertReceipt({
         request: input.request,
@@ -344,13 +354,13 @@ function makeFixture({
     version: CANARY_MANUAL_ROLLBACK_PROMOTION_SINK_VERSION,
     record(value) {
       calls.registerPromotion.push(value);
-      events.push('register');
+      recordEvent('register');
       if (promotionRegistrationFailure) throw promotionRegistrationFailure;
       return undefined;
     },
     cancel(value) {
       calls.cancelPromotion.push(value);
-      events.push('cancel');
+      recordEvent('cancel');
       return undefined;
     },
   });
@@ -363,6 +373,7 @@ function makeFixture({
   });
 
   return {
+    abortController,
     binding,
     calls,
     canaryEditor,
@@ -605,6 +616,76 @@ async function testRollbackRegistrationFailureRevertsBeforeFallback() {
   assertDeepFrozen(signal);
 }
 
+async function testInterruptionBeforePromotionDiscardsWithoutLegacyFallback() {
+  assert.strictEqual(
+    CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.ROLLOUT_INTERRUPTED,
+    'CANARY_TRANSACTIONAL_STAGING_ROLLOUT_INTERRUPTED'
+  );
+  for (const scenario of [
+    { fixture: makeFixture({ initiallyAborted: true }), events: [] },
+    { fixture: makeFixture({ abortAt: 'open' }), events: ['open', 'discard'] },
+    {
+      fixture: makeFixture({ abortAt: 'edit' }),
+      events: ['open', 'edit', 'discard'],
+    },
+  ]) {
+    await assert.rejects(
+      scenario.fixture.executor.execute(
+        scenario.fixture.request,
+        scenario.fixture.grant
+      ),
+      (error) => error.code
+        === CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.ROLLOUT_INTERRUPTED
+    );
+    assert.deepStrictEqual(scenario.fixture.events, scenario.events);
+    assert.strictEqual(scenario.fixture.calls.promote.length, 0);
+    assert.strictEqual(scenario.fixture.calls.revert.length, 0);
+  }
+}
+
+async function testInterruptionAfterPromotionUsesOnlyTheJobInversePatch() {
+  for (const scenario of [
+    {
+      fixture: makeFixture({ abortAt: 'promote' }),
+      events: ['open', 'edit', 'promote', 'discard', 'revert'],
+      promotionCancelled: false,
+    },
+    {
+      fixture: makeFixture({ abortAt: 'register' }),
+      events: [
+        'open', 'edit', 'promote', 'register', 'discard', 'revert', 'cancel',
+      ],
+      promotionCancelled: true,
+    },
+    {
+      fixture: makeFixture({ abortAt: 'discard' }),
+      events: [
+        'open', 'edit', 'promote', 'register', 'discard', 'revert', 'cancel',
+      ],
+      promotionCancelled: true,
+    },
+  ]) {
+    await assert.rejects(
+      scenario.fixture.executor.execute(
+        scenario.fixture.request,
+        scenario.fixture.grant
+      ),
+      (error) => error.code
+        === CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.ROLLOUT_INTERRUPTED
+    );
+    assert.deepStrictEqual(scenario.fixture.events, scenario.events);
+    assert.strictEqual(scenario.fixture.calls.revert.length, 1);
+    assert.strictEqual(
+      scenario.fixture.calls.revert[0].request.promotionId,
+      'promotion-transaction-a'
+    );
+    assert.strictEqual(
+      scenario.fixture.calls.cancelPromotion.length,
+      scenario.promotionCancelled ? 1 : 0
+    );
+  }
+}
+
 async function testInvalidOpenOrEditorResultFailsClosed() {
   const invalidOpenSeed = makeFixture();
   const invalidOpen = makeFixture({
@@ -702,6 +783,8 @@ async function run() {
   await testAmbiguousPromotionNeverFallsBack();
   await testPostPromotionCleanupRevertsBeforeFallback();
   await testRollbackRegistrationFailureRevertsBeforeFallback();
+  await testInterruptionBeforePromotionDiscardsWithoutLegacyFallback();
+  await testInterruptionAfterPromotionUsesOnlyTheJobInversePatch();
   await testInvalidOpenOrEditorResultFailsClosed();
   console.log('canary transactional staging executor tests passed');
 }

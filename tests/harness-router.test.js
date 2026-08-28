@@ -512,7 +512,7 @@ async function run() {
   assert.strictEqual(status.effectiveMode, 'legacy');
   assert.strictEqual(status.activeKernelId, 'legacy');
   assert.strictEqual(status.fallbackActive, true);
-  assert.strictEqual(status.reason, 'phase_5_not_promoted');
+  assert.strictEqual(status.reason, 'phase_9_not_promoted');
   assert.strictEqual(status.kernel.id, 'legacy');
   assert.strictEqual(status.runtimeConfig.configuredPrimaryKernel, 'v2');
   assert.strictEqual(status.runtimeConfig.diagnostics.configuredMode, 'on');

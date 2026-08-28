@@ -61,6 +61,10 @@ function createCapabilityGateway(dependencies = {}) {
     const action = normalizeCapabilityId(request.action);
     const adapter = adaptersByCapability.get(capability);
     const startedAt = now();
+    const signal = typeof AbortSignal === 'function'
+      && request.signal instanceof AbortSignal
+      ? request.signal
+      : null;
     const projectSession = normalizeProjectSession(
       request.projectSession && request.projectSession.rootPath
         ? sessionFactory(request.projectSession)
@@ -146,6 +150,7 @@ function createCapabilityGateway(dependencies = {}) {
         payload: request.payload || {},
         projectSession,
         startedAt,
+        ...(signal ? { signal } : {}),
       });
       return buildCapabilityResult({
         capability,

@@ -35,6 +35,22 @@ function normalizeRecord(value = {}) {
   }, {});
 }
 
+function normalizeAbortSignal(value) {
+  return typeof AbortSignal === 'function' && value instanceof AbortSignal
+    ? value
+    : null;
+}
+
+function externalMcpCancelledResult() {
+  return {
+    ok: false,
+    cancelled: true,
+    status: 'cancelled',
+    message: 'A operação MCP externa foi cancelada.',
+    errors: ['external_mcp_cancelled'],
+  };
+}
+
 function normalizeServerConfig(server = {}) {
   const id = normalizeId(server.id || server.name);
   return {
@@ -225,14 +241,20 @@ function createExternalMcpBridgeService(dependencies = {}) {
     return { ok: true, closed };
   }
 
-  async function initializeServer(server, transport, projectSession = {}) {
+  async function initializeServer(server, transport, projectSession = {}, rawSignal = null) {
+    const signal = normalizeAbortSignal(rawSignal);
+    if (signal && signal.aborted) return externalMcpCancelledResult();
     if (initializedServers.has(server.id)) return { ok: true, skipped: true };
     const initialized = await transport.request('initialize', {
       protocolVersion: normalizeText(server.protocolVersion) || '2025-06-18',
       clientInfo: { name: 'Faber Code', version: EXTERNAL_MCP_BRIDGE_SCHEMA_VERSION },
       capabilities: { tools: {} },
       projectSession: normalizeProjectSession(projectSession),
-    });
+    }, { projectSession: normalizeProjectSession(projectSession), signal });
+    if ((signal && signal.aborted)
+      || initialized && initialized.error && initialized.error.code === -32004) {
+      return externalMcpCancelledResult();
+    }
     if (initialized && initialized.error) {
       return {
         ok: false,
@@ -243,7 +265,15 @@ function createExternalMcpBridgeService(dependencies = {}) {
       };
     }
     if (typeof transport.notify === 'function') {
-      const notified = await transport.notify('notifications/initialized', {});
+      const notified = await transport.notify(
+        'notifications/initialized',
+        {},
+        { projectSession: normalizeProjectSession(projectSession), signal }
+      );
+      if ((signal && signal.aborted)
+        || notified && notified.error && notified.error.code === -32004) {
+        return externalMcpCancelledResult();
+      }
       if (notified && notified.error) {
         return {
           ok: false,
@@ -258,11 +288,24 @@ function createExternalMcpBridgeService(dependencies = {}) {
     return { ok: true, data: { initialize: initialized || {} } };
   }
 
-  async function discoverTools({ serverId, projectSession = {}, refresh = false } = {}) {
+  async function discoverTools({
+    serverId,
+    projectSession = {},
+    refresh = false,
+    signal: rawSignal = null,
+  } = {}) {
+    const signal = normalizeAbortSignal(rawSignal);
+    if (signal && signal.aborted) return externalMcpCancelledResult();
     if (!normalizeId(serverId)) {
       const discoveries = [];
       for (const server of serverMap.values()) {
-        const discovery = await discoverTools({ serverId: server.id, projectSession, refresh });
+        const discovery = await discoverTools({
+          serverId: server.id,
+          projectSession,
+          refresh,
+          signal,
+        });
+        if (signal && signal.aborted) return externalMcpCancelledResult();
         discoveries.push({
           serverId: server.id,
           ok: Boolean(discovery && discovery.ok),
@@ -314,9 +357,17 @@ function createExternalMcpBridgeService(dependencies = {}) {
       };
     }
 
-    const initialized = await initializeServer(server, transport, projectSession);
+    const initialized = await initializeServer(server, transport, projectSession, signal);
     if (!initialized.ok) return initialized;
-    const listed = await transport.request('tools/list', {}, { projectSession: normalizeProjectSession(projectSession) });
+    if (signal && signal.aborted) return externalMcpCancelledResult();
+    const listed = await transport.request('tools/list', {}, {
+      projectSession: normalizeProjectSession(projectSession),
+      signal,
+    });
+    if ((signal && signal.aborted)
+      || listed && listed.error && listed.error.code === -32004) {
+      return externalMcpCancelledResult();
+    }
     if (listed && listed.error) {
       return {
         ok: false,
@@ -343,7 +394,15 @@ function createExternalMcpBridgeService(dependencies = {}) {
     };
   }
 
-  async function callTool({ serverId, toolName, arguments: toolArguments = {}, projectSession = {} } = {}) {
+  async function callTool({
+    serverId,
+    toolName,
+    arguments: toolArguments = {},
+    projectSession = {},
+    signal: rawSignal = null,
+  } = {}) {
+    const signal = normalizeAbortSignal(rawSignal);
+    if (signal && signal.aborted) return externalMcpCancelledResult();
     const resolved = resolveServer(serverId);
     if (!resolved.ok) return resolved;
     const { server } = resolved;
@@ -359,8 +418,9 @@ function createExternalMcpBridgeService(dependencies = {}) {
     if (!transportResult.ok) return transportResult;
     const { transport } = transportResult;
 
-    const discovery = await discoverTools({ serverId: server.id, projectSession });
+    const discovery = await discoverTools({ serverId: server.id, projectSession, signal });
     if (!discovery.ok) return discovery;
+    if (signal && signal.aborted) return externalMcpCancelledResult();
     const normalizedToolName = normalizeId(toolName);
     const tool = discovery.data.tools.find((entry) => entry.name === toolName || entry.normalizedName === normalizedToolName);
     if (!tool) {
@@ -404,10 +464,15 @@ function createExternalMcpBridgeService(dependencies = {}) {
       };
     }
     if (server.injectProjectSessionArgument) externalArguments.projectSession = normalizedSession;
+    if (signal && signal.aborted) return externalMcpCancelledResult();
     const response = await transport.request('tools/call', {
       name: tool.name,
       arguments: externalArguments,
-    }, { projectSession: normalizedSession, tool });
+    }, { projectSession: normalizedSession, tool, signal });
+    if ((signal && signal.aborted)
+      || response && response.error && response.error.code === -32004) {
+      return externalMcpCancelledResult();
+    }
     const summary = summarizeToolResult(response || {});
     const failed = Boolean(response && (response.error || response.isError));
     return {

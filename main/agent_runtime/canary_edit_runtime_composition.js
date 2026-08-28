@@ -501,7 +501,7 @@ function createCanaryEditRuntimeComposition(options = {}) {
       adapterEnabled,
     });
   }
-  if (runtimeConfig.configuredMode !== 'canary') {
+  if (!['canary', 'on'].includes(runtimeConfig.configuredMode)) {
     return unavailableRuntime({
       state: CANARY_EDIT_RUNTIME_COMPOSITION_STATES.DISABLED,
       reason: CANARY_EDIT_RUNTIME_COMPOSITION_REASONS.MODE_NOT_CANARY,

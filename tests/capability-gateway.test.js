@@ -12,8 +12,8 @@ async function run() {
         actions: ['capture'],
         permission: 'write',
         description: 'fake browser',
-        handle: async ({ action, payload, projectSession }) => {
-          calls.push({ action, payload, projectSession });
+        handle: async ({ action, payload, projectSession, signal }) => {
+          calls.push({ action, payload, projectSession, signal });
           return {
             ok: true,
             status: 'succeeded',
@@ -32,6 +32,7 @@ async function run() {
   assert.strictEqual(capabilities[0].capability, 'browser_preview');
   assert.strictEqual(capabilities[0].mcpToolName, 'faber.browser_preview');
 
+  const controller = new AbortController();
   const result = await gateway.executeCapability({
     capability: 'browser_preview',
     action: 'capture',
@@ -41,6 +42,7 @@ async function run() {
       projectName: 'Projeto',
     },
     payload: { viewport: 'desktop' },
+    signal: controller.signal,
   });
 
   assert.strictEqual(result.ok, true);
@@ -49,6 +51,7 @@ async function run() {
   assert.deepStrictEqual(result.evidence.artifacts, ['/tmp/capture.png']);
   assert.strictEqual(calls.length, 1);
   assert.strictEqual(calls[0].projectSession.projectName, 'Projeto');
+  assert.strictEqual(calls[0].signal, controller.signal);
 
   const blockedAction = await gateway.executeCapability({
     capability: 'browser_preview',

@@ -348,7 +348,7 @@ function createCodexAppServerProductionClientActivation(options = {}) {
     'clientFactory'
   );
   const modeEligible = runtimeConfig.killSwitch === false
-    && ['shadow', 'canary'].includes(runtimeConfig.configuredMode);
+    && ['shadow', 'canary', 'on'].includes(runtimeConfig.configuredMode);
   const enabled = modeEligible && adapterConfig.enabled;
   let state = enabled
     ? CODEX_APP_SERVER_PRODUCTION_CLIENT_ACTIVATION_STATES.IDLE

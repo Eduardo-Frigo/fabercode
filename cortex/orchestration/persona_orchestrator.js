@@ -23,14 +23,6 @@ function hasExplicitAutomataContractIntent(userMessage = '') {
   );
 }
 
-function shouldPreferCortexRuntimeForRoute(routeDecision) {
-  const productRoute = routeDecision && routeDecision.productRoute ? routeDecision.productRoute : {};
-  return (
-    productRoute.capability === 'create_project' ||
-    productRoute.executionIntent === 'init_project'
-  );
-}
-
 function stripPlannerExecutionAuthority(plan) {
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return plan;
   let sanitized = plan;
@@ -617,8 +609,7 @@ function createPersonaOrchestrator(dependencies = {}) {
       if (
         routeDecision &&
         routeDecision.decision === 'execute' &&
-        typeof buildAgenticExecutionPlan === 'function' &&
-        !shouldPreferCortexRuntimeForRoute(routeDecision)
+        typeof buildAgenticExecutionPlan === 'function'
       ) {
         plan = await buildAgenticExecutionPlan({
           projectInfo,

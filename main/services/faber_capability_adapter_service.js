@@ -779,7 +779,7 @@ function createFaberCapabilityAdapterService(dependencies = {}) {
         refresh: { type: 'boolean' },
       },
     },
-    async handle({ action, payload, projectSession }) {
+    async handle({ action, payload, projectSession, signal = null }) {
       let result = null;
       if (action === 'servers') {
         const servers = externalMcpCapabilityService.listServers();
@@ -796,6 +796,7 @@ function createFaberCapabilityAdapterService(dependencies = {}) {
           serverId: payload.serverId,
           projectSession,
           refresh: Boolean(payload.refresh),
+          signal,
         });
       } else {
         result = await externalMcpCapabilityService.callTool({
@@ -803,6 +804,7 @@ function createFaberCapabilityAdapterService(dependencies = {}) {
           toolName: payload.toolName,
           arguments: payload.arguments || payload.input || payload.params || {},
           projectSession,
+          signal,
         });
       }
 

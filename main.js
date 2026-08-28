@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
-const { pathToFileURL } = require('url');
+const { fileURLToPath, pathToFileURL } = require('url');
 const dotenv = require('dotenv');
 const { createAutomataExecutor } = require('./cortex/automata/core/executor');
 const { validateOperationBatchPlan, validateRouteDecision } = require('./cortex/contracts/schemas');
@@ -84,12 +84,26 @@ const {
 const { createAssistantExecutionCoordinator } = require('./main/agent_runtime/assistant_execution_coordinator');
 const { createAssistantPlanningAuthorizer } = require('./main/agent_runtime/assistant_planning_authorizer');
 const { createAssistantRuntimeFacade } = require('./main/agent_runtime/assistant_runtime_facade');
+const {
+  createDefaultOnRolloutPolicy,
+} = require('./main/agent_runtime/default_on_rollout_policy');
+const {
+  DEFAULT_ON_ROLLOUT_SAFETY_INTERLOCK_VERSION,
+  classifyDefaultOnCanarySafetyEvent,
+  createDefaultOnRolloutSafetyInterlock,
+} = require('./main/agent_runtime/default_on_rollout_safety_interlock');
 const { createHarnessRuntimeConfig } = require('./main/agent_runtime/harness_runtime_config');
 const { createHarnessRouter } = require('./main/agent_runtime/harness_router');
 const { createLegacyKernelAdapter } = require('./main/agent_runtime/legacy_kernel_adapter');
 const {
   createCapabilityDelegationBinding,
 } = require('./main/capabilities/capability_delegation_contracts');
+const {
+  createCapabilityGrantStore,
+} = require('./main/capabilities/capability_grant_store');
+const {
+  createPendingApprovalStore,
+} = require('./main/capabilities/pending_approval_store');
 const {
   createMapChatSessionService,
   getMapChatReadOnlySystemGuidance,
@@ -163,6 +177,12 @@ const {
 const {
   createCanaryInternalRolloutPolicy,
 } = require('./main/services/canary_internal_rollout_policy');
+const {
+  createDefaultOnCanaryRolloutPolicyAdapter,
+} = require('./main/services/default_on_canary_rollout_policy_adapter');
+const {
+  createDefaultOnRolloutFactsService,
+} = require('./main/services/default_on_rollout_facts_service');
 const {
   createCodexAppServerProductionClientActivation,
 } = require('./main/services/codex_app_server_production_client_activation');
@@ -260,8 +280,28 @@ const {
   createAgenticMcpDiscoveryBrokerFactory,
 } = require('./main/services/agentic_mcp_discovery_broker_factory');
 const {
+  createAgenticMcpToolBrokerFactory,
+} = require('./main/services/agentic_mcp_tool_broker_factory');
+const {
+  createAgenticMcpWriteApprovalService,
+} = require('./main/services/agentic_mcp_write_approval_service');
+const {
   createAgenticProcessBrokerFactory,
 } = require('./main/services/agentic_process_broker_factory');
+const {
+  createAgenticBrowserBrokerFactory,
+} = require('./main/services/agentic_browser_broker_factory');
+const {
+  createAgenticBrowserSessionService,
+} = require('./main/services/agentic_browser_session_service');
+const {
+  buildAgenticChatCompletionToolResultMessages,
+  buildAgenticResponsesConversationInput,
+  buildAgenticResponsesToolResultInput,
+} = require('./main/services/agentic_model_tool_result_service');
+const {
+  createAgenticVisualEgressApprovalService,
+} = require('./main/services/agentic_visual_egress_approval_service');
 const {
   createAgenticDeleteRecoveryService,
 } = require('./main/services/agentic_delete_recovery_service');
@@ -294,6 +334,9 @@ const {
 const {
   createCodexAppServerRuntimeConfig,
 } = require('./main/runtime/codex_app_server_runtime_config');
+const {
+  createDefaultOnRolloutRuntimeConfig,
+} = require('./main/runtime/default_on_rollout_runtime_config');
 const {
   createExecutionIsolationRuntimeConfig,
 } = require('./main/runtime/execution_isolation_runtime_config');
@@ -1234,10 +1277,15 @@ let agenticDeleteActorId = `main-process:${crypto.randomUUID()}`;
 let agenticDeleteReleaseBinding = null;
 let agenticDeleteMutationBackendSelection = null;
 let agenticDeleteRuntimeServiceInstance = null;
+let agenticBrowserBrokerFactoryInstance = null;
+let agenticBrowserSessionServiceInstance = null;
 let agenticDomainReadBrokerFactoryInstance = null;
 let agenticGitReadBrokerFactoryInstance = null;
 let agenticMcpDiscoveryBrokerFactoryInstance = null;
+let agenticMcpToolBrokerFactoryInstance = null;
+let agenticMcpWriteApprovalServiceInstance = null;
 let agenticProcessBrokerFactoryInstance = null;
+let agenticVisualEgressApprovalServiceInstance = null;
 let agenticDeleteStartupRecoveryHealthy = false;
 let assistantExecutionCoordinatorInstance = null;
 let assistantJobAuthorityServiceInstance = null;
@@ -3050,37 +3098,46 @@ async function callPersonaProviderChat(model, messages, timeoutMs = AI_REQUEST_T
 }
 
 function buildAgenticOpenAiInput(conversationMessages = []) {
-  return (Array.isArray(conversationMessages) ? conversationMessages : [])
-    .map((message) => {
-      const role = String(message && message.role ? message.role : 'user').trim().toLowerCase();
-      const text = String(message && message.content ? message.content : '').trim();
-      if (!text) return null;
-      if (role === 'assistant') {
-        return {
-          role: 'assistant',
-          content: [{ type: 'output_text', text }],
-        };
-      }
-      return {
-        role: 'user',
-        content: [{ type: 'input_text', text }],
-      };
-    })
-    .filter(Boolean);
+  return buildAgenticResponsesConversationInput(conversationMessages);
 }
 
-function buildAgenticToolResultInput(toolResults = []) {
-  return (Array.isArray(toolResults) ? toolResults : [])
-    .map((item) => {
-      const callId = String(item && item.callId ? item.callId : '').trim();
-      if (!callId) return null;
-      return {
-        type: 'function_call_output',
-        call_id: callId,
-        output: typeof item.output === 'string' ? item.output : JSON.stringify(item.output || {}),
-      };
-    })
-    .filter(Boolean);
+function resolveAgenticModelProviderDestination(provider = '') {
+  const normalizedProvider = String(provider || '').trim().toLowerCase();
+  let configuredUrl = '';
+  let providerOrigin = '';
+  if (normalizedProvider === 'openai') {
+    configuredUrl = resolveOpenAiBaseUrl(OPENAI_API_BASE_URL);
+    providerOrigin = 'https://api.openai.com';
+  } else if (normalizedProvider === 'gemini') {
+    configuredUrl = String(
+      GEMINI_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta'
+    );
+    providerOrigin = 'https://generativelanguage.googleapis.com';
+  } else {
+    return null;
+  }
+  try {
+    const parsed = new URL(configuredUrl);
+    if (parsed.protocol !== 'https:' || parsed.origin !== providerOrigin) return null;
+  } catch {
+    return null;
+  }
+  return Object.freeze({
+    providerId: normalizedProvider,
+    providerOrigin,
+  });
+}
+
+function buildAgenticVisualTransportOptions(destination, consumeVisualEgress) {
+  if (!destination || typeof destination !== 'object'
+    || typeof destination.providerId !== 'string'
+    || typeof destination.providerOrigin !== 'string'
+    || typeof consumeVisualEgress !== 'function') return null;
+  return Object.freeze({
+    providerId: destination.providerId,
+    providerOrigin: destination.providerOrigin,
+    consumeVisualEgress,
+  });
 }
 
 function parseAgenticToolCalls(responseData = {}) {
@@ -3116,6 +3173,7 @@ async function callChatCompletionsAgentic({
   systemPrompt,
   conversationMessages,
   toolResults,
+  toolResultOptions,
   tools,
   timeoutMs,
 }) {
@@ -3136,13 +3194,10 @@ async function callChatCompletionsAgentic({
     }
     messages = [...cachedEntry.messages];
 
-    for (const result of toolResults) {
-      messages.push({
-        role: 'tool',
-        tool_call_id: result.callId || result.id || '',
-        content: typeof result.output === 'string' ? result.output : JSON.stringify(result.output || {}),
-      });
-    }
+    messages.push(...buildAgenticChatCompletionToolResultMessages(
+      toolResults,
+      toolResultOptions
+    ));
   } else {
     if (systemPrompt && String(systemPrompt).trim()) {
       messages.push({
@@ -3264,8 +3319,14 @@ async function requestAgenticModelTurn({
   toolResults = [],
   tools = [],
   timeoutMs = 90000,
+  consumeVisualEgress = null,
 } = {}) {
   const provider = String(getSelectedAiProvider() || '').trim().toLowerCase();
+  const destination = resolveAgenticModelProviderDestination(provider);
+  const toolResultOptions = buildAgenticVisualTransportOptions(
+    destination,
+    consumeVisualEgress
+  );
 
   if (provider === 'openai') {
     const apiKey = String(getEffectiveOpenAiApiKey() || '').trim();
@@ -3280,7 +3341,7 @@ async function requestAgenticModelTurn({
 
     if (shouldUseOpenAiResponsesApi(effectiveModel)) {
       const input = previousResponseId
-        ? buildAgenticToolResultInput(toolResults)
+        ? buildAgenticResponsesToolResultInput(toolResults, toolResultOptions)
         : buildAgenticOpenAiInput(conversationMessages);
       if (!input.length) {
         throw new Error('OpenAI agentic_empty_input: o loop agentic não recebeu contexto suficiente para continuar.');
@@ -3340,6 +3401,7 @@ async function requestAgenticModelTurn({
         systemPrompt,
         conversationMessages,
         toolResults,
+        toolResultOptions,
         tools,
         timeoutMs,
       });
@@ -3366,6 +3428,7 @@ async function requestAgenticModelTurn({
       systemPrompt,
       conversationMessages,
       toolResults,
+      toolResultOptions,
       tools,
       timeoutMs,
     });
@@ -4837,6 +4900,7 @@ let agenticToolLoopServiceInstance = null;
 let projectVerifiedExecutionServiceInstance = null;
 let toolRegistryInstance = null;
 const activeExecutionControllersByJobId = new Map();
+const activeAgenticExecutionSignalsByJobId = new Map();
 
 const sessionPermissions = {
   terminalAlwaysAllow: false,
@@ -5105,9 +5169,148 @@ function executeAction(action) {
   return getToolRegistry().execute('automata.execute_action', action);
 }
 
+function applyAgenticOptionalBlueprintScaffold(input = {}) {
+  const creationProfile = input && input.creationProfile ? input.creationProfile : null;
+  if (
+    !creationProfile
+    || !creationProfile.scaffold
+    || creationProfile.scaffold.strategy !== 'faber_blueprint'
+    || creationProfile.scaffold.explicitlyRequested !== true
+  ) {
+    return {
+      ok: false,
+      status: 'blocked',
+      message: 'O scaffold do Faber exige opt-in explícito no pedido de criação atual.',
+      modifiedFiles: [],
+    };
+  }
+  const projectInfo = input && input.projectInfo ? input.projectInfo : null;
+  const rootPath = projectInfo && typeof projectInfo.rootPath === 'string'
+    ? projectInfo.rootPath
+    : '';
+  if (!rootPath) {
+    return {
+      ok: false,
+      status: 'blocked',
+      message: 'Projeto autorizado ausente para o scaffold opcional.',
+      modifiedFiles: [],
+    };
+  }
+  const routeDecision = input && input.routeDecision ? input.routeDecision : null;
+  const routedMessage = routeDecision && typeof routeDecision.executionMessage === 'string'
+    ? routeDecision.executionMessage
+    : '';
+  const userMessage = input && typeof input.userMessage === 'string'
+    ? input.userMessage
+    : '';
+  const blueprint = buildProjectBlueprintOperationBatch({
+    projectInfo,
+    userMessage: [routedMessage, userMessage].filter(Boolean).join('\n\n'),
+    attachments: input && Array.isArray(input.attachments) ? input.attachments : [],
+    executionIntent: 'init_project',
+    buildOperationBatchDiffPreview,
+    contextText: userMessage,
+    force: true,
+    workingBrief: routeDecision && routeDecision.workingBrief
+      ? routeDecision.workingBrief
+      : null,
+    buildModeRoute: routeDecision && routeDecision.buildModeRoute
+      ? routeDecision.buildModeRoute
+      : null,
+  });
+  if (!blueprint || blueprint.ok !== true || !blueprint.action
+    || !Array.isArray(blueprint.action.operations)
+    || blueprint.action.operations.length < 1) {
+    return {
+      ok: false,
+      status: 'blocked',
+      message: 'O blueprint opcional não encontrou um scaffold compatível com o briefing e a stack.',
+      modifiedFiles: [],
+    };
+  }
+  return executeOperationBatchAction({
+    rootPath,
+    operations: blueprint.action.operations,
+  });
+}
+
+function inspectAgenticProjectValidation(input = {}) {
+  const projectInfo = readAgenticDeleteDataProperty(input, 'projectInfo');
+  const rootPath = readAgenticDeleteDataProperty(projectInfo, 'rootPath');
+  if (typeof rootPath !== 'string' || !rootPath.trim()) {
+    return {
+      ok: false,
+      staticReady: false,
+      processValidationPending: true,
+      staticChecks: [],
+      pendingCommands: [],
+      warnings: ['Projeto autorizado ausente para a inspeção adaptativa.'],
+    };
+  }
+  const userMessageValue = readAgenticDeleteDataProperty(input, 'userMessage');
+  const userMessage = typeof userMessageValue === 'string' ? userMessageValue : '';
+  const refreshed = scanProject(rootPath);
+  const plan = buildProjectVerificationPlan(refreshed, {
+    acceptanceContext: userMessage,
+    userMessage,
+    requiredNodeScripts: ['build', 'test'],
+    requirePythonTests: true,
+    requirePlaywright: 'if_available',
+  });
+  if (!plan || plan.ok !== true) {
+    return {
+      ok: true,
+      staticReady: false,
+      processValidationPending: true,
+      staticChecks: [{
+        id: 'project_verification_plan',
+        label: 'Plano de validação do projeto',
+        status: 'failed',
+        required: true,
+        detail: plan && plan.message
+          ? String(plan.message)
+          : 'Não foi possível construir o plano adaptativo do projeto.',
+      }],
+      pendingCommands: [],
+      warnings: Array.isArray(plan && plan.warnings) ? plan.warnings.map(String) : [],
+    };
+  }
+  const planSteps = Array.isArray(plan.steps) ? plan.steps : [];
+  const staticChecks = planSteps
+    .filter((step) => step && step.kind === 'static')
+    .map((step) => ({
+      id: String(step.id || ''),
+      label: String(step.label || ''),
+      status: step.expectedStatus === 'passed' ? 'passed' : 'failed',
+      required: step.required === true,
+      detail: String(step.detail || ''),
+    }));
+  const pendingCommands = planSteps
+    .filter((step) => step && (step.kind === 'command' || step.kind === 'manual'))
+    .map((step) => ({
+      id: String(step.id || ''),
+      label: String(step.label || ''),
+      commandText: String(step.commandText || ''),
+      required: step.required === true,
+      blockedBy: Array.isArray(step.blockedBy) ? step.blockedBy.map(String) : [],
+    }));
+  const staticReady = !staticChecks.some(
+    (step) => step.required && step.status === 'failed'
+  );
+  return {
+    ok: true,
+    staticReady,
+    processValidationPending: true,
+    staticChecks,
+    pendingCommands,
+    warnings: Array.isArray(plan.warnings) ? plan.warnings.map(String) : [],
+  };
+}
+
 function getAgenticToolLoopService() {
   if (!agenticToolLoopServiceInstance) {
     agenticToolLoopServiceInstance = createAgenticToolLoopService({
+      applyOptionalBlueprintScaffold: applyAgenticOptionalBlueprintScaffold,
       appendAuditEvent,
       appendJobEvent,
       executeCapability: (input) => getFaberCapabilityAdapterService().executeCapability(input),
@@ -5115,6 +5318,7 @@ function getAgenticToolLoopService() {
       getEffectiveGeminiModel,
       getEffectiveOpenAiModel,
       getSelectedAiProvider,
+      inspectProjectValidation: inspectAgenticProjectValidation,
       requestModelTurn: requestAgenticModelTurn,
       setJobCheckpoint,
       shouldUseModel: shouldUseOpenAiResponsesApi,
@@ -5503,8 +5707,18 @@ function clearAssistantRuntimeAuthority(reason = 'runtime_lifecycle_changed') {
     abortActiveJobExecution(jobId, reason);
   }
   activeExecutionControllersByJobId.clear();
+  activeAgenticExecutionSignalsByJobId.clear();
   assistantRuntimeLifecycleReason = reason;
   try {
+    const visualEgressResult = agenticVisualEgressApprovalServiceInstance
+      ? agenticVisualEgressApprovalServiceInstance.clear()
+      : Object.freeze({ ok: true });
+    const mcpWriteApprovalResult = agenticMcpWriteApprovalServiceInstance
+      ? agenticMcpWriteApprovalServiceInstance.clear()
+      : Object.freeze({ ok: true });
+    const browserSessionResult = agenticBrowserSessionServiceInstance
+      ? agenticBrowserSessionServiceInstance.clear()
+      : Object.freeze({ ok: true });
     const coordinatorResult = assistantExecutionCoordinatorInstance
       ? assistantExecutionCoordinatorInstance.clear()
       : Object.freeze({ ok: true, cleared: 0 });
@@ -5516,6 +5730,9 @@ function clearAssistantRuntimeAuthority(reason = 'runtime_lifecycle_changed') {
     ) ? readAgenticDeleteDataProperty(coordinatorResult, 'cleared') : 0;
     return Object.freeze({
       ok: confirmedAgenticDeleteResult(windowInvalidation)
+        && confirmedAgenticDeleteResult(visualEgressResult)
+        && confirmedAgenticDeleteResult(mcpWriteApprovalResult)
+        && confirmedAgenticDeleteResult(browserSessionResult)
         && confirmedAgenticDeleteResult(coordinatorResult)
         && confirmedAgenticDeleteResult(runtimeResult),
       cleared,
@@ -5693,6 +5910,404 @@ function currentAgenticDeleteBinding(inputBinding) {
     return null;
   }
   return binding;
+}
+
+function getCurrentAgenticBrowserBinding(jobId, rootPath) {
+  if (typeof jobId !== 'string' || !jobId
+    || typeof rootPath !== 'string' || !rootPath) return null;
+  let persisted;
+  try {
+    persisted = getAuthorizedJobById(jobId);
+  } catch {
+    return null;
+  }
+  const job = readAgenticDeleteDataProperty(persisted, 'job');
+  const authorityContext = readAgenticDeleteDataProperty(job, 'authorityContext');
+  if (readAgenticDeleteDataProperty(persisted, 'ok') !== true
+    || readAgenticDeleteDataProperty(job, 'id') !== jobId
+    || readAgenticDeleteDataProperty(authorityContext, 'schemaVersion')
+      !== 'assistant-job-authority.v1'
+    || readAgenticDeleteDataProperty(authorityContext, 'canonicalRootPath') !== rootPath) {
+    return null;
+  }
+  const binding = normalizeAgenticDeleteBinding({
+    projectId: readAgenticDeleteDataProperty(authorityContext, 'projectId'),
+    canonicalRootPath: readAgenticDeleteDataProperty(
+      authorityContext,
+      'canonicalRootPath'
+    ),
+    realRootPath: readAgenticDeleteDataProperty(authorityContext, 'realRootPath'),
+    sessionId: readAgenticDeleteDataProperty(authorityContext, 'sessionId'),
+    jobId,
+    kernelId: readAgenticDeleteDataProperty(authorityContext, 'kernelId'),
+    submissionDigest: readAgenticDeleteDataProperty(
+      authorityContext,
+      'submissionDigest'
+    ),
+  });
+  return binding ? currentAgenticDeleteBinding(binding) : null;
+}
+
+function agenticPathIsStrictlyInside(rootPath, targetPath) {
+  if (typeof rootPath !== 'string' || !rootPath
+    || typeof targetPath !== 'string' || !targetPath) return false;
+  const relative = path.relative(rootPath, targetPath);
+  return Boolean(relative)
+    && relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative);
+}
+
+function getActiveAgenticExecutionSignal(inputBinding) {
+  const binding = currentAgenticDeleteBinding(inputBinding);
+  if (!binding) return null;
+  const active = activeAgenticExecutionSignalsByJobId.get(binding.jobId);
+  const activeBinding = normalizeAgenticDeleteBinding(
+    readAgenticDeleteDataProperty(active, 'binding')
+  );
+  const signal = readAgenticDeleteDataProperty(active, 'signal');
+  if (!signal || signal.aborted
+    || !agenticDeleteBindingsMatch(activeBinding, binding)
+    || (typeof AbortSignal === 'function' && !(signal instanceof AbortSignal))) return null;
+  return currentAgenticDeleteBinding(binding) ? signal : null;
+}
+
+function authorizeAgenticBrowserFileUrl(binding, rawUrl) {
+  let targetPath;
+  try {
+    targetPath = fileURLToPath(new URL(rawUrl));
+  } catch {
+    return false;
+  }
+  if (!path.isAbsolute(targetPath)
+    || !agenticPathIsStrictlyInside(binding.canonicalRootPath, targetPath)) return false;
+  let targetStats;
+  let realTargetPath;
+  try {
+    targetStats = fs.statSync(targetPath);
+    realTargetPath = fs.realpathSync(targetPath);
+  } catch {
+    return false;
+  }
+  if (!targetStats.isFile()
+    || !agenticPathIsStrictlyInside(binding.realRootPath, realTargetPath)) return false;
+  return Boolean(currentAgenticDeleteBinding(binding));
+}
+
+function authorizeAgenticBrowserNavigation(input) {
+  const jobId = readAgenticDeleteDataProperty(input, 'jobId');
+  const rootPath = readAgenticDeleteDataProperty(input, 'rootPath');
+  const operation = readAgenticDeleteDataProperty(input, 'operation');
+  const rawUrl = readAgenticDeleteDataProperty(input, 'url');
+  if (!['open', 'navigate'].includes(operation)
+    || typeof rawUrl !== 'string' || !rawUrl || rawUrl.length > 8192
+    || rawUrl.includes('\0')) return Object.freeze({ allowed: false });
+  const binding = getCurrentAgenticBrowserBinding(jobId, rootPath);
+  const signal = binding ? getActiveAgenticExecutionSignal(binding) : null;
+  if (!binding || !signal) return Object.freeze({ allowed: false });
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return Object.freeze({ allowed: false });
+  }
+  let allowed = false;
+  if (parsed.protocol === 'file:') {
+    allowed = authorizeAgenticBrowserFileUrl(binding, parsed.href);
+  } else if (['http:', 'https:'].includes(parsed.protocol)
+    && !parsed.username && !parsed.password) {
+    // External origins can reach this point only after the main-only Browser
+    // Broker has consumed a matching grant. Localhost is policy-allowed there.
+    allowed = true;
+  }
+  if (!allowed || signal.aborted || !currentAgenticDeleteBinding(binding)) {
+    return Object.freeze({ allowed: false });
+  }
+  const destinationCheck = new URL(parsed.href);
+  return Object.freeze({
+    allowed: destinationCheck.href === parsed.href,
+  });
+}
+
+function authorizeAgenticBrowserRequest(input) {
+  const rawUrl = readAgenticDeleteDataProperty(input, 'url');
+  if (typeof rawUrl !== 'string' || !rawUrl || rawUrl.length > 8192
+    || rawUrl.includes('\0')) return Object.freeze({ allowed: false });
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return Object.freeze({ allowed: false });
+  }
+  if (parsed.protocol !== 'file:') return Object.freeze({ allowed: false });
+  const binding = getCurrentAgenticBrowserBinding(
+    readAgenticDeleteDataProperty(input, 'jobId'),
+    readAgenticDeleteDataProperty(input, 'rootPath')
+  );
+  const signal = binding ? getActiveAgenticExecutionSignal(binding) : null;
+  const allowed = Boolean(
+    binding
+    && signal
+    && authorizeAgenticBrowserFileUrl(binding, parsed.href)
+    && !signal.aborted
+    && currentAgenticDeleteBinding(binding)
+  );
+  return Object.freeze({ allowed });
+}
+
+function getAgenticVisualProviderLabel(providerId) {
+  if (providerId === 'openai') return 'OpenAI';
+  if (providerId === 'gemini') return 'Google Gemini';
+  return '';
+}
+
+function authorizeAgenticVisualEgressRoot(inputBinding) {
+  const binding = currentAgenticDeleteBinding(inputBinding);
+  if (!binding) return Object.freeze({ authorized: false });
+  const rootAuthorization = authorizeAgenticDeleteRoot(binding);
+  if (readAgenticDeleteDataProperty(rootAuthorization, 'authorized') !== true
+    || !currentAgenticDeleteBinding(binding)) {
+    return Object.freeze({ authorized: false });
+  }
+  return Object.freeze({ authorized: true, binding });
+}
+
+function authorizeAgenticVisualEgressFrontier(input) {
+  const binding = currentAgenticDeleteBinding(
+    readAgenticDeleteDataProperty(input, 'binding')
+  );
+  const windowLease = readAgenticDeleteDataProperty(input, 'windowLease');
+  const providerId = readAgenticDeleteDataProperty(input, 'providerId');
+  const providerOrigin = readAgenticDeleteDataProperty(input, 'providerOrigin');
+  const payloadDigest = readAgenticDeleteDataProperty(input, 'payloadDigest');
+  const mimeType = readAgenticDeleteDataProperty(input, 'mimeType');
+  const bytes = readAgenticDeleteDataProperty(input, 'bytes');
+  let destination = null;
+  try {
+    destination = resolveAgenticModelProviderDestination(getSelectedAiProvider());
+  } catch {
+    destination = null;
+  }
+  if (!binding || !windowLease || windowLease !== getAgenticDeleteWindowLease()
+    || !destination
+    || destination.providerId !== providerId
+    || destination.providerOrigin !== providerOrigin
+    || !AGENTIC_DELETE_DIGEST_PATTERN.test(String(payloadDigest || ''))
+    || mimeType !== 'image/png'
+    || !Number.isSafeInteger(bytes) || bytes <= 0 || bytes > 8 * 1024 * 1024
+    || Object.is(bytes, -0)) {
+    return Object.freeze({ authorized: false });
+  }
+  const finalBinding = currentAgenticDeleteBinding(binding);
+  let finalDestination = null;
+  try {
+    finalDestination = resolveAgenticModelProviderDestination(getSelectedAiProvider());
+  } catch {
+    finalDestination = null;
+  }
+  if (!finalBinding || windowLease !== getAgenticDeleteWindowLease()
+    || !finalDestination
+    || finalDestination.providerId !== providerId
+    || finalDestination.providerOrigin !== providerOrigin) {
+    return Object.freeze({ authorized: false });
+  }
+  return Object.freeze({
+    authorized: true,
+    binding: finalBinding,
+    windowLease,
+    providerOrigin,
+    payloadDigest,
+  });
+}
+
+function requestAgenticVisualEgressApproval(inputBinding, input) {
+  const service = agenticVisualEgressApprovalServiceInstance;
+  const binding = currentAgenticDeleteBinding(inputBinding);
+  const jobId = readAgenticDeleteDataProperty(input, 'jobId');
+  const callId = readAgenticDeleteDataProperty(input, 'callId');
+  const payloadDigest = readAgenticDeleteDataProperty(input, 'payloadDigest');
+  const mimeType = readAgenticDeleteDataProperty(input, 'mimeType');
+  const bytes = readAgenticDeleteDataProperty(input, 'bytes');
+  let destination = null;
+  try {
+    destination = resolveAgenticModelProviderDestination(getSelectedAiProvider());
+  } catch {
+    destination = null;
+  }
+  const providerLabel = destination
+    ? getAgenticVisualProviderLabel(destination.providerId)
+    : '';
+  const windowLease = getAgenticDeleteWindowLease();
+  if (!service || !binding || jobId !== binding.jobId
+    || typeof callId !== 'string' || !/^[A-Za-z0-9._:@-]{1,256}$/.test(callId)
+    || !destination || !providerLabel || !windowLease) {
+    return Promise.resolve(Object.freeze({
+      ok: false,
+      approved: false,
+      reason: 'visual_egress_unavailable',
+    }));
+  }
+  return service.requestApproval(Object.freeze({
+    binding,
+    windowLease,
+    providerId: destination.providerId,
+    providerLabel,
+    providerOrigin: destination.providerOrigin,
+    payloadDigest,
+    mimeType,
+    bytes,
+    projectLabel: getAgenticDeleteProjectLabel(binding),
+  }));
+}
+
+function consumeAgenticVisualEgressApproval(inputBinding, input) {
+  const service = agenticVisualEgressApprovalServiceInstance;
+  const binding = currentAgenticDeleteBinding(inputBinding);
+  const callId = readAgenticDeleteDataProperty(input, 'callId');
+  const receipt = readAgenticDeleteDataProperty(input, 'receipt');
+  const providerId = readAgenticDeleteDataProperty(input, 'providerId');
+  const providerOrigin = readAgenticDeleteDataProperty(input, 'providerOrigin');
+  let destination = null;
+  try {
+    destination = resolveAgenticModelProviderDestination(getSelectedAiProvider());
+  } catch {
+    destination = null;
+  }
+  const providerLabel = destination
+    ? getAgenticVisualProviderLabel(destination.providerId)
+    : '';
+  const windowLease = getAgenticDeleteWindowLease();
+  if (!service || !binding
+    || typeof callId !== 'string' || !/^[A-Za-z0-9._:@-]{1,256}$/.test(callId)
+    || !destination || !providerLabel || !windowLease
+    || destination.providerId !== providerId
+    || destination.providerOrigin !== providerOrigin) {
+    return Object.freeze({
+      ok: false,
+      authorized: false,
+      reason: 'visual_egress_unavailable',
+    });
+  }
+  return service.consumeApproval(Object.freeze({
+    binding,
+    windowLease,
+    providerId,
+    providerLabel,
+    providerOrigin,
+    payloadDigest: readAgenticDeleteDataProperty(input, 'payloadDigest'),
+    mimeType: readAgenticDeleteDataProperty(input, 'mimeType'),
+    bytes: readAgenticDeleteDataProperty(input, 'bytes'),
+    projectLabel: getAgenticDeleteProjectLabel(binding),
+    receipt,
+  }));
+}
+
+function authorizeAgenticMcpWriteRoot(inputBinding) {
+  const binding = currentAgenticDeleteBinding(inputBinding);
+  if (!binding) return Object.freeze({ authorized: false });
+  const rootAuthorization = authorizeAgenticDeleteRoot(binding);
+  if (readAgenticDeleteDataProperty(rootAuthorization, 'authorized') !== true
+    || !currentAgenticDeleteBinding(binding)) {
+    return Object.freeze({ authorized: false });
+  }
+  return Object.freeze({ authorized: true, binding });
+}
+
+function authorizeAgenticMcpWriteFrontier(input) {
+  const binding = currentAgenticDeleteBinding(
+    readAgenticDeleteDataProperty(input, 'binding')
+  );
+  const windowLease = readAgenticDeleteDataProperty(input, 'windowLease');
+  const serverId = readAgenticDeleteDataProperty(input, 'serverId');
+  const toolName = readAgenticDeleteDataProperty(input, 'toolName');
+  const invocationDigest = readAgenticDeleteDataProperty(input, 'invocationDigest');
+  if (!binding || !windowLease || windowLease !== getAgenticDeleteWindowLease()
+    || typeof serverId !== 'string'
+    || !/^[a-z0-9][a-z0-9_.:-]{0,255}$/.test(serverId)
+    || typeof toolName !== 'string'
+    || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(toolName)
+    || !AGENTIC_DELETE_DIGEST_PATTERN.test(String(invocationDigest || ''))) {
+    return Object.freeze({ authorized: false });
+  }
+  const finalBinding = currentAgenticDeleteBinding(binding);
+  if (!finalBinding || windowLease !== getAgenticDeleteWindowLease()) {
+    return Object.freeze({ authorized: false });
+  }
+  return Object.freeze({
+    authorized: true,
+    binding: finalBinding,
+    windowLease,
+    serverId,
+    toolName,
+    invocationDigest,
+  });
+}
+
+function requestAgenticMcpWriteApproval(input) {
+  const service = agenticMcpWriteApprovalServiceInstance;
+  const binding = currentAgenticDeleteBinding(
+    readAgenticDeleteDataProperty(input, 'binding')
+  );
+  const windowLease = getAgenticDeleteWindowLease();
+  if (!service || !binding || !windowLease) {
+    return Promise.resolve(Object.freeze({
+      ok: false,
+      approved: false,
+      reason: 'mcp_write_unavailable',
+    }));
+  }
+  return service.requestApproval(Object.freeze({
+    binding,
+    windowLease,
+    serverId: readAgenticDeleteDataProperty(input, 'serverId'),
+    toolName: readAgenticDeleteDataProperty(input, 'toolName'),
+    invocationDigest: readAgenticDeleteDataProperty(input, 'invocationDigest'),
+    idempotencyKey: readAgenticDeleteDataProperty(input, 'idempotencyKey'),
+    riskLevel: readAgenticDeleteDataProperty(input, 'riskLevel'),
+    projectLabel: getAgenticDeleteProjectLabel(binding),
+  }));
+}
+
+function consumeAgenticMcpWriteApproval(input) {
+  const service = agenticMcpWriteApprovalServiceInstance;
+  const binding = currentAgenticDeleteBinding(
+    readAgenticDeleteDataProperty(input, 'binding')
+  );
+  const windowLease = getAgenticDeleteWindowLease();
+  if (!service || !binding || !windowLease) {
+    return Object.freeze({
+      ok: false,
+      authorized: false,
+      reason: 'mcp_write_unavailable',
+    });
+  }
+  return service.consumeApproval(Object.freeze({
+    binding,
+    windowLease,
+    serverId: readAgenticDeleteDataProperty(input, 'serverId'),
+    toolName: readAgenticDeleteDataProperty(input, 'toolName'),
+    invocationDigest: readAgenticDeleteDataProperty(input, 'invocationDigest'),
+    idempotencyKey: readAgenticDeleteDataProperty(input, 'idempotencyKey'),
+    riskLevel: readAgenticDeleteDataProperty(input, 'riskLevel'),
+    projectLabel: getAgenticDeleteProjectLabel(binding),
+    receipt: readAgenticDeleteDataProperty(input, 'receipt'),
+  }));
+}
+
+function callAgenticExternalMcpTool(input) {
+  const projectSession = readAgenticDeleteDataProperty(input, 'projectSession');
+  const signal = readAgenticDeleteDataProperty(input, 'signal');
+  return getFaberCapabilityAdapterService().executeCapability(Object.freeze({
+    capability: 'external_mcp',
+    action: 'call_tool',
+    payload: Object.freeze({
+      serverId: readAgenticDeleteDataProperty(input, 'serverId'),
+      toolName: readAgenticDeleteDataProperty(input, 'toolName'),
+      arguments: readAgenticDeleteDataProperty(input, 'arguments'),
+    }),
+    projectSession,
+    ...(signal ? { signal } : {}),
+  }));
 }
 
 function authorizeAgenticDeleteEffectFrontier(input) {
@@ -5916,6 +6531,8 @@ async function initializeCanaryEditProductionRuntime({
   authoritativeKernel,
   authorityService,
   coordinator,
+  defaultOnCanaryRolloutPolicy = null,
+  defaultOnSafetyInterlock = null,
   runtimeConfig,
   runtimeServices,
 }) {
@@ -5928,11 +6545,47 @@ async function initializeCanaryEditProductionRuntime({
   const isolationReady = Boolean(
     isolationDiagnostics && isolationDiagnostics.state === 'ready'
   );
-  if (runtimeConfig.configuredMode !== 'canary'
+  const runtimeModeEligible = ['canary', 'on'].includes(
+    runtimeConfig.configuredMode
+  );
+  const defaultOnPolicyReady = runtimeConfig.configuredMode !== 'on'
+    || Boolean(defaultOnCanaryRolloutPolicy
+      && Object.isFrozen(defaultOnCanaryRolloutPolicy)
+      && typeof defaultOnCanaryRolloutPolicy.inspect === 'function'
+      && typeof defaultOnCanaryRolloutPolicy.diagnostics === 'function');
+  let defaultOnSafetyDiagnostics = null;
+  try {
+    defaultOnSafetyDiagnostics = defaultOnSafetyInterlock
+      && typeof defaultOnSafetyInterlock.diagnostics === 'function'
+      ? defaultOnSafetyInterlock.diagnostics()
+      : null;
+  } catch { /* an unreadable safety state is never eligible */ }
+  const defaultOnSafetyReady = runtimeConfig.configuredMode !== 'on'
+    || Boolean(defaultOnSafetyInterlock
+      && Object.isFrozen(defaultOnSafetyInterlock)
+      && defaultOnSafetyInterlock.version
+        === DEFAULT_ON_ROLLOUT_SAFETY_INTERLOCK_VERSION
+      && typeof defaultOnSafetyInterlock.begin === 'function'
+      && typeof defaultOnSafetyInterlock.finish === 'function'
+      && typeof defaultOnSafetyInterlock.trip === 'function'
+      && typeof defaultOnSafetyInterlock.diagnostics === 'function'
+      && defaultOnSafetyDiagnostics
+      && Object.isFrozen(defaultOnSafetyDiagnostics)
+      && readAgenticDeleteDataProperty(defaultOnSafetyDiagnostics, 'version')
+        === DEFAULT_ON_ROLLOUT_SAFETY_INTERLOCK_VERSION
+      && readAgenticDeleteDataProperty(defaultOnSafetyDiagnostics, 'state')
+        === 'armed');
+  if (!runtimeModeEligible
+    || !defaultOnPolicyReady
+    || !defaultOnSafetyReady
     || !runtimeServices || !isolationReady) {
-    const reason = runtimeConfig.configuredMode !== 'canary'
-      ? 'canary_mode_inactive'
-      : 'execution_isolation_unavailable';
+    const reason = !runtimeModeEligible
+      ? 'rollout_mode_inactive'
+      : !defaultOnPolicyReady
+        ? 'default_on_rollout_not_ready'
+        : !defaultOnSafetyReady
+          ? 'default_on_safety_interlock_not_ready'
+          : 'execution_isolation_unavailable';
     try {
       appendAuditEvent('assistant.canary_edit_activation', {
         state: 'disabled',
@@ -5946,12 +6599,14 @@ async function initializeCanaryEditProductionRuntime({
   let productionRuntime = null;
   try {
     const adapterConfig = createCodexAppServerRuntimeConfig({ env: process.env });
-    const rolloutPolicy = createCanaryInternalRolloutPolicy({
-      runtimeConfig,
-      authorizeProjectBinding: (projectId, rootPath) => (
-        getProjectAccess().authorizeProjectBinding(projectId, rootPath)
-      ),
-    });
+    const rolloutPolicy = runtimeConfig.configuredMode === 'on'
+      ? defaultOnCanaryRolloutPolicy
+      : createCanaryInternalRolloutPolicy({
+        runtimeConfig,
+        authorizeProjectBinding: (projectId, rootPath) => (
+          getProjectAccess().authorizeProjectBinding(projectId, rootPath)
+        ),
+      });
     const evidenceJournal = createCanaryRolloutEvidenceJournalAdapter({
       storageDir: app.getPath('userData'),
     });
@@ -6031,6 +6686,34 @@ async function initializeCanaryEditProductionRuntime({
       onCanaryFailed: (observation) => {
         const jobId = readAgenticDeleteDataProperty(observation, 'jobId');
         const reason = readAgenticDeleteDataProperty(observation, 'reason');
+        const safetyEvent = runtimeConfig.configuredMode === 'on'
+          ? classifyDefaultOnCanarySafetyEvent(reason)
+          : null;
+        if (safetyEvent && defaultOnSafetyInterlock) {
+          try {
+            const evidenceDigest = `sha256:${crypto.createHash('sha256')
+              .update(JSON.stringify(Object.freeze({
+                version: 'default-on-canary-safety-evidence.v1',
+                event: safetyEvent,
+                jobId,
+                reason,
+              })), 'utf8')
+              .digest('hex')}`;
+            const tripPromise = defaultOnSafetyInterlock.trip(Object.freeze({
+              event: safetyEvent,
+              sourceJobId: jobId,
+              evidenceDigest,
+            }));
+            Reflect.apply(Promise.prototype.then, tripPromise, [() => {}, () => {}]);
+          } catch {
+            try {
+              appendAuditEvent('assistant.default_on_rollout_safety_trip_failed', {
+                event: safetyEvent,
+                jobId,
+              });
+            } catch { /* the terminal failure remains authoritative */ }
+          }
+        }
         const terminalResult = markJobFailed(
           jobId,
           reason,
@@ -6530,12 +7213,18 @@ app.whenReady().then(async () => {
         const gitReadBinding = currentAgenticDeleteBinding(authorityBinding);
         const mcpDiscoveryBrokerFactory = agenticMcpDiscoveryBrokerFactoryInstance;
         const mcpDiscoveryBinding = currentAgenticDeleteBinding(authorityBinding);
+        const mcpToolBrokerFactory = agenticMcpToolBrokerFactoryInstance;
+        const mcpToolBinding = currentAgenticDeleteBinding(authorityBinding);
         const domainReadBrokerFactory = agenticDomainReadBrokerFactoryInstance;
         const domainReadBinding = currentAgenticDeleteBinding(authorityBinding);
+        const browserBrokerFactory = agenticBrowserBrokerFactoryInstance;
+        const browserBinding = currentAgenticDeleteBinding(authorityBinding);
         let processRoute = null;
         let gitReadRoute = null;
         let mcpDiscoveryRoute = null;
+        let mcpToolRoute = null;
         let domainReadRoute = null;
+        let browserRoute = null;
         if (processBrokerFactory && processBinding && sandboxExecutor) {
           try {
             processRoute = processBrokerFactory.createRoute(Object.freeze({
@@ -6574,6 +7263,18 @@ app.whenReady().then(async () => {
             });
           }
         }
+        if (mcpToolBrokerFactory && mcpToolBinding) {
+          try {
+            mcpToolRoute = mcpToolBrokerFactory.createRoute(Object.freeze({
+              binding: mcpToolBinding,
+            }));
+          } catch {
+            appendAuditEvent('assistant.agentic_mcp_tool_route_rejected', {
+              jobId,
+              reason: 'mcp_tool_route_invalid',
+            });
+          }
+        }
         if (domainReadBrokerFactory && domainReadBinding && projectRootReader) {
           try {
             domainReadRoute = domainReadBrokerFactory.createRoute(Object.freeze({
@@ -6584,6 +7285,18 @@ app.whenReady().then(async () => {
             appendAuditEvent('assistant.agentic_domain_read_route_rejected', {
               jobId,
               reason: 'domain_read_route_invalid',
+            });
+          }
+        }
+        if (browserBrokerFactory && browserBinding) {
+          try {
+            browserRoute = browserBrokerFactory.createRoute(Object.freeze({
+              binding: browserBinding,
+            }));
+          } catch {
+            appendAuditEvent('assistant.agentic_browser_route_rejected', {
+              jobId,
+              reason: 'browser_route_invalid',
             });
           }
         }
@@ -6646,6 +7359,19 @@ app.whenReady().then(async () => {
             writable: false,
           });
         }
+        if (mcpToolRoute) {
+          Object.defineProperty(agenticExecutionOptions, 'callMcpTool', {
+            configurable: false,
+            enumerable: false,
+            value: (mcpInput) => mcpToolRoute.call(Object.freeze({
+              serverId: readAgenticDeleteDataProperty(mcpInput, 'serverId'),
+              toolName: readAgenticDeleteDataProperty(mcpInput, 'toolName'),
+              arguments: readAgenticDeleteDataProperty(mcpInput, 'arguments'),
+              idempotencyKey: readAgenticDeleteDataProperty(mcpInput, 'idempotencyKey'),
+            })),
+            writable: false,
+          });
+        }
         if (processRoute) {
           Object.defineProperty(agenticExecutionOptions, 'executeProcess', {
             configurable: false,
@@ -6687,11 +7413,135 @@ app.whenReady().then(async () => {
             writable: false,
           });
         }
-        const agenticResult = await getAgenticToolLoopService().executeAction(
-          initialAction,
-          projectInfo,
-          Object.freeze(agenticExecutionOptions)
-        );
+        if (browserRoute) {
+          Object.defineProperty(agenticExecutionOptions, 'openBrowser', {
+            configurable: false,
+            enumerable: false,
+            value: (browserInput) => browserRoute.open(Object.freeze({
+              url: readAgenticDeleteDataProperty(browserInput, 'url'),
+              viewport: readAgenticDeleteDataProperty(browserInput, 'viewport'),
+            })),
+            writable: false,
+          });
+          Object.defineProperty(agenticExecutionOptions, 'navigateBrowser', {
+            configurable: false,
+            enumerable: false,
+            value: (browserInput) => browserRoute.navigate(Object.freeze({
+              sessionId: readAgenticDeleteDataProperty(browserInput, 'sessionId'),
+              url: readAgenticDeleteDataProperty(browserInput, 'url'),
+            })),
+            writable: false,
+          });
+          Object.defineProperty(agenticExecutionOptions, 'interactBrowser', {
+            configurable: false,
+            enumerable: false,
+            value: (browserInput) => browserRoute.interact(Object.freeze({
+              sessionId: readAgenticDeleteDataProperty(browserInput, 'sessionId'),
+              action: readAgenticDeleteDataProperty(browserInput, 'action'),
+              selector: readAgenticDeleteDataProperty(browserInput, 'selector'),
+              ...(readAgenticDeleteDataProperty(browserInput, 'action') === 'fill' ? {
+                value: readAgenticDeleteDataProperty(browserInput, 'value'),
+              } : {}),
+              idempotencyKey: readAgenticDeleteDataProperty(
+                browserInput,
+                'idempotencyKey'
+              ),
+            })),
+            writable: false,
+          });
+          Object.defineProperty(agenticExecutionOptions, 'captureBrowser', {
+            configurable: false,
+            enumerable: false,
+            value: (browserInput) => browserRoute.capture(Object.freeze({
+              sessionId: readAgenticDeleteDataProperty(browserInput, 'sessionId'),
+            })),
+            writable: false,
+          });
+          Object.defineProperty(agenticExecutionOptions, 'inspectBrowser', {
+            configurable: false,
+            enumerable: false,
+            value: (browserInput) => browserRoute.inspect(Object.freeze({
+              sessionId: readAgenticDeleteDataProperty(browserInput, 'sessionId'),
+            })),
+            writable: false,
+          });
+          Object.defineProperty(agenticExecutionOptions, 'closeBrowser', {
+            configurable: false,
+            enumerable: false,
+            value: (browserInput) => browserRoute.close(Object.freeze({
+              sessionId: readAgenticDeleteDataProperty(browserInput, 'sessionId'),
+            })),
+            writable: false,
+          });
+          Object.defineProperty(agenticExecutionOptions, 'authorizeVisualEgress', {
+            configurable: false,
+            enumerable: false,
+            value: (visualInput) => requestAgenticVisualEgressApproval(
+              browserBinding,
+              visualInput
+            ),
+            writable: false,
+          });
+          Object.defineProperty(agenticExecutionOptions, 'consumeVisualEgress', {
+            configurable: false,
+            enumerable: false,
+            value: (visualInput) => consumeAgenticVisualEgressApproval(
+              browserBinding,
+              visualInput
+            ),
+            writable: false,
+          });
+        }
+        const browserExecutionSignalBinding = mcpToolBinding || browserBinding;
+        const browserExecutionSignalRecord = browserExecutionSignalBinding
+          && jobId
+          && executionSignal
+          && !executionSignal.aborted
+          && (typeof AbortSignal !== 'function' || executionSignal instanceof AbortSignal)
+          ? Object.freeze({ binding: browserExecutionSignalBinding, signal: executionSignal })
+          : null;
+        if (browserExecutionSignalRecord) {
+          activeAgenticExecutionSignalsByJobId.set(jobId, browserExecutionSignalRecord);
+        }
+        let agenticResult;
+        try {
+          agenticResult = await getAgenticToolLoopService().executeAction(
+            initialAction,
+            projectInfo,
+            Object.freeze(agenticExecutionOptions)
+          );
+        } finally {
+          try {
+            if (mcpToolBinding && agenticMcpWriteApprovalServiceInstance) {
+              agenticMcpWriteApprovalServiceInstance.cancelJob(Object.freeze({
+                binding: mcpToolBinding,
+              }));
+            }
+          } catch {
+            // A terminal job cannot retain unused MCP write approval receipts.
+          }
+          try {
+            if (browserBinding && agenticVisualEgressApprovalServiceInstance) {
+              agenticVisualEgressApprovalServiceInstance.cancelJob(Object.freeze({
+                binding: browserBinding,
+              }));
+            }
+          } catch {
+            // A terminal job cannot retain visual approval authority.
+          }
+          try {
+            if (jobId && agenticBrowserSessionServiceInstance) {
+              agenticBrowserSessionServiceInstance.closeJob(Object.freeze({ jobId }));
+            }
+          } catch {
+            // Hidden preview windows are best-effort closed again by runtime clear.
+          }
+          if (browserExecutionSignalRecord
+            && activeAgenticExecutionSignalsByJobId.get(jobId)
+              === browserExecutionSignalRecord) {
+            activeAgenticExecutionSignalsByJobId.delete(jobId);
+          }
+        }
         const refreshed = scanProject(rootPath);
         const agenticModifiedFiles = Array.isArray(agenticResult && agenticResult.modifiedFiles)
           ? agenticResult.modifiedFiles
@@ -7421,6 +8271,45 @@ app.whenReady().then(async () => {
     })
     : null;
   agenticDeleteRuntimeServiceInstance = agenticDeleteRuntimeService;
+  const agenticVisualEgressApprovalService = createAgenticVisualEgressApprovalService({
+    showNativeDialog: showAgenticDeleteNativeDialog,
+    authorizeLifecycle: authorizeAgenticDeleteLifecycle,
+    authorizeRoot: authorizeAgenticVisualEgressRoot,
+    authorizeEgressFrontier: authorizeAgenticVisualEgressFrontier,
+    getWindowLease: getAgenticDeleteWindowLease,
+  });
+  agenticVisualEgressApprovalServiceInstance = agenticVisualEgressApprovalService;
+  const agenticBrowserSessionService = createAgenticBrowserSessionService({
+    BrowserWindow,
+    authorizeNavigation: authorizeAgenticBrowserNavigation,
+    authorizeRequest: authorizeAgenticBrowserRequest,
+  });
+  agenticBrowserSessionServiceInstance = agenticBrowserSessionService;
+  const agenticBrowserGrantStore = createCapabilityGrantStore({
+    authorizeRoot: authorizeAgenticDeleteRoot,
+    platform: process.platform,
+  });
+  const agenticBrowserPendingApprovalStore = createPendingApprovalStore({
+    authorizeRoot: authorizeAgenticDeleteRoot,
+    platform: process.platform,
+  });
+  const agenticBrowserApprovalReviewer = Object.freeze({
+    verifyDecision() {
+      return Object.freeze({ verified: false });
+    },
+  });
+  const agenticBrowserBrokerFactory = createAgenticBrowserBrokerFactory({
+    authorizeLifecycle: authorizeAgenticDeleteLifecycle,
+    authorizeRoot: authorizeAgenticDeleteRoot,
+    authorizeEffectFrontier: authorizeAgenticDeleteEffectFrontier,
+    browserSessionService: agenticBrowserSessionService,
+    grantStore: agenticBrowserGrantStore,
+    pendingApprovalStore: agenticBrowserPendingApprovalStore,
+    approvalReviewer: agenticBrowserApprovalReviewer,
+    getSignal: getActiveAgenticExecutionSignal,
+    audit: (event) => appendAuditEvent('assistant.agentic_browser_capability', event),
+  });
+  agenticBrowserBrokerFactoryInstance = agenticBrowserBrokerFactory;
   const assistantPlanningAuthorizer = createAssistantPlanningAuthorizer({
     authorizeProjectBinding: (projectId, rootPath) => (
       getProjectAccess().authorizeProjectBinding(projectId, rootPath)
@@ -7466,6 +8355,27 @@ app.whenReady().then(async () => {
     audit: (event) => appendAuditEvent('assistant.agentic_mcp_discovery_capability', event),
   });
   agenticMcpDiscoveryBrokerFactoryInstance = agenticMcpDiscoveryBrokerFactory;
+  const agenticMcpWriteApprovalService = createAgenticMcpWriteApprovalService({
+    showNativeDialog: showAgenticDeleteNativeDialog,
+    authorizeLifecycle: authorizeAgenticDeleteLifecycle,
+    authorizeRoot: authorizeAgenticMcpWriteRoot,
+    authorizeWriteFrontier: authorizeAgenticMcpWriteFrontier,
+    getWindowLease: getAgenticDeleteWindowLease,
+    getSignal: getActiveAgenticExecutionSignal,
+  });
+  agenticMcpWriteApprovalServiceInstance = agenticMcpWriteApprovalService;
+  const agenticMcpToolBrokerFactory = createAgenticMcpToolBrokerFactory({
+    authorizeLifecycle: authorizeAgenticDeleteLifecycle,
+    authorizeRoot: authorizeAgenticDeleteRoot,
+    authorizeEffectFrontier: authorizeAgenticDeleteEffectFrontier,
+    readDiscoveryCache: () => externalMcpDiscoveryCacheService.listDiscoveries(),
+    callExternalTool: callAgenticExternalMcpTool,
+    requestWriteApproval: requestAgenticMcpWriteApproval,
+    consumeWriteApproval: consumeAgenticMcpWriteApproval,
+    getSignal: getActiveAgenticExecutionSignal,
+    audit: (event) => appendAuditEvent('assistant.agentic_mcp_tool_capability', event),
+  });
+  agenticMcpToolBrokerFactoryInstance = agenticMcpToolBrokerFactory;
   const agenticDomainReadBrokerFactory = createAgenticDomainReadBrokerFactory({
     authorizeLifecycle: authorizeAgenticDeleteLifecycle,
     authorizeRoot: authorizeAgenticDeleteRoot,
@@ -7511,10 +8421,64 @@ app.whenReady().then(async () => {
   assistantExecutionCoordinatorInstance = assistantExecutionCoordinator;
 
   const harnessRuntimeConfig = createHarnessRuntimeConfig({ env: process.env });
+  const defaultOnRolloutRuntimeConfig = createDefaultOnRolloutRuntimeConfig({
+    env: process.env,
+  });
+  const defaultOnRolloutPolicy = createDefaultOnRolloutPolicy({
+    stableReleaseVersions: defaultOnRolloutRuntimeConfig.stableReleaseVersions,
+  });
+  const defaultOnRolloutFactsService = createDefaultOnRolloutFactsService({
+    runtimeConfig: defaultOnRolloutRuntimeConfig,
+    authorizeProjectBinding: (projectId, rootPath) => (
+      getProjectAccess().authorizeProjectBinding(projectId, rootPath)
+    ),
+  });
+  const defaultOnRolloutSafetyInterlock = createDefaultOnRolloutSafetyInterlock({
+    cancelJob(input) {
+      const jobId = readAgenticDeleteDataProperty(input, 'jobId');
+      const receipt = assistantExecutionCoordinator.revokeJob(
+        Object.freeze({ jobId })
+      );
+      abortActiveJobExecution(jobId, 'default_on_rollout_safety_trip');
+      return receipt;
+    },
+    closeBrowserJob(input) {
+      return agenticBrowserSessionServiceInstance
+        ? agenticBrowserSessionServiceInstance.closeJob(input)
+        : Object.freeze({ ok: true, closed: 0 });
+    },
+    closeRuntime() {
+      const runtime = canaryEditProductionRuntimeInstance;
+      if (!runtime) {
+        return Promise.resolve(Object.freeze({
+          closed: true,
+          drained: true,
+          clientClosed: true,
+        }));
+      }
+      canaryEditProductionRuntimeInstance = null;
+      return runtime.close();
+    },
+    audit: appendAuditEvent,
+  });
+  const defaultOnRolloutDiagnostics = defaultOnRolloutPolicy.diagnostics();
+  const defaultOnCanaryRolloutPolicy = harnessRuntimeConfig.configuredMode === 'on'
+    && defaultOnRolloutRuntimeConfig.valid
+    && defaultOnRolloutDiagnostics.stabilityGateSatisfied
+    ? createDefaultOnCanaryRolloutPolicyAdapter({
+      runtimeConfig: harnessRuntimeConfig,
+      rolloutPolicy: defaultOnRolloutPolicy,
+      authorizeProjectBinding: (projectId, rootPath) => (
+        getProjectAccess().authorizeProjectBinding(projectId, rootPath)
+      ),
+    })
+    : null;
   const canaryRuntimeSelection = await initializeCanaryEditProductionRuntime({
     authoritativeKernel: legacyHarnessKernel,
     authorityService: assistantJobAuthorityService,
     coordinator: assistantExecutionCoordinator,
+    defaultOnCanaryRolloutPolicy,
+    defaultOnSafetyInterlock: defaultOnRolloutSafetyInterlock,
     runtimeConfig: harnessRuntimeConfig,
     runtimeServices: assistantExecutionIsolationRuntimeServices,
   });
@@ -7551,7 +8515,15 @@ app.whenReady().then(async () => {
   harnessRouter = createHarnessRouter({
     canaryEditRunner: canaryRuntimeSelection.canaryEditRunner,
     contextPackInjector: contextPackHarnessProductionService.contextPackInjector,
+    defaultOnRolloutPolicy,
+    defaultOnSafetyInterlock: defaultOnRolloutSafetyInterlock,
     legacyKernel: legacyHarnessKernel,
+    persistDefaultOnRolloutSnapshot: (jobId, snapshot) => (
+      setJobCheckpoint(jobId, 'harness_rollout', snapshot)
+    ),
+    resolveDefaultOnRolloutFacts: (identity) => (
+      defaultOnRolloutFactsService.resolve(identity)
+    ),
     runtimeConfig: harnessRuntimeConfig,
   });
 

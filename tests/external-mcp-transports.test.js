@@ -40,6 +40,22 @@ async function testStdioTransport() {
     assert.strictEqual(fs.existsSync(artifactPath), true);
     assert.strictEqual(capture.structuredContent.domMetrics.length, 3);
     assert.strictEqual(transport.status().running, true);
+
+    const canceledArtifactPath = path.join(tempRoot, 'cancelled.png');
+    const controller = new AbortController();
+    const pending = transport.request('tools/call', {
+      name: 'visual.capture',
+      arguments: {
+        artifactPath: canceledArtifactPath,
+        delayMs: 300,
+        projectSession: { rootPath: tempRoot, projectId: 'stdio-test' },
+      },
+    }, { signal: controller.signal });
+    controller.abort();
+    const canceled = await pending;
+    assert.strictEqual(canceled.error.code, -32004);
+    assert.strictEqual(fs.existsSync(canceledArtifactPath), false);
+    assert.strictEqual(transport.status().running, false);
   } finally {
     transport.close();
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -101,6 +117,22 @@ async function testHttpTransportJsonAndSse() {
   const invalid = await invalidTransport.request('tools/list', {});
   assert.strictEqual(Boolean(invalid.error), true);
   assert.match(invalid.error.message, /http ou https/);
+
+  const controller = new AbortController();
+  const cancelTransport = createExternalMcpHttpTransport({
+    endpoint: 'https://mcp.example.test/cancel',
+    fetchImpl: async (_, options) => new Promise((resolve, reject) => {
+      options.signal.addEventListener('abort', () => {
+        const error = new Error('external cancellation');
+        error.name = 'AbortError';
+        reject(error);
+      }, { once: true });
+    }),
+  });
+  const pending = cancelTransport.request('tools/call', {}, { signal: controller.signal });
+  controller.abort();
+  const canceled = await pending;
+  assert.strictEqual(canceled.error.code, -32004);
 }
 
 async function run() {

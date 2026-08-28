@@ -23,6 +23,21 @@ function normalizeEnv(value = {}) {
   }, {});
 }
 
+function normalizeAbortSignal(value) {
+  return typeof AbortSignal === 'function' && value instanceof AbortSignal
+    ? value
+    : null;
+}
+
+function cancelledTransportResult() {
+  return {
+    error: {
+      code: -32004,
+      message: 'Requisição stdio MCP cancelada.',
+    },
+  };
+}
+
 function createExternalMcpStdioTransport(dependencies = {}) {
   const {
     command,
@@ -45,17 +60,34 @@ function createExternalMcpStdioTransport(dependencies = {}) {
   let nextId = 1;
   const pending = new Map();
 
-  function rejectPending(error) {
-    for (const [, entry] of pending.entries()) {
-      clearTimeout(entry.timer);
-      entry.resolve({
+  function settlePending(id, result) {
+    const entry = pending.get(id);
+    if (!entry) return false;
+    pending.delete(id);
+    clearTimeout(entry.timer);
+    if (entry.signal && entry.onAbort) {
+      entry.signal.removeEventListener('abort', entry.onAbort);
+    }
+    entry.resolve(result);
+    return true;
+  }
+
+  function rejectPending(error, code = -32000) {
+    for (const id of [...pending.keys()]) {
+      settlePending(id, {
         error: {
-          code: -32000,
+          code,
           message: error && error.message ? error.message : 'Transporte stdio MCP encerrado.',
         },
       });
     }
-    pending.clear();
+  }
+
+  function terminateForCancellation() {
+    const child = processRef;
+    processRef = null;
+    rejectPending(new Error('Requisição stdio MCP cancelada.'), -32004);
+    if (child && !child.killed && typeof child.kill === 'function') child.kill();
   }
 
   function handleResponseLine(line = '') {
@@ -70,14 +102,11 @@ function createExternalMcpStdioTransport(dependencies = {}) {
     }
     const id = message && message.id !== undefined ? String(message.id) : '';
     if (!id || !pending.has(id)) return;
-    const entry = pending.get(id);
-    pending.delete(id);
-    clearTimeout(entry.timer);
     if (message.error) {
-      entry.resolve({ error: message.error });
+      settlePending(id, { error: message.error });
       return;
     }
-    entry.resolve(message.result !== undefined ? message.result : message);
+    settlePending(id, message.result !== undefined ? message.result : message);
   }
 
   function handleStdout(chunk) {
@@ -104,12 +133,13 @@ function createExternalMcpStdioTransport(dependencies = {}) {
     if (processRef && processRef.exitCode === null && !processRef.killed) {
       return { ok: true, process: processRef };
     }
-    processRef = childProcess.spawn(safeCommand, safeArgs, {
+    const spawned = childProcess.spawn(safeCommand, safeArgs, {
       cwd: safeCwd || undefined,
       env: { ...process.env, ...safeEnv },
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    processRef = spawned;
     if (processRef.stdout && typeof processRef.stdout.setEncoding === 'function') {
       processRef.stdout.setEncoding('utf8');
     }
@@ -120,16 +150,22 @@ function createExternalMcpStdioTransport(dependencies = {}) {
     processRef.stderr.on('data', (chunk) => {
       stderrBuffer = clipText(`${stderrBuffer}${String(chunk || '')}`);
     });
-    processRef.on('error', (error) => {
+    spawned.on('error', (error) => {
+      if (processRef !== spawned) return;
+      processRef = null;
       rejectPending(error);
     });
-    processRef.on('exit', (code, signal) => {
+    spawned.on('exit', (code, signal) => {
+      if (processRef !== spawned) return;
+      processRef = null;
       rejectPending(new Error(`Processo stdio MCP saiu com code=${code} signal=${signal || ''}`));
     });
     return { ok: true, process: processRef };
   }
 
-  async function request(method, params = {}) {
+  async function request(method, params = {}, context = {}) {
+    const signal = normalizeAbortSignal(context && context.signal);
+    if (signal && signal.aborted) return cancelledTransportResult();
     const started = ensureProcess();
     if (!started.ok) return { error: started.error };
     const id = String(nextId);
@@ -141,9 +177,14 @@ function createExternalMcpStdioTransport(dependencies = {}) {
       params: params && typeof params === 'object' ? params : {},
     };
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        pending.delete(id);
-        resolve({
+      const entry = {
+        resolve,
+        timer: null,
+        signal,
+        onAbort: null,
+      };
+      entry.timer = setTimeout(() => {
+        settlePending(id, {
           error: {
             code: -32001,
             message: `Timeout MCP stdio em ${message.method}.`,
@@ -151,12 +192,18 @@ function createExternalMcpStdioTransport(dependencies = {}) {
           },
         });
       }, timeoutMs);
-      pending.set(id, { resolve, timer });
+      entry.onAbort = signal ? () => terminateForCancellation() : null;
+      pending.set(id, entry);
+      if (signal && entry.onAbort) {
+        signal.addEventListener('abort', entry.onAbort, { once: true });
+        if (signal.aborted) {
+          entry.onAbort();
+          return;
+        }
+      }
       started.process.stdin.write(`${JSON.stringify(message)}\n`, 'utf8', (error) => {
         if (!error) return;
-        pending.delete(id);
-        clearTimeout(timer);
-        resolve({
+        settlePending(id, {
           error: {
             code: -32002,
             message: error.message || 'Falha ao escrever no stdin MCP.',
@@ -166,7 +213,9 @@ function createExternalMcpStdioTransport(dependencies = {}) {
     });
   }
 
-  async function notify(method, params = {}) {
+  async function notify(method, params = {}, context = {}) {
+    const signal = normalizeAbortSignal(context && context.signal);
+    if (signal && signal.aborted) return cancelledTransportResult();
     const started = ensureProcess();
     if (!started.ok) return { error: started.error };
     const message = {
@@ -175,9 +224,27 @@ function createExternalMcpStdioTransport(dependencies = {}) {
       params: params && typeof params === 'object' ? params : {},
     };
     return new Promise((resolve) => {
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        if (signal) signal.removeEventListener('abort', onAbort);
+        resolve(result);
+      };
+      const onAbort = () => {
+        terminateForCancellation();
+        finish(cancelledTransportResult());
+      };
+      if (signal) {
+        signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+      }
       started.process.stdin.write(`${JSON.stringify(message)}\n`, 'utf8', (error) => {
         if (error) {
-          resolve({
+          finish({
             error: {
               code: -32002,
               message: error.message || 'Falha ao escrever notificacao no stdin MCP.',
@@ -185,15 +252,17 @@ function createExternalMcpStdioTransport(dependencies = {}) {
           });
           return;
         }
-        resolve({ ok: true });
+        finish({ ok: true });
       });
     });
   }
 
   function close() {
     if (!processRef || processRef.killed) return { ok: true, closed: false };
-    processRef.kill();
+    const child = processRef;
     processRef = null;
+    rejectPending(new Error('Transporte stdio MCP encerrado.'));
+    child.kill();
     return { ok: true, closed: true };
   }
 

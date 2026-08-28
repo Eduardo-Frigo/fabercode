@@ -138,6 +138,30 @@ async function run() {
   assert.strictEqual(plan.action.type, 'agentic_tool_loop');
   assert.strictEqual(plan.meta.autoExecute, true);
 
+  const genericCreatePlan = service.buildExecutionPlan({
+    projectInfo: { id: 'project-1', rootPath: '/tmp/project' },
+    userMessage: 'Crie uma aplicação Next.js com backend.',
+    routeDecision: {
+      decision: 'execute',
+      productRoute: {
+        capability: 'create_project',
+        executionIntent: 'init_project',
+        mode: 'faber_blueprint',
+        projectState: 'empty_project',
+      },
+    },
+  });
+  assert.strictEqual(genericCreatePlan.action.creationProfile.executionMode, 'unified_agentic_loop');
+  assert.strictEqual(genericCreatePlan.action.creationProfile.scaffold.strategy, 'none');
+
+  const explicitBlueprintPlan = service.buildExecutionPlan({
+    projectInfo: { id: 'project-1', rootPath: '/tmp/project' },
+    userMessage: 'Use o blueprint do Faber como scaffold inicial.',
+    routeDecision: genericCreatePlan.action.routeDecision,
+  });
+  assert.strictEqual(explicitBlueprintPlan.action.creationProfile.scaffold.strategy, 'faber_blueprint');
+  assert.strictEqual(explicitBlueprintPlan.action.creationProfile.scaffold.explicitlyRequested, true);
+
   const result = await service.executeAction(
     {
       type: 'agentic_tool_loop',

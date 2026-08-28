@@ -20,6 +20,68 @@ const {
   HARNESS_RUNTIME_MODES,
   createHarnessRuntimeConfig,
 } = require('./harness_runtime_config');
+const {
+  DEFAULT_ON_ROLLOUT_POLICY_VERSION,
+  DEFAULT_ON_ROLLOUT_REASONS,
+  DEFAULT_ON_ROLLOUT_SNAPSHOT_SCHEMA_VERSION,
+} = require('./default_on_rollout_policy');
+const {
+  DEFAULT_ON_ROLLOUT_SAFETY_INTERLOCK_VERSION,
+} = require('./default_on_rollout_safety_interlock');
+
+const SAFE_ROLLOUT_IDENTIFIER = /^[A-Za-z0-9._:@-]{1,256}$/;
+const SHA256_DIGEST = /^sha256:[a-f0-9]{64}$/;
+const DEFAULT_ON_FACT_KEYS = Object.freeze([
+  'projectPin',
+  'allowlisted',
+  'approvedCohort',
+]);
+const DEFAULT_ON_SNAPSHOT_KEYS = Object.freeze([
+  'schemaVersion',
+  'policyVersion',
+  'jobId',
+  'projectId',
+  'canonicalRootPath',
+  'selectedKernel',
+  'reason',
+  'flags',
+  'releaseGate',
+  'policyDigest',
+]);
+const DEFAULT_ON_FLAG_KEYS = Object.freeze([
+  'configuredMode',
+  'killSwitch',
+  'projectPin',
+  'allowlisted',
+  'approvedCohort',
+]);
+const DEFAULT_ON_RELEASE_GATE_KEYS = Object.freeze([
+  'minimumStableVersions',
+  'stableVersionCount',
+  'satisfied',
+]);
+const DEFAULT_ON_SAFETY_PORT_KEYS = Object.freeze([
+  'version',
+  'begin',
+  'finish',
+  'trip',
+  'diagnostics',
+]);
+const DEFAULT_ON_SAFETY_BEGIN_RECEIPT_KEYS = Object.freeze([
+  'ok',
+  'allowed',
+  'idempotent',
+  'jobId',
+  'reason',
+]);
+const DEFAULT_ON_SAFETY_FINISH_RECEIPT_KEYS = Object.freeze([
+  'ok',
+  'finished',
+  'jobId',
+]);
+const DEFAULT_ON_REASON_VALUES = new Set(
+  Object.values(DEFAULT_ON_ROLLOUT_REASONS)
+);
 
 function defaultRequestIdFactory() {
   return crypto.randomUUID();
@@ -90,6 +152,261 @@ function inspectableFunction(value, fieldName) {
     Function.prototype.toString.call(value);
   } catch {
     throw new TypeError(`${fieldName} must be an inspectable function`);
+  }
+  return value;
+}
+
+function inspectableSynchronousFunction(value, fieldName) {
+  const inspected = inspectableFunction(value, fieldName);
+  if (util.types.isAsyncFunction(inspected)) {
+    throw new TypeError(`${fieldName} must be synchronous`);
+  }
+  return inspected;
+}
+
+function exactDataFields(value, expectedKeys, { frozen = false } = {}) {
+  if (!isPlainRecord(value) || frozen && !Object.isFrozen(value)) return null;
+  let keys;
+  try {
+    keys = Reflect.ownKeys(value);
+  } catch {
+    return null;
+  }
+  if (keys.length !== expectedKeys.length
+    || keys.some((key) => typeof key !== 'string'
+      || !expectedKeys.includes(key))
+    || expectedKeys.some((key) => !keys.includes(key))) return null;
+  const fields = new Map();
+  for (const key of keys) {
+    let descriptor;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(value, key);
+    } catch {
+      return null;
+    }
+    if (!descriptor || descriptor.enumerable !== true
+      || !Object.hasOwn(descriptor, 'value')
+      || descriptor.value === undefined) return null;
+    fields.set(key, descriptor.value);
+  }
+  return fields;
+}
+
+function ownDataValue(value, key) {
+  if (!value || typeof value !== 'object' || util.types.isProxy(value)) return null;
+  let descriptor;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(value, key);
+  } catch {
+    return null;
+  }
+  return descriptor && Object.hasOwn(descriptor, 'value')
+    ? descriptor.value
+    : null;
+}
+
+function callSynchronous(callback, receiver, args, fieldName) {
+  let result;
+  try {
+    result = Reflect.apply(callback, receiver, args);
+  } catch (error) {
+    throw error;
+  }
+  if (util.types.isPromise(result)) {
+    try {
+      Reflect.apply(Promise.prototype.then, result, [() => {}, () => {}]);
+    } catch {
+      // The invalid asynchronous contract remains fail closed.
+    }
+    throw new TypeError(`${fieldName} must be synchronous`);
+  }
+  return result;
+}
+
+function captureDefaultOnRolloutPolicy(value) {
+  if (value === null || value === undefined) return null;
+  const fields = exactDataFields(
+    value,
+    ['version', 'capture', 'get', 'diagnostics'],
+    { frozen: true }
+  );
+  if (!fields
+    || fields.get('version') !== DEFAULT_ON_ROLLOUT_POLICY_VERSION) {
+    throw new TypeError('defaultOnRolloutPolicy must be a frozen policy port');
+  }
+  const capture = inspectableSynchronousFunction(
+    fields.get('capture'),
+    'defaultOnRolloutPolicy.capture'
+  );
+  inspectableSynchronousFunction(
+    fields.get('get'),
+    'defaultOnRolloutPolicy.get'
+  );
+  const diagnostics = inspectableSynchronousFunction(
+    fields.get('diagnostics'),
+    'defaultOnRolloutPolicy.diagnostics'
+  );
+  const diagnosticValue = callSynchronous(
+    diagnostics,
+    value,
+    [],
+    'defaultOnRolloutPolicy.diagnostics'
+  );
+  const diagnosticFields = inspectFrozenDiagnostics(
+    diagnosticValue,
+    'defaultOnRolloutPolicy.diagnostics'
+  );
+  if (diagnosticFields.get('version') !== DEFAULT_ON_ROLLOUT_POLICY_VERSION
+    || typeof diagnosticFields.get('stabilityGateSatisfied') !== 'boolean') {
+    throw new TypeError('defaultOnRolloutPolicy diagnostics are invalid');
+  }
+  return Object.freeze({
+    receiver: value,
+    capture,
+    stabilityGateSatisfied: diagnosticFields.get('stabilityGateSatisfied'),
+  });
+}
+
+function captureDefaultOnSafetyInterlock(value) {
+  if (value === null || value === undefined) return null;
+  const fields = exactDataFields(
+    value,
+    DEFAULT_ON_SAFETY_PORT_KEYS,
+    { frozen: true }
+  );
+  if (!fields
+    || fields.get('version')
+      !== DEFAULT_ON_ROLLOUT_SAFETY_INTERLOCK_VERSION) {
+    throw new TypeError(
+      'defaultOnSafetyInterlock must be a frozen safety port'
+    );
+  }
+  const begin = inspectableSynchronousFunction(
+    fields.get('begin'),
+    'defaultOnSafetyInterlock.begin'
+  );
+  const finish = inspectableSynchronousFunction(
+    fields.get('finish'),
+    'defaultOnSafetyInterlock.finish'
+  );
+  inspectableFunction(fields.get('trip'), 'defaultOnSafetyInterlock.trip');
+  const diagnostics = inspectableSynchronousFunction(
+    fields.get('diagnostics'),
+    'defaultOnSafetyInterlock.diagnostics'
+  );
+  const diagnosticFields = inspectFrozenDiagnostics(callSynchronous(
+    diagnostics,
+    value,
+    [],
+    'defaultOnSafetyInterlock.diagnostics'
+  ), 'defaultOnSafetyInterlock.diagnostics');
+  if (diagnosticFields.get('version')
+      !== DEFAULT_ON_ROLLOUT_SAFETY_INTERLOCK_VERSION
+    || !['armed', 'tripped'].includes(diagnosticFields.get('state'))
+    || !Number.isSafeInteger(diagnosticFields.get('activeJobs'))
+    || diagnosticFields.get('activeJobs') < 0) {
+    throw new TypeError('defaultOnSafetyInterlock diagnostics are invalid');
+  }
+  return Object.freeze({ receiver: value, begin, finish });
+}
+
+function beginDefaultOnSafetyExecution(port, snapshot) {
+  const registration = Object.freeze({
+    jobId: snapshot.jobId,
+    projectId: snapshot.projectId,
+    canonicalRootPath: snapshot.canonicalRootPath,
+    policyDigest: snapshot.policyDigest,
+  });
+  const receipt = callSynchronous(
+    port.begin,
+    port.receiver,
+    [registration],
+    'defaultOnSafetyInterlock.begin'
+  );
+  const fields = exactDataFields(
+    receipt,
+    DEFAULT_ON_SAFETY_BEGIN_RECEIPT_KEYS,
+    { frozen: true }
+  );
+  if (!fields || fields.get('ok') !== true
+    || typeof fields.get('allowed') !== 'boolean'
+    || typeof fields.get('idempotent') !== 'boolean'
+    || fields.get('jobId') !== snapshot.jobId
+    || typeof fields.get('reason') !== 'string') {
+    throw new TypeError('defaultOnSafetyInterlock.begin returned invalid data');
+  }
+  if (fields.get('allowed') !== true) {
+    throw new Error('Default-on safety interlock blocked V2 execution');
+  }
+  return registration;
+}
+
+function finishDefaultOnSafetyExecution(port, registration) {
+  const completion = Object.freeze({
+    jobId: registration.jobId,
+    policyDigest: registration.policyDigest,
+  });
+  const receipt = callSynchronous(
+    port.finish,
+    port.receiver,
+    [completion],
+    'defaultOnSafetyInterlock.finish'
+  );
+  const fields = exactDataFields(
+    receipt,
+    DEFAULT_ON_SAFETY_FINISH_RECEIPT_KEYS,
+    { frozen: true }
+  );
+  if (!fields || fields.get('ok') !== true
+    || fields.get('finished') !== true
+    || fields.get('jobId') !== registration.jobId) {
+    throw new Error('Default-on safety interlock finish was not confirmed');
+  }
+}
+
+function normalizeDefaultOnFacts(value) {
+  const fields = exactDataFields(value, DEFAULT_ON_FACT_KEYS, { frozen: true });
+  if (!fields || ![null, 'legacy', 'v2'].includes(fields.get('projectPin'))
+    || typeof fields.get('allowlisted') !== 'boolean'
+    || typeof fields.get('approvedCohort') !== 'boolean') return null;
+  return Object.freeze({
+    projectPin: fields.get('projectPin'),
+    allowlisted: fields.get('allowlisted'),
+    approvedCohort: fields.get('approvedCohort'),
+  });
+}
+
+function validateDefaultOnSnapshot(value, expected) {
+  const fields = exactDataFields(value, DEFAULT_ON_SNAPSHOT_KEYS, { frozen: true });
+  const flags = fields && exactDataFields(
+    fields.get('flags'),
+    DEFAULT_ON_FLAG_KEYS,
+    { frozen: true }
+  );
+  const releaseGate = fields && exactDataFields(
+    fields.get('releaseGate'),
+    DEFAULT_ON_RELEASE_GATE_KEYS,
+    { frozen: true }
+  );
+  if (!fields || !flags || !releaseGate
+    || fields.get('schemaVersion') !== DEFAULT_ON_ROLLOUT_SNAPSHOT_SCHEMA_VERSION
+    || fields.get('policyVersion') !== DEFAULT_ON_ROLLOUT_POLICY_VERSION
+    || fields.get('jobId') !== expected.jobId
+    || fields.get('projectId') !== expected.projectId
+    || fields.get('canonicalRootPath') !== expected.canonicalRootPath
+    || !['legacy', 'v2'].includes(fields.get('selectedKernel'))
+    || !DEFAULT_ON_REASON_VALUES.has(fields.get('reason'))
+    || !SHA256_DIGEST.test(fields.get('policyDigest'))
+    || flags.get('configuredMode') !== expected.configuredMode
+    || flags.get('killSwitch') !== expected.killSwitch
+    || flags.get('projectPin') !== expected.projectPin
+    || flags.get('allowlisted') !== expected.allowlisted
+    || flags.get('approvedCohort') !== expected.approvedCohort
+    || releaseGate.get('minimumStableVersions') !== 2
+    || !Number.isSafeInteger(releaseGate.get('stableVersionCount'))
+    || releaseGate.get('stableVersionCount') < 0
+    || typeof releaseGate.get('satisfied') !== 'boolean') {
+    throw new TypeError('defaultOnRolloutPolicy returned an invalid snapshot');
   }
   return value;
 }
@@ -337,7 +654,11 @@ function callCanaryEditRunner(port, request) {
 function createHarnessRouter({
   canaryEditRunner = null,
   contextPackInjector = null,
+  defaultOnRolloutPolicy = null,
+  defaultOnSafetyInterlock = null,
   legacyKernel,
+  persistDefaultOnRolloutSnapshot = null,
+  resolveDefaultOnRolloutFacts = null,
   runtimeConfig = null,
   requestIdFactory = defaultRequestIdFactory,
   shadowPlanRunner = null,
@@ -360,10 +681,96 @@ function createHarnessRouter({
     canaryEditRunner,
     legacyKernel
   );
+  const capturedDefaultOnRolloutPolicy = captureDefaultOnRolloutPolicy(
+    defaultOnRolloutPolicy
+  );
+  const capturedDefaultOnSafetyInterlock = captureDefaultOnSafetyInterlock(
+    defaultOnSafetyInterlock
+  );
+  const suppliedDefaultOnDependencies = [
+    capturedDefaultOnRolloutPolicy,
+    capturedDefaultOnSafetyInterlock,
+    resolveDefaultOnRolloutFacts,
+    persistDefaultOnRolloutSnapshot,
+  ].filter((value) => value !== null && value !== undefined).length;
+  if (suppliedDefaultOnDependencies !== 0 && suppliedDefaultOnDependencies !== 4) {
+    throw new TypeError('Default-on rollout dependencies must be supplied together');
+  }
+  const capturedResolveDefaultOnRolloutFacts = suppliedDefaultOnDependencies === 4
+    ? inspectableSynchronousFunction(
+      resolveDefaultOnRolloutFacts,
+      'resolveDefaultOnRolloutFacts'
+    )
+    : null;
+  const capturedPersistDefaultOnRolloutSnapshot = suppliedDefaultOnDependencies === 4
+    ? inspectableSynchronousFunction(
+      persistDefaultOnRolloutSnapshot,
+      'persistDefaultOnRolloutSnapshot'
+    )
+    : null;
   const shadowActive = resolvedRuntimeConfig.configuredMode === 'shadow'
     && capturedShadowPlanRunner !== null;
   const canaryActive = resolvedRuntimeConfig.configuredMode === 'canary'
     && capturedCanaryEditRunner !== null;
+  const defaultOnConfigured = resolvedRuntimeConfig.configuredMode === 'on'
+    && capturedCanaryEditRunner !== null
+    && suppliedDefaultOnDependencies === 4;
+  const defaultOnActive = defaultOnConfigured
+    && capturedDefaultOnRolloutPolicy.stabilityGateSatisfied;
+
+  function captureAndPersistDefaultOnSnapshot(request) {
+    const executionContext = ownDataValue(request, 'executionContext');
+    const projectInfo = ownDataValue(request, 'projectInfo');
+    const jobId = ownDataValue(executionContext, 'jobId');
+    const projectId = ownDataValue(projectInfo, 'id')
+      || ownDataValue(projectInfo, 'projectId');
+    const canonicalRootPath = ownDataValue(projectInfo, 'rootPath');
+    if (typeof jobId !== 'string' || !SAFE_ROLLOUT_IDENTIFIER.test(jobId)
+      || typeof projectId !== 'string'
+      || !SAFE_ROLLOUT_IDENTIFIER.test(projectId)
+      || typeof canonicalRootPath !== 'string'
+      || !canonicalRootPath) {
+      throw new TypeError('Default-on rollout requires exact job and project identities');
+    }
+    const identity = Object.freeze({
+      jobId,
+      projectId,
+      rootPath: canonicalRootPath,
+    });
+    const facts = normalizeDefaultOnFacts(callSynchronous(
+      capturedResolveDefaultOnRolloutFacts,
+      undefined,
+      [identity],
+      'resolveDefaultOnRolloutFacts'
+    ));
+    if (!facts) {
+      throw new TypeError('resolveDefaultOnRolloutFacts returned invalid facts');
+    }
+    const expected = Object.freeze({
+      jobId,
+      projectId,
+      canonicalRootPath,
+      configuredMode: resolvedRuntimeConfig.configuredMode,
+      killSwitch: resolvedRuntimeConfig.killSwitch,
+      ...facts,
+    });
+    const snapshot = validateDefaultOnSnapshot(callSynchronous(
+      capturedDefaultOnRolloutPolicy.capture,
+      capturedDefaultOnRolloutPolicy.receiver,
+      [expected],
+      'defaultOnRolloutPolicy.capture'
+    ), expected);
+    const persisted = callSynchronous(
+      capturedPersistDefaultOnRolloutSnapshot,
+      undefined,
+      [jobId, snapshot],
+      'persistDefaultOnRolloutSnapshot'
+    );
+    if (ownDataValue(persisted, 'ok') !== true) {
+      throw new Error('Default-on rollout checkpoint persistence failed');
+    }
+    return snapshot;
+  }
 
   async function dispatch(request) {
     assertHarnessRequest(request);
@@ -387,12 +794,36 @@ function createHarnessRouter({
     } else if (kernelRequest.operation === HARNESS_OPERATIONS.MESSAGE) {
       result = await legacyKernel.message(kernelRequest);
     } else if (kernelRequest.operation === HARNESS_OPERATIONS.EXECUTE) {
+      const defaultOnSnapshot = defaultOnActive
+        ? captureAndPersistDefaultOnSnapshot(kernelRequest)
+        : null;
       if (canaryActive) {
         result = await callCanaryEditRunner(capturedCanaryEditRunner, kernelRequest);
         expectedKernelIds = [
           legacyKernel.id,
           capturedCanaryEditRunner.canaryKernelId,
         ];
+      } else if (defaultOnSnapshot
+        && defaultOnSnapshot.selectedKernel === 'v2') {
+        const safetyRegistration = beginDefaultOnSafetyExecution(
+          capturedDefaultOnSafetyInterlock,
+          defaultOnSnapshot
+        );
+        try {
+          result = await callCanaryEditRunner(
+            capturedCanaryEditRunner,
+            kernelRequest
+          );
+          expectedKernelIds = [
+            legacyKernel.id,
+            capturedCanaryEditRunner.canaryKernelId,
+          ];
+        } finally {
+          finishDefaultOnSafetyExecution(
+            capturedDefaultOnSafetyInterlock,
+            safetyRegistration
+          );
+        }
       } else {
         result = await legacyKernel.execute(kernelRequest);
       }
@@ -430,6 +861,8 @@ function createHarnessRouter({
       ? 'shadow'
       : canaryActive
         ? 'canary'
+        : defaultOnActive
+          ? 'on'
         : legacyMode;
     const configFallbackReason = resolvedRuntimeConfig.diagnostics
       && resolvedRuntimeConfig.diagnostics.fallbackReason;
@@ -442,14 +875,18 @@ function createHarnessRouter({
       reason = 'shadow_active';
     } else if (canaryActive) {
       reason = 'canary_active';
+    } else if (defaultOnActive) {
+      reason = 'default_on_active';
     } else if (configuredMode === legacyMode) {
       reason = 'legacy_default';
     } else if (configuredMode === 'shadow') {
       reason = 'shadow_runner_unavailable';
     } else if (configuredMode === 'canary') {
       reason = 'canary_runner_unavailable';
+    } else if (configuredMode === 'on' && defaultOnConfigured) {
+      reason = 'default_on_stability_gate_not_met';
     } else {
-      reason = 'phase_5_not_promoted';
+      reason = 'phase_9_not_promoted';
     }
     return {
       ok: true,
@@ -457,10 +894,10 @@ function createHarnessRouter({
       requestedMode: resolvedRuntimeConfig.requestedMode || configuredMode,
       configuredMode,
       effectiveMode,
-      activeKernelId: canaryActive
+      activeKernelId: canaryActive || defaultOnActive
         ? capturedCanaryEditRunner.canaryKernelId
         : legacyKernel.id,
-      canaryKernelId: canaryActive
+      canaryKernelId: canaryActive || defaultOnActive
         ? capturedCanaryEditRunner.canaryKernelId
         : null,
       shadowKernelId: shadowActive
@@ -469,7 +906,7 @@ function createHarnessRouter({
       fallbackActive: configFallbackActive || configuredMode !== effectiveMode,
       reason,
       kernel: getKernelDiagnostics(legacyKernel),
-      canaryKernel: canaryActive
+      canaryKernel: canaryActive || defaultOnActive
         ? readCanaryEditRunnerDiagnostics(capturedCanaryEditRunner)
         : null,
       shadowKernel: shadowActive

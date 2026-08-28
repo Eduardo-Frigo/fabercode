@@ -79,6 +79,7 @@ const CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS = Object.freeze({
   OPEN_FAILED: 'CANARY_TRANSACTIONAL_STAGING_OPEN_FAILED',
   PROMOTION_AMBIGUOUS: 'CANARY_TRANSACTIONAL_STAGING_PROMOTION_AMBIGUOUS',
   REVERT_FAILED: 'CANARY_TRANSACTIONAL_STAGING_REVERT_FAILED',
+  ROLLOUT_INTERRUPTED: 'CANARY_TRANSACTIONAL_STAGING_ROLLOUT_INTERRUPTED',
 });
 
 const SAFE_IDENTIFIER = /^[A-Za-z0-9._:@-]{1,256}$/;
@@ -489,6 +490,29 @@ function readRequestAuthority(request) {
     || projectIdAlias !== null && projectIdAlias !== binding.projectId
     || !areEquivalentPortablePaths(rootPath, binding.canonicalRootPath)) return null;
   return binding;
+}
+
+function requestRolloutInterrupted(request) {
+  const context = ownDataValue(request, 'executionContext', {
+    enumerable: true,
+  });
+  const signal = ownDataValue(context, 'signal', { enumerable: true });
+  if (signal === null) return false;
+  if (!signal || (typeof signal !== 'object' && typeof signal !== 'function')
+    || util.types.isProxy(signal)) return true;
+  try {
+    return signal.aborted === true;
+  } catch {
+    return true;
+  }
+}
+
+function assertRolloutContinues(request) {
+  if (requestRolloutInterrupted(request)) {
+    throw executorError(
+      CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.ROLLOUT_INTERRUPTED
+    );
+  }
 }
 
 function validateGrant(value, request) {
@@ -953,8 +977,70 @@ function createCanaryTransactionalStagingExecutor(options = {}) {
     );
   }
 
+  async function discardStagingForInterruption(opened) {
+    try {
+      const discardValue = await callNativePort(
+        dependencies.workspaceSessionPort,
+        'discard',
+        [opened.session]
+      );
+      return Boolean(normalizeDiscardOutcome(discardValue, opened.session));
+    } catch {
+      return false;
+    }
+  }
+
+  async function interruptStaging({
+    request,
+    authorityBinding,
+    opened,
+    lifecycle,
+  }) {
+    await settleStagingFallback({
+      request,
+      authorityBinding,
+      opened,
+      lifecycle,
+      reason: 'rollout_interrupted',
+    });
+    throw executorError(
+      CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.ROLLOUT_INTERRUPTED
+    );
+  }
+
+  async function interruptSource({
+    request,
+    authorityBinding,
+    opened,
+    lifecycle,
+    transaction,
+    promotionRegistered,
+    stagingAlreadyDiscarded = false,
+  }) {
+    const stagingDiscarded = stagingAlreadyDiscarded
+      || await discardStagingForInterruption(opened);
+    await settleSourceFallback({
+      request,
+      authorityBinding,
+      opened,
+      lifecycle,
+      transaction,
+      reason: 'rollout_interrupted',
+      promotionRegistered,
+    });
+    if (!stagingDiscarded) {
+      throw executorError(
+        CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.CLEANUP_FAILED
+      );
+    }
+    throw executorError(
+      CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.ROLLOUT_INTERRUPTED
+    );
+  }
+
   async function execute(request, grant) {
     const authorityBinding = validateInput(request, grant);
+    assertRolloutContinues(request);
     let openedValue;
     try {
       openedValue = await callNativePort(
@@ -985,6 +1071,14 @@ function createCanaryTransactionalStagingExecutor(options = {}) {
         CANARY_TRANSACTIONAL_STAGING_EXECUTOR_REASONS.CLEANUP_FAILED
       );
     }
+    if (requestRolloutInterrupted(request)) {
+      return interruptStaging({
+        request,
+        authorityBinding,
+        opened,
+        lifecycle,
+      });
+    }
 
     let editOutcome = null;
     try {
@@ -1001,6 +1095,14 @@ function createCanaryTransactionalStagingExecutor(options = {}) {
       );
     } catch {
       editOutcome = null;
+    }
+    if (requestRolloutInterrupted(request)) {
+      return interruptStaging({
+        request,
+        authorityBinding,
+        opened,
+        lifecycle,
+      });
     }
     if (!editOutcome) {
       return settleStagingFallback({
@@ -1075,6 +1177,16 @@ function createCanaryTransactionalStagingExecutor(options = {}) {
         reason: 'source_frontier_invalid',
       });
     }
+    if (requestRolloutInterrupted(request)) {
+      return interruptSource({
+        request,
+        authorityBinding,
+        opened,
+        lifecycle,
+        transaction,
+        promotionRegistered: false,
+      });
+    }
 
     try {
       callPromotionSink(
@@ -1095,6 +1207,16 @@ function createCanaryTransactionalStagingExecutor(options = {}) {
         lifecycle,
         transaction,
         reason: 'rollback_registration_failed',
+      });
+    }
+    if (requestRolloutInterrupted(request)) {
+      return interruptSource({
+        request,
+        authorityBinding,
+        opened,
+        lifecycle,
+        transaction,
+        promotionRegistered: true,
       });
     }
 
@@ -1118,6 +1240,17 @@ function createCanaryTransactionalStagingExecutor(options = {}) {
         transaction,
         reason: 'post_promotion_cleanup_failed',
         promotionRegistered: true,
+      });
+    }
+    if (requestRolloutInterrupted(request)) {
+      return interruptSource({
+        request,
+        authorityBinding,
+        opened,
+        lifecycle,
+        transaction,
+        promotionRegistered: true,
+        stagingAlreadyDiscarded: true,
       });
     }
     const completed = lifecycle.completeCanary();

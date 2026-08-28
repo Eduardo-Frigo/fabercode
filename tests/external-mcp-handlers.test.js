@@ -101,9 +101,10 @@ async function run() {
       projectInfo: { rootPath: projectRoot, id: 'project-1', name: 'Projeto' },
       args: { artifactPath },
     });
-    assert.strictEqual(call.ok, true);
-    assert.deepStrictEqual(call.artifacts, [artifactPath]);
-    assert.strictEqual(fs.existsSync(artifactPath), true);
+    assert.strictEqual(call.ok, false);
+    assert.strictEqual(call.status, 'blocked');
+    assert.deepStrictEqual(call.errors, ['external_mcp_native_approval_required']);
+    assert.strictEqual(fs.existsSync(artifactPath), false);
 
     const blocked = await handlers.get('external-mcp:tools:call')(null, {
       serverId: 'visual-fixture',

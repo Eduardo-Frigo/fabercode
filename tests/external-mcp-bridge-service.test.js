@@ -141,17 +141,37 @@ async function run() {
   assert.strictEqual(allDiscovery.data.tools.some((tool) => tool.serverId === 'visual-auditor'), true);
   assert.strictEqual(allDiscovery.data.tools.some((tool) => tool.serverId === 'untrusted-tools' && tool.allowed === false), true);
 
+  const callController = new AbortController();
   const call = await service.callTool({
     serverId: 'visual-auditor',
     toolName: 'visual.capture',
     arguments: { url: 'http://127.0.0.1:3000/' },
     projectSession: { rootPath: '/tmp/faber-project', projectId: 'p1', projectName: 'Projeto' },
+    signal: callController.signal,
   });
   assert.strictEqual(call.ok, true);
   assert.strictEqual(call.status, 'succeeded');
   assert.deepStrictEqual(call.artifacts, ['/tmp/faber-external-mcp.png']);
   assert.deepStrictEqual(call.data.result.contentTypes, ['text', 'image']);
   assert.strictEqual(call.data.result.structuredContent.domMetrics[0].desktopNavVisible, true);
+  assert.strictEqual(
+    requests.find((entry) => entry.method === 'tools/call').context.signal,
+    callController.signal
+  );
+
+  const canceledController = new AbortController();
+  canceledController.abort();
+  const canceled = await service.callTool({
+    serverId: 'visual-auditor',
+    toolName: 'visual.capture',
+    arguments: { url: 'http://127.0.0.1:3000/' },
+    projectSession: { rootPath: '/tmp/faber-project', projectId: 'p1' },
+    signal: canceledController.signal,
+  });
+  assert.strictEqual(canceled.ok, false);
+  assert.strictEqual(canceled.cancelled, true);
+  assert.strictEqual(canceled.status, 'cancelled');
+  assert.deepStrictEqual(canceled.errors, ['external_mcp_cancelled']);
 
   const scopeBlockedCall = await service.callTool({
     serverId: 'visual-auditor',

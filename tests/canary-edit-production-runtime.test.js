@@ -325,6 +325,18 @@ async function testInactiveRuntimeStaysDisabled() {
   assert.strictEqual(fixture.calls.close, 0);
 }
 
+async function testDefaultOnComposesTheProductionRuntime() {
+  const fixture = createFixture({ mode: 'on' });
+  assert.strictEqual(fixture.runtime.diagnostics().runtime.state, 'ready');
+  assert.strictEqual(
+    fixture.runtime.diagnostics().runtime.configuredMode,
+    'on'
+  );
+  assert.strictEqual(Object.isFrozen(fixture.runtime.canaryEditRunner), true);
+  const receipt = await fixture.runtime.close();
+  assert.strictEqual(receipt.ok, true);
+}
+
 function testInvalidAndHostileOptionsAreRejected() {
   assert.throws(
     () => createCanaryEditProductionRuntime({}),
@@ -404,6 +416,7 @@ function testDurableRollbackStoresMustBeExactlyAligned() {
 async function main() {
   await testReadyRuntimeComposesOnlyProductionAdapters();
   await testInactiveRuntimeStaysDisabled();
+  await testDefaultOnComposesTheProductionRuntime();
   testInvalidAndHostileOptionsAreRejected();
   testDurableRollbackStoresMustBeExactlyAligned();
   console.log('canary-edit-production-runtime.test.js: ok');

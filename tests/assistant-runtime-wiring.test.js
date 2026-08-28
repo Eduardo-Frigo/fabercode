@@ -140,6 +140,202 @@ assertInOrder(
   'Cortex planning and repair prompts must keep the same validated ContextPack projection'
 );
 
+const optionalBlueprintScaffoldSource = extractFunctionDeclaration(
+  mainSource,
+  'applyAgenticOptionalBlueprintScaffold'
+);
+assertInOrder(
+  optionalBlueprintScaffoldSource,
+  [
+    "creationProfile.scaffold.strategy !== 'faber_blueprint'",
+    'buildProjectBlueprintOperationBatch({',
+    "executionIntent: 'init_project'",
+    'force: true,',
+    'executeOperationBatchAction({',
+  ],
+  'the optional blueprint must require main-owned opt-in and reuse the governed operation executor'
+);
+const agenticToolLoopFactorySource = extractFunctionDeclaration(
+  mainSource,
+  'getAgenticToolLoopService'
+);
+assert.ok(
+  agenticToolLoopFactorySource.includes(
+    'applyOptionalBlueprintScaffold: applyAgenticOptionalBlueprintScaffold'
+  ),
+  'production must bind the opt-in blueprint scaffold into the unified agentic loop'
+);
+
+assert.ok(
+  mainSource.includes("require('./main/services/agentic_model_tool_result_service')"),
+  'production must use the hardened multimodal tool-result transport'
+);
+assert.strictEqual(
+  mainSource.includes('function buildAgenticToolResultInput('),
+  false,
+  'production must not retain the legacy text-only tool-result serializer'
+);
+const agenticModelTurnSource = extractFunctionDeclaration(
+  mainSource,
+  'requestAgenticModelTurn'
+);
+assertInOrder(
+  agenticModelTurnSource,
+  [
+    'const destination = resolveAgenticModelProviderDestination(provider);',
+    'const toolResultOptions = buildAgenticVisualTransportOptions(',
+    'buildAgenticResponsesToolResultInput(toolResults, toolResultOptions)',
+  ],
+  'Responses visual content must consume approval against the current exact provider destination'
+);
+const chatCompletionsAgenticSource = extractFunctionDeclaration(
+  mainSource,
+  'callChatCompletionsAgentic'
+);
+assert.match(
+  chatCompletionsAgenticSource,
+  /buildAgenticChatCompletionToolResultMessages\(\s*toolResults,\s*toolResultOptions\s*\)/,
+  'Chat Completions visual content must use the same approval-gated transport'
+);
+
+const legacyExecuteStart = mainSource.indexOf(
+  'const handleLegacyHarnessExecute = async (action, projectInfo, executionContext = null, contextPack = null) => {'
+);
+const legacyExecuteEnd = mainSource.indexOf(
+  'const legacyHarnessKernel = createLegacyKernelAdapter({',
+  legacyExecuteStart
+);
+const legacyExecuteSource = mainSource.slice(legacyExecuteStart, legacyExecuteEnd);
+assert.ok(legacyExecuteStart >= 0 && legacyExecuteEnd > legacyExecuteStart);
+
+for (const requiredModule of [
+  "require('./main/services/agentic_browser_broker_factory')",
+  "require('./main/services/agentic_browser_session_service')",
+  "require('./main/services/agentic_mcp_tool_broker_factory')",
+  "require('./main/services/agentic_mcp_write_approval_service')",
+  "require('./main/services/agentic_visual_egress_approval_service')",
+  "require('./main/capabilities/capability_grant_store')",
+  "require('./main/capabilities/pending_approval_store')",
+]) {
+  assert.ok(
+    mainSource.includes(requiredModule),
+    `production visual runtime must import ${requiredModule}`
+  );
+}
+assertInOrder(
+  mainSource,
+  [
+    'const agenticVisualEgressApprovalService = createAgenticVisualEgressApprovalService({',
+    'agenticVisualEgressApprovalServiceInstance = agenticVisualEgressApprovalService;',
+    'const agenticBrowserSessionService = createAgenticBrowserSessionService({',
+    'agenticBrowserSessionServiceInstance = agenticBrowserSessionService;',
+    'const agenticBrowserBrokerFactory = createAgenticBrowserBrokerFactory({',
+    'agenticBrowserBrokerFactoryInstance = agenticBrowserBrokerFactory;',
+    'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
+  ],
+  'the visual approval and browser authority must exist before coordinated execution starts'
+);
+assertInOrder(
+  legacyExecuteSource,
+  [
+    'const browserBrokerFactory = agenticBrowserBrokerFactoryInstance;',
+    'const browserBinding = currentAgenticDeleteBinding(authorityBinding);',
+    'browserRoute = browserBrokerFactory.createRoute(',
+    "Object.defineProperty(agenticExecutionOptions, 'openBrowser'",
+    "Object.defineProperty(agenticExecutionOptions, 'interactBrowser'",
+    "Object.defineProperty(agenticExecutionOptions, 'captureBrowser'",
+    "Object.defineProperty(agenticExecutionOptions, 'authorizeVisualEgress'",
+    "Object.defineProperty(agenticExecutionOptions, 'consumeVisualEgress'",
+  ],
+  'browser and visual callbacks must remain private execution-context capabilities'
+);
+assert.ok(
+  mainSource.includes('const activeAgenticExecutionSignalsByJobId = new Map();'),
+  'production must retain the exact coordinator signal only for the active agentic job'
+);
+const activeBrowserSignalSource = extractFunctionDeclaration(
+  mainSource,
+  'getActiveAgenticExecutionSignal'
+);
+assert.ok(
+  activeBrowserSignalSource.includes('activeAgenticExecutionSignalsByJobId.get(binding.jobId)'),
+  'the Browser Broker must resolve cancellation from the active coordinator signal registry'
+);
+assertInOrder(
+  legacyExecuteSource,
+  [
+    'activeAgenticExecutionSignalsByJobId.set(jobId, browserExecutionSignalRecord);',
+    'agenticResult = await getAgenticToolLoopService().executeAction(',
+    'activeAgenticExecutionSignalsByJobId.delete(jobId);',
+  ],
+  'the exact browser signal binding must exist only around the agentic execution'
+);
+for (const privateVisualCallback of [
+  'openBrowser',
+  'navigateBrowser',
+  'interactBrowser',
+  'captureBrowser',
+  'inspectBrowser',
+  'closeBrowser',
+  'authorizeVisualEgress',
+  'consumeVisualEgress',
+]) {
+  const callbackStart = legacyExecuteSource.indexOf(
+    `Object.defineProperty(agenticExecutionOptions, '${privateVisualCallback}'`
+  );
+  assert.ok(callbackStart >= 0, `missing private visual callback ${privateVisualCallback}`);
+  assert.ok(
+    legacyExecuteSource.slice(callbackStart, callbackStart + 420).includes('enumerable: false'),
+    `${privateVisualCallback} must not enter enumerable execution payloads`
+  );
+}
+const runtimeClearSource = extractFunctionDeclaration(
+  mainSource,
+  'clearAssistantRuntimeAuthority'
+);
+assert.ok(
+  runtimeClearSource.includes('agenticVisualEgressApprovalServiceInstance.clear()')
+    && runtimeClearSource.includes('agenticBrowserSessionServiceInstance.clear()'),
+  'runtime authority reset must revoke visual approvals and destroy hidden browser windows'
+);
+
+const providerDestinationSource = extractFunctionDeclaration(
+  mainSource,
+  'resolveAgenticModelProviderDestination'
+);
+const buildProviderDestinationResolver = new Function(
+  'resolveOpenAiBaseUrl',
+  'OPENAI_API_BASE_URL',
+  'GEMINI_API_BASE_URL',
+  `${providerDestinationSource}; return resolveAgenticModelProviderDestination;`
+);
+assert.deepStrictEqual(
+  buildProviderDestinationResolver(
+    (value) => value,
+    'https://api.openai.com/v1',
+    'https://generativelanguage.googleapis.com/v1beta'
+  )('openai'),
+  { providerId: 'openai', providerOrigin: 'https://api.openai.com' }
+);
+assert.strictEqual(
+  buildProviderDestinationResolver(
+    (value) => value,
+    'https://custom.example/v1',
+    'https://generativelanguage.googleapis.com/v1beta'
+  )('openai'),
+  null,
+  'custom OpenAI-compatible origins must remain text-only'
+);
+assert.strictEqual(
+  buildProviderDestinationResolver(
+    (value) => value,
+    'https://api.openai.com/v1',
+    'https://custom-gemini.example/v1beta'
+  )('gemini'),
+  null,
+  'custom Gemini origins must remain text-only'
+);
+
 assertInOrder(
   mainSource,
   [
@@ -153,15 +349,6 @@ assertInOrder(
   'legacy execute must derive authority before reauthorization and terminalize every rejected job'
 );
 
-const legacyExecuteStart = mainSource.indexOf(
-  'const handleLegacyHarnessExecute = async (action, projectInfo, executionContext = null, contextPack = null) => {'
-);
-const legacyExecuteEnd = mainSource.indexOf(
-  'const legacyHarnessKernel = createLegacyKernelAdapter({',
-  legacyExecuteStart
-);
-const legacyExecuteSource = mainSource.slice(legacyExecuteStart, legacyExecuteEnd);
-assert.ok(legacyExecuteStart >= 0 && legacyExecuteEnd > legacyExecuteStart);
 assert.strictEqual(
   legacyExecuteSource.includes('sessionPermissions.writeAlwaysAllow = true;'),
   false,
@@ -245,6 +432,21 @@ assert.ok(
     && mainSource.includes('runProjectVerification,'),
   'direct user Preview, Terminal and project verification paths must remain registered'
 );
+const agenticInspectionSource = extractFunctionDeclaration(
+  mainSource,
+  'inspectAgenticProjectValidation'
+);
+assert.ok(
+  agenticInspectionSource.includes('scanProject(rootPath)')
+    && agenticInspectionSource.includes('buildProjectVerificationPlan(refreshed')
+    && agenticInspectionSource.includes("requiredNodeScripts: ['build', 'test']")
+    && agenticInspectionSource.includes('requirePythonTests: true'),
+  'create/init inspection must rescan the authorized project and build a strict stack-adaptive plan without executing it'
+);
+assert.ok(
+  mainSource.includes('inspectProjectValidation: inspectAgenticProjectValidation'),
+  'production must expose the stack-adaptive inspection callback only through the agentic loop service boundary'
+);
 assert.ok(
   mainSource.includes('automaticGitDiffCollectionAllowed: false'),
   'automatic files-tree refresh must not execute repository-controlled Git diff callbacks'
@@ -300,9 +502,14 @@ assertInOrder(
 );
 
 for (const productionCanaryDependency of [
+  "require('./main/agent_runtime/default_on_rollout_policy')",
+  "require('./main/agent_runtime/default_on_rollout_safety_interlock')",
   "require('./main/runtime/codex_app_server_runtime_config')",
+  "require('./main/runtime/default_on_rollout_runtime_config')",
   "require('./main/services/codex_app_server_production_client_activation')",
   "require('./main/services/canary_internal_rollout_policy')",
+  "require('./main/services/default_on_canary_rollout_policy_adapter')",
+  "require('./main/services/default_on_rollout_facts_service')",
   "require('./main/services/canary_edit_production_runtime')",
   "require('./main/services/canary_manual_rollback_job_service')",
   "require('./main/services/canary_manual_rollback_journal_adapter')",
@@ -322,10 +529,17 @@ const canaryInitializationSource = extractFunctionDeclaration(
 assertInOrder(
   canaryInitializationSource,
   [
-    "runtimeConfig.configuredMode !== 'canary'",
-    '!runtimeServices',
+    "const runtimeModeEligible = ['canary', 'on'].includes(",
+    "const defaultOnPolicyReady = runtimeConfig.configuredMode !== 'on'",
+    "const defaultOnSafetyReady = runtimeConfig.configuredMode !== 'on'",
+    'if (!runtimeModeEligible',
+    '|| !defaultOnPolicyReady',
+    '|| !defaultOnSafetyReady',
+    '|| !runtimeServices || !isolationReady)',
     'createCodexAppServerRuntimeConfig({ env: process.env })',
-    'createCanaryInternalRolloutPolicy({',
+    "const rolloutPolicy = runtimeConfig.configuredMode === 'on'",
+    '? defaultOnCanaryRolloutPolicy',
+    ': createCanaryInternalRolloutPolicy({',
     'authorizeProjectBinding: (projectId, rootPath) => (',
     'getProjectAccess().authorizeProjectBinding(projectId, rootPath)',
     'const evidenceJournal = createCanaryRolloutEvidenceJournalAdapter({',
@@ -363,6 +577,11 @@ assertInOrder(
     'return terminalResult;',
     'onCanaryFailed: (observation) => {',
     "const reason = readAgenticDeleteDataProperty(observation, 'reason');",
+    "const safetyEvent = runtimeConfig.configuredMode === 'on'",
+    '? classifyDefaultOnCanarySafetyEvent(reason)',
+    'const tripPromise = defaultOnSafetyInterlock.trip(Object.freeze({',
+    'sourceJobId: jobId,',
+    'evidenceDigest,',
     'const terminalResult = markJobFailed(',
     "'execute_failed'",
     "appendAuditEvent('assistant.canary_edit_failed'",
@@ -373,7 +592,7 @@ assertInOrder(
     'canaryEditProductionRuntimeInstance = productionRuntime;',
     'activeKernelId: CANARY_EDIT_PRODUCTION_KERNEL_ID,',
   ],
-  'canary startup must require the portable sandbox, exact internal authorization, pinned client readiness, and a ready production runner before changing kernel identity'
+  'canary/default-on startup must require the portable sandbox, exact rollout authorization, pinned client readiness, and a ready production runner before changing kernel identity'
 );
 assert.ok(
   canaryInitializationSource.includes(
@@ -386,11 +605,12 @@ assertInOrder(
   [
     'runtimeServices.diagnostics()',
     "isolationDiagnostics.state === 'ready'",
-    "runtimeConfig.configuredMode !== 'canary'",
-    '!isolationReady',
+    "const runtimeModeEligible = ['canary', 'on'].includes(",
+    "const defaultOnSafetyReady = runtimeConfig.configuredMode !== 'on'",
+    '|| !runtimeServices || !isolationReady)',
     'createCodexAppServerProductionClientActivation({',
   ],
-  'canary activation must not start a client unless the portable isolation service set is positively ready'
+  'canary/default-on activation must not start a client unless the portable isolation service set is positively ready'
 );
 
 assertInOrder(
@@ -454,10 +674,26 @@ assertInOrder(
     'harnessRouter.execute(action, projectInfo, executionContext)',
     'assistantExecutionCoordinatorInstance = assistantExecutionCoordinator;',
     'const harnessRuntimeConfig = createHarnessRuntimeConfig({ env: process.env });',
+    'const defaultOnRolloutRuntimeConfig = createDefaultOnRolloutRuntimeConfig({',
+    'const defaultOnRolloutPolicy = createDefaultOnRolloutPolicy({',
+    'const defaultOnRolloutFactsService = createDefaultOnRolloutFactsService({',
+    'const defaultOnRolloutSafetyInterlock = createDefaultOnRolloutSafetyInterlock({',
+    'cancelJob(input) {',
+    'const receipt = assistantExecutionCoordinator.revokeJob(',
+    "abortActiveJobExecution(jobId, 'default_on_rollout_safety_trip');",
+    'closeBrowserJob(input) {',
+    'agenticBrowserSessionServiceInstance.closeJob(input)',
+    'closeRuntime() {',
+    'const runtime = canaryEditProductionRuntimeInstance;',
+    'canaryEditProductionRuntimeInstance = null;',
+    'return runtime.close();',
+    'const defaultOnCanaryRolloutPolicy = harnessRuntimeConfig.configuredMode',
     'const canaryRuntimeSelection = await initializeCanaryEditProductionRuntime({',
     'authoritativeKernel: legacyHarnessKernel,',
     'authorityService: assistantJobAuthorityService,',
     'coordinator: assistantExecutionCoordinator,',
+    'defaultOnCanaryRolloutPolicy,',
+    'defaultOnSafetyInterlock: defaultOnRolloutSafetyInterlock,',
     'runtimeConfig: harnessRuntimeConfig,',
     'runtimeServices: assistantExecutionIsolationRuntimeServices,',
     'const activeHarnessKernelId = canaryRuntimeSelection.activeKernelId;',
@@ -473,6 +709,10 @@ assertInOrder(
     'harnessRouter = createHarnessRouter({',
     'canaryEditRunner: canaryRuntimeSelection.canaryEditRunner,',
     'contextPackInjector: contextPackHarnessProductionService.contextPackInjector,',
+    'defaultOnRolloutPolicy,',
+    'defaultOnSafetyInterlock: defaultOnRolloutSafetyInterlock,',
+    'persistDefaultOnRolloutSnapshot: (jobId, snapshot) => (',
+    'resolveDefaultOnRolloutFacts: (identity) => (',
     'runtimeConfig: harnessRuntimeConfig,',
     'const assistantRuntime = createAssistantRuntimeFacade({',
     'authorizePlanningPayload: (input) => (',
@@ -1044,7 +1284,7 @@ const mcpDiscoveryRouteStart = legacyExecuteSource.indexOf(
   'const mcpDiscoveryBrokerFactory = agenticMcpDiscoveryBrokerFactoryInstance;'
 );
 const mcpDiscoveryRouteEnd = legacyExecuteSource.indexOf(
-  'const agenticExecutionOptions = {',
+  'const mcpToolBrokerFactory = agenticMcpToolBrokerFactoryInstance;',
   mcpDiscoveryRouteStart
 );
 const mcpDiscoveryRouteSource = legacyExecuteSource.slice(
@@ -1065,6 +1305,34 @@ for (const forbiddenMcpRouteToken of [
     `the MCP cache-only route must not receive ${forbiddenMcpRouteToken}`
   );
 }
+
+assertInOrder(
+  legacyExecuteSource,
+  [
+    'const mcpToolBrokerFactory = agenticMcpToolBrokerFactoryInstance;',
+    'const mcpToolBinding = currentAgenticDeleteBinding(authorityBinding);',
+    'mcpToolRoute = mcpToolBrokerFactory.createRoute(Object.freeze({',
+    'binding: mcpToolBinding,',
+    "Object.defineProperty(agenticExecutionOptions, 'callMcpTool'",
+    'enumerable: false,',
+    'mcpToolRoute.call(Object.freeze({',
+    "serverId: readAgenticDeleteDataProperty(mcpInput, 'serverId')",
+    "toolName: readAgenticDeleteDataProperty(mcpInput, 'toolName')",
+    "arguments: readAgenticDeleteDataProperty(mcpInput, 'arguments')",
+    "idempotencyKey: readAgenticDeleteDataProperty(mcpInput, 'idempotencyKey')",
+    'Object.freeze(agenticExecutionOptions)',
+  ],
+  'MCP invocation must enter the loop only through the private exact job-bound broker route'
+);
+const privateMcpToolCallbackStart = legacyExecuteSource.indexOf(
+  "Object.defineProperty(agenticExecutionOptions, 'callMcpTool'"
+);
+assert.ok(privateMcpToolCallbackStart >= 0, 'missing private callMcpTool callback');
+assert.ok(
+  legacyExecuteSource.slice(privateMcpToolCallbackStart, privateMcpToolCallbackStart + 640)
+    .includes('enumerable: false'),
+  'callMcpTool must remain non-enumerable'
+);
 
 assertInOrder(
   legacyExecuteSource,
@@ -1181,7 +1449,7 @@ const mcpDiscoveryCompositionStart = mainSource.indexOf(
   'const agenticMcpDiscoveryBrokerFactory = createAgenticMcpDiscoveryBrokerFactory({'
 );
 const mcpDiscoveryCompositionEnd = mainSource.indexOf(
-  'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
+  'const agenticMcpWriteApprovalService = createAgenticMcpWriteApprovalService({',
   mcpDiscoveryCompositionStart
 );
 const mcpDiscoveryCompositionSource = mainSource.slice(
@@ -1201,6 +1469,53 @@ for (const forbiddenMcpCompositionToken of [
     `MCP discovery composition must not receive ${forbiddenMcpCompositionToken}`
   );
 }
+
+assertInOrder(
+  mainSource,
+  [
+    'const agenticMcpWriteApprovalService = createAgenticMcpWriteApprovalService({',
+    'showNativeDialog: showAgenticDeleteNativeDialog,',
+    'authorizeLifecycle: authorizeAgenticDeleteLifecycle,',
+    'authorizeRoot: authorizeAgenticMcpWriteRoot,',
+    'authorizeWriteFrontier: authorizeAgenticMcpWriteFrontier,',
+    'getWindowLease: getAgenticDeleteWindowLease,',
+    'getSignal: getActiveAgenticExecutionSignal,',
+    'agenticMcpWriteApprovalServiceInstance = agenticMcpWriteApprovalService;',
+    'const agenticMcpToolBrokerFactory = createAgenticMcpToolBrokerFactory({',
+    'readDiscoveryCache: () => externalMcpDiscoveryCacheService.listDiscoveries(),',
+    'callExternalTool: callAgenticExternalMcpTool,',
+    'requestWriteApproval: requestAgenticMcpWriteApproval,',
+    'consumeWriteApproval: consumeAgenticMcpWriteApproval,',
+    'getSignal: getActiveAgenticExecutionSignal,',
+    'agenticMcpToolBrokerFactoryInstance = agenticMcpToolBrokerFactory;',
+    'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
+  ],
+  'MCP external effects must be composed behind exact native approval before coordination'
+);
+const mcpWriteFrontierSource = extractFunctionDeclaration(
+  mainSource,
+  'authorizeAgenticMcpWriteFrontier'
+);
+for (const exactMcpWriteField of [
+  "'serverId'",
+  "'toolName'",
+  "'invocationDigest'",
+  'getAgenticDeleteWindowLease()',
+  'currentAgenticDeleteBinding(binding)',
+]) {
+  assert.ok(
+    mcpWriteFrontierSource.includes(exactMcpWriteField),
+    `MCP write frontier must bind ${exactMcpWriteField}`
+  );
+}
+assert.ok(
+  runtimeClearSource.includes('agenticMcpWriteApprovalServiceInstance.clear()'),
+  'runtime authority reset must revoke pending and active MCP write approvals'
+);
+assert.ok(
+  legacyExecuteSource.includes('agenticMcpWriteApprovalServiceInstance.cancelJob(Object.freeze({'),
+  'terminal agentic execution must revoke unused MCP write receipts'
+);
 
 const releaseHookSource = extractFunctionDeclaration(
   mainSource,

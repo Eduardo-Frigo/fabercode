@@ -39,6 +39,21 @@ function parseSsePayload(text = '') {
   };
 }
 
+function normalizeAbortSignal(value) {
+  return typeof AbortSignal === 'function' && value instanceof AbortSignal
+    ? value
+    : null;
+}
+
+function cancelledTransportResult() {
+  return {
+    error: {
+      code: -32004,
+      message: 'Requisição HTTP MCP cancelada.',
+    },
+  };
+}
+
 function createExternalMcpHttpTransport(dependencies = {}) {
   const {
     endpoint,
@@ -69,7 +84,13 @@ function createExternalMcpHttpTransport(dependencies = {}) {
     return { ok: true, url };
   }
 
-  async function sendJsonRpc(method, params = {}, { notification = false } = {}) {
+  async function sendJsonRpc(
+    method,
+    params = {},
+    { notification = false, signal: rawSignal = null } = {}
+  ) {
+    const externalSignal = normalizeAbortSignal(rawSignal);
+    if (externalSignal && externalSignal.aborted) return cancelledTransportResult();
     const endpointValidation = validateEndpoint();
     if (!endpointValidation.ok) {
       return {
@@ -91,7 +112,21 @@ function createExternalMcpHttpTransport(dependencies = {}) {
     const id = notification ? '' : String(nextId);
     if (!notification) nextId += 1;
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    let timedOut = false;
+    const timer = controller ? setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs) : null;
+    const onExternalAbort = controller ? () => controller.abort() : null;
+    if (externalSignal && onExternalAbort) {
+      externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      if (externalSignal && onExternalAbort) {
+        externalSignal.removeEventListener('abort', onExternalAbort);
+      }
+    };
     const body = {
       jsonrpc: '2.0',
       method: normalizeText(method),
@@ -107,9 +142,9 @@ function createExternalMcpHttpTransport(dependencies = {}) {
           ...safeHeaders,
         },
         body: JSON.stringify(body),
-        signal: controller ? controller.signal : undefined,
+        signal: controller ? controller.signal : (externalSignal || undefined),
       });
-      if (timer) clearTimeout(timer);
+      if (externalSignal && externalSignal.aborted) return cancelledTransportResult();
       if (!response || response.ok === false) {
         return {
           error: {
@@ -128,22 +163,32 @@ function createExternalMcpHttpTransport(dependencies = {}) {
       if (payload && payload.error) return { error: payload.error };
       return payload && payload.result !== undefined ? payload.result : payload;
     } catch (error) {
-      if (timer) clearTimeout(timer);
+      if (externalSignal && externalSignal.aborted) return cancelledTransportResult();
       return {
         error: {
           code: error && error.name === 'AbortError' ? -32001 : -32000,
-          message: error && error.message ? error.message : 'Falha no transporte HTTP MCP.',
+          message: timedOut
+            ? 'Timeout na requisição HTTP MCP.'
+            : error && error.message ? error.message : 'Falha no transporte HTTP MCP.',
         },
       };
+    } finally {
+      cleanup();
     }
   }
 
-  async function request(method, params = {}) {
-    return sendJsonRpc(method, params, { notification: false });
+  async function request(method, params = {}, context = {}) {
+    return sendJsonRpc(method, params, {
+      notification: false,
+      signal: context && context.signal,
+    });
   }
 
-  async function notify(method, params = {}) {
-    return sendJsonRpc(method, params, { notification: true });
+  async function notify(method, params = {}, context = {}) {
+    return sendJsonRpc(method, params, {
+      notification: true,
+      signal: context && context.signal,
+    });
   }
 
   function status() {

@@ -128,8 +128,8 @@ async function run() {
       ],
       externalMcpTransports: {
         'visual-auditor': {
-          request: async (method, params) => {
-            externalMcpCalls.push({ method, params });
+          request: async (method, params, context) => {
+            externalMcpCalls.push({ method, params, context });
             if (method === 'initialize') return { serverInfo: { name: 'Visual Auditor MCP' } };
             if (method === 'tools/list') {
               return {
@@ -187,6 +187,7 @@ async function run() {
     assert.strictEqual(externalDiscovery.evidence.data.tools.find((tool) => tool.name === 'visual.capture').allowed, true);
     assert.strictEqual(externalDiscovery.evidence.data.tools.find((tool) => tool.name === 'filesystem.write').allowed, false);
 
+    const externalController = new AbortController();
     const externalCapture = await service.executeCapability({
       capability: 'external_mcp',
       action: 'call_tool',
@@ -196,11 +197,16 @@ async function run() {
         toolName: 'visual.capture',
         arguments: { url: 'http://127.0.0.1:3000/' },
       },
+      signal: externalController.signal,
     });
     assert.strictEqual(externalCapture.ok, true);
     assert.deepStrictEqual(externalCapture.evidence.artifacts, ['/tmp/external-mcp-desktop.png']);
     assert.strictEqual(externalCapture.evidence.data.result.structuredContent.domMetrics[0].desktopNavVisible, true);
     assert.strictEqual(externalMcpCalls.some((entry) => entry.method === 'tools/call'), true);
+    assert.strictEqual(
+      externalMcpCalls.find((entry) => entry.method === 'tools/call').context.signal,
+      externalController.signal
+    );
 
     const externalBlocked = await service.executeCapability({
       capability: 'external_mcp',

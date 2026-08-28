@@ -493,6 +493,24 @@ async function testReadyCompositionIsLazyAndOwnsEvidence() {
   assert.strictEqual(runtime.diagnostics().closed, true);
 }
 
+async function testDefaultOnUsesTheSameIsolatedRuntime() {
+  const fixture = createReadyOptions({
+    options: {
+      runtimeConfig: createHarnessRuntimeConfig({
+        env: { FABER_HARNESS_V2_MODE: 'on' },
+      }),
+    },
+  });
+  const runtime = createCanaryEditRuntimeComposition(fixture.options);
+  assert.strictEqual(runtime.diagnostics().state, 'ready');
+  assert.strictEqual(runtime.diagnostics().requestedMode, 'on');
+  assert.strictEqual(runtime.diagnostics().configuredMode, 'on');
+  assert.strictEqual(Object.isFrozen(runtime.canaryEditRunner), true);
+  const receipt = await runtime.close();
+  assert.strictEqual(receipt.ok, true);
+  assert.strictEqual(receipt.closed, true);
+}
+
 async function testCloseDrainsTrackedExecutionBeforeClient() {
   const pendingExecution = deferred();
   const fixture = createReadyOptions({ executeDeferred: pendingExecution });
@@ -551,6 +569,7 @@ async function run() {
   await testInactiveAndKilledModesStayDisabled();
   await testRequestedCanaryFailsClosedWithoutEveryAuthority();
   await testReadyCompositionIsLazyAndOwnsEvidence();
+  await testDefaultOnUsesTheSameIsolatedRuntime();
   await testCloseDrainsTrackedExecutionBeforeClient();
   await testClientCloseFailureIsSanitizedAndTerminal();
   console.log('canary edit runtime composition tests passed');

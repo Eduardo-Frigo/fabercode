@@ -68,8 +68,9 @@ function handleRequest(message) {
     const projectSession = args.projectSession || {};
     const rootPath = String(projectSession.rootPath || '');
     const artifactPath = String(args.artifactPath || path.join(rootPath, '.faber', 'external-mcp-artifacts', 'stdio-visual-capture.png'));
-    writePng(artifactPath);
-    respond(message.id, {
+    const complete = () => {
+      writePng(artifactPath);
+      respond(message.id, {
       content: [
         { type: 'text', text: 'stdio visual capture complete' },
         { type: 'image', mimeType: 'image/png', path: artifactPath },
@@ -103,7 +104,11 @@ function handleRequest(message) {
         ],
       },
       artifacts: [artifactPath],
-    });
+      });
+    };
+    const delayMs = Number.isSafeInteger(args.delayMs) ? args.delayMs : 0;
+    if (delayMs > 0) setTimeout(complete, delayMs);
+    else complete();
     return;
   }
   respondError(message.id, -32601, `Metodo nao suportado no fixture: ${message.method}`);

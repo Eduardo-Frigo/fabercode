@@ -18,6 +18,12 @@ const {
   sanitizeOpenAiModelName,
 } = require('../cortex/providers/runtime_settings');
 const { createSecretStore } = require('../main/security/secret_store');
+const {
+  createApplicationCreationLiveCorpusModelResolver,
+} = require('../main/services/application_creation_live_corpus_model_resolver');
+const {
+  createApplicationCreationLiveCorpusPolicy,
+} = require('../main/services/application_creation_live_corpus_policy');
 
 function loadDotenv(rootDir) {
   try {
@@ -200,20 +206,33 @@ async function main() {
 
   const settings = runtimeSettings.readSettings();
   const apiKey = runtimeSettings.getEffectiveOpenAiApiKey();
-  const model = sanitizeOpenAiModelName(runtimeSettings.getEffectiveOpenAiModel() || 'gpt-5-codex');
+  const configuredModel = sanitizeOpenAiModelName(
+    runtimeSettings.getEffectiveOpenAiModel() || ''
+  );
   if (settings.selectedProvider !== 'openai') {
     throw new Error('OpenAI provider is not selected in Faber Code settings.');
   }
   if (!apiKey) {
     throw new Error('OpenAI API key is not readable from protected Faber Code settings.');
   }
-  if (!model) {
+  if (!configuredModel) {
     throw new Error('OpenAI model is not configured in Faber Code settings.');
   }
+  const baseUrl = process.env.OPENAI_API_BASE_URL || 'https://api.openai.com/v1';
+  const livePolicy = createApplicationCreationLiveCorpusPolicy({ fs, os, path });
+  const modelResolution = await createApplicationCreationLiveCorpusModelResolver()
+    .resolve({
+      apiKey,
+      baseUrl,
+      configuredModel,
+      policy: livePolicy,
+      metrics: {},
+    });
+  const model = modelResolution.model;
 
   const remoteClients = createRemoteProviderClients({
     AI_REQUEST_TIMEOUT_MS: 180000,
-    OPENAI_API_BASE_URL: process.env.OPENAI_API_BASE_URL || 'https://api.openai.com/v1',
+    OPENAI_API_BASE_URL: baseUrl,
     OPENAI_MIN_REQUEST_INTERVAL_MS: 0,
     RWKV_TEMPERATURE: 0,
     RWKV_TOP_P: 1,
@@ -353,7 +372,9 @@ async function main() {
   console.log(JSON.stringify({
     ok: true,
     provider: 'openai',
+    configuredModel,
     model,
+    usedConfiguredModel: modelResolution.usedConfiguredModel,
     providerCalls: providerCalls.length,
     operations: operations.map((operation) => `${operation.op}:${operation.path}`),
     modifiedFiles: execution.modifiedFiles || [],

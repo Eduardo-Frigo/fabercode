@@ -122,7 +122,7 @@ function createActivation({
 }
 
 async function testReadyClientIsVerifiedBeforeSelection() {
-  for (const mode of ['shadow', 'canary']) {
+  for (const mode of ['shadow', 'canary', 'on']) {
     const fixture = createActivation({ mode });
     assert.strictEqual(fixture.activation.version,
       CODEX_APP_SERVER_PRODUCTION_CLIENT_ACTIVATION_VERSION);
@@ -180,7 +180,6 @@ async function testReadyClientIsVerifiedBeforeSelection() {
 async function testInactiveModesNeverConstructAClient() {
   for (const input of [
     { mode: 'legacy', adapterEnabled: true },
-    { mode: 'on', adapterEnabled: true },
     { mode: 'shadow', adapterEnabled: false },
   ]) {
     const fixture = createActivation(input);

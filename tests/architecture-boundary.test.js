@@ -248,6 +248,12 @@ function assertAgentRuntimeBoundary() {
   const canaryLocalPromotionBackendSource = read(
     'main/services/canary_local_promotion_backend.js'
   );
+  const defaultOnRolloutPolicySource = read(
+    'main/agent_runtime/default_on_rollout_policy.js'
+  );
+  const defaultOnRolloutSafetyInterlockSource = read(
+    'main/agent_runtime/default_on_rollout_safety_interlock.js'
+  );
   assertDoesNotMatch(
     routerSource,
     /require\(['"]\.\/legacy_kernel_adapter['"]\)/,
@@ -313,6 +319,60 @@ function assertAgentRuntimeBoundary() {
         'canaryEditRunner.execute must return a native Promise'
       ),
     'HarnessRouter must activate canary explicitly, require a native async runner, and report unavailable composition fail-closed'
+  );
+  for (const [label, source] of [
+    ['default-on rollout policy', defaultOnRolloutPolicySource],
+    ['default-on safety interlock', defaultOnRolloutSafetyInterlockSource],
+  ]) {
+    assertDoesNotMatch(
+      source,
+      /require\(['"](?:fs|child_process|worker_threads|electron|net|tls|http|https)['"]\)|\bprocess\.env\b|\b(?:spawn|execFile|fork|writeFile|appendFile|unlink|rm|reset)\s*\(/,
+      `${label} must remain a pure main-owned authority boundary without ambient host effects or broad reset`
+    );
+  }
+  const defaultOnExecuteStart = routerSource.indexOf(
+    "} else if (defaultOnSnapshot\n        && defaultOnSnapshot.selectedKernel === 'v2')"
+  );
+  const defaultOnBeginIndex = routerSource.indexOf(
+    'beginDefaultOnSafetyExecution(',
+    defaultOnExecuteStart
+  );
+  const defaultOnRunnerIndex = routerSource.indexOf(
+    'result = await callCanaryEditRunner(',
+    defaultOnBeginIndex
+  );
+  const defaultOnFinishIndex = routerSource.indexOf(
+    'finishDefaultOnSafetyExecution(',
+    defaultOnRunnerIndex
+  );
+  assert.ok(
+    defaultOnExecuteStart >= 0
+      && defaultOnBeginIndex > defaultOnExecuteStart
+      && defaultOnRunnerIndex > defaultOnBeginIndex
+      && defaultOnFinishIndex > defaultOnRunnerIndex
+      && routerSource.indexOf(
+        'captureAndPersistDefaultOnSnapshot(kernelRequest)',
+        routerExecuteDispatchStart
+      ) < defaultOnExecuteStart,
+    'default-on execution must persist its job snapshot, arm safety, execute V2, and settle safety in that order'
+  );
+  assert.ok(
+    defaultOnRolloutSafetyInterlockSource.indexOf("state = 'tripped';")
+      < defaultOnRolloutSafetyInterlockSource.indexOf(
+        'tripPromise = performTrip(request, [...activeJobs.values()]);'
+      )
+      && defaultOnRolloutSafetyInterlockSource.indexOf('synchronousCall(cancelJob')
+        < defaultOnRolloutSafetyInterlockSource.indexOf(
+          'synchronousCall(closeBrowserJob'
+        )
+      && defaultOnRolloutSafetyInterlockSource.indexOf(
+        'synchronousCall(closeBrowserJob'
+      ) < defaultOnRolloutSafetyInterlockSource.indexOf(
+        'Reflect.apply(closeRuntime'
+      )
+      && defaultOnRolloutSafetyInterlockSource.includes('broadResetUsed: false')
+      && defaultOnRolloutSafetyInterlockSource.includes("restartMode: 'legacy_new_job'"),
+    'a safety trip must close admission before cancelling exact jobs, browser sessions, and runtime without broad reset'
   );
   assertDoesNotMatch(
     routerSource.slice(
@@ -405,7 +465,7 @@ function assertAgentRuntimeBoundary() {
         'CODEX_APP_SERVER_PINNED_CLI_VERSION'
       )
       && codexAppServerProductionClientActivationSource.includes(
-        "['shadow', 'canary'].includes(runtimeConfig.configuredMode)"
+        "['shadow', 'canary', 'on'].includes(runtimeConfig.configuredMode)"
       ),
     'production App Server activation must require pinned readiness and complete isolation before selection, cleaning every failed client'
   );
@@ -1392,7 +1452,7 @@ function assertAgentRuntimeBoundary() {
     'canary runtime composition must wire explicit ports without ambient filesystem, Git reset, process, network, or Electron authority'
   );
   const compositionModeIndex = canaryEditRuntimeCompositionSource.indexOf(
-    "if (runtimeConfig.configuredMode !== 'canary')"
+    "if (!['canary', 'on'].includes(runtimeConfig.configuredMode))"
   );
   const compositionSelectorIndex = canaryEditRuntimeCompositionSource.indexOf(
     'const rolloutSelector = createCanaryRolloutSelector({'
@@ -1531,6 +1591,38 @@ function assertAgentRuntimeBoundary() {
         'const rolloutSelector = createCanaryRolloutSelector({'
       ),
     'canary composition must reject an unready App Server client before constructing editing or rollout authority'
+  );
+}
+
+function assertPhase9QualificationBoundary() {
+  const packageConfig = JSON.parse(read('package.json'));
+  const scripts = packageConfig.scripts || {};
+  for (const requiredScript of [
+    'test:default-on-rollout',
+    'test:phase9:contracts',
+    'test:phase9:security',
+    'test:phase9:e2e',
+    'test:phase9:evals',
+    'test:phase9',
+    'test:phase9:live',
+    'test:phase9:qualification',
+  ]) {
+    assert.strictEqual(
+      typeof scripts[requiredScript],
+      'string',
+      `phase 9 qualification must retain ${requiredScript}`
+    );
+  }
+  assert.ok(
+    scripts['test:phase9'].includes('default-on-release-gate.test.js')
+      && scripts['test:phase9'].includes('test:phase9:contracts')
+      && scripts['test:phase9'].includes('test:phase9:security')
+      && scripts['test:phase9'].includes('test:phase9:e2e')
+      && scripts['test:phase9'].includes('test:phase9:evals')
+      && !scripts['test:phase9'].includes('test:phase9:live')
+      && scripts['test:phase9:qualification'].includes('test:phase9')
+      && scripts['test:phase9:qualification'].includes('test:phase9:live'),
+    'phase 9 must keep a deterministic gate and require the separate live gate for final qualification'
   );
 }
 
@@ -3686,6 +3778,7 @@ assertPreloadBoundary();
 assertCortexBoundary();
 assertMainBoundary();
 assertAgentRuntimeBoundary();
+assertPhase9QualificationBoundary();
 assertProjectCapabilityBoundary();
 assertAssistantHarnessCompositionBoundary();
 assertExecutionWorkspaceBoundary();
