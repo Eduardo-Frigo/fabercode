@@ -1,6 +1,7 @@
 const assert = require('assert');
 const { EventEmitter } = require('events');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 const { PassThrough } = require('stream');
@@ -184,23 +185,81 @@ function createRuntime(spawn, net = createAlwaysAvailableNet(), processEnv = {},
   });
 }
 
+function requestPreview(url) {
+  return new Promise((resolve, reject) => {
+    const request = http.get(url, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on('end', () => resolve({
+        statusCode: response.statusCode,
+        headers: response.headers,
+        body: Buffer.concat(chunks).toString('utf8'),
+      }));
+    });
+    request.once('error', reject);
+  });
+}
+
 async function testStaticPreviewCreatesReadySession(tempRoot) {
   const rootPath = path.join(tempRoot, 'static');
-  writeFile(path.join(rootPath, 'index.html'), '<h1>ok</h1>');
+  const outsideSecretPath = path.join(tempRoot, 'outside-secret.txt');
+  writeFile(path.join(rootPath, 'index.html'), '<h1>ok</h1><script type="module" src="/app.js"></script>');
+  writeFile(path.join(rootPath, 'app.js'), 'document.body.dataset.moduleLoaded = "yes";');
+  writeFile(path.join(rootPath, '.faber', 'private.json'), '{"secret":true}');
+  writeFile(path.join(rootPath, '.env'), 'SECRET=must-not-leak');
+  writeFile(outsideSecretPath, 'SYMLINK_SECRET=must-not-leak');
+  let symlinkCreated = false;
+  try {
+    fs.symlinkSync(outsideSecretPath, path.join(rootPath, 'linked-secret.txt'));
+    symlinkCreated = true;
+  } catch {
+    // Some Windows runners do not grant symlink creation privileges.
+  }
   const { spawn, calls } = createFakeSpawn();
   const runtime = createRuntime(spawn);
 
-  const result = await runtime.startProjectPreview(createProjectInfo(rootPath, ['index.html'], ['Projeto generico']));
+  const result = await runtime.startProjectPreview(
+    createProjectInfo(rootPath, ['index.html', 'app.js'], ['Projeto generico']),
+    { port: 4189 }
+  );
 
   assert.strictEqual(result.ok, true);
-  assert.strictEqual(result.session.mode, 'file');
+  assert.strictEqual(result.session.mode, 'static_server');
   assert.strictEqual(result.session.status, 'ready');
-  assert.ok(result.session.url.startsWith('file://'));
+  assert.strictEqual(result.session.url, 'http://127.0.0.1:4189/');
   assert.strictEqual(calls.length, 0);
+
+  const htmlResponse = await requestPreview(result.session.url);
+  assert.strictEqual(htmlResponse.statusCode, 200);
+  assert.match(htmlResponse.headers['content-type'], /^text\/html/);
+  assert.match(htmlResponse.body, /type="module"/);
+
+  const moduleResponse = await requestPreview(result.session.url + 'app.js');
+  assert.strictEqual(moduleResponse.statusCode, 200);
+  assert.match(moduleResponse.headers['content-type'], /javascript/);
+  assert.match(moduleResponse.body, /moduleLoaded/);
+
+  const privateResponse = await requestPreview(result.session.url + '.faber/private.json');
+  assert.strictEqual(privateResponse.statusCode, 404);
+  assert.doesNotMatch(privateResponse.body, /secret/i);
+  const envResponse = await requestPreview(result.session.url + '.env');
+  assert.strictEqual(envResponse.statusCode, 404);
+  assert.doesNotMatch(envResponse.body, /must-not-leak/i);
+  const packageResponse = await requestPreview(result.session.url + 'package.json');
+  assert.strictEqual(packageResponse.statusCode, 404);
+  if (symlinkCreated) {
+    const symlinkResponse = await requestPreview(result.session.url + 'linked-secret.txt');
+    assert.strictEqual(symlinkResponse.statusCode, 404);
+    assert.doesNotMatch(symlinkResponse.body, /SYMLINK_SECRET/);
+  }
 
   const status = runtime.getProjectPreviewRuntimeStatus({ rootPath });
   assert.strictEqual(status.running, true);
   assert.strictEqual(status.session.id, result.session.id);
+
+  const stopped = await runtime.stopProjectPreview({ rootPath });
+  assert.strictEqual(stopped.ok, true);
+  assert.strictEqual(stopped.stopped, true);
 }
 
 async function testServerPreviewSpawnsCommandAndStops(tempRoot) {

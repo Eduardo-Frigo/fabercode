@@ -52,6 +52,7 @@ const pendingValidationMessage = formatters.buildExecutionOutcomeAssistantMessag
     verified: false,
     validationPending: true,
     validationPendingReason: 'portable_sandbox_required',
+    validationPendingChecks: ['tests', 'build'],
     modifiedFiles: ['app/page.tsx'],
   },
   {},
@@ -60,23 +61,45 @@ const pendingValidationMessage = formatters.buildExecutionOutcomeAssistantMessag
     processValidation: { status: 'pending', reason: 'portable_sandbox_required' },
   }
 );
-assert.match(pendingValidationMessage, /apliquei a alteração/i);
-assert.match(pendingValidationMessage, /não foram executados/i);
-assert.match(pendingValidationMessage, /validação ficou pendente/i);
+assert.match(pendingValidationMessage, /alterações aplicadas/i);
+assert.match(pendingValidationMessage, /permanecem pendentes/i);
+assert.match(pendingValidationMessage, /testes/i);
+assert.match(pendingValidationMessage, /build/i);
+assert.doesNotMatch(pendingValidationMessage, /lint|preview/i);
+assert.doesNotMatch(pendingValidationMessage, /sandbox portátil/i);
 assert.doesNotMatch(pendingValidationMessage, /validei o projeto/i);
+assert.doesNotMatch(pendingValidationMessage, /^Concluído/i);
+
+const unspecifiedPendingValidationMessage = formatters.buildExecutionOutcomeAssistantMessage(
+  {
+    ok: true,
+    validationPending: true,
+    modifiedFiles: ['app/page.tsx'],
+  },
+  {},
+  { summary: { errors: 0, warnings: 0, checkedFiles: 1 } }
+);
+assert.strictEqual(
+  unspecifiedPendingValidationMessage,
+  'Alterações aplicadas. A validação técnica solicitada permanece pendente.'
+);
+assert.doesNotMatch(unspecifiedPendingValidationMessage, /lint|testes|build|preview/i);
 
 const agenticPendingValidationMessage = formatters.buildExecutionOutcomeAssistantMessage(
   {
     ok: true,
     agentic: true,
     validationPending: true,
+    validationPendingChecks: ['tests'],
     modifiedFiles: ['app/page.tsx'],
     message: 'Apliquei e todos os testes passaram.',
   },
   {},
   null
 );
-assert.match(agenticPendingValidationMessage, /não foram executados/i);
+assert.match(agenticPendingValidationMessage, /testes permanecem pendentes/i);
+assert.doesNotMatch(agenticPendingValidationMessage, /lint|build|preview/i);
+assert.doesNotMatch(agenticPendingValidationMessage, /sandbox portátil/i);
 assert.doesNotMatch(agenticPendingValidationMessage, /todos os testes passaram/i);
 
 const failedPendingValidationMessage = formatters.buildExecutionOutcomeAssistantMessage(
@@ -134,5 +157,23 @@ const agenticMessage = formatters.buildExecutionOutcomeAssistantMessage(
 );
 
 assert.strictEqual(agenticMessage, 'Consertei o fluxo do chat e já deixei a execução automática ligada.');
+
+assert.strictEqual(
+  formatters.buildTerminalJobMessage({
+    status: 'failed',
+    lastError: 'O processo governado solicitado está indisponível.',
+    checkpoints: {
+      agentic_terminal_evidence: {
+        data: {
+          version: 'agentic-terminal-evidence.v1',
+          outcome: 'blocked',
+          grounded: false,
+        },
+      },
+    },
+  }),
+  null,
+  'agentic terminal evidence already owns the truthful assistant message'
+);
 
 console.log('renderer-app-formatters.test.js: ok');

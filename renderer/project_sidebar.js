@@ -235,7 +235,8 @@
 
         const convItem = document.createElement('button');
         convItem.type = 'button';
-        const isActiveConversation = getActiveConversationId(projectId) === conv.id;
+        const isActiveConversation = getSelectedProjectId() === projectId
+          && getActiveConversationId(projectId) === conv.id;
         convItem.className = 'conversation-item' + (isActiveConversation ? ' active' : '');
         convItem.textContent = conv.title || uiText('defaultConversation', 'Conversa');
 

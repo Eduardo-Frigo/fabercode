@@ -68,6 +68,7 @@ const PRIVATE_MUTATION_METADATA_PATHS = Object.freeze([
 const TERMINAL_SUCCESS = new Set(['success', 'completed']);
 const TERMINAL_ROLLBACK = new Set([
   'failed',
+  'blocked',
   'cancelled',
   'canceled',
   'runtime_interrupted',

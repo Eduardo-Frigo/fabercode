@@ -61,7 +61,8 @@ const REQUEST_KEYS = Object.freeze(['userMessage', 'attachments']);
 const ATTACHMENT_KEYS = Object.freeze(['name', 'type', 'size', 'path']);
 const BIND_JOB_KEYS = Object.freeze(['submissionId', 'jobId']);
 const BIND_ACTION_KEYS = Object.freeze(['binding', 'action']);
-const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'runtime_interrupted']);
+const RESTORE_PENDING_APPROVAL_KEYS = Object.freeze(['jobId']);
+const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'blocked', 'cancelled', 'runtime_interrupted']);
 const ACTIVE_JOB_STATUSES = new Set(['running', 'retry_pending', 'paused_memory_pressure']);
 const EXECUTABLE_JOB_PHASES = new Set(['awaiting_user_confirmation', 'execute_pending']);
 const SECRET_KEY_PATTERN = /(secret|password|passphrase|token|api.?key|authorization|cookie|credential|private.?key)/i;
@@ -382,6 +383,7 @@ function createAssistantJobAuthorityService(options = {}) {
   const sessions = new Map();
   let generation = 0;
   let beginActive = false;
+  let restoreActive = false;
   let lastObservedAt = -1;
   let clockHealthy = true;
 
@@ -597,7 +599,7 @@ function createAssistantJobAuthorityService(options = {}) {
   }
 
   function beginSubmission(input) {
-    if (beginActive) return Object.freeze({ ok: false, reason: ASSISTANT_JOB_AUTHORITY_REASONS.BUSY });
+    if (beginActive || restoreActive) return Object.freeze({ ok: false, reason: ASSISTANT_JOB_AUTHORITY_REASONS.BUSY });
     beginActive = true;
     const observedGeneration = generation;
     try {
@@ -656,6 +658,142 @@ function createAssistantJobAuthorityService(options = {}) {
       return Object.freeze({ ok: false, reason: ASSISTANT_JOB_AUTHORITY_REASONS.INVALID_INPUT });
     } finally {
       beginActive = false;
+    }
+  }
+
+  function restorePendingApproval(input) {
+    if (beginActive || restoreActive) {
+      return deny(ASSISTANT_JOB_AUTHORITY_REASONS.BUSY);
+    }
+    restoreActive = true;
+    let provisionalRecord = null;
+    try {
+      const fields = assertExactDataRecord(
+        input,
+        RESTORE_PENDING_APPROVAL_KEYS,
+        'pending approval recovery'
+      );
+      const jobId = normalizeText(fields.get('jobId'), 'jobId', 256);
+      if (!SAFE_JOB_ID_PATTERN.test(jobId)) {
+        return deny(ASSISTANT_JOB_AUTHORITY_REASONS.INVALID_INPUT);
+      }
+
+      const observedGeneration = generation;
+      const rawResult = getJobById(jobId);
+      if (rawResult && typeof rawResult.then === 'function') {
+        return deny(ASSISTANT_JOB_AUTHORITY_REASONS.JOB_NOT_FOUND);
+      }
+      if (!isPlainObject(rawResult)) {
+        return deny(ASSISTANT_JOB_AUTHORITY_REASONS.JOB_NOT_FOUND);
+      }
+      const resultFields = new Map(ownDataEntries(rawResult));
+      const job = resultFields.get('job');
+      if (resultFields.get('ok') !== true || !isPlainObject(job)) {
+        return deny(ASSISTANT_JOB_AUTHORITY_REASONS.JOB_NOT_FOUND);
+      }
+      ownDataEntries(job);
+      const jobValue = (field) => {
+        const descriptor = Object.getOwnPropertyDescriptor(job, field);
+        return descriptor
+          && descriptor.enumerable === true
+          && Object.hasOwn(descriptor, 'value')
+          ? descriptor.value
+          : undefined;
+      };
+      if (jobValue('id') !== jobId
+        || jobValue('status') !== 'running'
+        || jobValue('phase') !== 'awaiting_user_confirmation') {
+        return deny(ASSISTANT_JOB_AUTHORITY_REASONS.LIFECYCLE_INACTIVE);
+      }
+
+      const context = normalizeAuthorityContext(jobValue('authorityContext'));
+      const request = normalizeRequest(jobValue('request'));
+      if (context.actionDigest === null
+        || jobValue('projectId') !== context.projectId
+        || jobValue('rootPath') !== context.canonicalRootPath) {
+        return deny(ASSISTANT_JOB_AUTHORITY_REASONS.CONTEXT_MISMATCH);
+      }
+
+      const existingSubmissionId = sessions.get(context.sessionId);
+      if (existingSubmissionId) {
+        const existing = submissions.get(existingSubmissionId);
+        if (!existing
+          || !existing.active
+          || existing.jobId !== jobId
+          || !contextsMatch(existing.context, context)) {
+          return deny(ASSISTANT_JOB_AUTHORITY_REASONS.CONTEXT_MISMATCH);
+        }
+        const verifiedExisting = verifyPersistedJob(existing);
+        if (!verifiedExisting.ok) return deny(verifiedExisting.reason);
+        return allow(bindingFromRecord(existing), {
+          authorityContext: existing.context,
+          request: verifiedExisting.persistedRequest,
+          restored: true,
+          idempotent: true,
+        });
+      }
+      if (submissions.size >= maxActiveSubmissions || sessions.size >= maxActiveSessions) {
+        return deny(ASSISTANT_JOB_AUTHORITY_REASONS.CAPACITY_EXCEEDED);
+      }
+
+      const rawAuthorization = authorizeProjectBinding(
+        context.projectId,
+        context.canonicalRootPath
+      );
+      if (rawAuthorization && typeof rawAuthorization.then === 'function') {
+        return deny(ASSISTANT_JOB_AUTHORITY_REASONS.PROJECT_NOT_AUTHORIZED);
+      }
+      const projectAuthorization = normalizeProjectAuthorization(
+        rawAuthorization,
+        context.projectId
+      );
+      if (generation !== observedGeneration || !clockHealthy) {
+        return deny(ASSISTANT_JOB_AUTHORITY_REASONS.LIFECYCLE_INACTIVE);
+      }
+      if (!projectAuthorization
+        || projectAuthorization.canonicalRootPath !== context.canonicalRootPath
+        || projectAuthorization.realRootPath !== context.realRootPath
+        || createSubmissionDigest(request, projectAuthorization.authorizedContext)
+          !== context.submissionDigest) {
+        return deny(ASSISTANT_JOB_AUTHORITY_REASONS.CONTEXT_MISMATCH);
+      }
+
+      const checkedAt = readNow();
+      const submissionId = uniqueId(
+        submissionIdFactory,
+        SAFE_SUBMISSION_ID_PATTERN,
+        submissions
+      );
+      if (!submissionId || generation !== observedGeneration) {
+        return deny(ASSISTANT_JOB_AUTHORITY_REASONS.ID_COLLISION);
+      }
+      provisionalRecord = {
+        submissionId,
+        context,
+        request,
+        authorizedContext: projectAuthorization.authorizedContext,
+        projectAuthorization,
+        jobId,
+        createdAt: checkedAt,
+        active: true,
+        mutating: false,
+        version: 0,
+      };
+      submissions.set(submissionId, provisionalRecord);
+      sessions.set(context.sessionId, submissionId);
+      const verified = verifyPersistedJob(provisionalRecord);
+      if (!verified.ok) return deny(verified.reason);
+      return allow(bindingFromRecord(provisionalRecord), {
+        authorityContext: context,
+        request: verified.persistedRequest,
+        restored: true,
+        idempotent: false,
+      });
+    } catch {
+      if (provisionalRecord && provisionalRecord.active) removeRecord(provisionalRecord);
+      return deny(ASSISTANT_JOB_AUTHORITY_REASONS.INVALID_INPUT);
+    } finally {
+      restoreActive = false;
     }
   }
 
@@ -1021,6 +1159,7 @@ function createAssistantJobAuthorityService(options = {}) {
     revoke: revokeExact,
     revokeExact,
     revokeSubmission,
+    restorePendingApproval,
     snapshotForUi,
     verifyActionDigest,
   });

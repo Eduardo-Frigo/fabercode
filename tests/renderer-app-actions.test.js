@@ -4,6 +4,7 @@ const path = require('path');
 const vm = require('vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'app_actions.js'), 'utf8');
+const appSource = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'app.js'), 'utf8');
 
 function deferred() {
   let resolve;
@@ -187,6 +188,11 @@ async function run() {
   assert.strictEqual(harness.calls.executePlan.length, 0, 'model autoExecute must never execute');
   assert.strictEqual(harness.state.pendingAction, firstAction);
   assert.strictEqual(harness.state.pendingActionJobId, 'job-authorized-1');
+  assert.strictEqual(
+    harness.calls.showPending[0].text,
+    'Confirme para iniciar a execução governada.'
+  );
+  assert.doesNotMatch(harness.calls.showPending[0].text, /área temporária|validação real/i);
 
   const sendGate = deferred();
   const doubleSend = createHarness({ plan: sendGate.promise });
@@ -202,6 +208,16 @@ async function run() {
 
   const firstConfirmation = harness.controller.onConfirm();
   const duplicateConfirmation = harness.controller.onConfirm();
+  assert.strictEqual(
+    harness.state.pendingAction,
+    null,
+    'a consumed confirmation must disappear before the execution promise settles'
+  );
+  assert.strictEqual(
+    harness.state.pendingActionJobId,
+    null,
+    'the consumed confirmation job binding must leave the pending UI immediately'
+  );
   await duplicateConfirmation;
   assert.strictEqual(JSON.stringify(harness.calls.executePlan), JSON.stringify([{ jobId: 'job-authorized-1' }]));
 
@@ -533,6 +549,7 @@ async function run() {
   assert.strictEqual(source.includes('pendingAction.jobId'), false);
   assert.strictEqual(source.includes('requestedMode'), false);
   assert.strictEqual(source.includes('Ação cancelada. Nenhum arquivo foi alterado.'), false);
+  assert.doesNotMatch(appSource, /pendingActionEl\.dataset\.uxTone\s*=\s*['"]warning['"]/);
   console.log('renderer-app-actions.test.js: ok');
 }
 

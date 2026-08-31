@@ -76,6 +76,7 @@ const EXECUTE_KEYS = Object.freeze([
 const TERMINAL_STATUSES = new Set([
   'completed',
   'failed',
+  'blocked',
   'cancelled',
   'runtime_interrupted',
 ]);

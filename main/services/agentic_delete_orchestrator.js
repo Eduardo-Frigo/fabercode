@@ -90,6 +90,7 @@ const TERMINAL_OUTCOMES = new Set([
   'success',
   'completed',
   'failed',
+  'blocked',
   'cancelled',
   'canceled',
   'runtime_interrupted',

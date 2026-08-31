@@ -46,6 +46,103 @@ function buildAuthorityContext(overrides = {}) {
     ...overrides,
   };
 }
+function runPendingApprovalRestartTests(tempRoot) {
+  const recoveryRoot = path.join(tempRoot, 'pending-approval-restart');
+  const terminalSnapshots = [];
+  const store = createStore(recoveryRoot, {
+    MAX_JOBS_STORED: 20,
+    onJobTerminal: (snapshot) => terminalSnapshots.push(snapshot),
+  });
+  const actionDigest = `sha256:${'7'.repeat(64)}`;
+  const createPendingJob = (label) => {
+    const created = store.createAuthorizedAssistantJob({
+      userMessage: label,
+      authorityContext: buildAuthorityContext({
+        sessionId: `session-${label.replace(/[^a-z]/g, '-')}`,
+      }),
+    });
+    assert.strictEqual(created.ok, true);
+    assert.strictEqual(store.bindJobActionDigest(created.job.id, actionDigest).ok, true);
+    assert.strictEqual(
+      store.markJobPhase(created.job.id, 'awaiting_user_confirmation').ok,
+      true
+    );
+    return created.job.id;
+  };
+
+  const resumableJobId = createPendingJob('resumable-approval');
+  const plannedAction = {
+    type: 'agentic_tool_loop',
+    rootPath: '/workspace/project-authority',
+    executionCommand: {
+      protocol: 'faber-exec-v2',
+      task_type: 'agentic_tool_loop',
+      root_path: '/workspace/project-authority',
+    },
+  };
+  const persisted = store.persistPendingApprovalRecovery(resumableJobId, {
+    schemaVersion: 'assistant-pending-approval-recovery.v1',
+    actionDigest,
+    requestedMode: 'ask_each',
+    action: plannedAction,
+  });
+  assert.strictEqual(persisted.ok, true);
+  plannedAction.type = 'renderer-mutated';
+  assert.strictEqual(
+    store.getAuthorizedJobById(resumableJobId).job.pendingApprovalRecovery.action.type,
+    'agentic_tool_loop'
+  );
+  const publicPendingJob = store.getJobById(resumableJobId).job;
+  assert.strictEqual(Object.hasOwn(publicPendingJob, 'pendingApprovalRecovery'), false);
+
+  const missingCheckpointJobId = createPendingJob('missing-checkpoint');
+  const mismatchedCheckpointJobId = createPendingJob('mismatched-checkpoint');
+  assert.strictEqual(
+    store.persistPendingApprovalRecovery(mismatchedCheckpointJobId, {
+      schemaVersion: 'assistant-pending-approval-recovery.v1',
+      actionDigest: `sha256:${'8'.repeat(64)}`,
+      requestedMode: 'ask_each',
+      action: { type: 'agentic_tool_loop' },
+    }).code,
+    'pending_approval_digest_mismatch'
+  );
+
+  const interrupted = store.createAssistantJob({ userMessage: 'execução já iniciada' }).job;
+  assert.strictEqual(store.markJobPhase(interrupted.id, 'execute_staging').ok, true);
+
+  const recovery = store.recoverInterruptedJobs('runtime_restart_test');
+  assert.deepStrictEqual(recovery, {
+    ok: true,
+    recovered: 1,
+    jobIds: [interrupted.id],
+  });
+  const resumed = store.getAuthorizedJobById(resumableJobId).job;
+  assert.strictEqual(resumed.status, 'running');
+  assert.strictEqual(resumed.phase, 'awaiting_user_confirmation');
+  assert.strictEqual(resumed.events[0].type, 'job.pending_approval_recovery_ready');
+
+  for (const expiredJobId of [missingCheckpointJobId, mismatchedCheckpointJobId]) {
+    const expired = store.getAuthorizedJobById(expiredJobId).job;
+    assert.strictEqual(expired.status, 'cancelled');
+    assert.strictEqual(expired.phase, 'approval_expired');
+    assert.strictEqual(expired.lastError, null);
+    assert.strictEqual(expired.retryState.retryable, false);
+    assert.strictEqual(expired.events[0].type, 'job.approval_expired');
+  }
+
+  assert.deepStrictEqual(store.listPendingApprovalRecoveryCandidates(), {
+    ok: true,
+    jobIds: [resumableJobId],
+  });
+  assert.strictEqual(
+    terminalSnapshots.filter((snapshot) => snapshot.phase === 'approval_expired').length,
+    2
+  );
+  assert.strictEqual(
+    terminalSnapshots.filter((snapshot) => snapshot.phase === 'runtime_interrupted').length,
+    1
+  );
+}
 
 function runAuthorizedRecoveryCandidateTests(tempRoot) {
   const recoveryRoot = path.join(tempRoot, 'authorized-recovery-candidates');
@@ -615,6 +712,25 @@ function runAuthorityAndLifecycleTests(tempRoot) {
   assert.strictEqual(terminalSnapshots.at(-1).status, 'failed');
   assert.strictEqual(terminalSnapshots.at(-1).phase, 'failed');
 
+  const blockedSnapshots = [];
+  const blockedStore = createStore(path.join(tempRoot, 'blocked-terminal'), {
+    onJobTerminal: (snapshot) => blockedSnapshots.push(snapshot),
+  });
+  const blockedJob = blockedStore.createAssistantJob({ userMessage: 'bloquear sem falhar' }).job;
+  const blockedResult = blockedStore.markJobBlocked(
+    blockedJob.id,
+    'governed_process_unavailable',
+    'execute_blocked'
+  );
+  assert.strictEqual(blockedResult.ok, true);
+  assert.strictEqual(blockedResult.job.status, 'blocked');
+  assert.strictEqual(blockedResult.job.phase, 'execute_blocked');
+  assert.strictEqual(blockedResult.job.lastError, 'governed_process_unavailable');
+  assert.strictEqual(blockedResult.job.retryState.retryable, false);
+  assert.strictEqual(blockedResult.job.events[0].type, 'job.blocked');
+  assert.strictEqual(blockedSnapshots.at(-1).status, 'blocked');
+  assert.strictEqual(blockedStore.markJobFailed(blockedJob.id, 'late_failure').code, 'job_terminal');
+
   const cancelledJob = store.createAssistantJob({ userMessage: 'cancelar' }).job;
   assert.strictEqual(store.markJobCancelled(cancelledJob.id).ok, true);
   assert.strictEqual(terminalSnapshots.at(-1).status, 'cancelled');
@@ -863,6 +979,7 @@ function run() {
     assert.ok(stateAfterRemoval.auditTrail.some((event) => event.type === 'job.interrupted'));
 
     runAuthorityAndLifecycleTests(tempRoot);
+    runPendingApprovalRestartTests(tempRoot);
     runAuthorizedRecoveryCandidateTests(tempRoot);
     runAtomicJobsPersistenceTests(tempRoot);
     runUnhealthyJobsStorageTests(tempRoot);

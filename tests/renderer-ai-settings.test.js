@@ -4,6 +4,18 @@ const path = require('path');
 const vm = require('vm');
 
 const rendererDir = path.join(__dirname, '..', 'renderer');
+const indexSource = fs.readFileSync(path.join(rendererDir, 'index.html'), 'utf8');
+[
+  'project-state-modal-close',
+  'project-file-modal-close',
+  'ai-settings-close',
+].forEach((id) => {
+  assert.match(
+    indexSource,
+    new RegExp(`<button[^>]*id="${id}"[^>]*aria-label="Fechar"[^>]*data-i18n-aria-label="close"[^>]*>`),
+    `${id} must expose a localized close action instead of an unlabeled multiplication sign`
+  );
+});
 const sources = [
   'ai_settings_support.js',
   'ai_settings_draft.js',

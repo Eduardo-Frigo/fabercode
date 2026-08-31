@@ -294,6 +294,128 @@ async function main() {
     'close_browser_preview',
     'finish_task',
   ]);
+  assert.match(result.message, /preview visual capturado/i);
+  assert.doesNotMatch(result.message, /preview não foi capturado/i);
+
+  // Browser verbs explicitly requested by the user are evidence obligations.
+  // A textual finish_task claim cannot replace a governed open receipt.
+  const prematureBrowserEvents = [];
+  const prematureBrowserService = createAgenticToolLoopService({
+    appendJobEvent(jobId, type, payload) {
+      prematureBrowserEvents.push({ jobId, type, payload });
+    },
+    executeCapability: async () => ({ ok: true }),
+    executeTool: async () => ({ ok: true }),
+    getEffectiveOpenAiModel: () => 'gpt-5-codex',
+    getSelectedAiProvider: () => 'openai',
+    requestModelTurn: async () => ({
+      responseId: 'premature-browser-finish-1',
+      text: '',
+      toolCalls: [{
+        callId: 'premature-browser-finish',
+        name: 'finish_task',
+        input: { status: 'success', summary: 'preview preparado' },
+      }],
+    }),
+    setJobCheckpoint() {},
+    shouldUseModel: () => true,
+    maxSteps: 1,
+  });
+  const prematureBrowserResult = await prematureBrowserService.executeAction({
+    type: 'agentic_tool_loop',
+    userMessage: 'Abra o preview no navegador governado antes de concluir. Não capture imagens.',
+    attachments: [],
+    conversationMessages: [],
+    jobId: 'job-premature-browser-finish',
+  }, {
+    id: 'project-browser-tool-loop',
+    rootPath: '/projects/browser-tool-loop',
+  }, Object.freeze({
+    jobId: 'job-premature-browser-finish',
+    openBrowser: async () => ({ status: 'completed', decision: 'allow', output: { ok: true, session } }),
+    navigateBrowser: async () => ({ status: 'completed', decision: 'allow', output: { ok: true, session } }),
+    interactBrowser: async () => ({ ok: true }),
+    captureBrowser: async () => ({
+      ok: true,
+      session,
+      image: { type: 'image', mimeType: 'image/png', data: pngBase64, bytes: png.length },
+    }),
+    inspectBrowser: async () => ({ ok: true, session, console: [], requestFailures: [] }),
+    closeBrowser: async () => ({ ok: true, closed: true, sessionId: session.id }),
+  }));
+  assert.strictEqual(prematureBrowserResult.ok, false);
+  const rejectedPrematureBrowserFinish = prematureBrowserEvents.find(
+    (entry) => entry.type === 'job.agentic_tool_result'
+      && entry.payload && entry.payload.toolName === 'finish_task'
+  );
+  assert(rejectedPrematureBrowserFinish);
+  assert.strictEqual(rejectedPrematureBrowserFinish.payload.ok, false);
+  assert.match(rejectedPrematureBrowserFinish.payload.message, /abrir.*preview/i);
+  assert.doesNotMatch(rejectedPrematureBrowserFinish.payload.message, /captur/i);
+
+  let failureTurn = 0;
+  let sanitizedInteractionFailure = null;
+  const interactionFailureService = createAgenticToolLoopService({
+    appendJobEvent() {},
+    executeCapability: async () => ({ ok: true }),
+    executeTool: async () => ({ ok: true }),
+    getEffectiveOpenAiModel: () => 'gpt-5-codex',
+    getSelectedAiProvider: () => 'openai',
+    requestModelTurn: async ({ toolResults }) => {
+      failureTurn += 1;
+      if (failureTurn === 1) {
+        return {
+          responseId: 'browser-failure-turn-1',
+          text: '',
+          toolCalls: [{
+            callId: 'browser-missing-element',
+            name: 'interact_browser_preview',
+            input: {
+              sessionId: session.id,
+              action: 'click',
+              selector: '[data-testid="missing"]',
+              idempotencyKey: 'browser-click-missing-1',
+            },
+          }],
+        };
+      }
+      sanitizedInteractionFailure = JSON.parse(toolResults[0].output);
+      return {
+        responseId: 'browser-failure-turn-2',
+        text: '',
+        toolCalls: [{
+          callId: 'finish-browser-failure-diagnostic',
+          name: 'finish_task',
+          input: { status: 'failure', summary: 'elemento não encontrado' },
+        }],
+      };
+    },
+    setJobCheckpoint() {},
+    shouldUseModel: () => true,
+    maxSteps: 3,
+  });
+  const interactionFailureResult = await interactionFailureService.executeAction({
+    type: 'agentic_tool_loop',
+    userMessage: 'Audite o preview em modo somente leitura.',
+    attachments: [],
+    conversationMessages: [],
+    jobId: 'job-browser-interaction-failure',
+  }, {
+    id: 'project-browser-tool-loop',
+    rootPath: '/projects/browser-tool-loop',
+  }, Object.freeze({
+    jobId: 'job-browser-interaction-failure',
+    openBrowser: async () => ({ status: 'completed', decision: 'allow', output: { ok: true, session } }),
+    navigateBrowser: async () => ({ status: 'completed', decision: 'allow', output: { ok: true, session } }),
+    interactBrowser: async () => ({ ok: false, reason: 'element_not_found' }),
+    captureBrowser: async () => ({ ok: true, session, image: { type: 'image', mimeType: 'image/png', data: pngBase64, bytes: png.length } }),
+    inspectBrowser: async () => ({ ok: true, session, console: [], requestFailures: [] }),
+    closeBrowser: async () => ({ ok: true, closed: true, sessionId: session.id }),
+  }));
+  assert.strictEqual(interactionFailureResult.ok, false);
+  assert.deepStrictEqual(sanitizedInteractionFailure.errors, ['BROWSER_INTERACTION_ELEMENT_NOT_FOUND']);
+  assert.match(sanitizedInteractionFailure.message, /elemento solicitado não foi encontrado/i);
+
   console.log('agentic-browser-tool-loop.test.js: ok');
 }
 

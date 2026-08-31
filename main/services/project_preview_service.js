@@ -1,6 +1,5 @@
 const defaultFs = require('fs');
 const defaultPath = require('path');
-const { pathToFileURL: defaultPathToFileURL } = require('url');
 
 function normalizePreviewText(value = '') {
   return String(value || '')
@@ -19,7 +18,6 @@ function createProjectPreviewService(dependencies = {}) {
   const {
     fs = defaultFs,
     path = defaultPath,
-    pathToFileURL = defaultPathToFileURL,
   } = dependencies;
 
   function safeExists(filePath) {
@@ -437,21 +435,23 @@ function createProjectPreviewService(dependencies = {}) {
     };
   }
 
-  function buildStaticPreviewPlan(rootPath, entryFile) {
-    const entryPath = path.join(rootPath, entryFile);
-    const url = pathToFileURL(entryPath).href;
+  function buildStaticPreviewPlan(rootPath, entryFile, options = {}) {
+    const requestedPort = Number.parseInt(options.port || '4173', 10);
+    const port = requestedPort >= 1 && requestedPort <= 65535 ? requestedPort : 4173;
+    const url = `http://127.0.0.1:${port}/`;
     return {
       ok: true,
       ready: true,
       rootPath,
-      mode: 'file',
+      mode: 'static_server',
       stack: 'web_estatico',
       status: 'ready',
       entryFile,
+      port,
       url,
-      steps: [buildOpenStep({ url, detail: `Abrir ${entryFile} diretamente no navegador.` })],
+      steps: [buildOpenStep({ url, detail: `Abrir ${entryFile} por servidor HTTP local seguro.` })],
       warnings: [],
-      message: 'Preview estático pronto.',
+      message: 'Preview estático HTTP pronto.',
     };
   }
 
@@ -680,7 +680,7 @@ function createProjectPreviewService(dependencies = {}) {
     }
 
     if (staticEntry) {
-      return buildStaticPreviewPlan(rootPath, staticEntry);
+      return buildStaticPreviewPlan(rootPath, staticEntry, options);
     }
 
     if (packageJson) {

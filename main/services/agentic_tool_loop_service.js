@@ -13,7 +13,26 @@ function defaultClipText(value = '', maxChars = 12000) {
   return `${text.slice(0, Math.max(0, maxChars - 3))}...`;
 }
 
+function actionExplicitlyRequiresReadOnly(action = {}) {
+  const text = String(action.userMessage || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return false;
+  if (/\b(?:somente|apenas)\s+(?:em\s+)?(?:modo\s+)?leitura\b|\bread[-\s]?only\b/.test(text)) {
+    return true;
+  }
+  const auditIntent = /\b(?:auditoria|audite|inspecao|inspecione|revisao|revise|verificacao|verifique|teste)\b/.test(text);
+  const deniesAnyMutation = /\bnao\s+(?:altere|modifique|edite|escreva|crie)\s+(?:nenhum|qualquer)\s+(?:arquivo|codigo)\b/.test(text)
+    || /\bdo not\s+(?:change|modify|edit|write|create)\s+(?:any\s+)?(?:file|code)\b/.test(text);
+  const restoresMutation = /\b(?:mas|porem|exceto|alem|but|except)\b.*\b(?:altere|modifique|edite|escreva|crie|change|modify|edit|write|create)\b/.test(text);
+  return auditIntent && deniesAnyMutation && !restoresMutation;
+}
+
 function actionRequiresFileChanges(action = {}) {
+  if (actionExplicitlyRequiresReadOnly(action)) return false;
   const route = action.routeDecision || {};
   const productRoute = route.productRoute || {};
   const text = `${action.userMessage || ''} ${route.executionMessage || ''}`.toLowerCase();
@@ -26,13 +45,109 @@ function actionRequiresFileChanges(action = {}) {
   );
 }
 
+function classifyProcessValidationCheck(input = {}) {
+  const command = String(input.command || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .pop()
+    .replace(/\.cmd$/i, '')
+    .toLowerCase();
+  const args = Array.isArray(input.args)
+    ? input.args.map((value) => String(value || '').toLowerCase())
+    : [];
+  const packageRunner = ['npm', 'pnpm', 'yarn', 'bun'].includes(command);
+  const scriptName = packageRunner
+    ? (args[0] === 'run' ? args[1] : args[0])
+    : '';
+  const signature = [command, scriptName, ...args].filter(Boolean).join(' ');
+  if (/\b(?:test|tests|jest|vitest|mocha|pytest|node:test)\b/.test(signature)
+    || (command === 'node' && args.includes('--test'))) return 'tests';
+  if (/\b(?:lint|eslint|stylelint|ruff|flake8)\b/.test(signature)) return 'lint';
+  if (/\b(?:build|tsc|compile|bundle)\b/.test(signature)) return 'build';
+  return '';
+}
+
+function requestedProcessValidationChecks(action = {}) {
+  const route = action && action.routeDecision && typeof action.routeDecision === 'object'
+    ? action.routeDecision
+    : {};
+  const text = [action && action.userMessage, route.executionMessage]
+    .map((value) => String(value || ''))
+    .join(' ')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return Object.freeze([]);
+
+  const requested = [];
+  const asksToRun = (subjectPattern) => new RegExp(
+    `\\b(?:execute|executar|rode|rodar|run)\\b[^.!?\\n]{0,140}\\b(?:${subjectPattern})\\b`
+  ).test(text);
+  const explicitlyNegates = (subjectPattern) => new RegExp(
+    `\\b(?:nao|do not)\\s+(?:execute|executar|rode|rodar|run)\\b[^.!?\\n]{0,100}\\b(?:${subjectPattern})\\b`
+  ).test(text);
+  const namesCommand = (scriptPattern) => new RegExp(
+    `\\b(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(?:${scriptPattern})\\b`
+  ).test(text);
+
+  const definitions = [
+    ['lint', 'lint|eslint|stylelint|ruff|flake8', 'lint'],
+    ['tests', 'teste|testes|test|tests|jest|vitest|mocha|pytest', 'test|tests'],
+    ['build', 'build|compilacao|compile|bundle', 'build'],
+  ];
+  definitions.forEach(([check, subjectPattern, scriptPattern]) => {
+    if (!explicitlyNegates(subjectPattern)
+      && (asksToRun(subjectPattern) || namesCommand(scriptPattern))) {
+      requested.push(check);
+    }
+  });
+  return Object.freeze(requested);
+}
+
+function requestedBrowserValidationChecks(action = {}) {
+  const route = action && action.routeDecision && typeof action.routeDecision === 'object'
+    ? action.routeDecision
+    : {};
+  const text = [action && action.userMessage, route.executionMessage]
+    .map((value) => String(value || ''))
+    .join(' ')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return Object.freeze([]);
+
+  const captureDenied = /\b(?:nao|sem|do not|without)\b[^.!?\n]{0,80}\b(?:captur\w*|screenshots?|imagens?|images?)\b/.test(text);
+  const openRequested = /\b(?:abra|abrir|open|prepare|preparar|inicie|iniciar|carregue|carregar)\b[^.!?\n]{0,120}\b(?:preview|navegador|browser|pagina|site|app)\b/.test(text)
+    || /\bpreview\b[^.!?\n]{0,60}\b(?:somente leitura|read[- ]only|navegador|browser)\b/.test(text);
+  const inspectRequested = /\b(?:inspecione|inspecionar|inspect|verifique|verificar|check)\b[^.!?\n]{0,120}\b(?:console|requests?|requisicoes?|preview|navegador|browser)\b/.test(text)
+    || /\b(?:console|requests? com falha|failed requests?|requisicoes? com falha)\b/.test(text);
+  const visualValidationRequested = /\b(?:valide|validar|verifique|verificar|teste|testar)\b[^.!?\n]{0,100}\b(?:visualmente|visual|preview)\b/.test(text);
+  const captureRequested = !captureDenied && (
+    /\b(?:capture|capturar|captura|screenshot)\b/.test(text)
+    || visualValidationRequested
+  );
+
+  const requested = [];
+  if (openRequested || inspectRequested || captureRequested) requested.push('opened');
+  if (inspectRequested) requested.push('inspected');
+  if (captureRequested) requested.push('captured');
+  return Object.freeze(requested);
+}
+
 const AGENTIC_EXECUTION_CANCELLED_CODE = 'AGENTIC_EXECUTION_CANCELLED';
 const AGENTIC_PROCESS_VALIDATION_PENDING_MESSAGE =
-  'Tarefa encerrada. Lint, testes e build não foram executados e o preview não foi capturado; essas validações permanecem pendentes até existir um sandbox portátil.';
+  'Tarefa encerrada. Lint, testes, build e preview não foram executados nesta tarefa; essas validações permanecem pendentes.';
 const AGENTIC_FAILURE_VALIDATION_PENDING_MESSAGE =
   'Tarefa encerrada como falha. Lint, testes e build não foram executados e o preview não foi capturado; essas validações permanecem pendentes.';
+const AGENTIC_FINISH_REQUEST_RECEIVED_MESSAGE =
+  'Solicitação de encerramento recebida; o Harness verificará as evidências antes de concluir.';
 const AGENTIC_MODEL_TEXT_CHECKPOINT_MESSAGE =
   'Resposta textual do modelo recebida; conteúdo omitido. Validações de processo permanecem pendentes.';
+const AGENTIC_TERMINAL_EVIDENCE_VERSION = 'agentic-terminal-evidence.v1';
 const AGENTIC_PROCESS_EXECUTION_POLICIES = Object.freeze({
   BROKERED: 'brokered',
   SUSPENDED: 'suspended',
@@ -515,6 +630,35 @@ function failedBrowserToolResult(raw, fallbackCode = 'BROWSER_OPERATION_FAILED')
   });
 }
 
+const BROWSER_INTERACTION_SAFE_FAILURES = Object.freeze({
+  element_not_found: Object.freeze({
+    code: 'BROWSER_INTERACTION_ELEMENT_NOT_FOUND',
+    message: 'O elemento solicitado não foi encontrado na página local.',
+  }),
+  element_not_clickable: Object.freeze({
+    code: 'BROWSER_INTERACTION_ELEMENT_NOT_CLICKABLE',
+    message: 'O elemento solicitado não estava disponível para clique na página local.',
+  }),
+});
+
+function failedBrowserInteractionToolResult(raw) {
+  const reason = ownDataValue(raw, 'reason');
+  const safeFailure = typeof reason === 'string'
+    ? BROWSER_INTERACTION_SAFE_FAILURES[reason]
+    : null;
+  if (!safeFailure) {
+    return failedBrowserToolResult(raw, 'BROWSER_INTERACTION_FAILED');
+  }
+  return Object.freeze({
+    ok: false,
+    status: 'failed',
+    message: safeFailure.message,
+    errors: Object.freeze([safeFailure.code]),
+    modifiedFiles: Object.freeze([]),
+    data: Object.freeze({ reason }),
+  });
+}
+
 function sanitizeBrowserNavigationToolResult(raw, operation) {
   try {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)
@@ -605,7 +749,7 @@ function sanitizeBrowserInteractionToolResult(raw, expected) {
     if (!snapshot || snapshot.ok !== true
       || snapshot.action !== expected.action
       || snapshot.selector !== expected.selector) {
-      return failedBrowserToolResult(snapshot, 'BROWSER_INTERACTION_FAILED');
+      return failedBrowserInteractionToolResult(snapshot);
     }
     const tagName = Object.hasOwn(snapshot, 'tagName')
       ? boundedBrowserText(snapshot.tagName, 'interaction tag name', 128)
@@ -2232,7 +2376,7 @@ function createAgenticToolLoopService(dependencies = {}) {
       '2. COMO USAR edit_file_fuzzy: Copie um bloco único e exato do arquivo (targetContent) e forneça a nova versão (replacementContent). O sistema ignora espaços e indentações para te ajudar a encontrar o bloco.',
       processExecutionAvailable
         ? processControlAvailable
-          ? '3. PROCESSOS ISOLADOS: Use `run_command` somente para executáveis e argumentos explícitos. Acompanhe com `read_command_output` e `wait_command`; use `stop_command` para encerrar a árvore. Rede, shell composto e preview continuam indisponíveis; nunca afirme uma validação sem evidência retornada pelas ferramentas.'
+          ? '3. PROCESSOS ISOLADOS: Use `run_command` somente para executáveis e argumentos explícitos. Acompanhe com `read_command_output` e `wait_command`; use `stop_command` para encerrar a árvore. Rede e shell composto continuam indisponíveis. Se o pedido exigir lint, testes ou build, cada verificação precisa terminar com recibo succeeded antes de `finish_task` com sucesso. Nunca afirme validação sem evidência retornada pelas ferramentas.'
           : '3. PROCESSOS ISOLADOS: Use `run_command` somente para executáveis e argumentos explícitos dentro do sandbox do job. Rede, shell composto e preview continuam indisponíveis; nunca afirme uma validação sem evidência retornada pelas ferramentas.'
         : '3. VALIDAÇÃO HONESTA: As ferramentas atuais não executam lint, testes ou builds nem capturam preview. Nunca afirme que essas validações foram executadas; informe-as como pendentes para o usuário.',
       domainReadAvailable
@@ -3160,7 +3304,7 @@ function createAgenticToolLoopService(dependencies = {}) {
             ok: succeeded,
             status: input.status,
             message: succeeded
-              ? AGENTIC_PROCESS_VALIDATION_PENDING_MESSAGE
+              ? AGENTIC_FINISH_REQUEST_RECEIVED_MESSAGE
               : AGENTIC_FAILURE_VALIDATION_PENDING_MESSAGE,
             _isFinishTask: true,
           };
@@ -3587,6 +3731,151 @@ function createAgenticToolLoopService(dependencies = {}) {
     let mutationRevision = 0;
     let lastCreationInspection = null;
 
+    let browserOpenSucceeded = false;
+    let browserCaptureSucceeded = false;
+    let browserInspectionSucceeded = false;
+    let processTerminalStatus = '';
+
+    let processExecutionPerformed = false;
+    let processExecutionFailureObserved = false;
+    let activeProcessCheck = '';
+    const processCheckStatuses = new Map();
+    const successfulToolNames = new Set();
+    const failedToolNames = new Set();
+    const requiredProcessChecks = requestedProcessValidationChecks(action);
+    const requiredBrowserChecks = requestedBrowserValidationChecks(action);
+    const buildValidationEvidence = () => Object.freeze({
+      process: Object.freeze({
+        performed: processExecutionPerformed,
+        terminalStatus: processTerminalStatus,
+        successfulChecks: Object.freeze(['lint', 'tests', 'build'].filter(
+          (check) => processCheckStatuses.get(check) === 'succeeded'
+        )),
+        failedChecks: Object.freeze(['lint', 'tests', 'build'].filter(
+          (check) => ['failed', 'timed_out', 'stopped'].includes(processCheckStatuses.get(check))
+        )),
+      }),
+      browser: Object.freeze({
+        opened: browserOpenSucceeded,
+        captured: browserCaptureSucceeded,
+        inspected: browserInspectionSucceeded,
+      }),
+    });
+
+    const processCheckLabels = Object.freeze({ lint: 'lint', tests: 'testes', build: 'build' });
+    const browserCheckLabels = Object.freeze({
+      opened: 'abrir o preview no navegador governado',
+      inspected: 'inspecionar o preview no navegador governado',
+      captured: 'capturar o preview no navegador governado',
+    });
+    const formatNamedList = (items = []) => {
+      if (items.length <= 1) return items[0] || '';
+      return `${items.slice(0, -1).join(', ')} e ${items.at(-1)}`;
+    };
+    const successfulProcessChecks = () => ['lint', 'tests', 'build'].filter(
+      (check) => processCheckStatuses.get(check) === 'succeeded'
+    );
+    const failedProcessChecks = () => ['lint', 'tests', 'build'].filter(
+      (check) => ['failed', 'timed_out', 'stopped'].includes(processCheckStatuses.get(check))
+    );
+    const successfulBrowserChecks = () => [
+      browserOpenSucceeded ? 'opened' : '',
+      browserInspectionSucceeded ? 'inspected' : '',
+      browserCaptureSucceeded ? 'captured' : '',
+    ].filter(Boolean);
+    let terminalEvidence = null;
+    const buildTerminalEvidence = ({ outcome, claim, grounded }) => Object.freeze({
+      version: AGENTIC_TERMINAL_EVIDENCE_VERSION,
+      outcome,
+      claim,
+      grounded: grounded === true,
+      required: Object.freeze({
+        process: Object.freeze([...requiredProcessChecks]),
+        browser: Object.freeze([...requiredBrowserChecks]),
+      }),
+      satisfied: Object.freeze({
+        process: Object.freeze(successfulProcessChecks()),
+        browser: Object.freeze(successfulBrowserChecks()),
+      }),
+      failed: Object.freeze({
+        process: Object.freeze(failedProcessChecks()),
+        tools: Object.freeze([...failedToolNames]),
+      }),
+      capabilities: Object.freeze({
+        process: processExecutionAvailable,
+        browser: browserAvailable,
+      }),
+    });
+
+    const getRequiredCapabilityFailure = () => {
+      const processMissing = requiredProcessChecks.length > 0 && !processExecutionAvailable;
+      const browserMissing = requiredBrowserChecks.length > 0 && !browserAvailable;
+      if (!processMissing && !browserMissing) return null;
+      const unavailable = [];
+      if (processMissing) unavailable.push('o processo governado solicitado está indisponível');
+      if (browserMissing) unavailable.push('o navegador governado solicitado está indisponível');
+      return Object.freeze({
+        code: 'agentic_required_capability_unavailable',
+        message: `Não foi possível comprovar a conclusão: ${formatNamedList(unavailable)} nesta execução.`,
+      });
+    };
+
+    const getRequiredProcessValidationGateFailure = () => {
+      const incomplete = requiredProcessChecks.filter(
+        (check) => processCheckStatuses.get(check) !== 'succeeded'
+      );
+      if (!incomplete.length) return null;
+      const named = incomplete.map((check) => processCheckLabels[check] || check);
+      const list = formatNamedList(named);
+      return Object.freeze({
+        code: 'agentic_required_process_validation_incomplete',
+        message: `Antes de concluir, execute e confirme no processo isolado: ${list}. Cada validação solicitada exige um recibo terminal succeeded.`,
+      });
+    };
+
+    const getRequiredBrowserValidationGateFailure = () => {
+      const completed = new Set(successfulBrowserChecks());
+      const incomplete = requiredBrowserChecks.filter((check) => !completed.has(check));
+      if (!incomplete.length) return null;
+      return Object.freeze({
+        code: 'agentic_required_browser_validation_incomplete',
+        message: `Antes de concluir, é necessário ${formatNamedList(incomplete.map(
+          (check) => browserCheckLabels[check] || check
+        ))}. Cada ação solicitada exige um recibo do navegador governado.`,
+      });
+    };
+
+    const buildTrustedSuccessMessage = () => {
+      const completed = [];
+      if (browserCaptureSucceeded) {
+        completed.push(browserInspectionSucceeded
+          ? 'Preview visual capturado e inspecionado no navegador governado.'
+          : 'Preview visual capturado no navegador governado.');
+      } else if (browserInspectionSucceeded) {
+        completed.push('Preview aberto e inspecionado no navegador governado.');
+      } else if (browserOpenSucceeded) {
+        completed.push('Preview aberto no navegador governado.');
+      }
+      if (processTerminalStatus === 'succeeded') {
+        const checks = successfulProcessChecks().map((check) => processCheckLabels[check] || check);
+        completed.push(`Processo isolado concluído com sucesso${checks.length ? `: ${formatNamedList(checks)}` : ''}.`);
+      }
+      if (!completed.length) return AGENTIC_PROCESS_VALIDATION_PENDING_MESSAGE;
+      return `Tarefa encerrada com evidência do Harness. ${completed.join(' ')}`;
+    };
+
+    const buildTrustedFailureMessage = () => {
+      const checks = failedProcessChecks().map((check) => processCheckLabels[check] || check);
+      if (checks.length) {
+        return `Execução encerrada como falha: a validação de ${formatNamedList(checks)} falhou com recibo terminal do processo governado.`;
+      }
+      const tools = [...failedToolNames];
+      if (tools.length) {
+        return `Execução encerrada como falha: a ferramenta governada ${formatNamedList(tools)} falhou; o Harness preservou o recibo técnico.`;
+      }
+      return 'Não foi possível comprovar a falha alegada: não há recibo técnico correspondente.';
+    };
+
     const buildCreationInspectionEvidence = () => {
       if (!lastCreationInspection) return null;
       return Object.freeze({
@@ -3681,7 +3970,11 @@ function createAgenticToolLoopService(dependencies = {}) {
         const finalMessage = allTextParts.filter(Boolean).join('\n\n').trim();
 
         const emptyTurnInspectionFailure = getCreationInspectionGateFailure();
-        if (modifiedFiles.size > 0 && finalMessage && !emptyTurnInspectionFailure) {
+        const emptyTurnCapabilityFailure = getRequiredCapabilityFailure();
+        const emptyTurnValidationFailure = getRequiredProcessValidationGateFailure()
+          || getRequiredBrowserValidationGateFailure();
+        if (modifiedFiles.size > 0 && finalMessage && !emptyTurnInspectionFailure
+          && !emptyTurnCapabilityFailure && !emptyTurnValidationFailure) {
           const creationInspection = buildCreationInspectionEvidence();
           return {
             ok: true,
@@ -3689,6 +3982,12 @@ function createAgenticToolLoopService(dependencies = {}) {
             message: AGENTIC_PROCESS_VALIDATION_PENDING_MESSAGE,
             modifiedFiles: [...modifiedFiles],
             toolRuns,
+            validationEvidence: buildValidationEvidence(),
+            terminalEvidence: buildTerminalEvidence({
+              outcome: 'succeeded',
+              claim: 'implicit',
+              grounded: true,
+            }),
             ...(creationInspection ? { creationInspection } : {}),
           };
         }
@@ -3726,12 +4025,52 @@ function createAgenticToolLoopService(dependencies = {}) {
             toolRuns,
           };
         }
+        if (emptyTurnCapabilityFailure || emptyTurnValidationFailure) {
+          const terminalFailure = emptyTurnCapabilityFailure || emptyTurnValidationFailure;
+          return {
+            ok: false,
+            status: 'blocked',
+            errors: [terminalFailure.code],
+            message: terminalFailure.message,
+            modifiedFiles: [...modifiedFiles],
+            toolRuns,
+            validationEvidence: buildValidationEvidence(),
+            terminalEvidence: buildTerminalEvidence({
+              outcome: 'blocked',
+              claim: 'implicit',
+              grounded: false,
+            }),
+          };
+        }
+        if (modifiedFiles.size === 0 && successfulToolNames.size === 0) {
+          const message = 'Não foi possível comprovar a conclusão: nenhuma ferramenta governada produziu um recibo de sucesso.';
+          return {
+            ok: false,
+            status: 'blocked',
+            errors: ['agentic_terminal_claim_unverified'],
+            message,
+            modifiedFiles: [],
+            toolRuns,
+            validationEvidence: buildValidationEvidence(),
+            terminalEvidence: buildTerminalEvidence({
+              outcome: 'blocked',
+              claim: 'implicit',
+              grounded: false,
+            }),
+          };
+        }
         return {
           ok: true,
           agentic: true,
           message: AGENTIC_PROCESS_VALIDATION_PENDING_MESSAGE,
           modifiedFiles: [...modifiedFiles],
           toolRuns,
+          validationEvidence: buildValidationEvidence(),
+          terminalEvidence: buildTerminalEvidence({
+            outcome: 'succeeded',
+            claim: 'implicit',
+            grounded: true,
+          }),
         };
       }
 
@@ -3823,26 +4162,151 @@ function createAgenticToolLoopService(dependencies = {}) {
             });
           }
         }
+        if (result && result.ok
+          && ['open_browser_preview', 'navigate_browser_preview'].includes(tool.name)) {
+          browserOpenSucceeded = true;
+        }
+        if (result && result.ok && tool.name === 'capture_browser_preview') {
+          browserCaptureSucceeded = true;
+        }
+        if (result && result.ok && tool.name === 'inspect_browser_preview') {
+          browserInspectionSucceeded = true;
+        }
+        if (['run_command', 'read_command_output', 'wait_command', 'stop_command'].includes(tool.name)
+          && (!result || result.ok !== true)) {
+          processExecutionFailureObserved = true;
+        }
+        if (result && result.ok && tool.name === 'run_command') {
+          processExecutionPerformed = true;
+          activeProcessCheck = classifyProcessValidationCheck(call.input || {});
+          if (result.data && processStatusIsTerminal(result.data.status)) {
+            processTerminalStatus = result.data.status;
+            if (activeProcessCheck) processCheckStatuses.set(activeProcessCheck, result.data.status);
+          }
+        }
+        if (result && result.ok
+          && ['read_command_output', 'wait_command'].includes(tool.name)
+          && result.data && processStatusIsTerminal(result.data.status)) {
+          processTerminalStatus = result.data.status;
+          if (activeProcessCheck) processCheckStatuses.set(activeProcessCheck, result.data.status);
+        }
+
+        if (tool.name !== 'finish_task') {
+          if (result && result.ok) successfulToolNames.add(tool.name);
+          else failedToolNames.add(tool.name);
+        }
+
         if (result && result._isFinishTask) {
-          const inspectionFailure = result.status === 'success'
+          const finishClaim = result.status === 'success' ? 'success' : 'failure';
+          const inspectionFailure = finishClaim === 'success'
             ? getCreationInspectionGateFailure()
             : null;
-          if (inspectionFailure) {
+          const capabilityFailure = getRequiredCapabilityFailure();
+          const processGateFailure = getRequiredProcessValidationGateFailure();
+          const browserGateFailure = getRequiredBrowserValidationGateFailure();
+          const groundedFailure = failedProcessChecks().length > 0
+            || processExecutionFailureObserved
+            || failedToolNames.size > 0;
+          const groundedSuccess = modifiedFiles.size > 0 || successfulToolNames.size > 0;
+
+          if (capabilityFailure) {
             result = {
               ok: false,
               status: 'blocked',
-              message: inspectionFailure.message,
-              errors: [inspectionFailure.code],
+              message: capabilityFailure.message,
+              errors: [capabilityFailure.code],
               modifiedFiles: [],
+              _isFinishTask: true,
+              _terminalOutcome: 'blocked',
             };
+            isFinished = true;
+            finishReason = capabilityFailure.message;
+            lastFinishResult = result;
+            terminalEvidence = buildTerminalEvidence({
+              outcome: 'blocked',
+              claim: finishClaim,
+              grounded: false,
+            });
+          } else if (finishClaim === 'success'
+            && (inspectionFailure || processGateFailure || browserGateFailure)) {
+            const terminalGateFailure = inspectionFailure || processGateFailure || browserGateFailure;
+            result = {
+              ok: false,
+              status: 'blocked',
+              message: terminalGateFailure.message,
+              errors: [terminalGateFailure.code],
+              modifiedFiles: [],
+              _isFinishTask: true,
+            };
+          } else if (finishClaim === 'success' && !groundedSuccess
+            && !actionRequiresFileChanges(action)) {
+            const ungroundedMessage = 'Não foi possível comprovar a conclusão: nenhuma ferramenta governada produziu um recibo de sucesso.';
+            result = {
+              ok: false,
+              status: 'blocked',
+              message: ungroundedMessage,
+              errors: ['agentic_terminal_claim_unverified'],
+              modifiedFiles: [],
+              _isFinishTask: true,
+              _terminalOutcome: 'blocked',
+            };
+            isFinished = true;
+            finishReason = ungroundedMessage;
+            lastFinishResult = result;
+            terminalEvidence = buildTerminalEvidence({
+              outcome: 'blocked',
+              claim: finishClaim,
+              grounded: false,
+            });
+          } else if (finishClaim === 'failure' && !groundedFailure
+            && (processGateFailure || browserGateFailure)) {
+            const terminalGateFailure = processGateFailure || browserGateFailure;
+            result = {
+              ok: false,
+              status: 'blocked',
+              message: terminalGateFailure.message,
+              errors: [terminalGateFailure.code],
+              modifiedFiles: [],
+              _isFinishTask: true,
+            };
+          } else if (finishClaim === 'failure' && !groundedFailure) {
+            const ungroundedMessage = buildTrustedFailureMessage();
+            result = {
+              ok: false,
+              status: 'blocked',
+              message: ungroundedMessage,
+              errors: ['agentic_terminal_claim_unverified'],
+              modifiedFiles: [],
+              _isFinishTask: true,
+              _terminalOutcome: 'blocked',
+            };
+            isFinished = true;
+            finishReason = ungroundedMessage;
+            lastFinishResult = result;
+            terminalEvidence = buildTerminalEvidence({
+              outcome: 'blocked',
+              claim: finishClaim,
+              grounded: false,
+            });
           } else {
             isFinished = true;
-            finishReason = result.message;
-            lastFinishResult = result;
+            finishReason = finishClaim === 'success'
+              ? buildTrustedSuccessMessage()
+              : buildTrustedFailureMessage();
+            lastFinishResult = {
+              ...result,
+              message: finishReason,
+              _terminalOutcome: finishClaim === 'success' ? 'succeeded' : 'failed',
+            };
+            terminalEvidence = buildTerminalEvidence({
+              outcome: finishClaim === 'success' ? 'succeeded' : 'failed',
+              claim: finishClaim,
+              grounded: finishClaim === 'failure' ? groundedFailure : groundedSuccess,
+            });
           }
         }
 
-        if (!result.ok) {
+        if (!result.ok && tool.name !== 'finish_task') {
           recentFailedToolCalls.push(currentCallKey);
           if (recentFailedToolCalls.length > 10) recentFailedToolCalls.shift();
         }
@@ -3896,17 +4360,38 @@ function createAgenticToolLoopService(dependencies = {}) {
       }
 
       if (isFinished) {
+        if (lastFinishResult && lastFinishResult._terminalOutcome === 'blocked') {
+          return {
+            ok: false,
+            status: 'blocked',
+            errors: Array.isArray(lastFinishResult.errors)
+              ? lastFinishResult.errors
+              : ['agentic_terminal_claim_unverified'],
+            message: finishReason,
+            modifiedFiles: [...modifiedFiles],
+            toolRuns,
+            validationEvidence: buildValidationEvidence(),
+            terminalEvidence,
+          };
+        }
         if (lastFinishResult && lastFinishResult.status === 'failure') {
           return {
             ok: false,
             status: 'failed',
             errors: ['agentic_finish_failure'],
-            message: AGENTIC_FAILURE_VALIDATION_PENDING_MESSAGE,
+            message: finishReason,
             modifiedFiles: [...modifiedFiles],
             toolRuns,
+            validationEvidence: buildValidationEvidence(),
+            terminalEvidence,
           };
         }
         if (actionRequiresFileChanges(action) && modifiedFiles.size === 0 && lastFinishResult && lastFinishResult.status === 'success') {
+          const noChangeTerminalEvidence = buildTerminalEvidence({
+            outcome: 'blocked',
+            claim: 'success',
+            grounded: false,
+          });
           return {
             ok: false,
             status: 'blocked',
@@ -3914,6 +4399,8 @@ function createAgenticToolLoopService(dependencies = {}) {
             message: 'Sem alterações de arquivos requeridas ao finalizar.',
             modifiedFiles: [],
             toolRuns,
+            validationEvidence: buildValidationEvidence(),
+            terminalEvidence: noChangeTerminalEvidence,
           };
         }
         return {
@@ -3922,6 +4409,8 @@ function createAgenticToolLoopService(dependencies = {}) {
           message: finishReason,
           modifiedFiles: [...modifiedFiles],
           toolRuns,
+          validationEvidence: buildValidationEvidence(),
+          terminalEvidence,
           ...(buildCreationInspectionEvidence()
             ? { creationInspection: buildCreationInspectionEvidence() }
             : {}),

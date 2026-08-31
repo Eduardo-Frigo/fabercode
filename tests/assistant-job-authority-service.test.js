@@ -164,6 +164,39 @@ function run() {
   );
   assert.strictEqual(harness.service.verifyActionDigest({ binding, action }).authorized, true);
 
+  const restoreHarness = createHarness();
+  const restoreStarted = restoreHarness.begin();
+  const { job: restoreJob, binding: restoreBinding } = restoreHarness.bind(restoreStarted);
+  const restoreAction = {
+    type: 'write_files',
+    files: [{ path: 'src/recovered.js', content: 'ok' }],
+  };
+  const restoreActionBinding = restoreHarness.service.bindAction({
+    binding: restoreBinding,
+    action: restoreAction,
+  });
+  persistAction(restoreJob, restoreActionBinding);
+  restoreJob.phase = 'awaiting_user_confirmation';
+
+  assert.strictEqual(restoreHarness.service.clear().ok, true);
+  const restoredPending = restoreHarness.service.restorePendingApproval({ jobId: restoreJob.id });
+  assert.strictEqual(restoredPending.authorized, true);
+  assert.strictEqual(restoredPending.restored, true);
+  assert.strictEqual(restoredPending.idempotent, false);
+  assert.deepStrictEqual(restoredPending.binding, restoreBinding);
+  assert.deepStrictEqual(restoredPending.request, request());
+  assert.strictEqual(
+    restoreHarness.service.authorizeExecute({
+      binding: restoredPending.binding,
+      action: restoreAction,
+    }).authorized,
+    true
+  );
+  assert.strictEqual(
+    restoreHarness.service.restorePendingApproval({ jobId: restoreJob.id }).idempotent,
+    true
+  );
+
   // Canonical order never changes submission/action digests.
   const canonicalA = createHarness();
   canonicalA.setAuthorizedContext({ z: [2, { b: true, a: false }], a: 'value' });

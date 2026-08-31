@@ -1,14 +1,18 @@
 const { spawn: defaultSpawn } = require('child_process');
+const defaultFs = require('fs');
+const defaultHttp = require('http');
 const defaultNet = require('net');
+const defaultPath = require('path');
 const { createProjectNodeRuntimeService } = require('./project_node_runtime_service');
 const { createProjectPreviewReadinessService } = require('./project_preview_readiness_service');
 
 function createProjectPreviewRuntimeService(dependencies = {}) {
   const {
     buildProjectPreviewPlan,
-    fs = null,
+    fs = defaultFs,
+    http = defaultHttp,
     net = defaultNet,
-    path = null,
+    path = defaultPath,
     nodeRuntimeService = createProjectNodeRuntimeService({ fs, path, processEnv: dependencies.processEnv || process.env }),
     processEnv = process.env,
     previewReadinessService = createProjectPreviewReadinessService({
@@ -25,6 +29,55 @@ function createProjectPreviewRuntimeService(dependencies = {}) {
 
   const sessionsById = new Map();
   const sessionsByRoot = new Map();
+
+  const staticPreviewBlockedSegments = new Set([
+    '.faber',
+    '.git',
+    '.hg',
+    '.svn',
+    'node_modules',
+  ]);
+  const staticPreviewBlockedBasenames = new Set([
+    'package-lock.json',
+    'package.json',
+    'pnpm-lock.yaml',
+    'yarn.lock',
+    'bun.lock',
+    'bun.lockb',
+  ]);
+  const staticPreviewMimeTypes = new Map([
+    ['.html', 'text/html; charset=utf-8'],
+    ['.htm', 'text/html; charset=utf-8'],
+    ['.css', 'text/css; charset=utf-8'],
+    ['.js', 'text/javascript; charset=utf-8'],
+    ['.mjs', 'text/javascript; charset=utf-8'],
+    ['.json', 'application/json; charset=utf-8'],
+    ['.map', 'application/json; charset=utf-8'],
+    ['.svg', 'image/svg+xml'],
+    ['.png', 'image/png'],
+    ['.jpg', 'image/jpeg'],
+    ['.jpeg', 'image/jpeg'],
+    ['.gif', 'image/gif'],
+    ['.webp', 'image/webp'],
+    ['.avif', 'image/avif'],
+    ['.ico', 'image/x-icon'],
+    ['.wasm', 'application/wasm'],
+    ['.xml', 'application/xml; charset=utf-8'],
+    ['.txt', 'text/plain; charset=utf-8'],
+    ['.csv', 'text/csv; charset=utf-8'],
+    ['.webmanifest', 'application/manifest+json; charset=utf-8'],
+    ['.woff', 'font/woff'],
+    ['.woff2', 'font/woff2'],
+    ['.ttf', 'font/ttf'],
+    ['.otf', 'font/otf'],
+    ['.eot', 'application/vnd.ms-fontobject'],
+    ['.mp4', 'video/mp4'],
+    ['.webm', 'video/webm'],
+    ['.mp3', 'audio/mpeg'],
+    ['.wav', 'audio/wav'],
+    ['.ogg', 'audio/ogg'],
+    ['.pdf', 'application/pdf'],
+  ]);
 
   function normalizeRootPath(projectInfo = {}) {
     return String(projectInfo && projectInfo.rootPath ? projectInfo.rootPath : '').trim();
@@ -198,7 +251,7 @@ function createProjectPreviewRuntimeService(dependencies = {}) {
     const rootPath = normalizeRootPath(projectInfo);
     const session = findSession({ rootPath });
     if (!session || !isRunningPreviewStatus(session.status)) return null;
-    if (session.mode === 'server' && (session.url || session.port)) {
+    if (['server', 'static_server'].includes(session.mode) && (session.url || session.port)) {
       const readiness = await waitForServerReady(session, {
         ...options,
         readyTimeoutMs: Math.max(10, Number(options.reuseSessionTimeoutMs || 2500)),
@@ -389,6 +442,126 @@ function createProjectPreviewRuntimeService(dependencies = {}) {
     };
   }
 
+  function pathIsInside(rootPath, candidatePath) {
+    const relative = path.relative(rootPath, candidatePath);
+    return relative === ''
+      || (!relative.startsWith(`..${path.sep}`)
+        && relative !== '..'
+        && !path.isAbsolute(relative));
+  }
+
+  function resolveStaticPreviewFile(plan = {}, requestUrl = '/') {
+    if (typeof requestUrl !== 'string' || requestUrl.length > 8192 || requestUrl.includes('\0')) {
+      return null;
+    }
+    const rootPath = path.resolve(String(plan.rootPath || ''));
+    const entryFile = String(plan.entryFile || 'index.html').replace(/\\/g, '/');
+    const hasPublicRoot = entryFile.startsWith('public/');
+    const documentRoot = hasPublicRoot ? path.join(rootPath, 'public') : rootPath;
+    const entryRelative = hasPublicRoot ? entryFile.slice('public/'.length) : entryFile;
+    let pathname = '';
+    try {
+      pathname = decodeURIComponent(new URL(requestUrl, 'http://127.0.0.1/').pathname);
+    } catch {
+      return null;
+    }
+    if (!pathname || pathname.includes('\0') || pathname.includes('\\')) return null;
+    let relativePath = pathname === '/'
+      ? entryRelative
+      : pathname.replace(/^\/+/, '');
+    if (pathname !== '/' && pathname.endsWith('/')) relativePath = `${relativePath}index.html`;
+    const segments = relativePath.split('/').filter(Boolean);
+    if (!segments.length
+      || segments.some((segment) => segment === '..'
+        || segment.startsWith('.')
+        || staticPreviewBlockedSegments.has(segment.toLowerCase()))) {
+      return null;
+    }
+    const basename = segments[segments.length - 1].toLowerCase();
+    if (staticPreviewBlockedBasenames.has(basename)) return null;
+    const extension = path.extname(basename).toLowerCase();
+    const contentType = staticPreviewMimeTypes.get(extension);
+    if (!contentType) return null;
+
+    try {
+      const resolvedDocumentRoot = path.resolve(documentRoot);
+      const candidatePath = path.resolve(resolvedDocumentRoot, ...segments);
+      if (!pathIsInside(resolvedDocumentRoot, candidatePath)) return null;
+      const realDocumentRoot = fs.realpathSync(resolvedDocumentRoot);
+      const realCandidatePath = fs.realpathSync(candidatePath);
+      if (!pathIsInside(realDocumentRoot, realCandidatePath)) return null;
+      const stat = fs.statSync(realCandidatePath);
+      if (!stat.isFile() || stat.size > 64 * 1024 * 1024) return null;
+      return { filePath: realCandidatePath, contentType, size: stat.size };
+    } catch {
+      return null;
+    }
+  }
+
+  function sendStaticPreviewFailure(response, statusCode, message) {
+    const body = String(message || 'Not Found');
+    response.statusCode = statusCode;
+    response.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    response.setHeader('Content-Length', Buffer.byteLength(body));
+    response.setHeader('Cache-Control', 'no-store');
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.end(body);
+  }
+
+  function createStaticPreviewRequestHandler(plan) {
+    return (request, response) => {
+      const method = String(request.method || 'GET').toUpperCase();
+      if (method !== 'GET' && method !== 'HEAD') {
+        response.setHeader('Allow', 'GET, HEAD');
+        sendStaticPreviewFailure(response, 405, 'Method Not Allowed');
+        return;
+      }
+      const resolved = resolveStaticPreviewFile(plan, request.url || '/');
+      if (!resolved) {
+        sendStaticPreviewFailure(response, 404, 'Not Found');
+        return;
+      }
+      fs.readFile(resolved.filePath, (error, content) => {
+        if (error || !Buffer.isBuffer(content) || content.length !== resolved.size) {
+          sendStaticPreviewFailure(response, 404, 'Not Found');
+          return;
+        }
+        response.statusCode = 200;
+        response.setHeader('Content-Type', resolved.contentType);
+        response.setHeader('Content-Length', content.length);
+        response.setHeader('Cache-Control', 'no-store');
+        response.setHeader('X-Content-Type-Options', 'nosniff');
+        response.setHeader('Referrer-Policy', 'no-referrer');
+        response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+        response.end(method === 'HEAD' ? undefined : content);
+      });
+    };
+  }
+
+  async function closeStaticPreviewServer(session) {
+    const server = session && session.server;
+    if (!server || typeof server.close !== 'function') return;
+    if (typeof session.removeAbortListener === 'function') {
+      session.removeAbortListener();
+      session.removeAbortListener = null;
+    }
+    await new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      try {
+        server.close(finish);
+        if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+      } catch {
+        finish();
+      }
+    });
+    session.server = null;
+  }
+
   async function stopProjectPreview(payload = {}) {
     const session = findSession(payload);
     if (!session) {
@@ -412,6 +585,7 @@ function createProjectPreviewRuntimeService(dependencies = {}) {
       }
     }
 
+    await closeStaticPreviewServer(session);
     session.status = 'stopped';
     session.stoppedAt = new Date().toISOString();
     sessionsById.delete(session.id);
@@ -453,6 +627,122 @@ function createProjectPreviewRuntimeService(dependencies = {}) {
       plan,
       session: summarizeSession(session).session,
       message: session.message,
+    };
+  }
+
+  async function startStaticPreview(projectInfo, plan, options = {}) {
+    const rootPath = normalizeRootPath(projectInfo);
+    await stopProjectPreview({ rootPath });
+    if (isAbortSignalAborted(options.signal)) {
+      return {
+        ok: false,
+        started: false,
+        cancelled: true,
+        plan,
+        message: 'Preview estático cancelado antes de iniciar.',
+      };
+    }
+
+    let server = null;
+    try {
+      server = http.createServer(createStaticPreviewRequestHandler(plan));
+    } catch {
+      return {
+        ok: false,
+        started: false,
+        plan,
+        message: 'Servidor HTTP local seguro indisponível.',
+      };
+    }
+
+    const session = {
+      id: createSessionId(),
+      rootPath,
+      mode: 'static_server',
+      stack: plan.stack,
+      status: 'starting',
+      url: plan.url,
+      port: plan.port,
+      pid: null,
+      commandText: '',
+      child: null,
+      server,
+      startedAt: new Date().toISOString(),
+      stoppedAt: null,
+      stdout: '',
+      stderr: '',
+      message: 'Iniciando servidor HTTP local seguro.',
+    };
+    sessionsById.set(session.id, session);
+    sessionsByRoot.set(rootPath, session);
+    session.removeAbortListener = addAbortListener(options.signal, () => {
+      session.cancelled = true;
+      stopProjectPreview({ sessionId: session.id });
+    });
+
+    const listenError = await new Promise((resolve) => {
+      const onError = (error) => {
+        server.removeListener('listening', onListening);
+        resolve(error || new Error('static preview listen failed'));
+      };
+      const onListening = () => {
+        server.removeListener('error', onError);
+        resolve(null);
+      };
+      server.once('error', onError);
+      server.once('listening', onListening);
+      server.listen(plan.port, '127.0.0.1');
+    });
+
+    if (listenError) {
+      session.status = 'failed';
+      session.message = 'O servidor HTTP local seguro não conseguiu reservar a porta.';
+      session.stoppedAt = new Date().toISOString();
+      sessionsById.delete(session.id);
+      sessionsByRoot.delete(rootPath);
+      await closeStaticPreviewServer(session);
+      return {
+        ok: false,
+        started: false,
+        plan,
+        session: summarizeSession(session).session,
+        message: session.message,
+      };
+    }
+
+    if (isAbortSignalAborted(options.signal) || session.cancelled) {
+      await stopProjectPreview({ sessionId: session.id });
+      return {
+        ok: false,
+        started: false,
+        cancelled: true,
+        plan,
+        session: summarizeSession(session).session,
+        message: 'Preview estático cancelado antes de ficar pronto.',
+      };
+    }
+
+    server.on('error', () => {
+      if (session.status === 'stopped' || session.status === 'failed') return;
+      session.status = 'failed';
+      session.message = 'O servidor HTTP local seguro falhou.';
+      session.stoppedAt = new Date().toISOString();
+      sessionsById.delete(session.id);
+      sessionsByRoot.delete(rootPath);
+    });
+    session.status = 'ready';
+    session.message = 'Preview estático HTTP pronto no navegador padrão.';
+    return {
+      ok: true,
+      started: true,
+      plan,
+      session: summarizeSession(session).session,
+      message: session.message,
+      readiness: {
+        ok: true,
+        ready: true,
+        probe: { type: 'loopback_static_server', url: plan.url, port: plan.port },
+      },
     };
   }
 
@@ -748,6 +1038,33 @@ function createProjectPreviewRuntimeService(dependencies = {}) {
         install: installResult,
         message: initialPlan.message || 'Preview bloqueado.',
       };
+    }
+
+    if (initialPlan.mode === 'static_server') {
+      const availablePort = await findAvailablePort(options.port || initialPlan.port);
+      if (!availablePort) {
+        return {
+          ok: false,
+          started: false,
+          plan: initialPlan,
+          message: 'Nenhuma porta local disponível para preview estático.',
+        };
+      }
+      const staticPlan = buildProjectPreviewPlan(projectInfo, {
+        ...options,
+        port: availablePort,
+      });
+      if (!staticPlan.ok || !staticPlan.ready || staticPlan.mode !== 'static_server') {
+        return {
+          ok: false,
+          started: false,
+          plan: staticPlan,
+          message: staticPlan.message || 'Preview estático bloqueado.',
+        };
+      }
+      const result = await startStaticPreview(projectInfo, staticPlan, options);
+      if (installResult) result.install = installResult;
+      return result;
     }
 
     if (initialPlan.mode === 'file') {

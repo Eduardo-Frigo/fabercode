@@ -227,6 +227,10 @@
       }
 
       executionInFlight = true;
+      // The digest-bound confirmation is single-use. Remove its actionable UI
+      // before crossing the async execution boundary so a slow job cannot look
+      // unconfirmed or invite a duplicate click.
+      clearPendingExecutionIfCurrent(pendingAction, pendingJobId);
       const executionEpoch = submissionEpoch;
       updateStatus(uiText('workingOnProject', 'Estou trabalhando no projeto.'));
       state.activeJobId = pendingJobId;
@@ -573,8 +577,8 @@
         state.pendingActionJobId = pendingJobId;
         showPending(
           uiText(
-            'safeTemporaryExecution',
-            'Pronto para executar em uma área temporária. Só aplico no projeto se passar na validação real.'
+            'confirmGovernedExecution',
+            'Confirme para iniciar a execução governada.'
           ),
           plan.action
         );

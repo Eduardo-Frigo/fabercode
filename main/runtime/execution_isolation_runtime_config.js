@@ -7,9 +7,13 @@ const EXECUTION_ISOLATION_RUNTIME_CONFIG_VERSION =
 
 const MODE_ENV_KEY = 'FABER_EXECUTION_ISOLATION_MODE';
 const KILL_SWITCH_ENV_KEY = 'FABER_EXECUTION_ISOLATION_KILL_SWITCH';
+const HARNESS_MODE_ENV_KEY = 'FABER_HARNESS_V2_MODE';
+const HARNESS_KILL_SWITCH_ENV_KEY = 'FABER_HARNESS_V2_KILL_SWITCH';
 const MODES = new Set(['disabled', 'enabled']);
+const ISOLATION_CAPABLE_HARNESS_MODES = new Set(['canary', 'on']);
 const TRUE_VALUES = new Set(['1', 'true', 'yes', 'on']);
 const FALSE_VALUES = new Set(['0', 'false', 'no', 'off']);
+const HARNESS_FALSE_VALUES = new Set(['', ...FALSE_VALUES]);
 const DATA_GRAPH_LIMITS = Object.freeze({
   maxDepth: 16,
   maxNodes: 10_000,
@@ -172,6 +176,27 @@ function normalizeKillSwitch(value) {
   return true;
 }
 
+function harnessEnablesPortableIsolation(envFields) {
+  if (envFields.has(MODE_ENV_KEY) || envFields.has(KILL_SWITCH_ENV_KEY)) {
+    return false;
+  }
+
+  const rawMode = envFields.get(HARNESS_MODE_ENV_KEY);
+  if (typeof rawMode !== 'string'
+    || !ISOLATION_CAPABLE_HARNESS_MODES.has(rawMode.trim().toLowerCase())) {
+    return false;
+  }
+
+  const rawKillSwitch = envFields.get(HARNESS_KILL_SWITCH_ENV_KEY);
+  if (rawKillSwitch === undefined || rawKillSwitch === null) return true;
+  if (typeof rawKillSwitch === 'boolean') return rawKillSwitch === false;
+  if (typeof rawKillSwitch !== 'string') return false;
+  const normalizedKillSwitch = rawKillSwitch.trim().toLowerCase();
+  if (TRUE_VALUES.has(normalizedKillSwitch)) return false;
+  if (HARNESS_FALSE_VALUES.has(normalizedKillSwitch)) return true;
+  return false;
+}
+
 function createExecutionIsolationRuntimeConfig(options = {}) {
   const optionFields = exactDataRecord(options, ['env']);
   if (!optionFields) return DEFAULT_CONFIG;
@@ -179,8 +204,13 @@ function createExecutionIsolationRuntimeConfig(options = {}) {
   const envFields = environmentDataRecord(env);
   if (!envFields) return DEFAULT_CONFIG;
 
-  const mode = normalizeMode(envFields.get(MODE_ENV_KEY));
-  const killSwitch = normalizeKillSwitch(envFields.get(KILL_SWITCH_ENV_KEY));
+  const inheritHarnessActivation = harnessEnablesPortableIsolation(envFields);
+  const mode = inheritHarnessActivation
+    ? 'enabled'
+    : normalizeMode(envFields.get(MODE_ENV_KEY));
+  const killSwitch = inheritHarnessActivation
+    ? false
+    : normalizeKillSwitch(envFields.get(KILL_SWITCH_ENV_KEY));
   if (!mode) return DEFAULT_CONFIG;
 
   return Object.freeze({

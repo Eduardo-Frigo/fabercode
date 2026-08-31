@@ -177,6 +177,7 @@ async function run() {
   assert.strictEqual(result.ok, true);
   assert.strictEqual(result.agentic, true);
   assert.match(result.message, /validações permanecem pendentes/i);
+  assert.doesNotMatch(result.message, /sandbox portátil/i);
   assert.doesNotMatch(result.message, /alteração real no projeto/i);
   assert.deepStrictEqual(result.modifiedFiles, ['app/page.tsx']);
   assert.strictEqual(capabilityCalls.length, 1);
@@ -543,6 +544,289 @@ async function run() {
     Object.freeze(brokeredProcessOptions)
   );
   assert.strictEqual(brokeredProcessResult.ok, true);
+  assert.deepStrictEqual(brokeredProcessResult.validationEvidence, {
+    process: {
+      performed: true,
+      terminalStatus: 'succeeded',
+      successfulChecks: ['tests'],
+      failedChecks: [],
+    },
+    browser: { opened: false, captured: false, inspected: false },
+  });
+  assert.match(brokeredProcessResult.message, /processo isolado concluído com sucesso/i);
+
+  // Explicitly requested process checks are terminal obligations. A model
+  // cannot turn an audit green by calling finish_task before every named check
+  // has a succeeded receipt from the broker.
+  const prematureFinishEvents = [];
+  let prematureProcessCalls = 0;
+  const prematureFinishService = buildCancellationService({
+    appendJobEvent: (jobId, type, payload) => {
+      prematureFinishEvents.push({ jobId, type, payload });
+    },
+    maxSteps: 1,
+    requestModelTurn: async () => ({
+      responseId: 'premature-finish-1',
+      text: '',
+      toolCalls: [{
+        callId: 'premature-finish-task',
+        name: 'finish_task',
+        input: { status: 'success', summary: 'auditoria concluída' },
+      }],
+    }),
+  });
+  const prematureFinishOptions = {
+    jobId: 'job-premature-finish',
+    processExecutionPolicy: AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED,
+  };
+  Object.defineProperty(prematureFinishOptions, 'executeProcess', {
+    configurable: false,
+    enumerable: false,
+    value: async () => {
+      prematureProcessCalls += 1;
+      return { ok: true };
+    },
+    writable: false,
+  });
+  const prematureFinishResult = await prematureFinishService.executeAction(
+    buildAction(
+      'job-premature-finish',
+      'Faça uma auditoria somente leitura. Execute npm test e npm run build antes de concluir.'
+    ),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    Object.freeze(prematureFinishOptions)
+  );
+  assert.strictEqual(prematureFinishResult.ok, false);
+  assert.strictEqual(prematureProcessCalls, 0);
+  const rejectedPrematureFinish = prematureFinishEvents.find(
+    (entry) => entry.type === 'job.agentic_tool_result'
+      && entry.payload && entry.payload.toolName === 'finish_task'
+  );
+  assert(rejectedPrematureFinish);
+  assert.strictEqual(rejectedPrematureFinish.payload.ok, false);
+  assert.match(rejectedPrematureFinish.payload.message, /testes/i);
+  assert.match(rejectedPrematureFinish.payload.message, /build/i);
+  assert.doesNotMatch(rejectedPrematureFinish.payload.message, /sandbox portátil/i);
+
+  // A model-declared failure is not evidence that required process checks
+  // were impossible. When the broker is available and no process attempt has
+  // failed, the Harness must keep the loop alive and require the named checks.
+  let prematureFailureTurn = 0;
+  const prematureFailureProcessCalls = [];
+  const prematureFailureService = buildCancellationService({
+    maxSteps: 3,
+    requestModelTurn: async ({ toolResults }) => {
+      prematureFailureTurn += 1;
+      if (prematureFailureTurn === 1) {
+        return {
+          responseId: 'premature-failure-1',
+          text: '',
+          toolCalls: [{
+            callId: 'premature-failure-finish',
+            name: 'finish_task',
+            input: { status: 'failure', summary: 'não consegui executar as validações' },
+          }],
+        };
+      }
+      if (prematureFailureTurn === 2) {
+        assert.strictEqual(toolResults.length, 1);
+        assert.match(toolResults[0].output, /testes/i);
+        assert.match(toolResults[0].output, /build/i);
+        return {
+          responseId: 'premature-failure-2',
+          text: '',
+          toolCalls: [
+            {
+              callId: 'premature-failure-test',
+              name: 'run_command',
+              input: { command: 'npm', args: ['test'], timeoutMs: 120_000 },
+            },
+            {
+              callId: 'premature-failure-build',
+              name: 'run_command',
+              input: { command: 'npm', args: ['run', 'build'], timeoutMs: 120_000 },
+            },
+          ],
+        };
+      }
+      return {
+        responseId: 'premature-failure-3',
+        text: '',
+        toolCalls: [{
+          callId: 'premature-failure-success',
+          name: 'finish_task',
+          input: { status: 'success', summary: 'validações concluídas' },
+        }],
+      };
+    },
+  });
+  const prematureFailureOptions = {
+    jobId: 'job-premature-failure',
+    processExecutionPolicy: AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED,
+  };
+  Object.defineProperty(prematureFailureOptions, 'executeProcess', {
+    configurable: false,
+    enumerable: false,
+    value: async (request) => {
+      prematureFailureProcessCalls.push([request.command, ...request.args]);
+      return Object.freeze({
+        schemaVersion: 'project-capability.result.v1',
+        requestId: `premature-failure-${prematureFailureProcessCalls.length}`,
+        capability: 'process',
+        action: 'run',
+        decision: 'allow',
+        status: 'completed',
+        output: Object.freeze({
+          status: 'succeeded',
+          revision: 1,
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          stopped: false,
+          availableFromCursor: 0,
+          outputCursor: 0,
+        }),
+        error: null,
+        policy: Object.freeze({ decision: 'allow', reasonCode: 'TEST_ALLOW' }),
+        approval: null,
+      });
+    },
+    writable: false,
+  });
+  const prematureFailureResult = await prematureFailureService.executeAction(
+    buildAction(
+      'job-premature-failure',
+      'Faça uma auditoria somente leitura. Execute npm test e npm run build antes de concluir.'
+    ),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    Object.freeze(prematureFailureOptions)
+  );
+  assert.strictEqual(prematureFailureResult.ok, true);
+  assert.strictEqual(prematureFailureTurn, 3);
+  assert.deepStrictEqual(prematureFailureProcessCalls, [
+    ['npm', 'test'],
+    ['npm', 'run', 'build'],
+  ]);
+  assert.deepStrictEqual(prematureFailureResult.validationEvidence.process.successfulChecks, [
+    'tests',
+    'build',
+  ]);
+
+  // A model-declared failure cannot become a factual task failure when the
+  // requested process capability is unavailable and no broker receipt exists.
+  const unavailableProcessFailureService = buildCancellationService({
+    maxSteps: 1,
+    requestModelTurn: async () => ({
+      responseId: 'unavailable-process-failure-1',
+      text: '',
+      toolCalls: [{
+        callId: 'unavailable-process-finish',
+        name: 'finish_task',
+        input: { status: 'failure', summary: 'não consegui executar os testes' },
+      }],
+    }),
+  });
+  const unavailableProcessFailureResult = await unavailableProcessFailureService.executeAction(
+    buildAction(
+      'job-unavailable-process-failure',
+      'Faça uma auditoria somente leitura e execute npm test antes de concluir.'
+    ),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    Object.freeze({
+      jobId: 'job-unavailable-process-failure',
+      processExecutionPolicy: AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED,
+    })
+  );
+  assert.strictEqual(unavailableProcessFailureResult.ok, false);
+  assert.strictEqual(unavailableProcessFailureResult.status, 'blocked');
+  assert.match(unavailableProcessFailureResult.message, /processo governado.*indisponível/i);
+  assert.deepStrictEqual(unavailableProcessFailureResult.errors, [
+    'agentic_required_capability_unavailable',
+  ]);
+  assert.strictEqual(unavailableProcessFailureResult.terminalEvidence.outcome, 'blocked');
+  assert.strictEqual(unavailableProcessFailureResult.terminalEvidence.grounded, false);
+  assert.deepStrictEqual(
+    unavailableProcessFailureResult.terminalEvidence.required.process,
+    ['tests']
+  );
+
+  // A real failed process receipt must produce an evidence-grounded failure
+  // naming the failed check, never the misleading "não foi executado" copy.
+  let groundedFailureTurn = 0;
+  const groundedFailureService = buildCancellationService({
+    maxSteps: 2,
+    requestModelTurn: async () => {
+      groundedFailureTurn += 1;
+      if (groundedFailureTurn === 1) {
+        return {
+          responseId: 'grounded-process-failure-1',
+          text: '',
+          toolCalls: [{
+            callId: 'grounded-process-run',
+            name: 'run_command',
+            input: { command: 'npm', args: ['test'], timeoutMs: 120_000 },
+          }],
+        };
+      }
+      return {
+        responseId: 'grounded-process-failure-2',
+        text: '',
+        toolCalls: [{
+          callId: 'grounded-process-finish',
+          name: 'finish_task',
+          input: { status: 'failure', summary: 'os testes falharam' },
+        }],
+      };
+    },
+  });
+  const groundedFailureOptions = {
+    jobId: 'job-grounded-process-failure',
+    processExecutionPolicy: AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED,
+  };
+  Object.defineProperty(groundedFailureOptions, 'executeProcess', {
+    configurable: false,
+    enumerable: false,
+    value: async () => Object.freeze({
+      schemaVersion: 'project-capability.result.v1',
+      requestId: 'grounded-process-failure-receipt',
+      capability: 'process',
+      action: 'run',
+      decision: 'allow',
+      status: 'completed',
+      output: Object.freeze({
+        status: 'failed',
+        revision: 1,
+        exitCode: 1,
+        signal: null,
+        timedOut: false,
+        stopped: false,
+        availableFromCursor: 0,
+        outputCursor: 0,
+      }),
+      error: null,
+      policy: Object.freeze({ decision: 'allow', reasonCode: 'TEST_ALLOW' }),
+      approval: null,
+    }),
+    writable: false,
+  });
+  const groundedFailureResult = await groundedFailureService.executeAction(
+    buildAction(
+      'job-grounded-process-failure',
+      'Faça uma auditoria somente leitura e execute npm test antes de concluir.'
+    ),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    Object.freeze(groundedFailureOptions)
+  );
+  assert.strictEqual(groundedFailureResult.ok, false);
+  assert.strictEqual(groundedFailureResult.status, 'failed');
+  assert.match(groundedFailureResult.message, /testes.*falhou/i);
+  assert.doesNotMatch(groundedFailureResult.message, /não foram executados/i);
+  assert.strictEqual(groundedFailureResult.terminalEvidence.outcome, 'failed');
+  assert.strictEqual(groundedFailureResult.terminalEvidence.grounded, true);
+  assert.deepStrictEqual(
+    groundedFailureResult.validationEvidence.process.failedChecks,
+    ['tests']
+  );
   assert.strictEqual(processCallbackRequests.length, 1);
   assert.deepStrictEqual(readProcessRequests, [Object.freeze({
     cursor: 0,
@@ -727,6 +1011,99 @@ async function run() {
   assert.strictEqual(blockedResult.ok, false);
   assert.strictEqual(blockedResult.status, 'blocked');
   assert.deepStrictEqual(blockedResult.errors, ['agentic_no_file_changes']);
+
+  // An explicit read-only audit must win over a mistaken edit route and may
+  // complete successfully without manufacturing a file mutation.
+  let readOnlyTurn = 0;
+  const readOnlyService = createAgenticToolLoopService({
+    appendJobEvent: () => {},
+    executeCapability: async () => ({ ok: true }),
+    executeTool: async () => ({ ok: true }),
+    getEffectiveOpenAiModel: () => 'gpt-5-codex',
+    getSelectedAiProvider: () => 'openai',
+    requestModelTurn: async () => {
+      readOnlyTurn += 1;
+      return readOnlyTurn === 1
+        ? {
+            responseId: 'read-only-inspection',
+            text: '',
+            toolCalls: [{
+              callId: 'inspect-read-only-audit',
+              name: 'project_tree',
+              input: {},
+            }],
+          }
+        : {
+            responseId: 'read-only-finish',
+            text: '',
+            toolCalls: [{
+              callId: 'finish-read-only-audit',
+              name: 'finish_task',
+              input: { status: 'success', summary: 'auditoria somente leitura concluída' },
+            }],
+          };
+    },
+    setJobCheckpoint: () => {},
+    shouldUseModel: () => true,
+  });
+  const readOnlyResult = await readOnlyService.executeAction(
+    {
+      type: 'agentic_tool_loop',
+      userMessage: 'Faça uma auditoria funcional somente leitura. Não altere nenhum arquivo e não crie código.',
+      attachments: [],
+      conversationMessages: [],
+      routeDecision: {
+        productRoute: {
+          capability: 'edit_project',
+          executionIntent: 'edit_project',
+        },
+      },
+      jobId: 'job-read-only-audit',
+    },
+    { id: 'project-1', rootPath: '/tmp/project' },
+    { jobId: 'job-read-only-audit' }
+  );
+  assert.strictEqual(readOnlyResult.ok, true);
+  assert.deepStrictEqual(readOnlyResult.modifiedFiles, []);
+  assert.strictEqual(Object.hasOwn(readOnlyResult, 'errors'), false);
+
+  const ungroundedSuccessService = createAgenticToolLoopService({
+    appendJobEvent: () => {},
+    executeCapability: async () => ({ ok: true }),
+    executeTool: async () => ({ ok: true }),
+    getEffectiveOpenAiModel: () => 'gpt-5-codex',
+    getSelectedAiProvider: () => 'openai',
+    requestModelTurn: async () => ({
+      responseId: 'ungrounded-success-finish',
+      text: '',
+      toolCalls: [{
+        callId: 'finish-ungrounded-success',
+        name: 'finish_task',
+        input: { status: 'success', summary: 'auditoria concluída' },
+      }],
+    }),
+    setJobCheckpoint: () => {},
+    shouldUseModel: () => true,
+    maxSteps: 1,
+  });
+  const ungroundedSuccessResult = await ungroundedSuccessService.executeAction(
+    {
+      type: 'agentic_tool_loop',
+      userMessage: 'Faça uma auditoria somente leitura do projeto.',
+      attachments: [],
+      conversationMessages: [],
+      jobId: 'job-ungrounded-success',
+    },
+    { id: 'project-1', rootPath: '/tmp/project' },
+    { jobId: 'job-ungrounded-success' }
+  );
+  assert.strictEqual(ungroundedSuccessResult.ok, false);
+  assert.strictEqual(ungroundedSuccessResult.status, 'blocked');
+  assert.deepStrictEqual(ungroundedSuccessResult.errors, [
+    'agentic_terminal_claim_unverified',
+  ]);
+  assert.strictEqual(ungroundedSuccessResult.terminalEvidence.outcome, 'blocked');
+  assert.strictEqual(ungroundedSuccessResult.terminalEvidence.grounded, false);
 
   // A signal already cancelled must fail closed before a model turn or local effect begins.
   const preAbortedController = new AbortController();
@@ -920,7 +1297,8 @@ async function run() {
     { id: 'project-1', rootPath: '/tmp/project' },
     { jobId: 'job-delete-absent' }
   );
-  assert.strictEqual(absentDeleteResult.ok, true);
+  assert.strictEqual(absentDeleteResult.ok, false);
+  assert.strictEqual(absentDeleteResult.status, 'blocked');
   assert(Array.isArray(absentDeleteDefinitions));
   assert.strictEqual(
     absentDeleteDefinitions.filter((definition) => definition.name === 'delete_paths').length,

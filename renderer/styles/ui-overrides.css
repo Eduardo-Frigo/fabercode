@@ -125,6 +125,10 @@ body {
 }
 
 .job-progress-head strong,
+#job-progress-status {
+  font-size: 0.76rem !important;
+}
+
 .pending-action p,
 .meta-box,
 .next-steps-box,

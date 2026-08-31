@@ -176,6 +176,51 @@ assert.strictEqual(failed.busy, false);
 assert.match(failed.detailText, /Motivo técnico/);
 assert.match(failed.detailText, /stacktrace/);
 
+const executeFailedTerminal = model.buildJobProgressPresentation({
+  status: 'failed',
+  phase: 'execute_failed',
+  progress: { pct: 100 },
+  lastError: 'Sem alterações de arquivos requeridas ao finalizar.',
+  attemptsByPhase: { execute_pending: 2 },
+  checkpoints: {
+    last_plan: {
+      data: {
+        responsePreview: 'Entendi. Vou trabalhar nisso agora e te volto com resultado real.',
+      },
+    },
+  },
+  events: [
+    {
+      type: 'job.phase_changed',
+      payload: { phase: 'execute_failed', progressPct: 100 },
+    },
+    {
+      type: 'job.failed',
+      payload: { reason: 'Sem alterações de arquivos requeridas ao finalizar.' },
+    },
+  ],
+});
+assert.strictEqual(executeFailedTerminal.statusText, '100%');
+assert.strictEqual(executeFailedTerminal.phaseLabel, 'Falha na execução');
+assert.strictEqual(
+  executeFailedTerminal.phaseSteps.some((step) => step.label === 'execute_failed'),
+  false
+);
+assert.strictEqual(executeFailedTerminal.finalSummaryLines.length, 1);
+assert.match(executeFailedTerminal.finalSummaryLines[0], /Sem alterações de arquivos requeridas/i);
+assert.doesNotMatch(
+  executeFailedTerminal.finalSummaryLines.join('\n'),
+  /Entendi\. Vou trabalhar|Próxima ação|Motivo técnico/i
+);
+
+const cancelledTerminal = model.buildJobProgressPresentation({
+  status: 'cancelled',
+  phase: 'cancelled',
+  progress: { pct: 100 },
+  events: [{ type: 'job.cancelled', payload: { reason: 'cancelled_by_user' } }],
+});
+assert.strictEqual(cancelledTerminal.statusText, '100%');
+
 const cortexValidationFailed = model.buildJobProgressPresentation({
   status: 'failed',
   phase: 'cortex_validation_retry_exhausted',
@@ -232,24 +277,36 @@ const completed = model.buildJobProgressPresentation({
 assert.strictEqual(completed.tone, 'success');
 assert.strictEqual(completed.busy, false);
 assert.strictEqual(completed.progressPct, 100);
-assert.ok(completed.finalSummaryLines.some((line) => /Resultado: execução concluída/.test(line)));
+assert.strictEqual(completed.statusText, '100%');
+assert.strictEqual(completed.finalSummaryLines.some((line) => /Resultado:|Caminho:/.test(line)), false);
 assert.ok(Array.isArray(completed.finalDetailLines));
+
+const completedWithRetry = model.buildJobProgressPresentation({
+  status: 'completed',
+  phase: 'done',
+  attemptsByPhase: { execute_pending: 2 },
+  events: [{ type: 'job.completed' }],
+});
+assert.strictEqual(
+  completedWithRetry.finalSummaryLines.some((line) => /Resultado:|Caminho:|Retentativas:|tentativas/i.test(line)),
+  false
+);
 
 const executePendingWithoutProcesses = model.buildJobProgressPresentation({
   status: 'running',
   phase: 'execute_pending',
   events: [],
 });
-assert.match(executePendingWithoutProcesses.detailText, /lint, testes, build e preview permanecem pendentes/i);
-assert.doesNotMatch(executePendingWithoutProcesses.detailText, /comandos reais passarem/i);
+assert.match(executePendingWithoutProcesses.detailText, /Harness está executando a ação autorizada/i);
+assert.doesNotMatch(executePendingWithoutProcesses.detailText, /lint|testes|build|preview/i);
 
 const executeValidationWithoutProcesses = model.buildJobProgressPresentation({
   status: 'running',
   phase: 'execute_validation',
   events: [],
 });
-assert.match(executeValidationWithoutProcesses.detailText, /sem iniciar processos do projeto/i);
-assert.doesNotMatch(executeValidationWithoutProcesses.detailText, /rodando build|smoke visual/i);
+assert.match(executeValidationWithoutProcesses.detailText, /Harness está validando os recibos da execução/i);
+assert.doesNotMatch(executeValidationWithoutProcesses.detailText, /lint|testes|build|preview/i);
 
 const completedWithProcessValidationPending = model.buildJobProgressPresentation({
   status: 'completed',
@@ -272,12 +329,101 @@ const completedWithProcessValidationPending = model.buildJobProgressPresentation
 });
 assert.match(
   completedWithProcessValidationPending.detailText,
-  /lint, testes, build e preview não foram executados e permanecem pendentes/i
+  /validação técnica solicitada permanece pendente/i
 );
+assert.doesNotMatch(completedWithProcessValidationPending.detailText, /lint|testes|build|preview/i);
 assert.doesNotMatch(completedWithProcessValidationPending.detailText, /validação real passou/i);
+assert.ok(
+  completedWithProcessValidationPending.finalSummaryLines.some((line) => /validações.*pendentes/i.test(line))
+);
 assert.match(
   completedWithProcessValidationPending.transientStatus,
-  /lint, testes, build e preview permanecem pendentes/i
+  /validação técnica solicitada permanece pendente/i
+);
+assert.doesNotMatch(completedWithProcessValidationPending.transientStatus, /lint|testes|build|preview/i);
+assert.strictEqual(completedWithProcessValidationPending.tone, 'warning');
+assert.strictEqual(
+  completedWithProcessValidationPending.title,
+  'Alterações aplicadas; validação pendente'
+);
+assert.strictEqual(
+  completedWithProcessValidationPending.statusLabel,
+  'Validação pendente'
+);
+
+const completedWithNamedPendingValidation = model.buildJobProgressPresentation({
+  status: 'completed',
+  phase: 'done',
+  checkpoints: {
+    execute_result: {
+      data: {
+        validationPending: true,
+        validationPendingChecks: ['tests'],
+      },
+    },
+  },
+  events: [{
+    type: 'job.completed',
+    payload: {
+      validationPending: true,
+      validationPendingChecks: ['tests'],
+    },
+  }],
+});
+assert.match(completedWithNamedPendingValidation.detailText, /testes permanecem pendentes/i);
+assert.match(completedWithNamedPendingValidation.transientStatus, /testes permanecem pendentes/i);
+assert.doesNotMatch(completedWithNamedPendingValidation.detailText, /lint|build|preview/i);
+
+const blockedByMissingEvidence = model.buildJobProgressPresentation({
+  status: 'blocked',
+  phase: 'execute_blocked',
+  lastError: 'O processo governado solicitado não estava disponível.',
+  checkpoints: {
+    agentic_terminal_evidence: {
+      data: {
+        version: 'agentic-terminal-evidence.v1',
+        outcome: 'blocked',
+        grounded: false,
+      },
+    },
+  },
+  events: [{ type: 'job.blocked', payload: { phase: 'execute_blocked' } }],
+});
+assert.strictEqual(blockedByMissingEvidence.tone, 'warning');
+assert.strictEqual(blockedByMissingEvidence.title, 'Execução bloqueada');
+assert.strictEqual(blockedByMissingEvidence.statusLabel, 'Bloqueado');
+assert.strictEqual(blockedByMissingEvidence.busy, false);
+assert.match(blockedByMissingEvidence.transientStatus, /não foi possível comprovar/i);
+
+const groundedProcessFailure = model.buildJobProgressPresentation({
+  status: 'failed',
+  phase: 'execute_failed',
+  progress: { pct: 100 },
+  lastError: 'agentic_execute_failed',
+  checkpoints: {
+    agentic_terminal_evidence: {
+      data: {
+        version: 'agentic-terminal-evidence.v1',
+        outcome: 'failed',
+        grounded: true,
+        failed: {
+          process: ['tests', 'build'],
+          tools: ['run_command'],
+        },
+      },
+    },
+  },
+  events: [{
+    type: 'job.failed',
+    payload: { reason: 'agentic_execute_failed', phase: 'execute_failed' },
+  }],
+});
+assert.strictEqual(groundedProcessFailure.tone, 'danger');
+assert.strictEqual(groundedProcessFailure.title, 'Não consegui concluir essa execução');
+assert.match(groundedProcessFailure.detailText, /Verificações com falha comprovada: testes e build\./i);
+assert.match(
+  groundedProcessFailure.finalSummaryLines.join('\n'),
+  /Verificações com falha comprovada: testes e build\./i
 );
 
 const completedWithCheckpointOnlyPending = model.buildJobProgressPresentation({
@@ -293,7 +439,8 @@ const completedWithCheckpointOnlyPending = model.buildJobProgressPresentation({
   events: [{ type: 'job.completed', payload: {} }],
 });
 assert.doesNotMatch(completedWithCheckpointOnlyPending.detailText, /validação real passou/i);
-assert.match(completedWithCheckpointOnlyPending.transientStatus, /permanecem pendentes/i);
+assert.match(completedWithCheckpointOnlyPending.transientStatus, /validação técnica solicitada permanece pendente/i);
+assert.doesNotMatch(completedWithCheckpointOnlyPending.transientStatus, /lint|testes|build|preview/i);
 
 const completedWithoutExecution = model.buildJobProgressPresentation({
   status: 'completed',
@@ -304,8 +451,9 @@ assert.strictEqual(completedWithoutExecution.title, 'Resposta concluída');
 assert.strictEqual(completedWithoutExecution.statusLabel, 'Sem execução');
 assert.strictEqual(completedWithoutExecution.tone, 'info');
 assert.strictEqual(completedWithoutExecution.transientStatus, 'Resposta concluída sem alterar arquivos.');
-assert.ok(
-  completedWithoutExecution.finalSummaryLines.some((line) => /Resultado: análise concluída sem execução/.test(line))
+assert.strictEqual(
+  completedWithoutExecution.finalSummaryLines.some((line) => /Resultado:|Caminho:/.test(line)),
+  false
 );
 assert.ok(
   completedWithoutExecution.detailText.includes('Concluí esta rodada como resposta contextual, sem alterar arquivos.')

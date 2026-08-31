@@ -19,6 +19,55 @@ async function main() {
   assert.deepStrictEqual(Reflect.ownKeys(defaultConfig), ['version', 'mode', 'killSwitch']);
   assert.strictEqual(Object.isFrozen(defaultConfig), true);
 
+  const enabledConfig = {
+    version: EXECUTION_ISOLATION_RUNTIME_CONFIG_VERSION,
+    mode: 'enabled',
+    killSwitch: false,
+  };
+  for (const harnessMode of ['canary', 'on']) {
+    assert.deepStrictEqual(createExecutionIsolationRuntimeConfig({
+      env: {
+        FABER_HARNESS_V2_MODE: harnessMode,
+        FABER_HARNESS_V2_KILL_SWITCH: '0',
+      },
+    }), enabledConfig, `${harnessMode} must arm portable isolation`);
+    assert.deepStrictEqual(createExecutionIsolationRuntimeConfig({
+      env: { FABER_HARNESS_V2_MODE: harnessMode },
+    }), enabledConfig, `${harnessMode} must inherit the Harness kill-switch default`);
+  }
+
+  for (const harnessEnv of [
+    { FABER_HARNESS_V2_MODE: 'legacy' },
+    { FABER_HARNESS_V2_MODE: 'shadow' },
+    {
+      FABER_HARNESS_V2_MODE: 'canary',
+      FABER_HARNESS_V2_KILL_SWITCH: '1',
+    },
+    {
+      FABER_HARNESS_V2_MODE: 'canary',
+      FABER_HARNESS_V2_KILL_SWITCH: 'invalid',
+    },
+  ]) {
+    assert.deepStrictEqual(
+      createExecutionIsolationRuntimeConfig({ env: harnessEnv }),
+      DEFAULT_CONFIG,
+      'inactive or fail-closed Harness settings must not arm portable isolation'
+    );
+  }
+
+  assert.deepStrictEqual(createExecutionIsolationRuntimeConfig({
+    env: {
+      FABER_HARNESS_V2_MODE: 'canary',
+      FABER_HARNESS_V2_KILL_SWITCH: '0',
+      FABER_EXECUTION_ISOLATION_MODE: 'disabled',
+      FABER_EXECUTION_ISOLATION_KILL_SWITCH: 'off',
+    },
+  }), {
+    version: EXECUTION_ISOLATION_RUNTIME_CONFIG_VERSION,
+    mode: 'disabled',
+    killSwitch: false,
+  }, 'explicit isolation settings must override Harness-derived activation');
+
   assert.deepStrictEqual(createExecutionIsolationRuntimeConfig({
     env: {
       FABER_EXECUTION_ISOLATION_MODE: ' ENABLED ',

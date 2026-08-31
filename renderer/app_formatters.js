@@ -44,6 +44,28 @@
     return /^(tente novamente|tenta novamente|tentar novamente|retente|retentar|continue|continua|de novo|tente de novo|repita|pode tentar novamente)$/.test(normalized);
   }
 
+  function formatPendingValidationChecks(result) {
+    const allowed = ['lint', 'tests', 'build', 'preview'];
+    const requested = Array.isArray(result && result.validationPendingChecks)
+      ? result.validationPendingChecks
+      : [];
+    const labels = {
+      lint: uiText('validationCheckLint', 'lint'),
+      tests: uiText('validationCheckTests', 'testes'),
+      build: uiText('validationCheckBuild', 'build'),
+      preview: uiText('validationCheckPreview', 'preview'),
+    };
+    const values = Array.from(new Set(requested
+      .map((check) => String(check || '').toLowerCase())
+      .filter((check) => allowed.includes(check))
+      .map((check) => labels[check])));
+    if (!values.length) return '';
+    const joined = values.length === 1
+      ? values[0]
+      : `${values.slice(0, -1).join(', ')} ${uiText('listAnd', 'e')} ${values.at(-1)}`;
+    return joined.charAt(0).toLocaleUpperCase() + joined.slice(1);
+  }
+
   function buildExecutionOutcomeAssistantMessage(result, action, qualityReport) {
     const isOk = Boolean(result && result.ok);
     const isAgentic = Boolean(result && result.agentic);
@@ -72,14 +94,28 @@
     );
 
     if (isOk && validationPending && effectOk && errors === 0) {
+      const pendingChecks = formatPendingValidationChecks(result);
+      if (pendingChecks) {
+        return modifiedFiles.length
+          ? uiText(
+              'executionValidationPendingApplied',
+              'Alterações aplicadas. {checks} permanecem pendentes.',
+              { checks: pendingChecks }
+            )
+          : uiText(
+              'executionValidationPendingNoChanges',
+              'Execução encerrada sem alterar arquivos. {checks} permanecem pendentes.',
+              { checks: pendingChecks }
+            );
+      }
       return modifiedFiles.length
         ? uiText(
-            'executionValidationPendingApplied',
-            'Concluído: apliquei a alteração. Lint, testes, build e preview não foram executados; a validação ficou pendente até existir um sandbox portátil.'
+            'executionValidationPendingAppliedGeneric',
+            'Alterações aplicadas. A validação técnica solicitada permanece pendente.'
           )
         : uiText(
-            'executionValidationPendingNoChanges',
-            'Concluído sem alterar arquivos. Lint, testes, build e preview não foram executados; a validação ficou pendente até existir um sandbox portátil.'
+            'executionValidationPendingNoChangesGeneric',
+            'Execução encerrada sem alterar arquivos. A validação técnica solicitada permanece pendente.'
           );
     }
 
@@ -146,6 +182,14 @@
     return match ? Number(match[1]) : null;
   }
 
+  function readAgenticTerminalEvidence(job) {
+    const checkpoint = job && job.checkpoints && job.checkpoints.agentic_terminal_evidence;
+    const raw = checkpoint && typeof checkpoint === 'object'
+      ? (checkpoint.data && typeof checkpoint.data === 'object' ? checkpoint.data : checkpoint)
+      : null;
+    return raw && raw.version === 'agentic-terminal-evidence.v1' ? raw : null;
+  }
+
   function buildTerminalJobMessage(job) {
     if (!job) return null;
     if (job.status === 'completed') {
@@ -153,6 +197,10 @@
     }
   
     if (job.status === 'cancelled') {
+      return null;
+    }
+
+    if (readAgenticTerminalEvidence(job)) {
       return null;
     }
   

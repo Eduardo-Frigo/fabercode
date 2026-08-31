@@ -499,7 +499,6 @@
       if (selectProjectSequence !== currentSequence) return false;
 
       if (!scan.ok) {
-        appendMessage('assistant', scan.message || t('projectScanFailed', 'Não consegui analisar essa pasta.'));
         updateStatus(t('projectAnalysisError', 'Erro na análise'));
         return false;
       }

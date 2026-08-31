@@ -34,7 +34,7 @@ assert.strictEqual(
   CODEX_APP_SERVER_SHADOW_PROTOCOL_VERSION,
   'codex-app-server-shadow-protocol.v1'
 );
-assert.strictEqual(CODEX_APP_SERVER_PINNED_CLI_VERSION, '0.150.0-alpha.12.2');
+assert.strictEqual(CODEX_APP_SERVER_PINNED_CLI_VERSION, '0.151.0-alpha.7.2');
 assert.deepStrictEqual(CODEX_APP_SERVER_SHADOW_TRANSPORT, {
   kind: 'stdio',
   listen: 'stdio://',
@@ -80,7 +80,7 @@ assert.deepStrictEqual(
   schemaVerification.artifacts.map(({ title, definitions }) => ({ title, definitions })),
   [
     { title: 'CodexAppServerProtocol', definitions: 83 },
-    { title: 'CodexAppServerProtocolV2', definitions: 610 },
+    { title: 'CodexAppServerProtocolV2', definitions: 614 },
   ]
 );
 assertDeepFrozen(schemaVerification);

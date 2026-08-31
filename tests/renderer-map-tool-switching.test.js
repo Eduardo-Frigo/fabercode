@@ -6,6 +6,18 @@ const {
   createApplicationMapRenderPlanService,
 } = require('../main/services/application_map_render_plan_service');
 
+const htmlSource = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'index.html'), 'utf8');
+assert.match(
+  htmlSource,
+  /<span id="map-zoom-label">Zoom:<\/span>/,
+  'the visible zoom label must have a stable accessible id'
+);
+assert.match(
+  htmlSource,
+  /<input[^>]*id="map-zoom-slider"[^>]*aria-labelledby="map-zoom-label"[^>]*aria-describedby="map-zoom-value"[^>]*>/,
+  'the map zoom slider must expose its visible label and current percentage to assistive technology'
+);
+
 function createClassList(initial = []) {
   const values = new Set(initial);
   return {

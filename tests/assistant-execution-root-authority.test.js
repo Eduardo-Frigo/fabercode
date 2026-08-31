@@ -135,6 +135,9 @@ function createHarness({
     revokeSubmission() {
       return Object.freeze({ ok: true, revoked: true });
     },
+    restorePendingApproval() {
+      return Object.freeze({ authorized: false });
+    },
   });
 
   const projectRootAuthority = Object.freeze({
@@ -216,6 +219,20 @@ function createHarness({
     refreshProjectFromRootLease: refresh,
     createAuthorizedAssistantJob,
     bindJobActionDigest,
+    persistPendingApprovalRecovery() {
+      return { ok: true };
+    },
+    getAuthorizedJobById(jobId) {
+      return jobs.has(jobId)
+        ? { ok: true, job: jobs.get(jobId) }
+        : { ok: false, code: 'job_not_found' };
+    },
+    restoreAuthorizedProject(binding) {
+      return binding.projectId === 'project-a'
+        && binding.canonicalRootPath === '/workspace/project-a'
+        ? { ok: true, projectInfo: { id: 'project-a', rootPath: '/workspace/project-a' } }
+        : { ok: false };
+    },
     bindActionToProject(action, projectInfo) {
       return { ...action, rootPath: projectInfo.rootPath };
     },

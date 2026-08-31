@@ -20,6 +20,7 @@
       phaseValidationExhausted: 'Validation attempts exhausted',
       phaseRetriesExhausted: 'Retries exhausted',
       phaseInterrupted: 'Run interrupted',
+      phaseExecutionFailed: 'Run failed',
       cancelled: 'Cancelled',
       completed: 'Completed',
       failed: 'Failed',
@@ -38,7 +39,8 @@
       reasonNoFiles: 'The run ended without creating or changing project files',
       responseNoChanges: 'Response completed without changing files.',
       processingSuccess: 'Processing completed successfully.',
-      processingValidationPending: 'Processing completed; lint, tests, build, and preview remain pending.',
+      processingValidationPending: 'Processing completed; the requested technical validation remains pending.',
+      processingValidationPendingNamed: 'Processing completed; {checks} remain pending.',
       processingObservations: 'Processing completed with notes.',
       cannotCompleteRound: 'I could not complete this round.',
       cancelledNoChanges: 'Task cancelled. No new operations will be started.',
@@ -99,6 +101,13 @@
       resultIncomplete: 'Result: run not completed.',
       path: 'Path: {value}.',
       retries: 'Retries: {value}.',
+      pendingValidations: 'Pending validations: {value}.',
+      validationCheckLint: 'lint',
+      validationCheckTests: 'tests',
+      validationCheckBuild: 'build',
+      validationCheckPreview: 'preview',
+      listAnd: 'and',
+      groundedProcessFailures: 'Checks with confirmed failures: {value}.',
       technicalReason: 'Technical reason: {value}',
       attempts: '{label}: {value} attempt(s)',
       someFiles: 'some',
@@ -121,11 +130,12 @@
       narrativePreparing: 'I am preparing changes in real files.',
       narrativeValidatingPatch: 'I am validating the patch before allowing it to run or be promoted to the real project.',
       narrativeAwaitingConfirmation: 'I prepared a Cortex-validated fix and am waiting for confirmation before touching the files.',
-      narrativeProtectedRun: 'I am applying file changes in a protected area; lint, tests, build, and preview remain pending.',
-      narrativeValidationRun: 'I am checking the result without starting project processes; lint, tests, build, and preview remain pending.',
+      narrativeProtectedRun: 'The Harness is running the authorized action.',
+      narrativeValidationRun: 'The Harness is validating the execution receipts.',
       narrativeContextOnly: 'I completed this round as a contextual response without changing files.',
       narrativeValidationPassed: 'I completed this round because the real validation passed.',
-      narrativeValidationPending: 'I completed the file changes, but lint, tests, build, and preview were not run and remain pending.',
+      narrativeValidationPending: 'The run ended, but the requested technical validation remains pending.',
+      narrativeValidationPendingNamed: 'The run ended, but {checks} remain pending.',
       narrativePartial: 'I changed {count} file(s), but found items that need attention during validation.',
       narrativeStopped: 'I stopped this round: {reason}',
       narrativeStoppedNoPromote: 'I stopped this round without marking it complete.',
@@ -169,6 +179,7 @@
       phaseValidationExhausted: 'Intentos de validación agotados',
       phaseRetriesExhausted: 'Reintentos agotados',
       phaseInterrupted: 'Ejecución interrumpida',
+      phaseExecutionFailed: 'Ejecución fallida',
       cancelled: 'Cancelado',
       completed: 'Completado',
       failed: 'Falló',
@@ -187,7 +198,8 @@
       reasonNoFiles: 'La ejecución terminó sin crear ni modificar archivos del proyecto',
       responseNoChanges: 'Respuesta completada sin modificar archivos.',
       processingSuccess: 'Procesamiento completado correctamente.',
-      processingValidationPending: 'Procesamiento completado; lint, pruebas, build y preview siguen pendientes.',
+      processingValidationPending: 'Procesamiento completado; la validación técnica solicitada sigue pendiente.',
+      processingValidationPendingNamed: 'Procesamiento completado; {checks} siguen pendientes.',
       processingObservations: 'Procesamiento completado con observaciones.',
       cannotCompleteRound: 'No pude completar esta ronda.',
       cancelledNoChanges: 'Acción cancelada. No se modificaron archivos.',
@@ -248,6 +260,13 @@
       resultIncomplete: 'Resultado: ejecución no completada.',
       path: 'Recorrido: {value}.',
       retries: 'Reintentos: {value}.',
+      pendingValidations: 'Validaciones pendientes: {value}.',
+      validationCheckLint: 'lint',
+      validationCheckTests: 'pruebas',
+      validationCheckBuild: 'build',
+      validationCheckPreview: 'preview',
+      listAnd: 'y',
+      groundedProcessFailures: 'Verificaciones con fallos comprobados: {value}.',
       technicalReason: 'Motivo técnico: {value}',
       attempts: '{label}: {value} intento(s)',
       someFiles: 'algunos',
@@ -270,11 +289,12 @@
       narrativePreparing: 'Estoy preparando cambios en archivos reales.',
       narrativeValidatingPatch: 'Estoy validando el parche antes de permitir su ejecución o promoción al proyecto real.',
       narrativeAwaitingConfirmation: 'Preparé una corrección validada por Cortex y espero tu confirmación antes de modificar los archivos.',
-      narrativeProtectedRun: 'Estoy aplicando cambios de archivos en un área protegida; lint, pruebas, build y preview siguen pendientes.',
-      narrativeValidationRun: 'Estoy revisando el resultado sin iniciar procesos del proyecto; lint, pruebas, build y preview siguen pendientes.',
+      narrativeProtectedRun: 'El Harness está ejecutando la acción autorizada.',
+      narrativeValidationRun: 'El Harness está validando los recibos de la ejecución.',
       narrativeContextOnly: 'Completé esta ronda como respuesta contextual, sin modificar archivos.',
       narrativeValidationPassed: 'Completé esta ronda porque la validación real pasó.',
-      narrativeValidationPending: 'Completé los cambios de archivos, pero lint, pruebas, build y preview no se ejecutaron y siguen pendientes.',
+      narrativeValidationPending: 'La ejecución terminó, pero la validación técnica solicitada sigue pendiente.',
+      narrativeValidationPendingNamed: 'La ejecución terminó, pero {checks} siguen pendientes.',
       narrativePartial: 'Modifiqué {count} archivo(s), pero detecté puntos de atención en la validación.',
       narrativeStopped: 'Detuve esta ronda: {reason}',
       narrativeStoppedNoPromote: 'Detuve esta ronda sin marcarla como completada.',
@@ -383,6 +403,8 @@
       cortex_validation_retry_exhausted: uxText('phaseValidationExhausted', 'Validação esgotada'),
       persona_retry_exhausted: uxText('phaseRetriesExhausted', 'Retentativas esgotadas'),
       runtime_interrupted: uxText('phaseInterrupted', 'Execução interrompida'),
+      execute_failed: uxText('phaseExecutionFailed', 'Falha na execução'),
+      execute_blocked: uxText('phaseExecutionBlocked', 'Execução bloqueada'),
       cancelled: uxText('cancelled', 'Cancelado'),
       done: uxText('completed', 'Concluído'),
       failed: uxText('failed', 'Falhou'),
@@ -440,11 +462,80 @@
     });
   }
 
+  function readAgenticTerminalEvidence(job) {
+    const candidates = [
+      readJobCheckpointData(job, 'agentic_terminal_evidence'),
+      readLatestJobEventPayload(job, 'job.completed'),
+      readJobCheckpointData(job, 'execute_result'),
+    ];
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== 'object') continue;
+      const evidence = candidate.terminalEvidence && typeof candidate.terminalEvidence === 'object'
+        ? candidate.terminalEvidence
+        : candidate;
+      if (evidence.version === 'agentic-terminal-evidence.v1'
+        && ['succeeded', 'failed', 'blocked'].includes(evidence.outcome)) {
+        return evidence;
+      }
+    }
+    return null;
+  }
+
+  function isAgenticTerminalBlocked(job) {
+    const evidence = readAgenticTerminalEvidence(job);
+    return Boolean(evidence && evidence.outcome === 'blocked');
+  }
+
+  function formatUxNaturalList(items) {
+    if (!Array.isArray(items) || items.length === 0) return '';
+    if (items.length === 1) return items[0];
+    return `${items.slice(0, -1).join(', ')} ${uxText('listAnd', 'e')} ${items.at(-1)}`;
+  }
+
+  function readGroundedProcessFailureLabels(job) {
+    const evidence = readAgenticTerminalEvidence(job);
+    if (!evidence || evidence.outcome !== 'failed' || evidence.grounded !== true) return [];
+    const failed = evidence.failed && typeof evidence.failed === 'object'
+      ? evidence.failed.process
+      : [];
+    if (!Array.isArray(failed)) return [];
+    const labels = {
+      lint: uxText('validationCheckLint', 'lint'),
+      tests: uxText('validationCheckTests', 'testes'),
+      build: uxText('validationCheckBuild', 'build'),
+    };
+    return Array.from(new Set(
+      failed
+        .map((check) => labels[String(check || '').toLowerCase()] || '')
+        .filter(Boolean)
+    ));
+  }
+
+  function readPendingValidationChecks(job) {
+    const candidates = [
+      readLatestJobEventPayload(job, 'job.completed'),
+      readJobCheckpointData(job, 'execute_result'),
+    ];
+    const candidate = candidates.find((entry) => (
+      entry && typeof entry === 'object' && Array.isArray(entry.validationPendingChecks)
+    ));
+    if (!candidate) return [];
+    const labels = {
+      lint: uxText('validationCheckLint', 'lint'),
+      tests: uxText('validationCheckTests', 'testes'),
+      build: uxText('validationCheckBuild', 'build'),
+      preview: uxText('validationCheckPreview', 'preview'),
+    };
+    return Array.from(new Set(candidate.validationPendingChecks
+      .map((check) => labels[String(check || '').toLowerCase()] || '')
+      .filter(Boolean)));
+  }
+
   function buildJobPhaseSteps(job) {
     if (!job) return [];
     const attempts = job.attemptsByPhase && typeof job.attemptsByPhase === 'object' ? job.attemptsByPhase : {};
     const currentPhase = String(job.phase || 'created');
-    const terminalStatus = ['completed', 'failed', 'cancelled'].includes(String(job.status || '').toLowerCase());
+    const terminalStatus = ['completed', 'failed', 'blocked', 'cancelled'].includes(String(job.status || '').toLowerCase());
     const busy = !terminalStatus;
     const phases = new Set();
 
@@ -573,7 +664,9 @@
 
   function inferJobTone(job) {
     const status = String(job && job.status ? job.status : '').toLowerCase();
+    if (status === 'blocked' || isAgenticTerminalBlocked(job)) return 'warning';
     if (status === 'completed' && isCompletedWithoutExecution(job)) return 'info';
+    if (status === 'completed' && hasPendingProcessValidation(job)) return 'warning';
     if (status === 'completed') return 'success';
     if (isPartialSuccess(job)) return 'partial_success';
     if (status === 'failed') return 'danger';
@@ -583,15 +676,30 @@
 
   function buildTransientJobStatus(job) {
     if (!job || !job.status) return '';
+    if (job.status === 'blocked' || isAgenticTerminalBlocked(job)) {
+      return uxText(
+        'processingBlockedEvidence',
+        'Não foi possível comprovar a conclusão; a execução foi bloqueada sem inventar sucesso ou falha.'
+      );
+    }
     if (job.status === 'completed') {
-      return isCompletedWithoutExecution(job)
-        ? uxText('responseNoChanges', 'Resposta concluída sem alterar arquivos.')
-        : hasPendingProcessValidation(job)
+      if (isCompletedWithoutExecution(job)) {
+        return uxText('responseNoChanges', 'Resposta concluída sem alterar arquivos.');
+      }
+      if (hasPendingProcessValidation(job)) {
+        const pendingChecks = readPendingValidationChecks(job);
+        return pendingChecks.length
           ? uxText(
-              'processingValidationPending',
-              'Processamento concluído; lint, testes, build e preview permanecem pendentes.'
+              'processingValidationPendingNamed',
+              'Processamento concluído; {checks} permanecem pendentes.',
+              { checks: formatUxNaturalList(pendingChecks) }
             )
-          : uxText('processingSuccess', 'Processamento concluído com sucesso.');
+          : uxText(
+              'processingValidationPending',
+              'Processamento concluído; a validação técnica solicitada permanece pendente.'
+            );
+      }
+      return uxText('processingSuccess', 'Processamento concluído com sucesso.');
     }
     if (job.status === 'failed') {
       return isPartialSuccess(job)
@@ -619,6 +727,9 @@
 
   function buildJobTitle(job) {
     if (!job) return uxText('processing', 'Processando');
+    if (job.status === 'blocked' || isAgenticTerminalBlocked(job)) {
+      return uxText('executionBlocked', 'Execução bloqueada');
+    }
     if (job.status === 'failed') {
       return isPartialSuccess(job)
         ? uxText('executionWithNotes', 'Execução concluída com observações')
@@ -627,7 +738,9 @@
     if (job.status === 'completed') {
       return isCompletedWithoutExecution(job)
         ? uxText('responseCompleted', 'Resposta concluída')
-        : uxText('executionCompleted', 'Execução concluída');
+        : hasPendingProcessValidation(job)
+          ? uxText('validationPendingTitle', 'Alterações aplicadas; validação pendente')
+          : uxText('executionCompleted', 'Execução concluída');
     }
     if (job.status === 'retry_pending') return uxText('retrySoon', 'Vou tentar novamente em instantes');
     if (job.status === 'cancelled') return uxText('executionCancelled', 'Execução cancelada');
@@ -636,10 +749,15 @@
 
   function buildJobStatusLabel(job) {
     if (!job) return uxText('waiting', 'Aguardando');
+    if (job.status === 'blocked' || isAgenticTerminalBlocked(job)) {
+      return uxText('blockedLabel', 'Bloqueado');
+    }
     if (job.status === 'completed') {
       return isCompletedWithoutExecution(job)
         ? uxText('noExecution', 'Sem execução')
-        : uxText('completed', 'Concluído');
+        : hasPendingProcessValidation(job)
+          ? uxText('validationPendingLabel', 'Validação pendente')
+          : uxText('completed', 'Concluído');
     }
     if (job.status === 'failed') {
       return isPartialSuccess(job)
@@ -783,6 +901,10 @@
           ? uxText('responseWithoutRun', 'Resposta concluída sem execução')
           : uxText('processingCompleted', 'Processamento concluído')}`.trim();
       }
+      if (type === 'job.blocked') {
+        const reason = compactUxReason(payload.reason);
+        return `${ts} ${uxText('executionBlocked', 'Execução bloqueada')}${reason ? ` - ${reason}` : ''}`.trim();
+      }
       if (type === 'job.failed') {
         const reason = compactUxReason(payload.reason);
         return `${ts} ${uxText('finalFailure', 'Falha final')}${reason ? ` - ${reason}` : ''}`.trim();
@@ -794,38 +916,26 @@
   }
 
   function buildFinalSummaryLines(job, phaseSteps = []) {
-    if (!job || !['completed', 'failed', 'cancelled'].includes(String(job.status || '').toLowerCase())) return [];
+    if (!job || !['completed', 'failed', 'blocked', 'cancelled'].includes(String(job.status || '').toLowerCase())) return [];
     const status = String(job.status || '').toLowerCase();
-    const completedWithoutExecution = isCompletedWithoutExecution(job);
-    const result =
-      status === 'completed'
-        ? completedWithoutExecution
-          ? uxText('resultAnalysis', 'Resultado: análise concluída sem execução.')
-          : uxText('resultExecution', 'Resultado: execução concluída.')
-        : status === 'cancelled'
-          ? uxText('resultCancelled', 'Resultado: execução cancelada.')
-          : uxText('resultIncomplete', 'Resultado: execução não concluída.');
-    const walkedPhases = phaseSteps
-      .filter((step) => step && step.state !== 'pending')
-      .map((step) => step.label)
-      .filter(Boolean);
-    const attempts = phaseSteps
-      .filter((step) => step && Number(step.attempt || 0) > 1)
-      .map((step) => uxText('attempts', '{label}: {value} tentativa(s)', {
-        label: step.label,
-        value: step.attempt,
-      }));
-    const lines = [result];
-    if (walkedPhases.length) {
-      lines.push(uxText('path', 'Caminho: {value}.', { value: walkedPhases.join(' > ') }));
+    const lines = [];
+    if (status === 'completed' && hasPendingProcessValidation(job)) {
+      const pendingChecks = readPendingValidationChecks(job);
+      lines.push(pendingChecks.length
+        ? uxText('pendingValidations', 'Validações pendentes: {value}.', { value: pendingChecks.join(', ') })
+        : uxText('pendingValidations', 'Validações pendentes: {value}.', {
+          value: 'verificação técnica necessária',
+        }));
     }
-    if (attempts.length) {
-      lines.push(uxText('retries', 'Retentativas: {value}.', { value: attempts.join(' | ') }));
-    }
-    lines.push(...buildJobNarrativeLines(job, { includePhaseLine: false, includeNextAction: true }));
-    if (job.lastError) {
+    lines.push(...buildJobNarrativeLines(job, { includePhaseLine: false, includeNextAction: false }));
+    const technicalReason = job.lastError ? compactUxReason(job.lastError) : '';
+    const normalizedReason = normalizedUxComparison(technicalReason);
+    const reasonAlreadyVisible = normalizedReason && lines.some((line) => (
+      normalizedUxComparison(line).includes(normalizedReason)
+    ));
+    if (technicalReason && !reasonAlreadyVisible) {
       lines.push(uxText('technicalReason', 'Motivo técnico: {value}', {
-        value: formatUxSentence(compactUxReason(job.lastError)),
+        value: formatUxSentence(technicalReason),
       }));
     }
     return lines;
@@ -841,6 +951,16 @@
     const text = String(value || '').replace(/\s+/g, ' ').trim();
     if (!text) return '';
     return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
+  }
+
+  function isLowSignalExecutorDiagnosis(value) {
+    const text = normalizeText(value);
+    if (!text) return true;
+    return /\b(vou trabalhar nisso agora|te volto com resultado real|i will work on this now|i'll work on this now|trabajare en esto ahora)\b/.test(text);
+  }
+
+  function normalizedUxComparison(value) {
+    return normalizeText(value).replace(/[.!?]+$/g, '').trim();
   }
 
   function readJobCheckpointData(job, key) {
@@ -922,29 +1042,41 @@
       } else if (phase === 'execute_pending') {
         lines.push(uxText(
           'narrativeProtectedRun',
-          'Estou aplicando alterações de arquivo em área protegida; lint, testes, build e preview permanecem pendentes.'
+          'O Harness está executando a ação autorizada.'
         ));
       } else if (phase === 'execute_validation') {
         lines.push(uxText(
           'narrativeValidationRun',
-          'Estou verificando o resultado sem iniciar processos do projeto; lint, testes, build e preview permanecem pendentes.'
+          'O Harness está validando os recibos da execução.'
         ));
       } else if (status === 'completed') {
-        lines.push(
-          isCompletedWithoutExecution(job)
-            ? uxText('narrativeContextOnly', 'Concluí esta rodada como resposta contextual, sem alterar arquivos.')
-            : hasPendingProcessValidation(job)
-              ? uxText(
-                  'narrativeValidationPending',
-                  'Concluí as alterações de arquivo, mas lint, testes, build e preview não foram executados e permanecem pendentes.'
-                )
-              : uxText('narrativeValidationPassed', 'Concluí esta rodada porque a validação real passou.')
-        );
+        if (isCompletedWithoutExecution(job)) {
+          lines.push(uxText('narrativeContextOnly', 'Concluí esta rodada como resposta contextual, sem alterar arquivos.'));
+        } else if (hasPendingProcessValidation(job)) {
+          const pendingChecks = readPendingValidationChecks(job);
+          lines.push(pendingChecks.length
+            ? uxText(
+                'narrativeValidationPendingNamed',
+                'A execução terminou, mas {checks} permanecem pendentes.',
+                { checks: formatUxNaturalList(pendingChecks) }
+              )
+            : uxText(
+                'narrativeValidationPending',
+                'A execução terminou, mas a validação técnica solicitada permanece pendente.'
+              ));
+        } else {
+          lines.push(uxText('narrativeValidationPassed', 'Concluí esta rodada porque a validação real passou.'));
+        }
       }
     }
 
-    if (status === 'failed') {
-      if (isPartialSuccess(job)) {
+    if (status === 'failed' || status === 'blocked') {
+      if (status === 'blocked' || isAgenticTerminalBlocked(job)) {
+        lines.push(uxText(
+          'narrativeEvidenceBlocked',
+          'O Harness bloqueou o encerramento porque não encontrou recibos suficientes para comprovar a alegação do modelo.'
+        ));
+      } else if (isPartialSuccess(job)) {
         const payload = readLatestJobEventPayload(job, 'job.execute_validation_blocked') || readLatestJobEventPayload(job, 'job.execute_pass_finished');
         const count = payload && payload.modifiedFilesCount
           ? payload.modifiedFilesCount
@@ -962,6 +1094,17 @@
           lines.push(uxText('narrativeStoppedNoPromote', 'Parei esta rodada sem promover como concluída.'));
         }
       }
+    }
+
+    const groundedProcessFailures = status === 'failed'
+      ? readGroundedProcessFailureLabels(job)
+      : [];
+    if (groundedProcessFailures.length > 0) {
+      lines.push(uxText(
+        'groundedProcessFailures',
+        'Verificações com falha comprovada: {value}.',
+        { value: formatUxNaturalList(groundedProcessFailures) }
+      ));
     }
 
     if (validation && status === 'failed') {
@@ -999,7 +1142,7 @@
     const lastPlan = readJobCheckpointData(job, 'last_plan');
     if (status === 'failed' && lastPlan && lastPlan.responsePreview) {
       const preview = clipUxLine(lastPlan.responsePreview, 240);
-      if (preview) {
+      if (preview && !isLowSignalExecutorDiagnosis(preview)) {
         lines.push(uxText('executorDiagnosis', 'Diagnóstico do Executor: {value}', { value: preview }));
       }
     }
@@ -1154,9 +1297,20 @@
     const progressPct = clampProgressPct(job);
     const retryCountdown = buildRetryCountdown(job, Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now());
     const phaseSteps = buildJobPhaseSteps(job);
-    const statusParts = [statusLabel, phaseLabel];
+    const normalizedStatus = String(job.status || '').toLowerCase();
+    const terminalStatus = ['completed', 'failed', 'blocked', 'cancelled'].includes(normalizedStatus);
+    const statusParts = terminalStatus && progressPct !== null
+      ? []
+      : terminalStatus
+        ? [statusLabel]
+        : [statusLabel, phaseLabel];
     if (progressPct !== null) statusParts.push(`${progressPct}%`);
     if (retryCountdown) statusParts.push(retryCountdown);
+    const uniqueStatusParts = statusParts.filter((part, index, list) => {
+      if (!part) return false;
+      const normalizedPart = String(part).trim().toLowerCase();
+      return list.findIndex((candidate) => String(candidate || '').trim().toLowerCase() === normalizedPart) === index;
+    });
 
     const detailLines = [];
     if (job.attemptsByPhase && typeof job.attemptsByPhase === 'object') {
@@ -1189,13 +1343,13 @@
     }
 
     const tone = inferJobTone(job);
-    const busy = !['completed', 'failed', 'cancelled'].includes(String(job.status || '').toLowerCase());
+    const busy = !terminalStatus;
     const finalSummaryLines = buildFinalSummaryLines(job, phaseSteps);
     return {
       title: buildJobTitle(job),
       phaseLabel,
       statusLabel,
-      statusText: statusParts.join(' | '),
+      statusText: uniqueStatusParts.join(' | '),
       detailText: detailLines.filter(Boolean).join('\n') || uxText('processingEllipsis', 'Processando...'),
       activityLines: recentTimeline,
       finalDetailLines: fullTimeline,

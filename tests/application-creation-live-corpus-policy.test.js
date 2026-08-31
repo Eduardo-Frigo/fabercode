@@ -117,7 +117,7 @@ function run() {
     const childEnvironment = policy.buildNpmChildEnvironment({
       PATH: '/usr/local/bin:/usr/bin',
       LANG: 'pt_BR.UTF-8',
-      HOME: '/Users/example',
+      HOME: path.join(tempRoot, 'host-home'),
       OPENAI_API_KEY: 'must-not-leak',
       GEMINI_API_KEY: 'must-not-leak',
       HTTPS_PROXY: 'https://proxy.example',

@@ -398,8 +398,14 @@ assert.ok(
   'a failed coordinated action must require a new approval instead of retaining a stale digest for retry'
 );
 assert.ok(
-  mainSource.includes('const ASSISTANT_PROCESS_EXECUTION_POLICY = PROCESS_EXECUTION_POLICIES.SUSPENDED;'),
-  'assistant-originated project processes must stay suspended until the portable sandbox exists'
+  mainSource.includes('AGENTIC_PROCESS_EXECUTION_POLICIES,')
+    && mainSource.includes(
+      'const ASSISTANT_PROCESS_EXECUTION_POLICY = AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED;'
+    )
+    && !mainSource.includes(
+      'const ASSISTANT_PROCESS_EXECUTION_POLICY = PROCESS_EXECUTION_POLICIES.BROKERED;'
+    ),
+  'assistant-originated processes must use the agentic brokered policy rather than an undefined legacy policy member'
 );
 assert.ok(
   mainSource.includes(
@@ -417,7 +423,7 @@ assert.ok(
 );
 assert.ok(
   legacyExecuteSource.includes('processExecutionPolicy: ASSISTANT_PROCESS_EXECUTION_POLICY'),
-  'staged assistant execution must receive the non-forgeable suspended process policy'
+  'staged assistant execution must receive the non-forgeable brokered process policy'
 );
 assert.ok(
   legacyExecuteSource.includes('processExecutionAllowed: false'),
@@ -426,6 +432,19 @@ assert.ok(
 assert.ok(
   legacyExecuteSource.includes('const visualValidationReport = buildAssistantVisualValidationPending();'),
   'assistant execution must report preview validation as pending without starting an app'
+);
+const assistantVisualValidationPendingSource = extractFunctionDeclaration(
+  mainSource,
+  'buildAssistantVisualValidationPending'
+);
+assert.strictEqual(
+  assistantVisualValidationPendingSource.includes('até existir um sandbox portátil'),
+  false,
+  'pending validation copy must not claim that the now-active portable sandbox is unavailable'
+);
+assert.ok(
+  assistantVisualValidationPendingSource.includes("summary: 'Preview não capturado nesta execução.'"),
+  'pending validation copy must accurately describe evidence missing only from the current execution'
 );
 assert.strictEqual(
   legacyExecuteSource.includes('runProjectVisualValidation(refreshed'),
@@ -438,8 +457,19 @@ assert.strictEqual(
   'assistant execution must not schedule project build or test scripts'
 );
 assert.ok(
-  legacyExecuteSource.includes('buildAssistantProcessValidationPendingMessage(agenticModifiedFiles)'),
-  'agentic success output must replace model validation claims with a trusted pending notice'
+  legacyExecuteSource.includes('buildAssistantAgenticValidationFields(')
+    && legacyExecuteSource.includes('message: agenticResult && agenticResult.message'),
+  'agentic success output must preserve trusted tool-loop evidence and derive validation fields from it'
+);
+assert.ok(
+  legacyExecuteSource.includes("setJobCheckpoint(jobId, 'agentic_terminal_evidence'")
+    && legacyExecuteSource.includes('agenticResult && agenticResult.terminalEvidence'),
+  'agentic terminal evidence must be normalized and persisted before the job is surfaced'
+);
+assert.ok(
+  legacyExecuteSource.includes('if (agenticValidationFields.validationVerified) {')
+    && legacyExecuteSource.includes('completeActiveMilestoneAfterValidatedJob(rootPath, jobId);'),
+  'an agentic job with pending validation must not complete the active milestone'
 );
 assert.ok(
   mainSource.includes('registerPreviewHandlers({')
@@ -742,6 +772,54 @@ assertInOrder(
     'assistantRuntime,',
   ],
   'main process must compose authorization, coordination, the low-level router, and IPC in order'
+);
+
+const pendingApprovalProjectRestoreSource = extractFunctionDeclaration(
+  mainSource,
+  'restoreAuthorizedProjectForPendingApproval'
+);
+for (const fragment of [
+  'readProjectsSnapshot()',
+  "readAgenticDeleteDataProperty(project, 'id') === binding.projectId",
+  "readAgenticDeleteDataProperty(project, 'rootPath') === binding.canonicalRootPath",
+  "readAgenticDeleteDataProperty(project, 'state') !== 'deleted'",
+  'getProjectAccess().normalizeProjectInfo(matches[0], {',
+  'requireProjectBinding: true,',
+]) {
+  assert.ok(
+    pendingApprovalProjectRestoreSource.includes(fragment),
+    `pending approval project recovery must include ${fragment}`
+  );
+}
+const pendingApprovalStartupRecoverySource = extractFunctionDeclaration(
+  mainSource,
+  'restoreAssistantPendingApprovalsAtStartup'
+);
+for (const fragment of [
+  'listPendingApprovalRecoveryCandidates()',
+  'getPendingApprovalRecovery(jobId)',
+  'coordinator.restorePendingApproval({',
+  'markJobApprovalExpired(',
+  "appendAuditEvent('assistant.pending_approval_startup_recovery'",
+]) {
+  assert.ok(
+    pendingApprovalStartupRecoverySource.includes(fragment),
+    `startup approval recovery must include ${fragment}`
+  );
+}
+assertInOrder(
+  mainSource,
+  [
+    'getPendingApprovalRecovery,',
+    'listPendingApprovalRecoveryCandidates,',
+    'markJobApprovalExpired,',
+    'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
+    'getAuthorizedJobById,',
+    'restoreAuthorizedProject: restoreAuthorizedProjectForPendingApproval,',
+    'assistantExecutionCoordinatorInstance = assistantExecutionCoordinator;',
+    'restoreAssistantPendingApprovalsAtStartup(assistantExecutionCoordinator)',
+  ],
+  'pending approvals must be rehydrated only after main-process authority and coordinator construction'
 );
 
 assertInOrder(

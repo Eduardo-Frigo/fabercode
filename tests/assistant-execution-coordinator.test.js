@@ -53,6 +53,7 @@ function createHarness({
     executions: [],
     failures: [],
     lifecycleReleases: [],
+    pendingApprovalRecoveries: [],
     releaseOrder: [],
     retryEligibilityInspections: [],
     retryAuthorizations: [],
@@ -128,6 +129,20 @@ function createHarness({
     if (typeof hooks.onBindJobActionDigest === 'function') {
       hooks.onBindJobActionDigest({ actionDigest, coordinator, job, jobId });
     }
+    return { ok: true, job };
+  }
+
+  function persistPendingApprovalRecovery(jobId, recovery) {
+    const job = jobs.get(jobId);
+    calls.pendingApprovalRecoveries.push({ jobId, recovery });
+    if (typeof hooks.onPersistPendingApprovalRecovery === 'function') {
+      const overridden = hooks.onPersistPendingApprovalRecovery({
+        coordinator, job, jobId, recovery,
+      });
+      if (overridden !== undefined) return overridden;
+    }
+    if (!job) return { ok: false, code: 'job_not_found' };
+    job.pendingApprovalRecovery = recovery;
     return { ok: true, job };
   }
 
@@ -212,6 +227,18 @@ function createHarness({
     authorityService,
     bindActionToProject,
     bindJobActionDigest,
+    persistPendingApprovalRecovery,
+    getAuthorizedJobById(jobId) {
+      return jobs.has(jobId)
+        ? { ok: true, job: jobs.get(jobId) }
+        : { ok: false, code: 'job_not_found' };
+    },
+    restoreAuthorizedProject(binding) {
+      const current = project(binding.projectId);
+      return binding.canonicalRootPath === current.rootPath
+        ? { ok: true, projectInfo: current }
+        : { ok: false, code: 'project_not_authorized' };
+    },
     createActionDigest: digestAction,
     createAuthorizedAssistantJob,
     ...(createAuthorizedJobExecutor
@@ -526,6 +553,49 @@ async function run() {
   assert.strictEqual(basic.calls.actionDigests[0].executionCommand.root_path, '/workspace/project-a');
   assert.strictEqual(basic.jobs.get(createdJobId).request.userMessage, 'Crie a aplicação');
   assert.deepStrictEqual(basic.jobs.get(createdJobId).request.attachments, []);
+  assert.strictEqual(basic.calls.pendingApprovalRecoveries.length, 1);
+  const pendingRecovery = basic.calls.pendingApprovalRecoveries[0];
+  assert.strictEqual(pendingRecovery.jobId, createdJobId);
+  assert.strictEqual(pendingRecovery.recovery.schemaVersion, 'assistant-pending-approval-recovery.v1');
+  assert.strictEqual(pendingRecovery.recovery.requestedMode, 'delegate_task');
+  assert.strictEqual(pendingRecovery.recovery.actionDigest, basic.jobs.get(createdJobId).authorityContext.actionDigest);
+  assert.strictEqual(pendingRecovery.recovery.action.rootPath, '/workspace/project-a');
+  assert.strictEqual(Object.isFrozen(pendingRecovery.recovery), true);
+  assert.strictEqual(Object.isFrozen(pendingRecovery.recovery.action), true);
+
+  const restart = createHarness();
+  const restartedJobId = await createReadyJob(restart, 'restart');
+  const restartRecovery = restart.jobs.get(restartedJobId).pendingApprovalRecovery;
+  assert.strictEqual(restart.coordinator.clear().ok, true);
+  assert.strictEqual(restart.coordinator.diagnostics().activeJobs, 0);
+  assert.deepStrictEqual(
+    restart.coordinator.restorePendingApproval({
+      jobId: restartedJobId,
+      recovery: { ...restartRecovery, actionDigest: `sha256:${'f'.repeat(64)}` },
+    }),
+    {
+      ok: false,
+      code: ASSISTANT_EXECUTION_COORDINATOR_REASONS.ACTION_DIGEST_MISMATCH,
+      message: 'A operação foi rejeitada pelo coordenador.',
+    }
+  );
+  const restored = restart.coordinator.restorePendingApproval({
+    jobId: restartedJobId,
+    recovery: restartRecovery,
+  });
+  assert.strictEqual(restored.ok, true);
+  assert.strictEqual(restored.restored, true);
+  assert.strictEqual(restored.idempotent, false);
+  assert.strictEqual(restored.job.id, restartedJobId);
+  assert.strictEqual(restart.coordinator.diagnostics().readyJobs, 1);
+  assert.strictEqual(
+    restart.coordinator.restorePendingApproval({
+      jobId: restartedJobId,
+      recovery: restartRecovery,
+    }).idempotent,
+    true
+  );
+  assert.strictEqual((await restart.coordinator.execute({ jobId: restartedJobId })).ok, true);
 
   proposedAction.files[0].content = 'mutated-after-plan';
   proposedAction.rootPath = '/workspace/project-b';
@@ -999,7 +1069,7 @@ async function run() {
   assert.strictEqual(resultB.jobId, resultB.createdId);
   assert.strictEqual(concurrent.coordinator.onJobTerminal({ jobId: resultA.jobId, status: 'cancelled' }).revoked, true);
   assert.strictEqual(concurrent.coordinator.onJobTerminal({ jobId: resultA.jobId, status: 'cancelled' }).idempotent, true);
-  assert.strictEqual(concurrent.coordinator.onJobTerminal({ jobId: resultB.jobId, status: 'failed' }).revoked, true);
+  assert.strictEqual(concurrent.coordinator.onJobTerminal({ jobId: resultB.jobId, status: 'blocked' }).revoked, true);
   assert.strictEqual(concurrent.coordinator.diagnostics().activeJobs, 0);
 
   // Map chat is conversation-only: it needs no project binding and can never

@@ -1,6 +1,6 @@
 const { randomUUID: defaultRandomUUID } = require('crypto');
 
-const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'blocked', 'cancelled']);
 const AUTHORIZED_RECOVERY_FAILED_TERMINAL_PHASES = new Set([
   'failed',
   'runtime_interrupted',
@@ -49,7 +49,20 @@ const PUBLIC_JOB_REDACTED_KEYS = new Set([
   'kernelId',
   'submissionDigest',
   'actionDigest',
+  'pendingApprovalRecovery',
 ]);
+const PENDING_APPROVAL_RECOVERY_SCHEMA_VERSION =
+  'assistant-pending-approval-recovery.v1';
+const PENDING_APPROVAL_RECOVERY_KEYS = Object.freeze([
+  'schemaVersion',
+  'actionDigest',
+  'requestedMode',
+  'action',
+]);
+const PENDING_APPROVAL_MODES = new Set(['ask_each', 'delegate_task']);
+const MAX_PENDING_APPROVAL_DATA_NODES = 50_000;
+const MAX_PENDING_APPROVAL_DATA_DEPTH = 32;
+const MAX_PENDING_APPROVAL_STRING_BYTES = 2 * 1024 * 1024;
 
 function createJobStateStore(dependencies = {}) {
   const {
@@ -83,6 +96,116 @@ function createJobStateStore(dependencies = {}) {
 
   function cloneJsonSnapshot(value) {
     return JSON.parse(JSON.stringify(value));
+  }
+
+  function clonePendingApprovalData(
+    value,
+    state = { nodes: 0, stringBytes: 0 },
+    depth = 0,
+    seen = new Set()
+  ) {
+    state.nodes += 1;
+    if (state.nodes > MAX_PENDING_APPROVAL_DATA_NODES
+      || depth > MAX_PENDING_APPROVAL_DATA_DEPTH) {
+      throw new TypeError('Pending approval recovery data exceeds structural limits');
+    }
+    if (value === null || typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      if (value.includes('\0')) throw new TypeError('Pending approval strings must not contain NUL');
+      state.stringBytes += Buffer.byteLength(value, 'utf8');
+      if (state.stringBytes > MAX_PENDING_APPROVAL_STRING_BYTES) {
+        throw new TypeError('Pending approval recovery data exceeds its string budget');
+      }
+      return value;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value) || Object.is(value, -0)) {
+        throw new TypeError('Pending approval numbers must be finite');
+      }
+      return value;
+    }
+    if (!value || typeof value !== 'object' || seen.has(value)) {
+      throw new TypeError('Pending approval recovery data is not plain acyclic data');
+    }
+
+    seen.add(value);
+    try {
+      const isArray = Array.isArray(value);
+      const prototype = Object.getPrototypeOf(value);
+      if ((isArray && prototype !== Array.prototype)
+        || (!isArray && prototype !== Object.prototype && prototype !== null)) {
+        throw new TypeError('Pending approval recovery data must be plain');
+      }
+      const keys = Reflect.ownKeys(value);
+      if (keys.some((key) => typeof key !== 'string'
+        || key === 'then'
+        || UNSAFE_RECORD_KEYS.has(key))) {
+        throw new TypeError('Pending approval recovery data contains unsafe keys');
+      }
+      if (isArray && (keys.length !== value.length + 1 || keys.at(-1) !== 'length')) {
+        throw new TypeError('Pending approval arrays must be dense');
+      }
+      const output = isArray ? [] : {};
+      const dataKeys = isArray ? keys.slice(0, -1) : keys;
+      dataKeys.forEach((key, index) => {
+        if (isArray && key !== String(index)) {
+          throw new TypeError('Pending approval arrays must be indexed');
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!descriptor
+          || descriptor.enumerable !== true
+          || !Object.prototype.hasOwnProperty.call(descriptor, 'value')
+          || descriptor.value === undefined) {
+          throw new TypeError('Pending approval recovery data must use data properties');
+        }
+        output[key] = clonePendingApprovalData(descriptor.value, state, depth + 1, seen);
+      });
+      return output;
+    } finally {
+      seen.delete(value);
+    }
+  }
+
+  function normalizePendingApprovalRecovery(value, expectedDigest = null) {
+    let snapshot;
+    try {
+      snapshot = clonePendingApprovalData(value);
+    } catch {
+      return null;
+    }
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null;
+    const keys = Object.keys(snapshot).sort();
+    const expectedKeys = [...PENDING_APPROVAL_RECOVERY_KEYS].sort();
+    if (keys.length !== expectedKeys.length
+      || keys.some((key, index) => key !== expectedKeys[index])
+      || snapshot.schemaVersion !== PENDING_APPROVAL_RECOVERY_SCHEMA_VERSION
+      || !SHA256_DIGEST_PATTERN.test(snapshot.actionDigest)
+      || (expectedDigest !== null && snapshot.actionDigest !== expectedDigest)
+      || !PENDING_APPROVAL_MODES.has(snapshot.requestedMode)
+      || !snapshot.action
+      || typeof snapshot.action !== 'object'
+      || Array.isArray(snapshot.action)) {
+      return null;
+    }
+    return snapshot;
+  }
+
+  function isPendingApprovalRecoveryCandidate(job) {
+    if (ownDataValue(job, 'status') !== 'running'
+      || ownDataValue(job, 'phase') !== 'awaiting_user_confirmation') {
+      return false;
+    }
+    const authority = validateStoredAuthorityJob(job);
+    if (!authority.ok
+      || authority.authorityContextStatus !== 'bound'
+      || !authority.authorityContext
+      || !SHA256_DIGEST_PATTERN.test(authority.authorityContext.actionDigest)) {
+      return false;
+    }
+    return Boolean(normalizePendingApprovalRecovery(
+      ownDataValue(job, 'pendingApprovalRecovery'),
+      authority.authorityContext.actionDigest
+    ));
   }
 
   function snapshotAuthorityContext(authorityContext, options = {}) {
@@ -1061,6 +1184,34 @@ function createJobStateStore(dependencies = {}) {
     return next;
   }
 
+  function markJobBlocked(jobId, reason, phase = 'blocked') {
+    const next = mutateJobState(jobId, (job) => {
+      const retryState = ensureJobRetryState(job);
+      const progressResult = applyProgressUpdate(job, 100, 'blocked');
+
+      retryState.retryable = false;
+      retryState.nextRetryAt = null;
+      retryState.lastRetryAt = retryState.lastRetryAt || progressResult.nowIso;
+
+      job.status = 'blocked';
+      job.phase = phase;
+      job.lastError = String(reason || 'blocked');
+      job.events = [
+        buildJobEvent('job.blocked', {
+          phase,
+          reason: String(reason || ''),
+          progressPct: progressResult.progress.pct,
+        }),
+        ...(Array.isArray(job.events) ? job.events : []),
+      ].slice(0, MAX_JOB_EVENTS);
+      return job;
+    }, { rejectTerminal: true, notifyTerminal: true });
+    if (next.ok) {
+      appendJobAuditBestEffort('job.blocked', { jobId, phase, reason: String(reason || '') });
+    }
+    return next;
+  }
+
   function markJobCancelled(jobId, reason = 'cancelled_by_user') {
     const next = mutateJobState(jobId, (job) => {
       const retryState = ensureJobRetryState(job);
@@ -1192,11 +1343,158 @@ function createJobStateStore(dependencies = {}) {
     }, { rejectTerminal: true });
   }
 
+  function persistPendingApprovalRecovery(jobId, value) {
+    if (!isSafeJobId(jobId)) return invalidJobIdResult(jobId);
+    const current = readJobsState();
+    if (!Object.hasOwn(current.jobsById, jobId)) {
+      return { ok: false, code: 'job_not_found', message: 'Job não encontrado.' };
+    }
+    const previousJob = current.jobsById[jobId];
+    const authority = validateStoredAuthorityJob(previousJob);
+    if (!authority.ok) return authority;
+    if (isTerminalJob(previousJob)) {
+      return { ok: false, code: 'job_terminal', message: 'Job já está em estado terminal.' };
+    }
+    if (previousJob.status !== 'running'
+      || previousJob.phase !== 'awaiting_user_confirmation'
+      || authority.authorityContextStatus !== 'bound'
+      || !authority.authorityContext
+      || !SHA256_DIGEST_PATTERN.test(authority.authorityContext.actionDigest)) {
+      return {
+        ok: false,
+        code: 'pending_approval_unavailable',
+        message: 'O job não está aguardando uma aprovação recuperável.',
+      };
+    }
+    const normalized = normalizePendingApprovalRecovery(
+      value,
+      authority.authorityContext.actionDigest
+    );
+    if (!normalized) {
+      const suppliedDigest = ownDataValue(value, 'actionDigest');
+      return {
+        ok: false,
+        code: typeof suppliedDigest === 'string'
+          && SHA256_DIGEST_PATTERN.test(suppliedDigest)
+          && suppliedDigest !== authority.authorityContext.actionDigest
+          ? 'pending_approval_digest_mismatch'
+          : 'pending_approval_recovery_invalid',
+        message: 'Comprovante de retomada da aprovação inválido.',
+      };
+    }
+    const previousRecovery = normalizePendingApprovalRecovery(
+      ownDataValue(previousJob, 'pendingApprovalRecovery'),
+      authority.authorityContext.actionDigest
+    );
+    if (previousRecovery) {
+      const idempotent = JSON.stringify(previousRecovery) === JSON.stringify(normalized);
+      return idempotent
+        ? { ok: true, job: previousJob, idempotent: true }
+        : {
+          ok: false,
+          code: 'pending_approval_recovery_conflict',
+          message: 'O job já possui outro comprovante de retomada.',
+        };
+    }
+    const nextJob = {
+      ...previousJob,
+      updatedAt: new Date().toISOString(),
+      pendingApprovalRecovery: normalized,
+      events: [
+        buildJobEvent('job.pending_approval_recovery_persisted'),
+        ...(Array.isArray(previousJob.events) ? previousJob.events : []),
+      ].slice(0, MAX_JOB_EVENTS),
+    };
+    writeJobsState({
+      ...current,
+      jobsById: { ...current.jobsById, [jobId]: nextJob },
+    });
+    appendJobAuditBestEffort('job.pending_approval_recovery_persisted', { jobId });
+    return { ok: true, job: nextJob, idempotent: false };
+  }
+
+  function getPendingApprovalRecovery(jobId) {
+    if (!isSafeJobId(jobId)) return invalidJobIdResult(jobId);
+    const current = readJobsState();
+    if (!Object.hasOwn(current.jobsById, jobId)) {
+      return { ok: false, code: 'job_not_found', message: 'Job não encontrado.' };
+    }
+    const job = current.jobsById[jobId];
+    if (!isPendingApprovalRecoveryCandidate(job)) {
+      return {
+        ok: false,
+        code: 'pending_approval_recovery_unavailable',
+        message: 'A retomada da aprovação não está disponível.',
+      };
+    }
+    const authority = validateStoredAuthorityJob(job);
+    const recovery = normalizePendingApprovalRecovery(
+      ownDataValue(job, 'pendingApprovalRecovery'),
+      authority.authorityContext.actionDigest
+    );
+    return { ok: true, job, recovery };
+  }
+
+  function listPendingApprovalRecoveryCandidates() {
+    const current = readJobsState();
+    if (isJobsStorageHealthy() !== true) return { ok: false, jobIds: [] };
+    const ordered = [];
+    const seen = new Set();
+    const inspect = (jobId) => {
+      if (seen.has(jobId)
+        || !isSafeJobId(jobId)
+        || !Object.hasOwn(current.jobsById, jobId)) return;
+      seen.add(jobId);
+      if (isPendingApprovalRecoveryCandidate(current.jobsById[jobId])) {
+        ordered.push(jobId);
+      }
+    };
+    (Array.isArray(current.jobOrder) ? current.jobOrder : []).forEach(inspect);
+    Object.keys(current.jobsById).forEach(inspect);
+    return { ok: true, jobIds: ordered };
+  }
+
+  function markJobApprovalExpired(
+    jobId,
+    reason = 'approval_expired_after_runtime_restart'
+  ) {
+    const next = mutateJobState(jobId, (job) => {
+      const previousPhase = job.phase || null;
+      const retryState = ensureJobRetryState(job);
+      const progressResult = applyProgressUpdate(job, 100, 'approval_expired');
+      retryState.retryable = false;
+      retryState.nextRetryAt = null;
+      retryState.lastReason = String(reason || 'approval_expired');
+      job.status = 'cancelled';
+      job.phase = 'approval_expired';
+      job.lastError = null;
+      delete job.pendingApprovalRecovery;
+      job.events = [
+        buildJobEvent('job.approval_expired', {
+          previousPhase,
+          reason: String(reason || 'approval_expired'),
+          progressPct: progressResult.progress.pct,
+        }),
+        ...(Array.isArray(job.events) ? job.events : []),
+      ].slice(0, MAX_JOB_EVENTS);
+      return job;
+    }, { rejectTerminal: true, notifyTerminal: true });
+    if (next.ok) {
+      appendJobAuditBestEffort('job.approval_expired', {
+        jobId,
+        reason: String(reason || 'approval_expired'),
+      });
+    }
+    return next;
+  }
+
   function recoverInterruptedJobs(reason = 'runtime_restarted_before_job_completed') {
     const current = readJobsState();
     const interruptedStatuses = new Set(['running', 'retry_pending', 'paused_memory_pressure']);
     const nowIso = new Date().toISOString();
     const recoveredJobIds = [];
+    const expiredApprovalJobIds = [];
+    const resumableApprovalJobIds = [];
     const jobsById = { ...current.jobsById };
     const ownJobIds = Object.keys(current.jobsById);
     const reconciledOrder = [];
@@ -1221,16 +1519,58 @@ function createJobStateStore(dependencies = {}) {
 
     for (const jobId of ownJobIds) {
       const job = jobsById[jobId];
-      if (!job || typeof job !== 'object' || Array.isArray(job) || !interruptedStatuses.has(job.status)) continue;
+      if (!job || typeof job !== 'object' || Array.isArray(job)
+        || !interruptedStatuses.has(job.status)) continue;
+
+      const pendingApproval = job.status === 'running'
+        && job.phase === 'awaiting_user_confirmation';
+      if (pendingApproval) {
+        if (isPendingApprovalRecoveryCandidate(job)) {
+          const nextJob = { ...job, updatedAt: nowIso };
+          if (!Array.isArray(job.events)
+            || !job.events[0]
+            || job.events[0].type !== 'job.pending_approval_recovery_ready') {
+            nextJob.events = [
+              buildJobEvent('job.pending_approval_recovery_ready', {
+                previousPhase: job.phase,
+              }),
+              ...(Array.isArray(job.events) ? job.events : []),
+            ].slice(0, MAX_JOB_EVENTS);
+          }
+          jobsById[jobId] = nextJob;
+          resumableApprovalJobIds.push(jobId);
+          continue;
+        }
+        const nextJob = { ...job };
+        const retryState = ensureJobRetryState(nextJob);
+        const progressResult = applyProgressUpdate(nextJob, 100, 'approval_expired');
+        retryState.retryable = false;
+        retryState.nextRetryAt = null;
+        retryState.lastReason = 'approval_expired_after_runtime_restart';
+        nextJob.status = 'cancelled';
+        nextJob.phase = 'approval_expired';
+        nextJob.lastError = null;
+        nextJob.updatedAt = nowIso;
+        delete nextJob.pendingApprovalRecovery;
+        nextJob.events = [
+          buildJobEvent('job.approval_expired', {
+            previousPhase: job.phase,
+            reason: retryState.lastReason,
+            progressPct: progressResult.progress.pct,
+          }),
+          ...(Array.isArray(job.events) ? job.events : []),
+        ].slice(0, MAX_JOB_EVENTS);
+        jobsById[jobId] = nextJob;
+        expiredApprovalJobIds.push(jobId);
+        continue;
+      }
 
       const nextJob = { ...job };
       const retryState = ensureJobRetryState(nextJob);
       const progressResult = applyProgressUpdate(nextJob, 100, 'failed');
-
       retryState.retryable = false;
       retryState.nextRetryAt = null;
       retryState.lastRetryAt = retryState.lastRetryAt || progressResult.nowIso;
-
       nextJob.status = 'failed';
       nextJob.phase = 'runtime_interrupted';
       nextJob.lastError = String(reason || 'runtime_interrupted');
@@ -1244,7 +1584,6 @@ function createJobStateStore(dependencies = {}) {
         }),
         ...(Array.isArray(job.events) ? job.events : []),
       ].slice(0, MAX_JOB_EVENTS);
-
       jobsById[jobId] = nextJob;
       recoveredJobIds.push(jobId);
     }
@@ -1252,20 +1591,17 @@ function createJobStateStore(dependencies = {}) {
     const orderChanged =
       reconciledOrder.length !== current.jobOrder.length ||
       reconciledOrder.some((jobId, index) => jobId !== current.jobOrder[index]);
-    if (!recoveredJobIds.length && !orderChanged) {
+    if (!recoveredJobIds.length
+      && !expiredApprovalJobIds.length
+      && !resumableApprovalJobIds.length
+      && !orderChanged) {
       return { ok: true, recovered: 0, jobIds: [] };
     }
 
-    writeJobsState({
-      ...current,
-      jobsById,
-      jobOrder: reconciledOrder,
-    });
-
-    recoveredJobIds.forEach((jobId) => {
+    writeJobsState({ ...current, jobsById, jobOrder: reconciledOrder });
+    [...recoveredJobIds, ...expiredApprovalJobIds].forEach((jobId) => {
       notifyJobTerminalBestEffort(jobsById[jobId]);
     });
-
     recoveredJobIds.forEach((jobId) => {
       appendJobAuditBestEffort('job.interrupted', {
         jobId,
@@ -1273,7 +1609,15 @@ function createJobStateStore(dependencies = {}) {
         reason: String(reason || 'runtime_interrupted'),
       });
     });
-
+    expiredApprovalJobIds.forEach((jobId) => {
+      appendJobAuditBestEffort('job.approval_expired', {
+        jobId,
+        reason: 'approval_expired_after_runtime_restart',
+      });
+    });
+    resumableApprovalJobIds.forEach((jobId) => {
+      appendJobAuditBestEffort('job.pending_approval_recovery_ready', { jobId });
+    });
     return { ok: true, recovered: recoveredJobIds.length, jobIds: recoveredJobIds };
   }
 
@@ -1370,10 +1714,14 @@ function createJobStateStore(dependencies = {}) {
     createAssistantJob,
     getAuthorizedJobById,
     getJobById,
+    getPendingApprovalRecovery,
     isJobCancelled,
     listAuthorizedJobRecoveryCandidates,
+    listPendingApprovalRecoveryCandidates,
     listJobs,
+    markJobApprovalExpired,
     markJobAwaitingUserInput,
+    markJobBlocked,
     markJobCancelled,
     markJobCanaryRolledBack,
     markJobCompleted,
@@ -1381,6 +1729,7 @@ function createJobStateStore(dependencies = {}) {
     markJobPausedForMemory,
     markJobPhase,
     markJobRetryPending,
+    persistPendingApprovalRecovery,
     recoverInterruptedJobs,
     setJobCheckpoint,
   };

@@ -1935,9 +1935,9 @@ function assertAssistantHarnessCompositionBoundary() {
       )
       && agenticToolLoopSource.includes("name: 'run_command'")
       && mainSource.includes(
-        'const ASSISTANT_PROCESS_EXECUTION_POLICY = PROCESS_EXECUTION_POLICIES.SUSPENDED;'
+        'const ASSISTANT_PROCESS_EXECUTION_POLICY = AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED;'
       ),
-    'run_command must exist only behind the exact brokered policy while production remains suspended'
+    'run_command must exist only behind the exact brokered policy now backed by the portable sandbox'
   );
   assert.ok(
     agenticToolLoopSource.includes('informe-as como pendentes para o usuário'),

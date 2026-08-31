@@ -648,23 +648,25 @@
       const summaryLines = Array.isArray(presentation && presentation.finalSummaryLines)
         ? presentation.finalSummaryLines.filter(Boolean)
         : [];
-      const summary = document.createElement('div');
-      summary.className = 'job-progress-final__summary';
-      (summaryLines.length ? summaryLines : [textFor('resultRecorded', 'Resultado registrado.')]).forEach((line) => {
-        const row = document.createElement('div');
-        row.textContent = line;
-        summary.appendChild(row);
-      });
-      wrap.appendChild(summary);
-
       const detailLines = Array.isArray(presentation && presentation.finalDetailLines)
         ? presentation.finalDetailLines.map(compactActivityLine).filter(Boolean)
         : [];
+      if (!summaryLines.length && !detailLines.length) return null;
+      if (summaryLines.length) {
+        const summary = document.createElement('div');
+        summary.className = 'job-progress-final__summary';
+        summaryLines.forEach((line) => {
+          const row = document.createElement('div');
+          row.textContent = line;
+          summary.appendChild(row);
+        });
+        wrap.appendChild(summary);
+      }
       if (detailLines.length) {
         const details = document.createElement('details');
         details.className = 'job-progress-final__details';
         const summaryNode = document.createElement('summary');
-        summaryNode.textContent = textFor('viewExecutionPath', 'Ver caminho da execução');
+        summaryNode.textContent = textFor('viewExecutionPath', 'Ver detalhes técnicos');
         const list = document.createElement('div');
         list.className = 'job-progress-final__timeline';
         detailLines.forEach((line) => {
@@ -687,7 +689,10 @@
         elements.detail.append(createSectionLabel(textFor('phases', 'Fases')), phaseStrip);
       }
       if (presentation && presentation.busy === false) {
-        elements.detail.appendChild(renderFinalSummary(presentation));
+        const finalSummary = renderFinalSummary(presentation);
+        if (finalSummary) {
+          elements.detail.appendChild(finalSummary);
+        }
         return;
       }
       const activityLines = presentation && Array.isArray(presentation.activityLines)
@@ -720,17 +725,19 @@
       onVisibilityChange();
 
       const titleByStatus =
-        job.status === 'failed'
-          ? 'Não consegui concluir essa execução'
-          : job.status === 'completed'
-            ? 'Execução concluída'
-            : job.status === 'retry_pending'
-              ? 'Vou tentar novamente em instantes'
-              : 'Trabalhando no projeto';
+        job.status === 'blocked'
+          ? 'Execução bloqueada'
+          : job.status === 'failed'
+            ? 'Não consegui concluir essa execução'
+            : job.status === 'completed'
+              ? 'Execução concluída'
+              : job.status === 'retry_pending'
+                ? 'Vou tentar novamente em instantes'
+                : 'Trabalhando no projeto';
       if (elements.title) elements.title.textContent = presentation ? presentation.title : titleByStatus;
 
       if (elements.cancelBtn) {
-        const isTerminal = ['completed', 'failed', 'cancelled'].includes(String(job.status || '').toLowerCase());
+        const isTerminal = ['completed', 'failed', 'blocked', 'cancelled'].includes(String(job.status || '').toLowerCase());
         elements.cancelBtn.style.display = isTerminal ? 'none' : 'block';
       }
 
@@ -738,20 +745,31 @@
       const statusLabel =
         job.status === 'completed'
           ? 'Concluído'
-          : job.status === 'failed'
-            ? 'Falha'
-            : job.status === 'cancelled'
-              ? 'Cancelado'
-              : job.status === 'retry_pending'
-                ? 'Aguardando retentativa'
-                : 'Em andamento';
+          : job.status === 'blocked'
+            ? 'Bloqueado'
+            : job.status === 'failed'
+              ? 'Falha'
+              : job.status === 'cancelled'
+                ? 'Cancelado'
+                : job.status === 'retry_pending'
+                  ? 'Aguardando retentativa'
+                  : 'Em andamento';
 
       const progressPct =
         job && job.progress && Number.isFinite(Number(job.progress.pct))
           ? Math.max(0, Math.min(100, Math.round(Number(job.progress.pct))))
           : null;
 
-      let statusText = progressPct === null ? `${statusLabel} | ${phaseLabel}` : `${statusLabel} | ${phaseLabel} | ${progressPct}%`;
+      const terminal = ['completed', 'failed', 'blocked', 'cancelled'].includes(String(job.status || '').toLowerCase());
+      const statusParts = terminal
+        ? [phaseLabel !== statusLabel ? phaseLabel : '', progressPct === null ? '' : `${progressPct}%`]
+        : [statusLabel, phaseLabel, progressPct === null ? '' : `${progressPct}%`];
+      const uniqueStatusParts = statusParts.filter((part, index, list) => {
+        if (!part) return false;
+        const normalized = String(part).trim().toLocaleLowerCase('pt-BR');
+        return list.findIndex((candidate) => String(candidate || '').trim().toLocaleLowerCase('pt-BR') === normalized) === index;
+      });
+      let statusText = uniqueStatusParts.join(' · ');
       if (job.status === 'retry_pending' && job.retryState && job.retryState.nextRetryAt) {
         const nextMs = new Date(job.retryState.nextRetryAt).getTime();
         if (Number.isFinite(nextMs)) {
@@ -791,7 +809,7 @@
         renderActivityDetail(String(detailText || '').split('\n'), presentation);
         elements.detail.classList.toggle(
           'is-live',
-          presentation ? presentation.busy : !['completed', 'failed', 'cancelled'].includes(String(job.status || '').toLowerCase())
+          presentation ? presentation.busy : !['completed', 'failed', 'blocked', 'cancelled'].includes(String(job.status || '').toLowerCase())
         );
       }
     }

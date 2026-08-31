@@ -263,6 +263,48 @@ async function runAsyncAssertions() {
   assert.ok(statuses.includes('Execução local ativa'));
   assert.ok(dispatchedEvents.some((event) => event.type === 'faber:project-preview-started'));
 
+  const staticPreviewPayloads = [];
+  const staticTerminalCommands = [];
+  const staticController = tools.createProjectToolsController({
+    api: {
+      getProjectPreviewPlan: async () => ({
+        ok: true,
+        plan: {
+          ok: true,
+          ready: true,
+          mode: 'static_server',
+          port: 4173,
+          url: 'http://127.0.0.1:4173/',
+          commandText: '',
+          steps: [],
+          warnings: [],
+        },
+      }),
+      startProjectPreview: async (payload) => {
+        staticPreviewPayloads.push(payload);
+        return {
+          ok: true,
+          session: {
+            mode: 'static_server',
+            status: 'ready',
+            url: 'http://127.0.0.1:4173/',
+          },
+        };
+      },
+    },
+    terminalController: {
+      runProjectCommand: async (command) => {
+        staticTerminalCommands.push(command);
+        return { ok: true };
+      },
+    },
+    getSelectedProjectInfo: () => ({ rootPath: '/tmp/faber-static-preview' }),
+  });
+  assert.strictEqual(await staticController.startPreview(), true);
+  assert.strictEqual(staticTerminalCommands.length, 0);
+  assert.strictEqual(staticPreviewPayloads.length, 1);
+  assert.strictEqual(staticPreviewPayloads[0].open, true);
+
   const failedMessages = [];
   const failedController = tools.createProjectToolsController({
     api: {

@@ -11,6 +11,14 @@ const htmlSource = fs.readFileSync(
   path.join(__dirname, '..', 'renderer', 'index.html'),
   'utf8'
 );
+const uiOverridesSource = fs.readFileSync(
+  path.join(__dirname, '..', 'renderer', 'styles', 'ui-overrides.css'),
+  'utf8'
+);
+const workspaceLayoutSource = fs.readFileSync(
+  path.join(__dirname, '..', 'renderer', 'styles', 'workspace-layout.css'),
+  'utf8'
+);
 
 function deferred() {
   let resolve;
@@ -71,16 +79,38 @@ function canaryJob(jobId, overrides = {}) {
 
 async function run() {
   assert.match(
+    uiOverridesSource,
+    /\.job-progress-head strong,\s*#job-progress-status\s*\{[^}]*font-size:\s*0\.76rem\s*!important;/s,
+    'the job error title and its status indicator must use the exact same font size'
+  );
+  assert.match(
+    workspaceLayoutSource,
+    /\.job-status-info\s*\{[^}]*flex-direction:\s*row;[^}]*align-items:\s*center;/s,
+    'the progress percentage must share the top header row with the job title'
+  );
+  assert.match(
+    workspaceLayoutSource,
+    /#job-progress-status\s*\{[^}]*margin-left:\s*auto;[^}]*flex-shrink:\s*0;/s,
+    'the progress percentage must stay aligned at the top-right before the actions'
+  );
+  assert.match(
     htmlSource,
     /id="btn-job-rollback-canary"[^>]*class="[^"]*hidden[^"]*"/,
     'the rollback control must be present and hidden by default'
   );
+  assert.doesNotMatch(
+    rendererSource,
+    /resultRecorded[^\n]*Resultado registrado/,
+    'the expanded terminal card must not inject a redundant generic result row'
+  );
 
   const rollbackButton = createButton();
+  const cancelButton = createButton();
   const title = { textContent: '' };
   const status = { textContent: '' };
   const elements = {
     'btn-job-rollback-canary': rollbackButton,
+    'btn-job-cancel': cancelButton,
     'job-progress-title': title,
     'job-progress-status': status,
   };
@@ -121,9 +151,22 @@ async function run() {
     id: 'job-legacy-1',
     status: 'completed',
     phase: 'done',
+    progress: { pct: 100 },
     events: [{ type: 'job.completed', payload: { canary: false } }],
   });
   assert.strictEqual(rollbackButton.classList.contains('hidden'), true);
+  assert.strictEqual(status.textContent, '100%');
+
+  cancelButton.style.display = 'block';
+  controller.render({
+    id: 'job-blocked-1',
+    status: 'blocked',
+    phase: 'execute_blocked',
+    progress: { pct: 100 },
+    events: [{ type: 'job.blocked', payload: { reason: 'process_unavailable' } }],
+  });
+  assert.strictEqual(cancelButton.style.display, 'none');
+  assert.strictEqual(title.textContent, 'Execução bloqueada');
 
   const eligible = canaryJob('job-canary-1');
   controller.render(eligible);

@@ -20,7 +20,9 @@ const SAFE_ROOT_LEASE_ID_PATTERN = /^[A-Za-z0-9._:@-]{1,256}$/;
 const SUPPORTED_PLANNING_OPERATIONS = new Set(['plan', 'message', 'map_message']);
 const APPROVAL_MODES = new Set(['ask_each', 'delegate_task']);
 const TERMINAL_RECORD_STATES = new Set(['executed', 'failed', 'revoked']);
-const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'runtime_interrupted']);
+const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'blocked', 'cancelled', 'runtime_interrupted']);
+const PENDING_APPROVAL_RECOVERY_SCHEMA_VERSION =
+  'assistant-pending-approval-recovery.v1';
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const AUTHORITY_BINDING_KEYS = Object.freeze([
   'projectId',
@@ -488,8 +490,11 @@ function createAssistantExecutionCoordinator(options = {}) {
   const authorityService = fields.get('authorityService');
   const createAuthorizedAssistantJob = fields.get('createAuthorizedAssistantJob');
   const bindJobActionDigest = fields.get('bindJobActionDigest');
+  const persistPendingApprovalRecovery = fields.get('persistPendingApprovalRecovery');
+  const getAuthorizedJobById = fields.get('getAuthorizedJobById');
   const bindActionToProject = fields.get('bindActionToProject');
   const createActionDigest = fields.get('createActionDigest');
+  const restoreAuthorizedProject = fields.get('restoreAuthorizedProject');
   const createAuthorizedJobExecutor = fields.get('createAuthorizedJobExecutor');
   const executeAction = fields.get('executeAction');
   const projectRootAuthority = fields.get('projectRootAuthority');
@@ -512,6 +517,7 @@ function createAssistantExecutionCoordinator(options = {}) {
     'inspectRetryEligibility',
     'revokeExact',
     'revokeSubmission',
+    'restorePendingApproval',
   ]) {
     if (typeof authorityService[method] !== 'function') {
       throw new TypeError(`authorityService.${method} is required`);
@@ -557,10 +563,13 @@ function createAssistantExecutionCoordinator(options = {}) {
   }
   for (const [name, callback] of [
     ['createAuthorizedAssistantJob', createAuthorizedAssistantJob],
+    ['persistPendingApprovalRecovery', persistPendingApprovalRecovery],
+    ['getAuthorizedJobById', getAuthorizedJobById],
     ['bindJobActionDigest', bindJobActionDigest],
     ['bindActionToProject', bindActionToProject],
     ['createActionDigest', createActionDigest],
     ['executeAction', executeAction],
+    ['restoreAuthorizedProject', restoreAuthorizedProject],
   ]) {
     if (typeof callback !== 'function') throw new TypeError(`${name} is required`);
   }
@@ -587,6 +596,7 @@ function createAssistantExecutionCoordinator(options = {}) {
   let authorityHealthy = true;
   let authorityFailureReason = null;
   let clearing = false;
+  let restoreActive = false;
   let releaseBarrierActive = false;
 
   function markAuthorityUnhealthy(reason) {
@@ -1411,6 +1421,34 @@ function createAssistantExecutionCoordinator(options = {}) {
       if (!recordIsCurrent(record, observedGeneration, observedVersion, 'planning')) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
+      let recoveryFields;
+      try {
+        const recovery = Object.freeze({
+          schemaVersion: PENDING_APPROVAL_RECOVERY_SCHEMA_VERSION,
+          actionDigest: expectedDigest,
+          requestedMode: record.requestedMode,
+          action,
+        });
+        const recoveryPersisted = persistPendingApprovalRecovery(
+          record.jobId,
+          recovery
+        );
+        if (!isSynchronousResult(recoveryPersisted)) {
+          throw new TypeError('pending approval recovery persistence must be synchronous');
+        }
+        recoveryFields = dataFields(
+          recoveryPersisted,
+          'pending approval recovery persistence result'
+        );
+      } catch {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.ACTION_PERSIST_FAILED);
+      }
+      if (recoveryFields.get('ok') !== true) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.ACTION_PERSIST_FAILED);
+      }
+      if (!recordIsCurrent(record, observedGeneration, observedVersion, 'planning')) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
+      }
       record.action = action;
       record.actionDigest = expectedDigest;
       record.state = 'ready';
@@ -1418,6 +1456,223 @@ function createAssistantExecutionCoordinator(options = {}) {
       return Object.freeze({ ok: true, action });
     } catch {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.ACTION_BIND_FAILED);
+    }
+  }
+
+  function restorePendingApproval(input = {}) {
+    let binding = null;
+    let committed = false;
+    if (!authorityHealthy || clearing || restoreActive) {
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY);
+    }
+    restoreActive = true;
+    const observedGeneration = generation;
+    try {
+      const inputFields = dataFields(input, 'pending approval restore input');
+      if (inputFields.size !== 2
+        || !inputFields.has('jobId')
+        || !inputFields.has('recovery')) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.INVALID_INPUT);
+      }
+      const jobId = normalizeJobId(inputFields.get('jobId'));
+      const recoveryFields = dataFields(
+        inputFields.get('recovery'),
+        'pending approval recovery'
+      );
+      const recoveryKeys = ['schemaVersion', 'actionDigest', 'requestedMode', 'action'];
+      if (recoveryFields.size !== recoveryKeys.length
+        || recoveryKeys.some((key) => !recoveryFields.has(key))
+        || recoveryFields.get('schemaVersion') !== PENDING_APPROVAL_RECOVERY_SCHEMA_VERSION) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.INVALID_INPUT);
+      }
+      const actionDigest = recoveryFields.get('actionDigest');
+      if (typeof actionDigest !== 'string' || !DIGEST_PATTERN.test(actionDigest)) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.INVALID_INPUT);
+      }
+      const requestedMode = recoveryFields.get('requestedMode');
+      if (typeof requestedMode !== 'string' || !APPROVAL_MODES.has(requestedMode)) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.INVALID_INPUT);
+      }
+      const action = immutableJsonSnapshot(recoveryFields.get('action'));
+      if (!isPlainRecord(action)) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.INVALID_INPUT);
+      }
+      const computedDigest = createActionDigest(action);
+      if (typeof computedDigest !== 'string'
+        || !DIGEST_PATTERN.test(computedDigest)
+        || computedDigest !== actionDigest) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.ACTION_DIGEST_MISMATCH);
+      }
+      if (!authorityHealthy || clearing || generation !== observedGeneration) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
+      }
+
+      const existing = recordsByJobId.get(jobId);
+      if (existing) {
+        const idempotent = existing.state === 'ready'
+          && existing.actionDigest === actionDigest
+          && existing.requestedMode === requestedMode
+          && createActionDigest(existing.action) === actionDigest;
+        return idempotent
+          ? Object.freeze({
+            ok: true,
+            job: existing.publicJob,
+            restored: true,
+            idempotent: true,
+          })
+          : deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_ALREADY_STARTED);
+      }
+      if (recordsByJobId.size >= maxActiveJobs) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.CAPACITY_EXCEEDED);
+      }
+
+      let foundFields;
+      let persistedJob;
+      let publicJob;
+      try {
+        const found = getAuthorizedJobById(jobId);
+        if (!isSynchronousResult(found)) throw new TypeError('job restore lookup must be synchronous');
+        foundFields = dataFields(found, 'job restore lookup result');
+        if (foundFields.get('ok') !== true) throw new TypeError('job restore lookup failed');
+        persistedJob = foundFields.get('job');
+        const persistedFields = dataFields(persistedJob, 'persisted pending approval job');
+        if (persistedFields.get('status') !== 'running'
+          || persistedFields.get('phase') !== 'awaiting_user_confirmation') {
+          throw new TypeError('job is not awaiting approval');
+        }
+        publicJob = projectJobForPlanner(persistedJob);
+      } catch {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.JOB_NOT_FOUND);
+      }
+      if (!authorityHealthy || clearing || generation !== observedGeneration
+        || recordsByJobId.has(jobId)) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
+      }
+
+      let restoredFields;
+      try {
+        const restored = authorityService.restorePendingApproval({ jobId });
+        if (!isSynchronousResult(restored)) {
+          throw new TypeError('authority restore must be synchronous');
+        }
+        restoredFields = dataFields(restored, 'authority restore result');
+        if (restoredFields.get('authorized') !== true
+          || restoredFields.get('restored') !== true
+          || !restoredFields.get('binding')) {
+          throw new TypeError('authority restore was denied');
+        }
+        binding = immutableAuthorityBinding(restoredFields.get('binding'));
+      } catch {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_BIND_FAILED);
+      }
+      if (binding.jobId !== jobId
+        || publicJob.projectId !== binding.projectId
+        || publicJob.rootPath !== binding.canonicalRootPath) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_BIND_FAILED);
+      }
+      if (!authorityHealthy || clearing || generation !== observedGeneration
+        || recordsByJobId.has(jobId)) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
+      }
+
+      let authorityRequest;
+      try {
+        authorityRequest = normalizeJobRequest(
+          dataFields(restoredFields.get('request'), 'restored authority request')
+        );
+      } catch {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_BIND_FAILED);
+      }
+
+      let authorizedProject;
+      try {
+        const projectResult = restoreAuthorizedProject(binding);
+        if (!isSynchronousResult(projectResult)) {
+          throw new TypeError('project restore must be synchronous');
+        }
+        const projectResultFields = dataFields(projectResult, 'project restore result');
+        if (projectResultFields.get('ok') !== true) {
+          throw new TypeError('project restore was denied');
+        }
+        const projectSnapshot = immutableJsonSnapshot(
+          projectResultFields.get('projectInfo')
+        );
+        const projectIdentity = readProjectIdentity(projectSnapshot);
+        if (projectIdentity.projectId !== binding.projectId
+          || projectIdentity.rootPath !== binding.canonicalRootPath) {
+          throw new TypeError('restored project identity mismatch');
+        }
+        authorizedProject = buildProjectIdentitySnapshot(projectSnapshot, projectIdentity);
+      } catch {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.PROJECT_ROOT_AUTHORITY_FAILED);
+      }
+      if (!authorityHealthy || clearing || generation !== observedGeneration
+        || recordsByJobId.has(jobId)) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
+      }
+
+      let executeAuthorizationFields;
+      try {
+        const authorized = authorityService.authorizeExecute({ binding, action });
+        if (!isSynchronousResult(authorized)) {
+          throw new TypeError('restored execution authorization must be synchronous');
+        }
+        executeAuthorizationFields = dataFields(
+          authorized,
+          'restored execution authorization'
+        );
+      } catch {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_NOT_AUTHORIZED);
+      }
+      if (executeAuthorizationFields.get('authorized') !== true
+        || executeAuthorizationFields.get('actionDigest') !== actionDigest) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_NOT_AUTHORIZED);
+      }
+      if (!authorityHealthy || clearing || generation !== observedGeneration
+        || recordsByJobId.has(jobId)) {
+        return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
+      }
+
+      const record = {
+        jobId,
+        binding,
+        action,
+        actionDigest,
+        authorityRequest,
+        project: authorizedProject,
+        publicJob,
+        requestedMode,
+        state: 'ready',
+        terminalObserved: null,
+        version: 0,
+        abortController: null,
+        releaseInProgress: false,
+        releasePrepared: false,
+        projectRootLease: null,
+        projectRootLeaseInUse: false,
+        projectRootReleaseInProgress: false,
+        projectRootReleasePromise: null,
+        authorizedJobExecutor: null,
+        authorizedJobExecutorClose: null,
+        authorizedJobExecutorCreateInProgress: false,
+        authorizedJobExecutorCloseInProgress: false,
+        authorizedJobExecutorClosePromise: null,
+        executionCleanupInProgress: false,
+        executionRevocationRequested: false,
+      };
+      recordsByJobId.set(jobId, record);
+      committed = true;
+      return Object.freeze({
+        ok: true,
+        job: publicJob,
+        restored: true,
+        idempotent: false,
+      });
+    } catch {
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.INVALID_INPUT);
+    } finally {
+      restoreActive = false;
+      if (binding && !committed) revokeBindingConfirmed(binding);
     }
   }
 
@@ -2123,7 +2378,7 @@ function createAssistantExecutionCoordinator(options = {}) {
     const executionActive = record.state === 'executing'
       && executionLifecycleActive(record);
     const deferTerminal = (record.state === 'planning' && status === 'completed')
-      || (record.state === 'executing' && ['completed', 'failed', 'cancelled'].includes(status))
+      || (record.state === 'executing' && ['completed', 'failed', 'blocked', 'cancelled'].includes(status))
       || executionActive;
     if (deferTerminal) {
       if (record.terminalObserved && record.terminalObserved !== status) {
@@ -2268,6 +2523,7 @@ function createAssistantExecutionCoordinator(options = {}) {
     execute,
     inspectRootMutation,
     onJobTerminal,
+    restorePendingApproval,
     retry,
     revokeJob,
   });

@@ -154,6 +154,8 @@ assert.strictEqual(typeof factory, 'function');
     assert.deepStrictEqual(deniedLifecycle, [['invalidate', 'project_switch']]);
 
     const scanFailureLifecycle = [];
+    const scanFailureMessages = [];
+    const scanFailureStatuses = [];
     const scanFailureState = {
       ...deniedState,
       pendingAction: null,
@@ -165,10 +167,12 @@ assert.strictEqual(typeof factory, 'function');
         scanProject: async () => ({ ok: false, message: 'Scan failed.' }),
       },
       callbacks: {
+        appendMessage: (...args) => scanFailureMessages.push(args),
         hideJobProgress: () => scanFailureLifecycle.push(['hide-progress']),
         invalidateSubmission: (reason) => scanFailureLifecycle.push(['invalidate', reason]),
         resetApprovalMode: (reason) => scanFailureLifecycle.push(['reset', reason]),
         stopJobPolling: () => scanFailureLifecycle.push(['stop-polling']),
+        updateStatus: (message) => scanFailureStatuses.push(message),
       },
       state: scanFailureState,
     });
@@ -181,6 +185,9 @@ assert.strictEqual(typeof factory, 'function');
       ['stop-polling'],
       ['hide-progress'],
     ]);
+    assert.deepStrictEqual(scanFailureMessages, []);
+    assert.deepStrictEqual(scanFailureStatuses, ['Analisando projeto...', 'Erro na análise']);
+    assert.strictEqual(scanFailureState.selectedProjectId, 'project-1');
 
     const clearLifecycle = [];
     const clearState = {

@@ -41,19 +41,23 @@ function testMissingRootPathIsRejected() {
   assert.strictEqual(plan.status, 'blocked');
 }
 
-function testStaticPreviewUsesFileUrl(tempRoot) {
+function testStaticPreviewUsesLoopbackHttp(tempRoot) {
   const rootPath = path.join(tempRoot, 'static');
   writeFile(path.join(rootPath, 'index.html'), '<h1>ok</h1>');
 
   const service = createProjectPreviewService({ fs, path });
-  const plan = service.buildProjectPreviewPlan(createProjectInfo(rootPath, ['index.html'], ['Projeto generico']));
+  const plan = service.buildProjectPreviewPlan(
+    createProjectInfo(rootPath, ['index.html'], ['Projeto generico']),
+    { port: 4187 }
+  );
 
   assert.strictEqual(plan.ready, true);
-  assert.strictEqual(plan.mode, 'file');
+  assert.strictEqual(plan.mode, 'static_server');
   assert.strictEqual(plan.stack, 'web_estatico');
-  assert.ok(plan.url.startsWith('file://'));
-  assert.ok(plan.url.includes('index.html'));
+  assert.strictEqual(plan.port, 4187);
+  assert.strictEqual(plan.url, 'http://127.0.0.1:4187/');
   assert.strictEqual(plan.steps[0].kind, 'open');
+  assert.match(plan.steps[0].detail, /servidor HTTP local seguro/i);
 }
 
 function testLampPreviewUsesPhpServer(tempRoot) {
@@ -299,7 +303,7 @@ function main() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'project-preview-test-'));
   try {
     testMissingRootPathIsRejected();
-    testStaticPreviewUsesFileUrl(tempRoot);
+    testStaticPreviewUsesLoopbackHttp(tempRoot);
     testLampPreviewUsesPhpServer(tempRoot);
     testNextPreviewUsesDevScriptWhenReady(tempRoot);
     testNextPreviewBlocksWhenNodeModulesIsPartial(tempRoot);

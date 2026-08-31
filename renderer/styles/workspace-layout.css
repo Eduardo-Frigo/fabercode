@@ -1093,9 +1093,16 @@ body:not(.workspace-left-collapsed) .btn-update-wide .update-text {
 
 .job-status-info {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
   flex-grow: 1;
   min-width: 0;
+}
+
+#job-progress-status {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .job-status-actions {

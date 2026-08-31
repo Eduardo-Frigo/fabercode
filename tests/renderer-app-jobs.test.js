@@ -128,6 +128,11 @@ async function run() {
   const action = { rootPath: '/workspace/project', targetFile: 'src/retry.js' };
   retry.resolve({ ok: true, jobId: 'job-retry-1', action, meta: { autoExecute: true } });
   await firstRetry;
+  assert.strictEqual(
+    harness.calls.showPending[0].text,
+    'Confirme para iniciar a execução governada.'
+  );
+  assert.doesNotMatch(harness.calls.showPending[0].text, /área temporária|validação real/i);
   assert.strictEqual(harness.state.pendingAction, action);
   assert.strictEqual(harness.state.pendingActionJobId, 'job-retry-1');
 
@@ -458,6 +463,31 @@ async function run() {
       JSON.parse(JSON.stringify(staleWatch.calls.cancelJob)),
       [{ jobId: 'job-stale-watch' }],
     );
+  }
+
+  {
+    const blockedPoll = createHarness(
+      async () => ({ ok: false }),
+      {
+        getJob: async () => ({
+          ok: true,
+          job: {
+            id: 'job-blocked-terminal',
+            projectId: 'project-1',
+            rootPath: '/workspace/project',
+            status: 'blocked',
+            phase: 'execute_blocked',
+          },
+        }),
+      },
+    );
+    blockedPoll.state.activeJobId = 'job-blocked-terminal';
+    blockedPoll.state.jobPollingTimer = { type: 'interval' };
+    const result = await blockedPoll.controller.pollJob('job-blocked-terminal');
+    assert.strictEqual(result.status, 'blocked');
+    assert.strictEqual(blockedPoll.state.activeJobId, null);
+    assert.strictEqual(blockedPoll.state.jobPollingTimer, null);
+    assert.strictEqual(blockedPoll.state.jobTerminalNoticeById['job-blocked-terminal'], true);
   }
 
   assert.strictEqual(source.includes('api.buildPlan'), false);

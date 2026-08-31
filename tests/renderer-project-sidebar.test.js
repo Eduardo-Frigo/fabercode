@@ -150,6 +150,35 @@ const renderedHeaderClasses = renderedHeader.children.map((child) => child.class
 assert.ok(renderedHeaderClasses.includes('folder-icon'), 'expanded sidebar should keep the regular folder icon');
 assert.ok(renderedHeaderClasses.includes('project-rail-icon'), 'project rows should keep a hidden compact icon available for rail contexts');
 
+const activeScopeList = new FakeElement();
+const activeScopeController = sidebar.createProjectSidebarController({
+  listEl: activeScopeList,
+  getProjects: () => [
+    { id: 'project-a', name: 'Projeto Alpha' },
+    { id: 'project-b', name: 'Projeto Beta' },
+  ],
+  getExpandedProjects: () => ({ 'project-a': true, 'project-b': true }),
+  getSelectedProjectId: () => 'project-b',
+  getActiveConversationId: (projectId) => `conversation-${projectId}`,
+  getConversations: (projectId) => [{
+    id: `conversation-${projectId}`,
+    title: `Conversa ${projectId}`,
+  }],
+});
+activeScopeController.render();
+const projectAConversation = activeScopeList.children[0].children[1].children[1].children[0].children[0];
+const projectBConversation = activeScopeList.children[1].children[1].children[1].children[0].children[0];
+assert.strictEqual(
+  projectAConversation.classList.contains('active'),
+  false,
+  'an expanded background project must not expose its remembered conversation as globally active'
+);
+assert.strictEqual(
+  projectBConversation.classList.contains('active'),
+  true,
+  'only the selected project conversation may expose the active visual state'
+);
+
 const railList = new FakeElement();
 const railToggle = new FakeElement();
 const railLightbox = new FakeElement(['project-rail-lightbox', 'hidden']);

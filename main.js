@@ -265,7 +265,6 @@ const {
   createProjectVerifiedExecutionService,
   PROCESS_EXECUTION_PENDING_CHECKS,
   PROCESS_EXECUTION_POLICIES,
-  PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
   shouldVerifyAction: shouldVerifyProjectAction,
 } = require('./main/services/project_verified_execution_service');
 const {
@@ -310,7 +309,10 @@ const {
 const {
   createAgenticDeleteStartupRecoveryService,
 } = require('./main/services/agentic_delete_startup_recovery_service');
-const { createAgenticToolLoopService } = require('./main/services/agentic_tool_loop_service');
+const {
+  AGENTIC_PROCESS_EXECUTION_POLICIES,
+  createAgenticToolLoopService,
+} = require('./main/services/agentic_tool_loop_service');
 const { createProjectVisualCaptureService } = require('./main/services/project_visual_capture_service');
 const { createProjectVisualValidationRuntimeService } = require('./main/services/project_visual_validation_runtime_service');
 const { createStackRegistryService } = require('./main/services/stack_registry_service');
@@ -1369,7 +1371,7 @@ function observeAssistantJobTerminal(job = null) {
   if (!coordinator || !job || typeof job !== 'object' || Array.isArray(job)) return;
   const jobId = typeof job.id === 'string' ? job.id : '';
   const status = job.phase === 'runtime_interrupted' ? 'runtime_interrupted' : job.status;
-  if (!jobId || !['completed', 'failed', 'cancelled', 'runtime_interrupted'].includes(status)) return;
+  if (!jobId || !['completed', 'failed', 'blocked', 'cancelled', 'runtime_interrupted'].includes(status)) return;
   coordinator.onJobTerminal({ jobId, status });
 }
 
@@ -1421,11 +1423,15 @@ const {
   getCortexLearning,
   getAuthorizedJobById,
   getJobById,
+  getPendingApprovalRecovery,
   isJobCancelled,
   listConversationMessages,
+  listPendingApprovalRecoveryCandidates,
   listAuthorizedJobRecoveryCandidates,
   listJobs,
+  markJobApprovalExpired,
   markJobCanaryRolledBack,
+  markJobBlocked,
   markJobCancelled,
   markJobCompleted,
   markJobFailed,
@@ -1433,6 +1439,7 @@ const {
   markJobPausedForMemory,
   markJobPhase,
   markJobRetryPending,
+  persistPendingApprovalRecovery,
   readOrchestrationState,
   recoverInterruptedJobs,
   removeProjectConversationHistory,
@@ -5355,19 +5362,19 @@ function getProjectVerifiedExecutionService() {
   return projectVerifiedExecutionServiceInstance;
 }
 
-// Temporary option B: assistant-originated arbitrary commands, project code
-// execution and preview stay disabled until a portable sandbox can enforce
-// filesystem, process and network limits. Fixed read-only domain operations
-// such as Git status remain governed capabilities. User-originated Terminal,
-// Preview and project verification IPCs keep their existing services.
-const ASSISTANT_PROCESS_EXECUTION_POLICY = PROCESS_EXECUTION_POLICIES.SUSPENDED;
+// The portable isolation helper is now the only production execution path for
+// assistant-owned processes. The broker accepts one executable plus bounded
+// arguments, keeps shell composition and network disabled, and binds every
+// process to the authorized job workspace.
+const ASSISTANT_PROCESS_EXECUTION_POLICY = AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED;
+const ASSISTANT_VALIDATION_NOT_RUN_REASON = 'assistant_validation_not_run';
 
 function buildAssistantProcessValidationPendingFields(fileMutationApplied = false) {
   return {
     verified: false,
     validationVerified: false,
     validationPending: true,
-    validationPendingReason: PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
+    validationPendingReason: ASSISTANT_VALIDATION_NOT_RUN_REASON,
     validationPendingChecks: [...PROCESS_EXECUTION_PENDING_CHECKS],
     processExecutionPolicy: ASSISTANT_PROCESS_EXECUTION_POLICY,
     processExecutionPerformed: false,
@@ -5375,14 +5382,141 @@ function buildAssistantProcessValidationPendingFields(fileMutationApplied = fals
   };
 }
 
-function buildAssistantProcessValidationPendingMessage(modifiedFiles = []) {
-  const count = Array.isArray(modifiedFiles) ? modifiedFiles.length : 0;
-  const mutationSummary = count === 0
-    ? 'A execução da IA terminou sem alteração de arquivo.'
-    : count === 1
-      ? 'A IA concluiu uma alteração de arquivo.'
-      : `A IA concluiu alterações em ${count} arquivo(s).`;
-  return `${mutationSummary} Lint, testes e build não foram executados e o preview não foi capturado; essas validações permanecem pendentes até existir um sandbox portátil.`;
+const AGENTIC_VALIDATION_INCOMPLETE_REASON = 'agentic_validation_incomplete';
+const AGENTIC_TERMINAL_EVIDENCE_VERSION = 'agentic-terminal-evidence.v1';
+
+function normalizeAssistantAgenticValidationEvidence(raw = {}) {
+  const processEvidence = raw && raw.process && typeof raw.process === 'object'
+    ? raw.process
+    : {};
+  const browserEvidence = raw && raw.browser && typeof raw.browser === 'object'
+    ? raw.browser
+    : {};
+  const allowedChecks = new Set(['lint', 'tests', 'build']);
+  const normalizeChecks = (checks) => Array.from(new Set(
+    (Array.isArray(checks) ? checks : [])
+      .map((check) => String(check || ''))
+      .filter((check) => allowedChecks.has(check))
+  ));
+  const terminalStatus = ['succeeded', 'failed', 'stopped', 'timed_out'].includes(
+    processEvidence.terminalStatus
+  ) ? processEvidence.terminalStatus : '';
+  return {
+    process: {
+      performed: processEvidence.performed === true,
+      terminalStatus,
+      successfulChecks: normalizeChecks(processEvidence.successfulChecks),
+      failedChecks: normalizeChecks(processEvidence.failedChecks),
+    },
+    browser: {
+      opened: browserEvidence.opened === true,
+      captured: browserEvidence.captured === true,
+      inspected: browserEvidence.inspected === true,
+    },
+  };
+}
+
+function normalizeAssistantAgenticTerminalEvidence(raw = {}) {
+  if (!raw || typeof raw !== 'object' || raw.version !== AGENTIC_TERMINAL_EVIDENCE_VERSION) {
+    return null;
+  }
+  const allowedProcessChecks = new Set(['lint', 'tests', 'build']);
+  const allowedBrowserChecks = new Set(['opened', 'inspected', 'captured']);
+  const normalizeList = (values, allowed, maxItems = 12) => Array.from(new Set(
+    (Array.isArray(values) ? values : [])
+      .map((value) => String(value || '').trim())
+      .filter((value) => allowed.has(value))
+  )).slice(0, maxItems);
+  const required = raw.required && typeof raw.required === 'object' ? raw.required : {};
+  const satisfied = raw.satisfied && typeof raw.satisfied === 'object' ? raw.satisfied : {};
+  const failed = raw.failed && typeof raw.failed === 'object' ? raw.failed : {};
+  const capabilities = raw.capabilities && typeof raw.capabilities === 'object'
+    ? raw.capabilities
+    : {};
+  const outcome = ['succeeded', 'failed', 'blocked'].includes(raw.outcome)
+    ? raw.outcome
+    : 'blocked';
+  const claim = ['success', 'failure', 'implicit'].includes(raw.claim)
+    ? raw.claim
+    : 'implicit';
+  return {
+    version: AGENTIC_TERMINAL_EVIDENCE_VERSION,
+    outcome,
+    claim,
+    grounded: raw.grounded === true,
+    required: {
+      process: normalizeList(required.process, allowedProcessChecks),
+      browser: normalizeList(required.browser, allowedBrowserChecks),
+    },
+    satisfied: {
+      process: normalizeList(satisfied.process, allowedProcessChecks),
+      browser: normalizeList(satisfied.browser, allowedBrowserChecks),
+    },
+    failed: {
+      process: normalizeList(failed.process, allowedProcessChecks),
+      tools: Array.from(new Set(
+        (Array.isArray(failed.tools) ? failed.tools : [])
+          .map((value) => String(value || '').trim().slice(0, 128))
+          .filter(Boolean)
+      )).slice(0, 24),
+    },
+    capabilities: {
+      process: capabilities.process === true,
+      browser: capabilities.browser === true,
+    },
+  };
+}
+
+function buildAssistantAgenticValidationFields(
+  rawEvidence,
+  fileMutationApplied = false,
+  rawTerminalEvidence = null
+) {
+  const validationEvidence = normalizeAssistantAgenticValidationEvidence(rawEvidence);
+  const terminalEvidence = normalizeAssistantAgenticTerminalEvidence(rawTerminalEvidence);
+  const successfulChecks = new Set(validationEvidence.process.successfulChecks);
+  const successfulBrowserChecks = new Set([
+    ...(terminalEvidence ? terminalEvidence.satisfied.browser : []),
+    ...(validationEvidence.browser.opened ? ['opened'] : []),
+    ...(validationEvidence.browser.inspected ? ['inspected'] : []),
+    ...(validationEvidence.browser.captured ? ['captured'] : []),
+  ]);
+  let pendingChecks;
+  if (terminalEvidence && fileMutationApplied !== true) {
+    pendingChecks = terminalEvidence.required.process.filter(
+      (check) => !successfulChecks.has(check)
+    );
+    if (terminalEvidence.required.browser.some(
+      (check) => !successfulBrowserChecks.has(check)
+    )) {
+      pendingChecks.push('preview');
+    }
+  } else {
+    pendingChecks = PROCESS_EXECUTION_PENDING_CHECKS.filter((check) => (
+      check === 'preview'
+        ? !validationEvidence.browser.captured
+        : !successfulChecks.has(check)
+    ));
+  }
+  pendingChecks = Array.from(new Set(pendingChecks));
+  const terminalSucceeded = !terminalEvidence || (
+    terminalEvidence.outcome === 'succeeded' && terminalEvidence.grounded === true
+  );
+  const validationVerified = terminalSucceeded
+    && pendingChecks.length === 0
+    && validationEvidence.process.failedChecks.length === 0;
+  return {
+    verified: validationVerified,
+    validationVerified,
+    validationPending: !validationVerified,
+    validationPendingReason: validationVerified ? null : AGENTIC_VALIDATION_INCOMPLETE_REASON,
+    validationPendingChecks: pendingChecks,
+    processExecutionPolicy: ASSISTANT_PROCESS_EXECUTION_POLICY,
+    processExecutionPerformed: validationEvidence.process.performed,
+    fileMutationApplied: fileMutationApplied === true,
+    validationEvidence,
+    ...(terminalEvidence ? { terminalEvidence } : {}),
+  };
 }
 
 function buildAssistantVisualValidationPending() {
@@ -5390,22 +5524,22 @@ function buildAssistantVisualValidationPending() {
     required: false,
     status: 'pending',
     validationPending: true,
-    validationPendingReason: PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
+    validationPendingReason: ASSISTANT_VALIDATION_NOT_RUN_REASON,
     processExecutionPerformed: false,
-    summary: 'Preview não capturado: validação pendente até existir um sandbox portátil.',
+    summary: 'Preview não capturado nesta execução.',
   };
 }
 
-function sanitizeAssistantToolRunsForPendingValidation(toolRuns = []) {
+function sanitizeAssistantToolRuns(toolRuns = []) {
   if (!Array.isArray(toolRuns)) return [];
-  return toolRuns.slice(0, 100).map((entry) => {
-    if (!entry || typeof entry !== 'object') return entry;
-    if (entry.toolName !== 'finish_task') return entry;
-    return {
-      ...entry,
-      message: 'Tarefa encerrada; lint, testes, build e preview permanecem pendentes.',
-    };
-  });
+  return toolRuns.slice(0, 100)
+    .filter((entry) => entry && typeof entry === 'object')
+    .map((entry) => ({
+      step: Number.isSafeInteger(entry.step) ? entry.step : 0,
+      toolName: String(entry.toolName || '').slice(0, 128),
+      ok: entry.ok === true,
+      message: String(entry.message || '').slice(0, 640),
+    }));
 }
 
 const runtimeDiffStatsByRoot = new Map();
@@ -5768,6 +5902,113 @@ function getProjectAccess() {
     });
   }
   return projectAccessInstance;
+}
+
+function restoreAuthorizedProjectForPendingApproval(binding) {
+  try {
+    if (!binding || typeof binding !== 'object') {
+      return Object.freeze({ ok: false, code: 'authority_binding_invalid' });
+    }
+    const snapshot = readProjectsSnapshot();
+    const projects = readAgenticDeleteDataProperty(snapshot, 'projects');
+    if (!Array.isArray(projects)) {
+      return Object.freeze({ ok: false, code: 'project_snapshot_invalid' });
+    }
+    const matches = projects.filter((project) => (
+      readAgenticDeleteDataProperty(project, 'id') === binding.projectId
+      && readAgenticDeleteDataProperty(project, 'rootPath') === binding.canonicalRootPath
+      && readAgenticDeleteDataProperty(project, 'state') !== 'deleted'
+    ));
+    if (matches.length !== 1) {
+      return Object.freeze({ ok: false, code: 'project_not_authorized' });
+    }
+    const normalized = getProjectAccess().normalizeProjectInfo(matches[0], {
+      requireProjectBinding: true,
+    });
+    if (!normalized || normalized.ok !== true || !normalized.projectInfo) {
+      return Object.freeze({ ok: false, code: 'project_not_authorized' });
+    }
+    if (normalized.projectInfo.id !== binding.projectId
+      || normalized.projectInfo.rootPath !== binding.canonicalRootPath) {
+      return Object.freeze({ ok: false, code: 'project_identity_changed' });
+    }
+    return Object.freeze({ ok: true, projectInfo: normalized.projectInfo });
+  } catch {
+    return Object.freeze({ ok: false, code: 'project_restore_failed' });
+  }
+}
+
+function restoreAssistantPendingApprovalsAtStartup(coordinator) {
+  let listed;
+  try {
+    listed = listPendingApprovalRecoveryCandidates();
+  } catch {
+    listed = null;
+  }
+  if (!listed || listed.ok !== true || !Array.isArray(listed.jobIds)) {
+    try {
+      appendAuditEvent('assistant.pending_approval_startup_recovery', {
+        ok: false,
+        reason: 'candidate_listing_failed',
+      });
+    } catch { /* best-effort startup audit */ }
+    return Object.freeze({ ok: false, restored: 0, expired: 0, failed: 1 });
+  }
+
+  let restored = 0;
+  let expired = 0;
+  let failed = 0;
+  const jobIds = [...new Set(listed.jobIds.filter((jobId) => (
+    typeof jobId === 'string' && jobId.length > 0 && jobId.length <= 256
+  )))];
+  for (const jobId of jobIds) {
+    let pending;
+    try {
+      pending = getPendingApprovalRecovery(jobId);
+    } catch {
+      pending = null;
+    }
+    let receipt = null;
+    if (pending && pending.ok === true && pending.recovery) {
+      try {
+        receipt = coordinator.restorePendingApproval({
+          jobId,
+          recovery: pending.recovery,
+        });
+      } catch {
+        receipt = null;
+      }
+    }
+    if (receipt && receipt.ok === true) {
+      restored += 1;
+      continue;
+    }
+
+    const reason = receipt && typeof receipt.code === 'string'
+      ? `pending_approval_restore_failed:${receipt.code}`
+      : 'pending_approval_restore_failed';
+    let expiration;
+    try {
+      expiration = markJobApprovalExpired(jobId, reason);
+    } catch {
+      expiration = null;
+    }
+    if (expiration && expiration.ok === true) expired += 1;
+    else failed += 1;
+  }
+
+  const result = Object.freeze({
+    ok: failed === 0,
+    restored,
+    expired,
+    failed,
+  });
+  if (jobIds.length > 0 || failed > 0) {
+    try {
+      appendAuditEvent('assistant.pending_approval_startup_recovery', result);
+    } catch { /* best-effort startup audit */ }
+  }
+  return result;
 }
 
 function registerIpcHandler(channel, handler) {
@@ -6359,7 +6600,7 @@ function beforeAgenticDeleteAuthorityRelease(input) {
   const terminalStatus = readAgenticDeleteDataProperty(input, 'terminalStatus');
   if (!binding
     || (terminalStatus !== null
-      && !['completed', 'failed', 'cancelled', 'runtime_interrupted'].includes(terminalStatus))) {
+      && !['completed', 'failed', 'blocked', 'cancelled', 'runtime_interrupted'].includes(terminalStatus))) {
     return Object.freeze({ ok: false });
   }
   const runtime = agenticDeleteRuntimeServiceInstance;
@@ -7553,22 +7794,30 @@ app.whenReady().then(async () => {
         const agenticModifiedFiles = Array.isArray(agenticResult && agenticResult.modifiedFiles)
           ? agenticResult.modifiedFiles
           : [];
-        const agenticToolRuns = sanitizeAssistantToolRunsForPendingValidation(
+        const agenticValidationFields = buildAssistantAgenticValidationFields(
+          agenticResult && agenticResult.validationEvidence,
+          agenticModifiedFiles.length > 0,
+          agenticResult && agenticResult.terminalEvidence
+        );
+        const agenticToolRuns = sanitizeAssistantToolRuns(
           agenticResult && agenticResult.toolRuns
         );
         const finalResult = {
           ...agenticResult,
-          ...buildAssistantProcessValidationPendingFields(agenticModifiedFiles.length > 0),
-          message: agenticResult && agenticResult.ok
-            ? buildAssistantProcessValidationPendingMessage(agenticModifiedFiles)
-            : agenticResult && agenticResult.message
-              ? agenticResult.message
-              : 'A execução da IA não foi concluída.',
+          ...agenticValidationFields,
+          message: agenticResult && agenticResult.message
+            ? agenticResult.message
+            : 'A execução da IA não foi concluída.',
           modifiedFiles: agenticModifiedFiles,
           toolRuns: agenticToolRuns,
           projectInfo: refreshed,
           nextSteps: buildNextSteps(refreshed),
         };
+        if (jobId && agenticValidationFields.terminalEvidence) {
+          setJobCheckpoint(jobId, 'agentic_terminal_evidence', {
+            ...agenticValidationFields.terminalEvidence,
+          });
+        }
 
         if (agenticResult && agenticResult.ok) {
           const requiresMaterialChange = actionRequiresMaterialChange(initialAction);
@@ -7598,15 +7847,17 @@ app.whenReady().then(async () => {
               agentic: true,
               modifiedFiles: changedFiles,
               toolRuns: agenticToolRuns.slice(0, 20),
-              ...buildAssistantProcessValidationPendingFields(changedFiles.length > 0),
+              ...agenticValidationFields,
             });
             const terminalResult = markJobCompleted(jobId, {
               agentic: true,
               modifiedFiles: changedFiles,
-              ...buildAssistantProcessValidationPendingFields(changedFiles.length > 0),
+              ...agenticValidationFields,
             });
             if (terminalResult && terminalResult.ok === true) {
-              completeActiveMilestoneAfterValidatedJob(rootPath, jobId);
+              if (agenticValidationFields.validationVerified) {
+                completeActiveMilestoneAfterValidatedJob(rootPath, jobId);
+              }
             }
           }
           appendAuditEvent('assistant.agentic_execute_success', {
@@ -7614,19 +7865,48 @@ app.whenReady().then(async () => {
             jobId,
             modifiedFiles: changedFiles,
             toolRuns: agenticToolRuns.length,
-            validationPendingReason: PROCESS_EXECUTION_VALIDATION_PENDING_REASON,
+            validationPendingReason: agenticValidationFields.validationPendingReason,
           });
           return finalResult;
         }
 
+        const agenticTerminalOutcome = agenticValidationFields.terminalEvidence
+          ? agenticValidationFields.terminalEvidence.outcome
+          : '';
+        const agenticTerminalReason = agenticResult && agenticResult.message
+          ? agenticResult.message
+          : 'agentic_execute_failed';
         if (jobId) {
-          markJobFailed(jobId, agenticResult && agenticResult.message ? agenticResult.message : 'agentic_execute_failed', 'execute_failed');
+          setJobCheckpoint(jobId, 'execute_result', {
+            ok: false,
+            agentic: true,
+            status: agenticResult && agenticResult.status
+              ? String(agenticResult.status)
+              : 'failed',
+            modifiedFiles: agenticModifiedFiles,
+            toolRuns: agenticToolRuns.slice(0, 20),
+            ...agenticValidationFields,
+          });
+          if (agenticTerminalOutcome === 'blocked') {
+            markJobBlocked(
+              jobId,
+              agenticTerminalReason,
+              'execute_blocked'
+            );
+          } else {
+            markJobFailed(
+              jobId,
+              agenticTerminalReason,
+              'execute_failed'
+            );
+          }
         }
-        appendAuditEvent('assistant.agentic_execute_failed', {
-          rootPath,
-          jobId,
-          message: agenticResult && agenticResult.message ? agenticResult.message : 'agentic_execute_failed',
-        });
+        appendAuditEvent(
+          agenticTerminalOutcome === 'blocked'
+            ? 'assistant.agentic_execute_blocked'
+            : 'assistant.agentic_execute_failed',
+          { rootPath, jobId, message: agenticTerminalReason }
+        );
         return finalResult;
       }
 
@@ -8397,6 +8677,9 @@ app.whenReady().then(async () => {
     beforeAuthorityRelease: beforeAgenticDeleteAuthorityRelease,
     bindActionToProject: bindActionToAuthorizedProject,
     bindJobActionDigest,
+    persistPendingApprovalRecovery,
+    getAuthorizedJobById,
+    restoreAuthorizedProject: restoreAuthorizedProjectForPendingApproval,
     createActionDigest,
     createAuthorizedAssistantJob,
     createAuthorizedJobExecutor: ({ binding }) => {
@@ -8426,6 +8709,16 @@ app.whenReady().then(async () => {
     },
   });
   assistantExecutionCoordinatorInstance = assistantExecutionCoordinator;
+  const pendingApprovalStartupRecovery =
+    restoreAssistantPendingApprovalsAtStartup(assistantExecutionCoordinator);
+  if (!pendingApprovalStartupRecovery.ok
+    || pendingApprovalStartupRecovery.expired > 0
+    || pendingApprovalStartupRecovery.failed > 0) {
+    console.warn(
+      '[assistant] pending approval startup recovery summary',
+      pendingApprovalStartupRecovery
+    );
+  }
 
   const harnessRolloutEnvironment = Object.freeze({ ...process.env });
   const harnessRuntimeConfig = createHarnessRuntimeConfig({
@@ -8591,7 +8884,7 @@ app.whenReady().then(async () => {
     if (!revoked.ok) {
       const current = getJobById(jobId);
       if (current && current.ok && current.job
-        && ['completed', 'failed', 'cancelled'].includes(current.job.status)) {
+        && ['completed', 'failed', 'blocked', 'cancelled'].includes(current.job.status)) {
         return { ok: true, idempotent: true, job: current.job };
       }
       return revoked;

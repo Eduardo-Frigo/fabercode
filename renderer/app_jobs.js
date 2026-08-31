@@ -162,8 +162,8 @@
           state.pendingActionJobId = planJobId;
           showPending(
             uiText(
-              'safeTemporaryExecution',
-              'Pronto para executar em uma área temporária. Só aplico no projeto se passar na validação real.'
+              'confirmGovernedExecution',
+              'Confirme para iniciar a execução governada.'
             ),
             plan.action
           );
@@ -202,7 +202,7 @@
         await maybeAutoRetryPendingJob(response.job, expectedContext);
         if (!jobUiContextIsCurrent(expectedContext)) return null;
     
-        if (['completed', 'failed', 'cancelled'].includes(response.job.status)) {
+        if (['completed', 'failed', 'blocked', 'cancelled'].includes(response.job.status)) {
           const alreadyNotified = Boolean(state.jobTerminalNoticeById[jobId]);
           if (!alreadyNotified) {
             const terminalMessage = buildTerminalJobMessage(response.job);

@@ -700,7 +700,12 @@
         rootPath: projectInfo.rootPath,
       });
       const plan = planResult && planResult.plan ? planResult.plan : null;
-      if (!planResult || !planResult.ok || !plan || plan.mode === 'file') {
+      if (
+        !planResult
+        || !planResult.ok
+        || !plan
+        || ['file', 'static_server'].includes(plan.mode)
+      ) {
         return null;
       }
       const command = buildTerminalPreviewCommand(plan);

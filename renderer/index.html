@@ -330,8 +330,17 @@
               <!-- Controls -->
               <div class="application-map-controls">
                 <div class="zoom-slider-container">
-                  <span>Zoom:</span>
-                  <input type="range" id="map-zoom-slider" min="0.3" max="2" step="0.05" value="1">
+                  <span id="map-zoom-label">Zoom:</span>
+                  <input
+                    type="range"
+                    id="map-zoom-slider"
+                    min="0.3"
+                    max="2"
+                    step="0.05"
+                    value="1"
+                    aria-labelledby="map-zoom-label"
+                    aria-describedby="map-zoom-value"
+                  >
                   <span id="map-zoom-value">100%</span>
                   <button id="btn-map-zoom-reset" class="btn-map-zoom-reset">Reset</button>
                 </div>
@@ -754,7 +763,7 @@
       <div class="project-state-modal__dialog" role="dialog" aria-modal="true" aria-label="Projetos">
         <div class="project-state-modal__head">
           <strong id="project-state-modal-title" data-i18n="projectsTitle">Projetos</strong>
-          <button id="project-state-modal-close" type="button" class="project-state-modal__close">×</button>
+          <button id="project-state-modal-close" type="button" class="project-state-modal__close" aria-label="Fechar" data-i18n-aria-label="close">×</button>
         </div>
         <div id="project-state-modal-list" class="project-state-modal__list"></div>
         <div id="project-state-modal-footer" class="project-state-modal__footer"></div>
@@ -894,7 +903,7 @@
             <span id="project-file-modal-image-counter" class="project-file-modal__image-counter">1/1</span>
             <button id="project-file-modal-next" type="button" class="project-file-modal__nav-btn" aria-label="Próxima imagem" data-i18n-aria-label="nextImage">→</button>
           </div>
-          <button id="project-file-modal-close" type="button" class="project-file-modal__close">×</button>
+          <button id="project-file-modal-close" type="button" class="project-file-modal__close" aria-label="Fechar" data-i18n-aria-label="close">×</button>
         </div>
         <div class="project-file-modal__tools">
           <button id="project-file-save" type="button" class="project-file-save" data-i18n="save" disabled>Salvar</button>
@@ -917,7 +926,7 @@
       <div class="ai-settings-modal__dialog" role="dialog" aria-modal="true" aria-label="Configurações">
         <div class="ai-settings-modal__head">
           <strong>Configurações</strong>
-          <button id="ai-settings-close" type="button" class="ai-settings-modal__close">×</button>
+          <button id="ai-settings-close" type="button" class="ai-settings-modal__close" aria-label="Fechar" data-i18n-aria-label="close">×</button>
         </div>
 
         <div class="ai-settings-modal__body">

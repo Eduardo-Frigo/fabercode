@@ -1558,7 +1558,7 @@ function clearPending() {
 function showPending(text, action) {
   state.pendingAction = action;
   pendingTextEl.textContent = text;
-  pendingActionEl.dataset.uxTone = 'warning';
+  pendingActionEl.removeAttribute('data-ux-tone');
   pendingActionEl.classList.remove('hidden');
   renderWelcomePanel();
 }
