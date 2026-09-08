@@ -7,9 +7,11 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'app_proje
 const sandbox = {
   console,
   window: {
+    clearTimeout,
     FaberProjectSidebar: {
       normalizeProjectItems: (items) => items,
     },
+    setTimeout,
   },
 };
 sandbox.window.window = sandbox.window;
@@ -17,6 +19,14 @@ vm.runInNewContext(source, sandbox, { filename: 'app_projects.js' });
 
 const factory = sandbox.window.FaberAppProjects.createAppProjectController;
 assert.strictEqual(typeof factory, 'function');
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 (async () => {
   const calls = [];
@@ -125,6 +135,308 @@ assert.strictEqual(typeof factory, 'function');
     assert.strictEqual(switchState.pendingAction, null);
     assert.strictEqual(switchState.pendingActionJobId, null);
 
+    for (const activeJob of [
+      { id: 'job-resume-running', status: 'running', phase: 'execute_pending' },
+      { id: 'job-resume-retry', status: 'retry_pending', phase: 'execute_validation' },
+      { id: 'job-resume-cancelling', status: 'running', phase: 'cancelling' },
+    ]) {
+      const resumeCalls = [];
+      const resumeState = {
+        activeConversationByProject: {},
+        activeJobId: null,
+        automataContractLedger: [],
+        automataContractSummary: null,
+        expandedProjects: {},
+        nextSteps: [],
+        pendingAction: null,
+        pendingActionJobId: null,
+        projectConversations: {},
+        projects: [{ id: 'project-resume', name: 'Resume', rootPath: '/workspace/resume' }],
+        selectedProjectId: null,
+        selectedProjectInfo: null,
+        uiMode: 'default',
+      };
+      const resumeController = factory({
+        api: {
+          getMempalaceStatus: async () => null,
+          listJobs: async (payload) => {
+            resumeCalls.push(['list-jobs', payload]);
+            return {
+              ok: true,
+              jobs: [
+                { id: 'job-terminal-old', status: 'completed', phase: 'done' },
+                {
+                  ...activeJob,
+                  projectId: 'project-resume',
+                  rootPath: '/workspace/resume',
+                },
+              ],
+            };
+          },
+          scanProject: async (rootPath) => ({
+            ok: true,
+            info: { id: 'project-resume', rootPath, totalFiles: 1 },
+            nextSteps: [],
+          }),
+        },
+        callbacks: {
+          startJobPolling: (jobId, snapshot) => resumeCalls.push([
+            'start-polling',
+            jobId,
+            snapshot && snapshot.phase,
+          ]),
+        },
+        state: resumeState,
+      });
+      assert.strictEqual(await resumeController.selectProject('project-resume'), true);
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(resumeCalls)), [
+        ['list-jobs', { projectId: 'project-resume', limit: 12 }],
+        ['start-polling', activeJob.id, activeJob.phase],
+      ]);
+    }
+
+    {
+      const rankedCalls = [];
+      const rankedState = {
+        activeConversationByProject: {},
+        activeJobId: null,
+        automataContractLedger: [],
+        automataContractSummary: null,
+        expandedProjects: {},
+        nextSteps: [],
+        pendingAction: null,
+        pendingActionJobId: null,
+        projectConversations: {},
+        projects: [{ id: 'project-ranked', name: 'Ranked', rootPath: '/workspace/ranked' }],
+        selectedProjectId: null,
+        selectedProjectInfo: null,
+        uiMode: 'default',
+      };
+      const jobs = [
+        { id: 'job-retry-newer', status: 'retry_pending', phase: 'execute_validation', updatedAt: '2026-08-31T12:00:05.000Z' },
+        { id: 'job-cancelling-old', status: 'running', phase: 'cancelling', updatedAt: '2026-08-31T12:00:02.000Z' },
+        { id: 'job-running-newest', status: 'running', phase: 'execute_pending', updatedAt: '2026-08-31T12:00:06.000Z' },
+        { id: 'job-cancelling-new', status: 'running', phase: 'cancelling', updatedAt: '2026-08-31T12:00:04.000Z' },
+      ].map((job) => ({
+        ...job,
+        projectId: 'project-ranked',
+        rootPath: '/workspace/ranked',
+      }));
+      const rankedController = factory({
+        api: {
+          getMempalaceStatus: async () => null,
+          listJobs: async () => ({ ok: true, jobs }),
+          scanProject: async (rootPath) => ({
+            ok: true,
+            info: { id: 'project-ranked', rootPath },
+            nextSteps: [],
+          }),
+        },
+        callbacks: {
+          startJobPolling: (jobId, snapshot) => rankedCalls.push([jobId, snapshot && snapshot.id]),
+        },
+        state: rankedState,
+      });
+      assert.strictEqual(await rankedController.selectProject('project-ranked'), true);
+      assert.deepStrictEqual(rankedCalls, [['job-cancelling-new', 'job-cancelling-new']]);
+
+      jobs.splice(0, jobs.length,
+        {
+          id: 'job-retry-latest',
+          projectId: 'project-ranked',
+          rootPath: '/workspace/ranked',
+          status: 'retry_pending',
+          phase: 'execute_validation',
+          updatedAt: '2026-08-31T12:00:09.000Z',
+        },
+        {
+          id: 'job-running-old',
+          projectId: 'project-ranked',
+          rootPath: '/workspace/ranked',
+          status: 'running',
+          phase: 'execute_pending',
+          updatedAt: '2026-08-31T12:00:07.000Z',
+        },
+        {
+          id: 'job-running-new',
+          projectId: 'project-ranked',
+          rootPath: '/workspace/ranked',
+          status: 'running',
+          phase: 'execute_validation',
+          updatedAt: '2026-08-31T12:00:08.000Z',
+        },
+      );
+      rankedCalls.length = 0;
+      assert.strictEqual(await rankedController.selectProject('project-ranked'), true);
+      assert.deepStrictEqual(rankedCalls, [['job-running-new', 'job-running-new']]);
+    }
+
+    {
+      const lateListJobs = deferred();
+      const firstListStarted = deferred();
+      const staleStarts = [];
+      const staleSelectionState = {
+        activeConversationByProject: {},
+        activeJobId: null,
+        automataContractLedger: [],
+        automataContractSummary: null,
+        expandedProjects: {},
+        nextSteps: [],
+        pendingAction: null,
+        pendingActionJobId: null,
+        projectConversations: {},
+        projects: [
+          { id: 'project-a', name: 'A', rootPath: '/workspace/a' },
+          { id: 'project-b', name: 'B', rootPath: '/workspace/b' },
+        ],
+        selectedProjectId: null,
+        selectedProjectInfo: null,
+        uiMode: 'default',
+      };
+      const staleSelectionController = factory({
+        api: {
+          getMempalaceStatus: async () => null,
+          listJobs: async ({ projectId }) => {
+            if (projectId === 'project-a') {
+              firstListStarted.resolve();
+              return lateListJobs.promise;
+            }
+            return { ok: true, jobs: [] };
+          },
+          scanProject: async (rootPath) => ({
+            ok: true,
+            info: {
+              id: rootPath.endsWith('/a') ? 'project-a' : 'project-b',
+              rootPath,
+            },
+            nextSteps: [],
+          }),
+        },
+        callbacks: {
+          startJobPolling: (jobId) => staleStarts.push(jobId),
+        },
+        state: staleSelectionState,
+      });
+      const firstSelection = staleSelectionController.selectProject('project-a');
+      await firstListStarted.promise;
+      assert.strictEqual(await staleSelectionController.selectProject('project-b'), true);
+      lateListJobs.resolve({
+        ok: true,
+        jobs: [{
+          id: 'job-project-a',
+          projectId: 'project-a',
+          rootPath: '/workspace/a',
+          status: 'running',
+          phase: 'execute_pending',
+          updatedAt: '2026-08-31T12:00:00.000Z',
+        }],
+      });
+      assert.strictEqual(await firstSelection, false);
+      assert.deepStrictEqual(staleStarts, []);
+      assert.strictEqual(staleSelectionState.selectedProjectId, 'project-b');
+    }
+
+    {
+      const settlingCalls = [];
+      const settlingState = {
+        ...switchState,
+        activeJobId: 'job-settling-cancel',
+        pendingAction: null,
+        pendingActionJobId: null,
+        selectedProjectId: 'project-1',
+        selectedProjectInfo: { id: 'project-1', rootPath: '/workspace/one' },
+      };
+      let cleanupPoll = 0;
+      const settlingController = factory({
+        api: {
+          cancelJob: async ({ jobId }) => ({
+            ok: true,
+            job: { id: jobId, status: 'running', phase: 'cancelling' },
+          }),
+          getJob: async ({ jobId }) => {
+            cleanupPoll += 1;
+            settlingCalls.push(['get-job', jobId]);
+            return {
+              ok: true,
+              job: cleanupPoll < 2
+                ? { id: jobId, status: 'running', phase: 'cancelling' }
+                : { id: jobId, status: 'cancelled', phase: 'cancelled' },
+            };
+          },
+          getMempalaceStatus: async () => null,
+          listJobs: async () => ({ ok: true, jobs: [] }),
+          scanProject: async (rootPath) => ({
+            ok: true,
+            info: { id: 'project-2', rootPath },
+            nextSteps: [],
+          }),
+        },
+        callbacks: {
+          waitForCancellationPoll: async () => {},
+        },
+        state: settlingState,
+      });
+      assert.strictEqual(await settlingController.selectProject('project-2'), true);
+      assert.deepStrictEqual(settlingCalls, [
+        ['get-job', 'job-settling-cancel'],
+        ['get-job', 'job-settling-cancel'],
+      ]);
+      assert.strictEqual(settlingState.activeJobId, null);
+      assert.strictEqual(settlingState.selectedProjectId, 'project-2');
+    }
+
+    {
+      const timeoutState = {
+        ...switchState,
+        activeJobId: 'job-cancel-timeout',
+        pendingAction: null,
+        pendingActionJobId: null,
+        selectedProjectId: 'project-1',
+        selectedProjectInfo: { id: 'project-1', rootPath: '/workspace/one' },
+      };
+      let scanAttempted = false;
+      let timeoutPolls = 0;
+      const timeoutMessages = [];
+      const cancellationResultDeadlines = [];
+      const timeoutController = factory({
+        api: {
+          cancelJob: async ({ jobId }) => ({
+            ok: true,
+            job: { id: jobId, status: 'running', phase: 'cancelling' },
+          }),
+          getJob: async ({ jobId }) => {
+            timeoutPolls += 1;
+            return {
+              ok: true,
+              job: { id: jobId, status: 'running', phase: 'cancelling' },
+            };
+          },
+          scanProject: async () => {
+            scanAttempted = true;
+            return { ok: true };
+          },
+        },
+        callbacks: {
+          appendMessage: (...args) => timeoutMessages.push(args),
+          waitForCancellationPoll: async () => {},
+          waitForCancellationResult: async (pendingResult, timeoutMs) => {
+            cancellationResultDeadlines.push(timeoutMs);
+            return pendingResult;
+          },
+        },
+        state: timeoutState,
+      });
+      assert.strictEqual(await timeoutController.selectProject('project-2'), false);
+      assert.strictEqual(await timeoutController.selectProject('project-2'), false);
+      assert.strictEqual(scanAttempted, false);
+      assert.strictEqual(timeoutPolls, 40);
+      assert.strictEqual(timeoutMessages.length, 1);
+      assert.strictEqual(cancellationResultDeadlines.length, 40);
+      assert.strictEqual(cancellationResultDeadlines.every((value) => value > 0 && value <= 5000), true);
+      assert.strictEqual(timeoutState.activeJobId, 'job-cancel-timeout');
+      assert.strictEqual(timeoutState.selectedProjectId, 'project-1');
+    }
+
     const deniedState = {
       ...switchState,
       activeJobId: null,
@@ -204,7 +516,7 @@ assert.strictEqual(typeof factory, 'function');
       api: {
         cancelJob: async (payload) => {
           clearLifecycle.push(['cancel', payload]);
-          return { ok: true };
+          return { ok: true, job: { id: payload.jobId, status: 'cancelled', phase: 'cancelled' } };
         },
       },
       callbacks: {
@@ -234,7 +546,7 @@ assert.strictEqual(typeof factory, 'function');
       api: {
         cancelJob: async (payload) => {
           malformedPendingCalls.push(payload);
-          return { ok: true };
+          return { ok: true, job: { id: payload.jobId, status: 'cancelled', phase: 'cancelled' } };
         },
       },
       state: malformedPendingState,
@@ -323,7 +635,7 @@ assert.strictEqual(typeof factory, 'function');
       api: {
         cancelJob: async (payload) => {
           raceCalls.push(['cancel', payload]);
-          return { ok: true };
+          return { ok: true, job: { id: payload.jobId, status: 'cancelled', phase: 'cancelled' } };
         },
         getMempalaceStatus: async () => null,
         scanProject: async (rootPath) => {
@@ -368,7 +680,7 @@ assert.strictEqual(typeof factory, 'function');
       api: {
         cancelJob: async (payload) => {
           trashCalls.push(['cancel', payload]);
-          return { ok: true };
+          return { ok: true, job: { id: payload.jobId, status: 'cancelled', phase: 'cancelled' } };
         },
         trashProject: async (payload) => {
           trashCalls.push(['trash', payload]);

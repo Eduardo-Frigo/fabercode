@@ -228,6 +228,7 @@ for (const requiredModule of [
   "require('./main/services/agentic_browser_session_service')",
   "require('./main/services/agentic_mcp_tool_broker_factory')",
   "require('./main/services/agentic_mcp_write_approval_service')",
+  "require('./main/services/agentic_visual_capture_approval_service')",
   "require('./main/services/agentic_visual_egress_approval_service')",
   "require('./main/capabilities/capability_grant_store')",
   "require('./main/capabilities/pending_approval_store')",
@@ -244,7 +245,11 @@ assertInOrder(
     'agenticVisualEgressApprovalServiceInstance = agenticVisualEgressApprovalService;',
     'const agenticBrowserSessionService = createAgenticBrowserSessionService({',
     'agenticBrowserSessionServiceInstance = agenticBrowserSessionService;',
+    'const agenticVisualCaptureApprovalService = createAgenticVisualCaptureApprovalService({',
+    'agenticVisualCaptureApprovalServiceInstance = agenticVisualCaptureApprovalService;',
     'const agenticBrowserBrokerFactory = createAgenticBrowserBrokerFactory({',
+    'requestCaptureApproval: requestAgenticVisualCaptureApproval,',
+    'consumeCaptureApproval: consumeAgenticVisualCaptureApproval,',
     'agenticBrowserBrokerFactoryInstance = agenticBrowserBrokerFactory;',
     'const assistantExecutionCoordinator = createAssistantExecutionCoordinator({',
   ],
@@ -259,6 +264,8 @@ assertInOrder(
     "Object.defineProperty(agenticExecutionOptions, 'openBrowser'",
     "Object.defineProperty(agenticExecutionOptions, 'interactBrowser'",
     "Object.defineProperty(agenticExecutionOptions, 'captureBrowser'",
+    "callId: readAgenticDeleteDataProperty(browserInput, 'callId')",
+    "invocationId: readAgenticDeleteDataProperty(browserInput, 'invocationId')",
     "Object.defineProperty(agenticExecutionOptions, 'authorizeVisualEgress'",
     "Object.defineProperty(agenticExecutionOptions, 'consumeVisualEgress'",
   ],
@@ -310,8 +317,18 @@ const runtimeClearSource = extractFunctionDeclaration(
 );
 assert.ok(
   runtimeClearSource.includes('agenticVisualEgressApprovalServiceInstance.clear()')
+    && runtimeClearSource.includes('agenticVisualCaptureApprovalServiceInstance.clear()')
     && runtimeClearSource.includes('agenticBrowserSessionServiceInstance.clear()'),
-  'runtime authority reset must revoke visual approvals and destroy hidden browser windows'
+  'runtime authority reset must revoke capture/egress approvals and destroy hidden browser windows'
+);
+assert.ok(
+  legacyExecuteSource.includes(
+    'if (browserBinding && agenticVisualCaptureApprovalServiceInstance)'
+  )
+    && legacyExecuteSource.includes(
+      'agenticVisualCaptureApprovalServiceInstance.cancelJob(Object.freeze({'
+    ),
+  'terminal agentic jobs must revoke unused one-shot capture approvals'
 );
 
 const providerDestinationSource = extractFunctionDeclaration(
@@ -471,6 +488,256 @@ assert.ok(
     && legacyExecuteSource.includes('completeActiveMilestoneAfterValidatedJob(rootPath, jobId);'),
   'an agentic job with pending validation must not complete the active milestone'
 );
+
+const buildExtractedAgenticValidationFields = new Function(
+  'PROCESS_EXECUTION_PENDING_CHECKS',
+  'ASSISTANT_PROCESS_EXECUTION_POLICY',
+  'AGENTIC_VALIDATION_INCOMPLETE_REASON',
+  'AGENTIC_TERMINAL_EVIDENCE_VERSION',
+  [
+    extractFunctionDeclaration(mainSource, 'normalizeAssistantAgenticValidationEvidence'),
+    extractFunctionDeclaration(mainSource, 'normalizeAssistantAgenticTerminalEvidence'),
+    extractFunctionDeclaration(mainSource, 'buildAssistantAgenticValidationFields'),
+    'return buildAssistantAgenticValidationFields;',
+  ].join('\n')
+)(
+  Object.freeze(['lint', 'tests', 'build', 'preview']),
+  'brokered',
+  'agentic_validation_incomplete',
+  'agentic-terminal-evidence.v1'
+);
+const groundedFailedValidation = buildExtractedAgenticValidationFields(
+  {
+    process: {
+      performed: true,
+      terminalStatus: 'succeeded',
+      successfulChecks: ['build'],
+      failedChecks: ['tests'],
+    },
+    browser: {
+      opened: false,
+      captured: false,
+      inspected: false,
+    },
+  },
+  false,
+  {
+    version: 'agentic-terminal-evidence.v1',
+    outcome: 'failed',
+    claim: 'failure',
+    grounded: true,
+    required: {
+      process: ['tests', 'build'],
+      browser: [],
+    },
+    satisfied: {
+      process: ['build'],
+      browser: [],
+    },
+    failed: {
+      process: ['tests'],
+      tools: [],
+    },
+    capabilities: {
+      process: true,
+      browser: true,
+    },
+  }
+);
+assert.strictEqual(groundedFailedValidation.verified, false);
+assert.strictEqual(groundedFailedValidation.validationVerified, false);
+assert.strictEqual(groundedFailedValidation.validationPending, false);
+assert.strictEqual(groundedFailedValidation.validationPendingReason, null);
+assert.deepStrictEqual(groundedFailedValidation.validationPendingChecks, []);
+assert.deepStrictEqual(
+  groundedFailedValidation.validationEvidence.process.failedChecks,
+  ['tests']
+);
+assert.deepStrictEqual(
+  groundedFailedValidation.terminalEvidence.failed.process,
+  ['tests']
+);
+
+const failedWithUnresolvedBuildValidation = buildExtractedAgenticValidationFields(
+  {
+    process: {
+      performed: true,
+      terminalStatus: 'failed',
+      successfulChecks: [],
+      failedChecks: ['tests'],
+    },
+    browser: {
+      opened: false,
+      captured: false,
+      inspected: false,
+    },
+  },
+  false,
+  {
+    version: 'agentic-terminal-evidence.v1',
+    outcome: 'failed',
+    claim: 'failure',
+    grounded: true,
+    required: {
+      process: ['tests', 'build'],
+      browser: [],
+    },
+    satisfied: {
+      process: [],
+      browser: [],
+    },
+    failed: {
+      process: ['tests'],
+      tools: [],
+    },
+    capabilities: {
+      process: true,
+      browser: true,
+    },
+  }
+);
+assert.strictEqual(failedWithUnresolvedBuildValidation.verified, false);
+assert.strictEqual(failedWithUnresolvedBuildValidation.validationVerified, false);
+assert.strictEqual(failedWithUnresolvedBuildValidation.validationPending, true);
+assert.strictEqual(
+  failedWithUnresolvedBuildValidation.validationPendingReason,
+  'agentic_validation_incomplete'
+);
+assert.deepStrictEqual(
+  failedWithUnresolvedBuildValidation.validationPendingChecks,
+  ['build']
+);
+assert.deepStrictEqual(
+  failedWithUnresolvedBuildValidation.validationEvidence.process.failedChecks,
+  ['tests']
+);
+
+const fullySucceededValidation = buildExtractedAgenticValidationFields(
+  {
+    process: {
+      performed: true,
+      terminalStatus: 'succeeded',
+      successfulChecks: ['tests', 'build'],
+      failedChecks: [],
+    },
+    browser: {
+      opened: false,
+      captured: false,
+      inspected: false,
+    },
+  },
+  false,
+  {
+    version: 'agentic-terminal-evidence.v1',
+    outcome: 'succeeded',
+    claim: 'success',
+    grounded: true,
+    required: {
+      process: ['tests', 'build'],
+      browser: [],
+    },
+    satisfied: {
+      process: ['tests', 'build'],
+      browser: [],
+    },
+    failed: {
+      process: [],
+      tools: [],
+    },
+    capabilities: {
+      process: true,
+      browser: true,
+    },
+  }
+);
+assert.strictEqual(fullySucceededValidation.verified, true);
+assert.strictEqual(fullySucceededValidation.validationVerified, true);
+assert.strictEqual(fullySucceededValidation.validationPending, false);
+assert.strictEqual(fullySucceededValidation.validationPendingReason, null);
+assert.deepStrictEqual(fullySucceededValidation.validationPendingChecks, []);
+const fullySucceededAfterMutation = buildExtractedAgenticValidationFields(
+  fullySucceededValidation.validationEvidence,
+  true,
+  fullySucceededValidation.terminalEvidence
+);
+assert.strictEqual(fullySucceededAfterMutation.validationVerified, true);
+assert.deepStrictEqual(fullySucceededAfterMutation.validationPendingChecks, []);
+assert.strictEqual(fullySucceededAfterMutation.validationPendingChecks.includes('lint'), false);
+assert.deepStrictEqual(
+  fullySucceededValidation.validationEvidence.process.successfulChecks,
+  ['tests', 'build']
+);
+
+// A visual audit is not verified merely because a PNG exists locally. The
+// coordinator must preserve the one-use visual delivery receipt and keep the
+// job pending when the tool loop required delivery but did not satisfy it.
+const visualDeliveryPending = buildExtractedAgenticValidationFields(
+  {
+    process: {
+      performed: false,
+      terminalStatus: '',
+      successfulChecks: [],
+      failedChecks: [],
+    },
+    browser: {
+      opened: true,
+      captured: true,
+      inspected: true,
+      visualDelivered: false,
+    },
+  },
+  false,
+  {
+    version: 'agentic-terminal-evidence.v1',
+    outcome: 'succeeded',
+    claim: 'success',
+    grounded: true,
+    required: {
+      process: [],
+      browser: ['opened', 'captured', 'visual_delivered'],
+    },
+    satisfied: {
+      process: [],
+      browser: ['opened', 'captured'],
+    },
+    failed: { process: [], tools: [] },
+    capabilities: { process: true, browser: true },
+  }
+);
+assert.strictEqual(visualDeliveryPending.validationVerified, false);
+assert.strictEqual(visualDeliveryPending.validationPending, true);
+assert.deepStrictEqual(visualDeliveryPending.validationPendingChecks, ['preview']);
+assert.strictEqual(visualDeliveryPending.validationEvidence.browser.visualDelivered, false);
+assert.deepStrictEqual(
+  visualDeliveryPending.terminalEvidence.required.browser,
+  ['opened', 'captured', 'visual_delivered']
+);
+
+const visualDeliverySucceeded = buildExtractedAgenticValidationFields(
+  {
+    ...visualDeliveryPending.validationEvidence,
+    browser: {
+      ...visualDeliveryPending.validationEvidence.browser,
+      visualDelivered: true,
+    },
+  },
+  false,
+  {
+    ...visualDeliveryPending.terminalEvidence,
+    satisfied: {
+      process: [],
+      browser: ['opened', 'captured', 'visual_delivered'],
+    },
+  }
+);
+assert.strictEqual(visualDeliverySucceeded.validationVerified, true);
+assert.strictEqual(visualDeliverySucceeded.validationPending, false);
+assert.strictEqual(visualDeliverySucceeded.validationEvidence.browser.visualDelivered, true);
+assert.deepStrictEqual(
+  visualDeliverySucceeded.terminalEvidence.satisfied.browser,
+  ['opened', 'captured', 'visual_delivered']
+);
+
 assert.ok(
   mainSource.includes('registerPreviewHandlers({')
     && mainSource.includes('registerTerminalHandlers({')
@@ -542,6 +809,7 @@ assertInOrder(
     'releaseProjectRootLeaseConfirmed(record)',
     'removeLocalRecord(record',
     'revokeBindingConfirmed(record.binding)',
+    'confirmExecutionCleanup(record',
   ],
   'executor cleanup must be confirmed before delete/root barriers and authority revocation'
 );
@@ -688,11 +956,17 @@ assertInOrder(
     'mutationBackend: agenticDeleteMutationBackend,',
     'transactionalOptions.getProjectRootReader = () => projectRootReader;',
     'createTransactionalFilesystemDeleteService(transactionalOptions)',
+    'const agenticDeleteCancellationRecoveryAdapter = agenticDeleteRecoveryService',
+    '? createAgenticDeleteCancellationRecoveryAdapter({',
+    'getAuthorizedJobById,',
+    'agenticDeleteRecoveryService.recoverJob,',
+    'markJobCancelledAfterCleanup,',
+    ': null;',
     'const agenticDeleteStartupRecoveryService = createAgenticDeleteStartupRecoveryService({',
     'recoverInterruptedJobs,',
     'listAuthorizedJobRecoveryCandidates,',
-    'recoverJob: agenticDeleteRecoveryService',
-    '? agenticDeleteRecoveryService.recoverJob',
+    'recoverJob: agenticDeleteCancellationRecoveryAdapter',
+    '? agenticDeleteCancellationRecoveryAdapter.recoverJob',
     ': () => Object.freeze({ ok: false }),',
     'const agenticDeleteStartupRecoveryResult = agenticDeleteStartupRecoveryService.recoverAtStartup({',
     "reason: 'runtime_restarted_before_job_completed',",
@@ -763,6 +1037,7 @@ assertInOrder(
     'resolveDefaultOnRolloutFacts: (identity) => (',
     'runtimeConfig: harnessRuntimeConfig,',
     'const assistantRuntime = createAssistantRuntimeFacade({',
+    'authorizeProductAccess: authorizeAssistantProductAccess,',
     'authorizePlanningPayload: (input) => (',
     'agenticDeleteStartupRecoveryHealthy',
     '? assistantPlanningAuthorizer.authorize(input)',
@@ -770,8 +1045,14 @@ assertInOrder(
     'kernelId: activeHarnessKernelId,',
     'registerAssistantHandlers({',
     'assistantRuntime,',
+    'authorizeAssistantAccess: authorizeAssistantIpcAccess,',
   ],
   'main process must compose authorization, coordination, the low-level router, and IPC in order'
+);
+
+assert.ok(
+  mainSource.includes('isAuthorizedRecoveryProject: isAssistantRecoveryProjectRegistered'),
+  'startup delete recovery must exclude jobs whose project was deliberately removed from Faber'
 );
 
 const pendingApprovalProjectRestoreSource = extractFunctionDeclaration(
@@ -996,8 +1277,9 @@ assertInOrder(
   mainSource,
   [
     'const cancelAssistantJob = async ({ jobId }) => {',
+    "markJobCancellationRequested(jobId, 'cancelled_by_user')",
     'assistantExecutionCoordinator.revokeJob({ jobId })',
-    "markJobCancelled(jobId, 'cancelled_by_user')",
+    'markJobExecutionCleanupFailed(',
     'const rollbackCanaryJob = (input) => (',
     'canaryManualRollbackJobService.rollback(input)',
     'const retryAssistantJob = ({ jobId }) => assistantRuntime.retry({ jobId });',
@@ -1007,6 +1289,28 @@ assertInOrder(
     'retryAssistantJob,',
   ],
   'cancel, canary rollback, and retry IPC must delegate to authoritative runtime services'
+);
+
+const cancelAssistantJobSource = mainSource.slice(
+  mainSource.indexOf('const cancelAssistantJob = async ({ jobId }) => {'),
+  mainSource.indexOf('const rollbackCanaryJob = (input) => (')
+);
+assert.ok(
+  !cancelAssistantJobSource.includes("markJobCancelled(jobId, 'cancelled_by_user')"),
+  'the cancellation handler must not publish a terminal state before cleanup confirmation'
+);
+assertInOrder(
+  mainSource,
+  [
+    'onCancellationRequested: (jobId, reason) => {',
+    'assistantRuntimeLifecycleClearServiceInstance',
+    '.requestCancellation(jobId, reason)',
+    'onExecutionCleanupConfirmed: (proof) => {',
+    '.confirmExecutionCleanup(proof)',
+    'onExecutionCleanupFailed: (failure) => {',
+    '.failExecutionCleanup(failure)',
+  ],
+  'production must route cancellation and cleanup outcomes through the lifecycle transaction'
 );
 
 assert.ok(
@@ -1022,27 +1326,65 @@ assert.ok(
   'application shutdown must revoke process-local assistant authority'
 );
 assert.ok(
-  mainSource.includes("clearAssistantRuntimeAuthority('account_signed_out')"),
-  'account sign-out must revoke process-local assistant authority'
+  mainSource.includes('beforeProductAccessContextChange: ({ reason }) => {'),
+  'account context changes must use the pre-transition authority boundary'
 );
 assert.ok(
-  mainSource.includes("clearAssistantRuntimeAuthority('account_signed_in')"),
-  'account sign-in or identity replacement must revoke prior assistant authority'
+  mainSource.includes('clearAssistantRuntimeAuthority(`account_${reason}`)'),
+  'every account context transition must revoke prior assistant authority synchronously'
+);
+assert.ok(
+  mainSource.includes('isProductAccessAuthorityReady: productAccessAuthorityReady'),
+  'account access status must depend on the main-owned document lease boundary'
+);
+assert.ok(
+  mainSource.includes(
+    "require('./main/services/assistant_runtime_lifecycle_clear_service')"
+  ),
+  'main process must import the assistant runtime lifecycle clear service'
+);
+const lifecycleClearSource = extractFunctionDeclaration(
+  mainSource,
+  'clearAssistantRuntimeAuthority'
+);
+assert.ok(
+  lifecycleClearSource.includes('assistantRuntimeLifecycleClearServiceInstance.clear(reason)'),
+  'lifecycle authority clear must delegate to the transaction service'
+);
+assert.strictEqual(
+  lifecycleClearSource.includes('markJobCancelled('),
+  false,
+  'lifecycle authority clear must never publish cancellation directly'
 );
 assertInOrder(
   mainSource,
   [
-    'function clearAssistantRuntimeAuthority(reason = \'runtime_lifecycle_changed\') {',
-    'const windowInvalidation = invalidateAgenticDeleteWindow(reason);',
-    'assistantRuntimeLifecycleReason = reason;',
-    'assistantExecutionCoordinatorInstance.clear()',
-    'agenticDeleteRuntimeServiceInstance.clear()',
-    'assistantRuntimeLifecycleReason = null;',
-    'onAuthorityRevoked: (jobId, reason) => {',
-    'if (assistantRuntimeLifecycleReason) {',
-    'markJobCancelled(jobId, assistantRuntimeLifecycleReason);',
+    'assistantRuntimeLifecycleClearServiceInstance =',
+    'createAssistantRuntimeLifecycleClearService({',
+    'invalidateWindow(reason) {',
+    'clearPeripheralAuthority() {',
+    'clearCoordinator() {',
+    'clearDeleteRuntime() {',
+    'markCancellationRequested(jobId, reason) {',
+    'markCancelledAfterCleanup(jobId, receipt) {',
+    'markExecutionCleanupFailed(jobId, reason) {',
+    'scheduleContinuation(continuation) {',
   ],
-  'lifecycle cleanup must invalidate delete authority, clear the coordinator, and persist cancellation in order'
+  'production must compose every lifecycle clear gate behind one transaction service'
+);
+const coordinatorLifecycleCallbacks = mainSource.slice(
+  mainSource.indexOf('onCancellationRequested: (jobId, reason) => {'),
+  mainSource.indexOf('onPlanningFailure: (jobId, reason) => {')
+);
+assert.strictEqual(
+  coordinatorLifecycleCallbacks.includes('markJobCancelled('),
+  false,
+  'coordinator lifecycle callbacks must not publish cancelled before cleanup receipt'
+);
+assert.ok(
+  coordinatorLifecycleCallbacks.includes('onAuthorityRevoked: (jobId, reason) => {')
+    && coordinatorLifecycleCallbacks.includes('abortActiveJobExecution(jobId, reason);'),
+  'authority revocation must still abort the process-local execution immediately'
 );
 
 const deleteRuntimeCompositionStart = mainSource.indexOf(
@@ -1093,10 +1435,27 @@ assertInOrder(
   'journal key loss must block assistant recovery/delete authority without suppressing user IPCs or the window'
 );
 
+assert.ok(
+  mainSource.includes(
+    "require('./main/services/agentic_delete_cancellation_recovery_adapter')"
+  ),
+  'main process must import the delete cancellation recovery adapter'
+);
+const startupDeleteRecoveryComposition = mainSource.slice(
+  mainSource.indexOf('const agenticDeleteStartupRecoveryService ='),
+  mainSource.indexOf('const agenticDeleteStartupRecoveryResult =')
+);
+assert.strictEqual(
+  startupDeleteRecoveryComposition.includes('agenticDeleteRecoveryService.recoverJob'),
+  false,
+  'startup recovery must receive the cancellation adapter instead of the raw delete recoverJob'
+);
+
 for (const importedFactory of [
   'createTransactionJournalAuthenticator',
   'createAnchoredMutationRuntimeConfig',
   'createAgenticDeleteMutationBackendSelection',
+  'createAgenticDeleteCancellationRecoveryAdapter',
   'createAgenticDeleteRecoveryService',
   'createAgenticDeleteStartupRecoveryService',
   'createTransactionalFilesystemDeleteService',
@@ -1107,15 +1466,41 @@ for (const importedFactory of [
   );
 }
 
+assert.ok(
+  mainSource.includes(
+    "require('./main/services/assistant_runtime_window_lease_gate')"
+  ),
+  'main process must import the epoch-bound assistant window lease gate'
+);
 assert.strictEqual(
-  (mainSource.match(/mainWindowDocumentLease = Object\.freeze\(Object\.create\(null\)\)/g) || []).length,
-  1,
-  'a document lease must only be minted at one trusted main-document load boundary'
+  mainSource.includes('assistantRuntimeLifecycleClearHealthy'),
+  false,
+  'the ad hoc lifecycle-health boolean must not remain as a lease authority source'
 );
 assertInOrder(
   mainSource,
   [
+    'const assistantRuntimeWindowLeaseGateInstance =',
+    'createAssistantRuntimeWindowLeaseGate();',
+    'let assistantRuntimeWindowLeaseEpochToken = null;',
+    'let assistantRuntimeWindowLeaseWindowToken = Object.freeze(Object.create(null));',
+    'let assistantRuntimeWindowLeaseCandidateToken = null;',
     'let mainWindowDocumentLease = null;',
+    'function beginAssistantRuntimeWindowLeaseClear(windowToken) {',
+    'mainWindowDocumentLease = null;',
+    'assistantRuntimeWindowLeaseGateInstance.beginClear(windowToken)',
+    'assistantRuntimeWindowLeaseEpochToken = epochToken;',
+    'assistantRuntimeWindowLeaseGateInstance.didFinish(',
+    'function concludeAssistantRuntimeWindowLeaseClear(',
+    'assistantRuntimeLifecycleClearServiceInstance.diagnostics()',
+    'assistantRuntimeWindowLeaseGateInstance.concludeClear(',
+    'function mintAssistantRuntimeWindowLeaseIfReady(win = mainWindow) {',
+    'trustedMainDocumentIsCurrent(win)',
+    'assistantRuntimeWindowLeaseGateInstance.issueLease(',
+    'mainWindowDocumentLease = leaseToken;',
+    'function registerAssistantRuntimeDocumentCandidate(win = mainWindow) {',
+    'assistantRuntimeWindowLeaseGateInstance.didFinish(',
+    'mintAssistantRuntimeWindowLeaseIfReady(win);',
     'function invalidateAgenticDeleteWindow(reason = \'window_invalidated\') {',
     'mainWindowDocumentLease = null;',
     'runtime.invalidateWindow(reason)',
@@ -1123,9 +1508,58 @@ assertInOrder(
     'mainWindow === win',
     'trustedMainDocumentIsCurrent(win)',
     'win.webContents.getURL() === pathToFileURL(mainDocumentPath).href',
-    'mainWindowDocumentLease = Object.freeze(Object.create(null));',
+    'registerAssistantRuntimeDocumentCandidate(win);',
   ],
-  'the old document lease must be invalidated before a new trusted local document may mint one'
+  'a trusted document lease must be issued only by the current epoch/window/candidate gate'
+);
+assertInOrder(
+  extractFunctionDeclaration(mainSource, 'getAgenticDeleteWindowLease'),
+  [
+    'trustedMainDocumentIsCurrent()',
+    'assistantRuntimeWindowLeaseGateInstance.consumeLease(',
+    'assistantRuntimeWindowLeaseEpochToken,',
+    'assistantRuntimeWindowLeaseWindowToken,',
+    'assistantRuntimeWindowLeaseCandidateToken',
+    'consumedLease !== mainWindowDocumentLease',
+  ],
+  'window authority reads must revalidate the exact current lease through consumeLease'
+);
+assertInOrder(
+  lifecycleClearSource,
+  [
+    'const lifecycleWindowToken = assistantRuntimeWindowLeaseWindowToken;',
+    'const lifecycleEpochToken = beginAssistantRuntimeWindowLeaseClear(',
+    'lifecycleWindowToken',
+    'assistantRuntimeLifecycleClearServiceInstance.clear(reason)',
+    'concludeAssistantRuntimeWindowLeaseClear(',
+    'lifecycleEpochToken,',
+    'result',
+  ],
+  'every lifecycle clear must invalidate and capture its epoch/window before clearing authority'
+);
+const lifecycleFallbackSource = lifecycleClearSource.slice(
+  lifecycleClearSource.indexOf('if (assistantRuntimeLifecycleClearServiceInstance) {')
+);
+assert.strictEqual(
+  lifecycleFallbackSource.includes('mainWindowDocumentLease = leaseToken'),
+  false,
+  'the pre-composition lifecycle fallback must remain fail-closed'
+);
+const lifecycleScheduleSource = mainSource.slice(
+  mainSource.indexOf('scheduleContinuation(continuation) {'),
+  mainSource.indexOf('const pendingApprovalStartupRecovery =')
+);
+assertInOrder(
+  lifecycleScheduleSource,
+  [
+    'const scheduledEpochToken = assistantRuntimeWindowLeaseEpochToken;',
+    'queueMicrotask(() => {',
+    'const continuationResult = continuation();',
+    'concludeAssistantRuntimeWindowLeaseClear(',
+    'scheduledEpochToken,',
+    'continuationResult',
+  ],
+  'an asynchronously drained lifecycle must conclude only its captured epoch'
 );
 for (const reason of [
   'renderer_navigation',
@@ -1133,8 +1567,6 @@ for (const reason of [
   'renderer_destroyed',
   'window_closed',
   'app_before_quit',
-  'account_signed_out',
-  'account_signed_in',
 ]) {
   assert.ok(
     mainSource.includes(`clearAssistantRuntimeAuthority('${reason}')`),
@@ -1161,51 +1593,99 @@ assertInOrder(
   'the native dialog must bind the signal, window, and opaque lease before and after its await'
 );
 
+const accountServiceStart = mainSource.indexOf('const platformAccountService = createPlatformAccountService({');
+const accountServiceEnd = mainSource.indexOf('const pexelsAssetService =', accountServiceStart);
+const accountServiceSource = mainSource.slice(accountServiceStart, accountServiceEnd);
+assertInOrder(
+  accountServiceSource,
+  [
+    'allowLocalUnauthenticated: FABER_LOCAL_UNAUTHENTICATED,',
+    'beforeProductAccessContextChange: ({ reason }) => {',
+    'clearAssistantRuntimeAuthority(`account_${reason}`)',
+    'createLocalPrincipalId: () => `local-development:${crypto.randomUUID()}`',
+    'isProductAccessAuthorityReady: productAccessAuthorityReady,',
+  ],
+  'the main process must mint local identity and revoke authority before every context transition'
+);
 const platformAuthCallbackStart = mainSource.indexOf('onAuthCompleted: () => {');
 const platformAuthCallbackEnd = mainSource.indexOf(
   'port: Number.isFinite(FABER_BACKEND_PORT)',
   platformAuthCallbackStart
 );
-assertInOrder(
-  mainSource.slice(platformAuthCallbackStart, platformAuthCallbackEnd),
-  [
-    "clearAssistantRuntimeAuthority('account_signed_in')",
-    'rotateAgenticDeleteActorId();',
-    "mainWindow.webContents.send('account:event', { type: 'signed-in' })",
-  ],
-  'backend authentication must clear authority and rotate the main-only actor before notifying the renderer'
+const platformAuthCallbackSource = mainSource.slice(
+  platformAuthCallbackStart,
+  platformAuthCallbackEnd
+);
+assert.ok(
+  platformAuthCallbackSource.includes("mainWindow.webContents.send('account:event', { type: 'signed-in' })"),
+  'backend authentication must notify the renderer after the service transition succeeds'
+);
+assert.strictEqual(
+  /clearAssistantRuntimeAuthority|rotateAgenticDeleteActorId/.test(platformAuthCallbackSource),
+  false,
+  'backend authentication must not repeat the authoritative pre-transition cleanup'
 );
 const accountEventStart = mainSource.indexOf('emitAccountEvent: (payload) => {');
 const accountEventEnd = mainSource.indexOf('normalizeExternalUrl,', accountEventStart);
 const accountEventSource = mainSource.slice(accountEventStart, accountEventEnd);
-assertInOrder(
-  accountEventSource,
-  [
-    "clearAssistantRuntimeAuthority('account_signed_out')",
-    'rotateAgenticDeleteActorId();',
-    "clearAssistantRuntimeAuthority('account_signed_in')",
-    'rotateAgenticDeleteActorId();',
-    "mainWindow.webContents.send('account:event', payload)",
-  ],
-  'account identity changes must rotate the actor only after clearing previous authority'
+assert.ok(
+  accountEventSource.includes("mainWindow.webContents.send('account:event', payload)"),
+  'account events must notify the renderer after an accepted service transition'
+);
+assert.strictEqual(
+  /clearAssistantRuntimeAuthority|rotateAgenticDeleteActorId/.test(accountEventSource),
+  false,
+  'renderer notification must not repeat or delay the pre-transition cleanup'
 );
 
 const actorIdSource = extractFunctionDeclaration(mainSource, 'getAgenticDeleteActorId');
 assertInOrder(
   actorIdSource,
   [
-    'platformAccountService.getCurrentSession()',
-    "readAgenticDeleteDataProperty(session, 'user')",
-    "readAgenticDeleteDataProperty(user, 'id')",
-    'AGENTIC_DELETE_ACTOR_ID_PATTERN.test(userId)',
-    'return agenticDeleteActorId;',
+    'platformAccountService.getProductAccessPrincipal()',
+    "readAgenticDeleteDataProperty(principal, 'kind')",
+    "readAgenticDeleteDataProperty(principal, 'actorId')",
+    "kind === 'account' || kind === 'local_development'",
+    'AGENTIC_DELETE_ACTOR_ID_PATTERN.test(actorId)',
+    'return actorId;',
+    'return null;',
   ],
-  'the agent actor must come from a safe main-owned account id or the rotated process fallback'
+  'the agent actor must come exclusively from the current main-owned product principal'
 );
 assert.strictEqual(
-  /email|name|renderer/i.test(actorIdSource),
+  /email|name|renderer|main-process/i.test(actorIdSource),
   false,
-  'renderer fields, email, and display names must never become the delete actor id'
+  'renderer fields and identity fallbacks must never become the delete actor id'
+);
+
+const ipcAccessSource = extractFunctionDeclaration(mainSource, 'authorizeAssistantIpcAccess');
+for (const fragment of [
+  'event.sender !== mainWindow.webContents',
+  'event.senderFrame !== mainWindow.webContents.mainFrame',
+  'authorizeAssistantProductAccess()',
+]) {
+  assert.ok(ipcAccessSource.includes(fragment), `assistant IPC access must include ${fragment}`);
+}
+const productAccessSource = extractFunctionDeclaration(mainSource, 'authorizeAssistantProductAccess');
+assertInOrder(
+  productAccessSource,
+  [
+    'productAccessAuthorityReady()',
+    'platformAccountService.getProductAccessPrincipal()',
+    'return null;',
+  ],
+  'assistant access must require the current document lease and main-owned principal'
+);
+const assistantRouteStart = mainSource.indexOf("registerIpcHandler('assistant:route'");
+const assistantRouteEnd = mainSource.indexOf('const handleLegacyHarnessPlan', assistantRouteStart);
+assertInOrder(
+  mainSource.slice(assistantRouteStart, assistantRouteEnd),
+  [
+    'authorizeAssistantIpcAccess(event)',
+    'assistantProductAccessDeniedResult()',
+    'resolveAssistantRouteDecision({',
+  ],
+  'the legacy route must not bypass product, document, frame, and lease authorization'
 );
 
 const projectLabelSource = extractFunctionDeclaration(
@@ -1287,6 +1767,7 @@ assertInOrder(
     'enumerable: false,',
     'processRoute.execute(Object.freeze({',
     "command: readAgenticDeleteDataProperty(processInput, 'command')",
+    "mutationRevision: readAgenticDeleteDataProperty(\n                processInput,\n                'mutationRevision'",
     "args: readAgenticDeleteDataProperty(processInput, 'args')",
     "timeoutMs: readAgenticDeleteDataProperty(processInput, 'timeoutMs')",
     "Object.defineProperty(agenticExecutionOptions, 'readProcess'",

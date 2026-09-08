@@ -2,6 +2,7 @@ const assert = require('assert');
 const { EventEmitter } = require('events');
 
 const {
+  AGENTIC_BROWSER_SESSION_VERSION,
   AGENTIC_BROWSER_SESSION_REASONS,
   createAgenticBrowserSessionService,
 } = require('../main/services/agentic_browser_session_service');
@@ -34,7 +35,10 @@ function createFakeBrowserWindowClass(state) {
         return { ok: true, tagName: 'button' };
       };
       this.webContents.capturePage = async () => ({
-        toPNG: () => Buffer.from('real-png-bytes'),
+        toPNG: () => {
+          state.capturePageCalls = (state.capturePageCalls || 0) + 1;
+          return Buffer.from('real-png-bytes');
+        },
       });
       this.webContents.getURL = () => this.url;
       this.webContents.getTitle = () => this.title;
@@ -86,6 +90,8 @@ async function testPersistentNavigationInteractionAndVisualContent() {
     viewport: { width: 1280, height: 720 },
   });
   assert.strictEqual(opened.ok, true);
+  assert.strictEqual(AGENTIC_BROWSER_SESSION_VERSION, 'agentic-browser-session.v2');
+  assert.strictEqual(opened.session.revision, 1);
   assert.strictEqual(opened.session.id, 'browser-session-1');
   assert.strictEqual(state.windows.length, 1);
   assert.strictEqual(state.windows[0].options.show, false);
@@ -160,6 +166,27 @@ async function testPersistentNavigationInteractionAndVisualContent() {
   assert.ok(inspected.console.some((entry) => entry.message === 'API warning'));
   assert.ok(inspected.requestFailures.some((entry) => entry.url === 'https://asset.invalid/a.png'));
   assert.strictEqual(authorizationCalls.length, 2);
+
+  const approvedSnapshot = inspected.session;
+  state.windows[0].url = 'http://127.0.0.1:3000/replaced';
+  state.windows[0].webContents.emit(
+    'did-start-navigation',
+    {},
+    state.windows[0].url,
+    false,
+    true
+  );
+  const changedBeforeCapture = await service.capture({
+    jobId: 'job-1',
+    sessionId: 'browser-session-1',
+    expectedRevision: approvedSnapshot.revision,
+    expectedUrl: approvedSnapshot.url,
+  });
+  assert.deepStrictEqual(changedBeforeCapture, {
+    ok: false,
+    code: AGENTIC_BROWSER_SESSION_REASONS.SESSION_CHANGED,
+  });
+  assert.strictEqual(state.capturePageCalls, 1);
 
   const wrongJob = service.inspect({
     jobId: 'job-2',

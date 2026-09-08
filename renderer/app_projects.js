@@ -34,14 +34,44 @@
       renderNextSteps = () => {},
       renderSystemNotice = () => {},
       renderWelcomePanel = () => {},
+      startJobPolling = () => {},
       stopJobPolling = () => {},
       updateStatus = () => {},
+      waitForCancellationPoll = (delayMs) => new Promise((resolve) => {
+        window.setTimeout(resolve, delayMs);
+      }),
+      waitForCancellationResult = (pendingResult, timeoutMs) => new Promise((resolve) => {
+        let settled = false;
+        const timer = window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          resolve(null);
+        }, timeoutMs);
+        Promise.resolve(pendingResult).then(
+          (value) => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timer);
+            resolve(value);
+          },
+          () => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timer);
+            resolve(null);
+          },
+        );
+      }),
       resetApprovalMode = () => {},
       ensureConversationStateForProject = () => {},
     } = callbacks;
 
     let selectProjectSequence = 0;
     let contextChangeCancellation = null;
+    const cancellationPendingNoticeJobIds = new Set();
+    const CANCELLATION_SETTLE_POLL_MS = 250;
+    const CANCELLATION_SETTLE_MAX_POLLS = 20;
+    const CANCELLATION_SETTLE_DEADLINE_MS = 5000;
 
     function normalizeAssistantJobId(value) {
       return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -52,6 +82,104 @@
         ? normalizeAssistantJobId(state.pendingActionJobId)
         : null;
       return pendingJobId || normalizeAssistantJobId(state.activeJobId);
+    }
+
+    function terminalAssistantJob(job, expectedJobId) {
+      return Boolean(
+        job
+        && normalizeAssistantJobId(job.id) === expectedJobId
+        && ['completed', 'failed', 'blocked', 'cancelled']
+          .includes(String(job.status || '').toLowerCase())
+      );
+    }
+
+    async function waitForAssistantJobTerminal(jobId, initialJob = null) {
+      if (terminalAssistantJob(initialJob, jobId)) {
+        cancellationPendingNoticeJobIds.delete(jobId);
+        return true;
+      }
+      if (!api || typeof api.getJob !== 'function') return false;
+      const deadlineAt = Date.now() + CANCELLATION_SETTLE_DEADLINE_MS;
+      for (let attempt = 0; attempt < CANCELLATION_SETTLE_MAX_POLLS; attempt += 1) {
+        try {
+          const beforePollRemainingMs = deadlineAt - Date.now();
+          if (beforePollRemainingMs <= 0) break;
+          await waitForCancellationPoll(Math.min(
+            CANCELLATION_SETTLE_POLL_MS,
+            beforePollRemainingMs,
+          ));
+          const resultRemainingMs = deadlineAt - Date.now();
+          if (resultRemainingMs <= 0) break;
+          const response = await waitForCancellationResult(
+            api.getJob({ jobId }),
+            resultRemainingMs,
+          );
+          if (response && response.ok === true && terminalAssistantJob(response.job, jobId)) {
+            cancellationPendingNoticeJobIds.delete(jobId);
+            return true;
+          }
+        } catch {}
+      }
+      return false;
+    }
+
+    function activeJobPriority(job) {
+      const status = String(job && job.status || '').toLowerCase();
+      const phase = String(job && job.phase || '').toLowerCase();
+      if (status === 'running' && phase === 'cancelling') return 0;
+      if (status === 'running') return 1;
+      if (status === 'retry_pending') return 2;
+      return Number.POSITIVE_INFINITY;
+    }
+
+    function jobRecencyMs(job) {
+      for (const value of [job && job.updatedAt, job && job.createdAt]) {
+        const parsed = typeof value === 'string' ? Date.parse(value) : NaN;
+        if (Number.isFinite(parsed)) return parsed;
+      }
+      return 0;
+    }
+
+    function compareActiveJobs(left, right) {
+      const priorityDelta = activeJobPriority(left) - activeJobPriority(right);
+      if (priorityDelta) return priorityDelta;
+      const recencyDelta = jobRecencyMs(right) - jobRecencyMs(left);
+      if (recencyDelta) return recencyDelta;
+      const leftId = normalizeAssistantJobId(left && left.id) || '';
+      const rightId = normalizeAssistantJobId(right && right.id) || '';
+      return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+    }
+
+    function projectSelectionIsCurrent(sequence, projectId, rootPath) {
+      return selectProjectSequence === sequence
+        && state.selectedProjectId === projectId
+        && String(state.selectedProjectInfo && state.selectedProjectInfo.rootPath || '') === rootPath;
+    }
+
+    async function reattachActiveProjectJob(projectId, rootPath, selectionSequence) {
+      if (!api || typeof api.listJobs !== 'function') return null;
+      if (!projectSelectionIsCurrent(selectionSequence, projectId, rootPath)) return null;
+      try {
+        const response = await api.listJobs({ projectId, limit: 12 });
+        if (!projectSelectionIsCurrent(selectionSequence, projectId, rootPath)) return null;
+        const jobs = response && response.ok === true && Array.isArray(response.jobs)
+          ? response.jobs
+          : [];
+        const activeJob = jobs
+          .filter((job) => (
+            normalizeAssistantJobId(job && job.id)
+            && job.projectId === projectId
+            && job.rootPath === rootPath
+            && Number.isFinite(activeJobPriority(job))
+          ))
+          .sort(compareActiveJobs)[0];
+        if (!activeJob) return null;
+        if (!projectSelectionIsCurrent(selectionSequence, projectId, rootPath)) return null;
+        startJobPolling(activeJob.id, activeJob);
+        return activeJob.id;
+      } catch {
+        return null;
+      }
     }
 
     async function cancelAssistantJobBeforeProjectSwitch(expectedJobId = currentAssistantJobId()) {
@@ -69,7 +197,21 @@
 
       if (!contextChangeCancellation || contextChangeCancellation.jobId !== jobId) {
         const promise = Promise.resolve()
-          .then(() => api.cancelJob({ jobId }))
+          .then(async () => {
+            const result = await api.cancelJob({ jobId });
+            if (!result || result.ok !== true) return result;
+            const terminal = await waitForAssistantJobTerminal(jobId, result.job || null);
+            return terminal
+              ? { ...result, ok: true }
+              : {
+                  ok: false,
+                  code: 'cancellation_pending',
+                  message: t(
+                    'projectSwitchCancellationPending',
+                    'A tarefa ainda está encerrando; aguarde a confirmação antes de trocar de contexto.'
+                  ),
+                };
+          })
           .catch((error) => ({
             ok: false,
             message: error && error.message ? error.message : '',
@@ -84,15 +226,28 @@
 
       const result = await contextChangeCancellation.promise;
       if (!result || result.ok !== true) {
-        appendMessage(
-          'assistant',
-          (result && result.message)
-            || t('projectSwitchCancellationFailed', 'Não troquei de projeto porque a tarefa ativa não pôde ser cancelada.'),
-          { persistToConversation: false },
-        );
-        updateStatus(t('actionCancellationFailedStatus', 'Falha ao cancelar tarefa'));
+        const message = (result && result.message)
+          || t('projectSwitchCancellationFailed', 'Não troquei de projeto porque a tarefa ativa não pôde ser cancelada.');
+        const cancellationPending = result && result.code === 'cancellation_pending';
+        const alreadyNotified = cancellationPending
+          && cancellationPendingNoticeJobIds.has(jobId);
+        if (!alreadyNotified) {
+          appendMessage('assistant', message, { persistToConversation: false });
+          if (cancellationPending) {
+            cancellationPendingNoticeJobIds.add(jobId);
+            if (cancellationPendingNoticeJobIds.size > 256) {
+              cancellationPendingNoticeJobIds.delete(
+                cancellationPendingNoticeJobIds.values().next().value
+              );
+            }
+          }
+        }
+        updateStatus(cancellationPending
+          ? message
+          : t('actionCancellationFailedStatus', 'Falha ao cancelar tarefa'));
         return false;
       }
+      cancellationPendingNoticeJobIds.delete(jobId);
       return true;
     }
 
@@ -511,6 +666,7 @@
     
       state.selectedProjectId = projectId;
       state.selectedProjectInfo = scan.info;
+      const selectedRootPath = String(scan.info && scan.info.rootPath || '');
       if (projectChanged && !previousProjectId) resetApprovalMode('project_switch');
       state.nextSteps = scan.nextSteps || [];
       state.expandedProjects[project.id] = true;
@@ -518,38 +674,50 @@
       renderProjects();
       renderNextSteps();
       if (projectFileTreeController) await projectFileTreeController.refresh();
+      if (!projectSelectionIsCurrent(currentSequence, project.id, selectedRootPath)) return false;
       if (projectTerminalController && projectTerminalController.isOpen()) {
         await projectTerminalController.refresh();
       } else {
         if (projectTerminalController) projectTerminalController.render();
       }
+      if (!projectSelectionIsCurrent(currentSequence, project.id, selectedRootPath)) return false;
       if (automataContractsController) {
-        state.automataContractSummary = await automataContractsController.refreshSummary();
+        const nextAutomataContractSummary = await automataContractsController.refreshSummary();
+        if (!projectSelectionIsCurrent(currentSequence, project.id, selectedRootPath)) return false;
+        state.automataContractSummary = nextAutomataContractSummary;
       }
       if (applicationMapController) {
         if (!options || options.initialTab !== 'map') {
           await applicationMapController.loadProjectMap(project.id, options);
+          if (!projectSelectionIsCurrent(currentSequence, project.id, selectedRootPath)) return false;
         }
       }
       if (milestonesPanelController) {
         await milestonesPanelController.refresh();
+        if (!projectSelectionIsCurrent(currentSequence, project.id, selectedRootPath)) return false;
       }
     
+      let nextMempalaceStatus = null;
       try {
-        state.mempalaceStatus = await api.getMempalaceStatus(state.selectedProjectInfo);
-      } catch {
-        state.mempalaceStatus = null;
-      }
+        nextMempalaceStatus = await api.getMempalaceStatus(scan.info);
+      } catch {}
+      if (!projectSelectionIsCurrent(currentSequence, project.id, selectedRootPath)) return false;
+      state.mempalaceStatus = nextMempalaceStatus;
     
       updateStatus(`${t('activeProjectLabel', 'Projeto ativo')}: ${project.name}`);
       const activeConversationId = getActiveConversationId(project.id);
       if (activeConversationId) {
         await loadConversationMessages(activeConversationId);
+        if (!projectSelectionIsCurrent(currentSequence, project.id, selectedRootPath)) return false;
       }
       await refreshCortexLearningPanel();
+      if (!projectSelectionIsCurrent(currentSequence, project.id, selectedRootPath)) return false;
       renderChatForActiveConversation();
+      await reattachActiveProjectJob(project.id, selectedRootPath, currentSequence);
+      if (!projectSelectionIsCurrent(currentSequence, project.id, selectedRootPath)) return false;
       if (options && options.initialTab === 'map') {
         await ensureMapTabVisible();
+        if (!projectSelectionIsCurrent(currentSequence, project.id, selectedRootPath)) return false;
       }
       return true;
     }

@@ -84,6 +84,7 @@ function brokerContext({
   realRootPath = '/private/workspace/source-project-a',
   effects = [PROJECT_CAPABILITY_EFFECTS.PROCESS_EXECUTE],
   requestDigest = 'c'.repeat(64),
+  mutationRevision = 0,
 } = {}) {
   return Object.freeze({
     requestId,
@@ -101,6 +102,7 @@ function brokerContext({
     action: 'run',
     effects: Object.freeze([...effects]),
     requestDigest,
+    mutationRevision,
   });
 }
 
@@ -113,12 +115,16 @@ function dependencyHarness({
   authorityReturnsPromise = false,
   authorityRejectsPromise = false,
   openReturnsPromise = true,
+  refreshDenied = false,
+  deferFirstOpen = false,
+  execStatus = 'running',
 } = {}) {
   const jobBinding = binding();
   const state = {
     events: [],
     authorityChecks: 0,
     opens: 0,
+    sessionMutationRevision: null,
     closes: 0,
     execs: 0,
     reads: 0,
@@ -130,6 +136,7 @@ function dependencyHarness({
     waitInputs: [],
     stopInputs: [],
     receipts: [],
+    releaseFirstOpen: null,
   };
   const session = Object.freeze({
     version: EXECUTION_ISOLATION_JOB_SESSION_VERSION,
@@ -142,9 +149,9 @@ function dependencyHarness({
       const receipt = Object.freeze({
         schemaVersion: 'test-process-receipt.v1',
         executionId: input.sandboxRequest.executionId,
-        status: 'running',
+        status: execStatus,
         revision: 1,
-        exitCode: null,
+        exitCode: execStatus === 'succeeded' ? 0 : null,
         signal: null,
         timedOut: false,
         stopped: false,
@@ -258,9 +265,19 @@ function dependencyHarness({
       state.events.push('session:open');
       state.opens += 1;
       state.openInputs.push(input);
+      const refreshing = state.sessionMutationRevision !== null
+        && input.mutationRevision > state.sessionMutationRevision;
       const result = openDenied
         ? Object.freeze({ ok: false, code: 'SESSION_OPEN_REJECTED' })
+        : refreshDenied && refreshing
+        ? Object.freeze({ ok: false, code: 'WORKSPACE_ACQUIRE_FAILED' })
         : Object.freeze({ ok: true, session, idempotent: false });
+      if (result.ok === true) state.sessionMutationRevision = input.mutationRevision;
+      if (openReturnsPromise && deferFirstOpen && state.opens === 1) {
+        return new Promise((resolve) => {
+          state.releaseFirstOpen = () => resolve(result);
+        });
+      }
       return openReturnsPromise ? Promise.resolve(result) : result;
     },
     close(input) {
@@ -327,9 +344,11 @@ async function main() {
   assert.deepStrictEqual(harness.state.openInputs[0], Object.freeze({
     binding: harness.jobBinding,
     sourceRootIdentityDigest: digest('b'),
+    mutationRevision: 0,
   }));
   assert.deepStrictEqual(harness.state.execInputs[0], Object.freeze({
     sandboxRequest: request,
+    mutationRevision: 0,
   }));
   const activeDiagnostics = executor.diagnostics();
   assert.deepStrictEqual(activeDiagnostics, Object.freeze({
@@ -547,6 +566,122 @@ async function main() {
   );
   assert.strictEqual(invalidContextHarness.state.authorityChecks, 0);
   assert.strictEqual(invalidContextHarness.state.opens, 0);
+  await rejectedCode(
+    invalidContextExecutor.execute(
+      sandboxRequest(),
+      brokerContext({ mutationRevision: -1 })
+    ),
+    EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.BROKER_REQUEST_INVALID
+  );
+
+  const refreshHarness = dependencyHarness({ execStatus: 'succeeded' });
+  const refreshExecutor = createExecutor(refreshHarness);
+  await refreshExecutor.execute(sandboxRequest(), brokerContext());
+  const refreshedRequest = sandboxRequest({
+    requestId: 'request-refresh',
+    executionDigest: 'd'.repeat(64),
+  });
+  const refreshedContext = brokerContext({
+    requestId: 'request-refresh',
+    requestDigest: 'd'.repeat(64),
+    mutationRevision: 1,
+  });
+  const refreshedOutput = await refreshExecutor.execute(
+    refreshedRequest,
+    refreshedContext
+  );
+  assert.strictEqual(refreshedOutput.status, 'succeeded');
+  assert.strictEqual(refreshHarness.state.opens, 2);
+  assert.deepStrictEqual(refreshHarness.state.openInputs[1], Object.freeze({
+    binding: refreshHarness.jobBinding,
+    sourceRootIdentityDigest: digest('b'),
+    mutationRevision: 1,
+  }));
+  assert.deepStrictEqual(refreshHarness.state.execInputs[1], Object.freeze({
+    sandboxRequest: refreshedRequest,
+    mutationRevision: 1,
+  }));
+  assert.deepStrictEqual(refreshHarness.state.events, [
+    'authority:1',
+    'session:open',
+    'authority:2',
+    'session:exec',
+    'authority:3',
+    'session:open',
+    'authority:4',
+    'session:exec',
+  ]);
+  await rejectedCode(
+    refreshExecutor.execute(
+      sandboxRequest({
+        requestId: 'request-stale-revision',
+        executionDigest: 'f'.repeat(64),
+      }),
+      brokerContext({
+        requestId: 'request-stale-revision',
+        requestDigest: 'f'.repeat(64),
+        mutationRevision: 0,
+      })
+    ),
+    EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.MUTATION_REVISION_MISMATCH
+  );
+  assert.strictEqual(refreshHarness.state.execs, 2);
+  assert.strictEqual((await refreshExecutor.close()).ok, true);
+
+  const refreshFailureHarness = dependencyHarness({
+    execStatus: 'succeeded',
+    refreshDenied: true,
+  });
+  const refreshFailureExecutor = createExecutor(refreshFailureHarness);
+  await refreshFailureExecutor.execute(sandboxRequest(), brokerContext());
+  await rejectedCode(
+    refreshFailureExecutor.execute(refreshedRequest, refreshedContext),
+    EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.SESSION_REFRESH_FAILED
+  );
+  assert.strictEqual(refreshFailureHarness.state.execs, 1);
+  await rejectedCode(
+    refreshFailureExecutor.execute(
+      sandboxRequest({
+        requestId: 'request-after-refresh-failure',
+        executionDigest: 'e'.repeat(64),
+      }),
+      brokerContext({
+        requestId: 'request-after-refresh-failure',
+        requestDigest: 'e'.repeat(64),
+        mutationRevision: 0,
+      })
+    ),
+    EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.SESSION_REFRESH_FAILED
+  );
+  assert.strictEqual(refreshFailureHarness.state.execs, 1);
+
+  const concurrentRevisionHarness = dependencyHarness({
+    deferFirstOpen: true,
+    execStatus: 'succeeded',
+  });
+  const concurrentRevisionExecutor = createExecutor(concurrentRevisionHarness);
+  const revisionZeroExecution = concurrentRevisionExecutor.execute(
+    sandboxRequest(),
+    brokerContext()
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(typeof concurrentRevisionHarness.state.releaseFirstOpen, 'function');
+  const revisionOneExecution = concurrentRevisionExecutor.execute(
+    refreshedRequest,
+    refreshedContext
+  );
+  concurrentRevisionHarness.state.releaseFirstOpen();
+  assert.strictEqual((await revisionZeroExecution).status, 'succeeded');
+  assert.strictEqual((await revisionOneExecution).status, 'succeeded');
+  assert.deepStrictEqual(
+    concurrentRevisionHarness.state.openInputs.map((input) => input.mutationRevision),
+    [0, 1]
+  );
+  assert.deepStrictEqual(
+    concurrentRevisionHarness.state.execInputs.map((input) => input.mutationRevision),
+    [0, 1]
+  );
+  assert.strictEqual((await concurrentRevisionExecutor.close()).ok, true);
 
   const mutableContext = { ...brokerContext() };
   await rejectedCode(

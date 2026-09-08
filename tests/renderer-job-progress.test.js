@@ -19,6 +19,10 @@ const workspaceLayoutSource = fs.readFileSync(
   path.join(__dirname, '..', 'renderer', 'styles', 'workspace-layout.css'),
   'utf8'
 );
+const appSource = fs.readFileSync(
+  path.join(__dirname, '..', 'renderer', 'app.js'),
+  'utf8'
+);
 
 function deferred() {
   let resolve;
@@ -98,6 +102,16 @@ async function run() {
     /id="btn-job-rollback-canary"[^>]*class="[^"]*hidden[^"]*"/,
     'the rollback control must be present and hidden by default'
   );
+  assert.match(
+    htmlSource,
+    /id="status-pill"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/,
+    'the global execution status must announce cancellation progress accessibly'
+  );
+  assert.match(
+    appSource,
+    /createJobProgressController\(\{[\s\S]*?api:\s*window\.localcodeApi[\s\S]*?\}\)/,
+    'the production job controller must receive the preload API explicitly'
+  );
   assert.doesNotMatch(
     rendererSource,
     /resultRecorded[^\n]*Resultado registrado/,
@@ -119,22 +133,36 @@ async function run() {
     getElementById: (id) => elements[id] || null,
   };
   const calls = [];
+  const cancelCalls = [];
+  const legacyCancelCalls = [];
   const statuses = [];
   let confirmation = false;
   let nextResponse = Promise.resolve({ ok: false, message: 'indisponível' });
+  let nextCancelResponse = Promise.resolve({ ok: true });
+  const injectedApi = {
+    cancelJob: (payload) => {
+      cancelCalls.push(payload);
+      return nextCancelResponse;
+    },
+    rollbackCanaryJob: (payload) => {
+      calls.push(payload);
+      return nextResponse;
+    },
+  };
   const windowRef = {
     api: {
-      rollbackCanaryJob: (payload) => {
-        calls.push(payload);
-        return nextResponse;
+      cancelJob: (payload) => {
+        legacyCancelCalls.push(payload);
+        return Promise.resolve({ ok: true });
       },
     },
+    FaberAppState: { lastJobContext: { jobId: 'job-stale-context' } },
     t: (_key, fallback) => fallback,
   };
   const sandbox = {
     document: documentRef,
     localStorage: { getItem: () => null, setItem: () => {} },
-    setTimeout,
+    setTimeout: (callback) => { callback(); return 1; },
     window: windowRef,
   };
   windowRef.window = windowRef;
@@ -142,7 +170,7 @@ async function run() {
 
   vm.runInNewContext(rendererSource, sandbox, { filename: 'renderer/job_progress.js' });
   const controller = windowRef.FaberJobProgress.createJobProgressController({
-    api: windowRef.api,
+    api: injectedApi,
     confirmRollback: () => confirmation,
     updateStatus: (value) => statuses.push(value),
   });
@@ -167,6 +195,45 @@ async function run() {
   });
   assert.strictEqual(cancelButton.style.display, 'none');
   assert.strictEqual(title.textContent, 'Execução bloqueada');
+
+  controller.render({
+    id: 'job-current-running',
+    status: 'running',
+    phase: 'execute_pending',
+    progress: { pct: 77 },
+    events: [],
+  });
+  await cancelButton.click();
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(cancelCalls)),
+    [{ jobId: 'job-current-running' }],
+    'the stop control must cancel the exact job rendered by the card'
+  );
+  assert.strictEqual(legacyCancelCalls.length, 0);
+
+  nextCancelResponse = Promise.resolve({ ok: false, message: 'Cancelamento recusado.' });
+  controller.render({
+    id: 'job-current-denied',
+    status: 'running',
+    phase: 'execute_pending',
+    progress: { pct: 77 },
+    events: [],
+  });
+  await cancelButton.click();
+  assert.strictEqual(statuses.at(-1), 'Cancelamento recusado.');
+  assert.strictEqual(cancelButton.disabled, false);
+  assert.strictEqual(cancelButton.textContent, 'Parar');
+
+  controller.render({
+    id: 'job-current-cancelling',
+    status: 'running',
+    phase: 'cancelling',
+    progress: { pct: 77 },
+    events: [{ type: 'job.cancellation_requested', payload: { reason: 'cancelled_by_user' } }],
+  });
+  assert.strictEqual(cancelButton.style.display, 'block');
+  assert.strictEqual(cancelButton.disabled, true);
+  assert.strictEqual(cancelButton.textContent, 'Parando...');
 
   const eligible = canaryJob('job-canary-1');
   controller.render(eligible);

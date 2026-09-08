@@ -248,6 +248,9 @@ const { createHostRequirementsService } = require('./main/services/host_requirem
 const { createCortexMemoryManagementService } = require('./main/services/cortex_memory_management_service');
 const { createMemoryEvidenceLedgerService } = require('./main/services/memory_evidence_ledger_service');
 const { createPlatformAccountService } = require('./main/services/platform_account_service');
+const {
+  createPlatformSessionEnvelopeService,
+} = require('./main/services/platform_session_envelope_service');
 const { createPlatformBackendService } = require('./main/services/platform_backend_service');
 const { createPlatformGuidanceService } = require('./main/services/platform_guidance_service');
 const { createPlatformMediaService } = require('./main/services/platform_media_service');
@@ -290,6 +293,7 @@ const {
   createAgenticProcessBrokerFactory,
 } = require('./main/services/agentic_process_broker_factory');
 const {
+  createAgenticBrowserSessionSnapshotDigest,
   createAgenticBrowserBrokerFactory,
 } = require('./main/services/agentic_browser_broker_factory');
 const {
@@ -301,8 +305,20 @@ const {
   buildAgenticResponsesToolResultInput,
 } = require('./main/services/agentic_model_tool_result_service');
 const {
+  createAgenticVisualCaptureApprovalService,
+} = require('./main/services/agentic_visual_capture_approval_service');
+const {
   createAgenticVisualEgressApprovalService,
 } = require('./main/services/agentic_visual_egress_approval_service');
+const {
+  createAgenticDeleteCancellationRecoveryAdapter,
+} = require('./main/services/agentic_delete_cancellation_recovery_adapter');
+const {
+  createAssistantRuntimeLifecycleClearService,
+} = require('./main/services/assistant_runtime_lifecycle_clear_service');
+const {
+  createAssistantRuntimeWindowLeaseGate,
+} = require('./main/services/assistant_runtime_window_lease_gate');
 const {
   createAgenticDeleteRecoveryService,
 } = require('./main/services/agentic_delete_recovery_service');
@@ -433,6 +449,7 @@ const {
   FABER_POSTGRES_SSL,
   FABER_POSTGRES_SSL_REJECT_UNAUTHORIZED,
   FABER_AUTH_DEV_CODES,
+  FABER_LOCAL_UNAUTHENTICATED,
   GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET,
   GOOGLE_REDIRECT_URI,
@@ -534,6 +551,7 @@ const {
   dirname: __dirname,
   env: process.env,
   fs,
+  isPackaged: app.isPackaged,
   normalizeAiProviderName,
   path,
   platform: process.platform,
@@ -997,41 +1015,11 @@ function getSecretStore() {
   return secretStoreInstance;
 }
 
-function signSessionPayload(payload = '') {
-  const secret = String(FABER_SESSION_SECRET || '').trim();
-  if (!secret) return '';
-  return crypto.createHmac('sha256', secret).update(String(payload || '')).digest('base64url');
-}
-
-function verifySessionSignature(payload = '', signature = '') {
-  const expected = signSessionPayload(payload);
-  const actual = String(signature || '').trim();
-  if (!expected || !actual) return false;
-  const expectedBuffer = Buffer.from(expected, 'utf8');
-  const actualBuffer = Buffer.from(actual, 'utf8');
-  return expectedBuffer.length === actualBuffer.length && crypto.timingSafeEqual(expectedBuffer, actualBuffer);
-}
-
-function createSessionFileEnvelope(sessionData = null) {
-  const payload = getSecretStore().protectSecret(JSON.stringify(sessionData || null));
-  if (!payload) return null;
-  return {
-    protected: true,
-    version: 1,
-    payload,
-    signature: signSessionPayload(payload),
-  };
-}
-
-function parseSessionFileContent(content = '') {
-  const parsed = JSON.parse(String(content || 'null'));
-  if (!parsed || parsed.protected !== true) return parsed;
-  if (!verifySessionSignature(parsed.payload, parsed.signature)) return null;
-  const unprotected = getSecretStore().unprotectSecret(parsed.payload);
-  if (!unprotected) return null;
-  return JSON.parse(unprotected);
-}
-
+const platformSessionEnvelopeService = createPlatformSessionEnvelopeService({
+  protectSecret: (value) => getSecretStore().protectSecret(value),
+  sessionSecret: FABER_SESSION_SECRET,
+  unprotectSecret: (value) => getSecretStore().unprotectSecret(value),
+});
 const aiRuntimeSettings = createAiRuntimeSettingsService({
   aiProviderEnv: AI_PROVIDER_ENV,
   fs,
@@ -1093,6 +1081,7 @@ const postgresUserStore = createPostgresUserStore({
 
 const platformAccountService = createPlatformAccountService({
   allowDevEmailCodes: FABER_AUTH_DEV_CODES,
+  allowLocalUnauthenticated: FABER_LOCAL_UNAUTHENTICATED,
   appBaseUrl: FABER_APP_BASE_URL,
   databaseUrl: FABER_DATABASE_URL,
   fetchFn: fetch,
@@ -1105,6 +1094,15 @@ const platformAccountService = createPlatformAccountService({
   githubScopes: GITHUB_SCOPES,
   platformMediaEndpoint: FABER_PLATFORM_MEDIA_ENDPOINT,
   pexelsApiKey: FABER_PLATFORM_PEXELS_API_KEY,
+  beforeProductAccessContextChange: ({ reason }) => {
+    const authorityCleanup = clearAssistantRuntimeAuthority(`account_${reason}`);
+    if (!confirmedAgenticDeleteResult(authorityCleanup)) {
+      appendAuditEvent('assistant.authority_cleanup_failed', { reason: `account_${reason}` });
+    }
+    return authorityCleanup;
+  },
+  createLocalPrincipalId: () => `local-development:${crypto.randomUUID()}`,
+  isProductAccessAuthorityReady: productAccessAuthorityReady,
   protectSecret: (value) => getSecretStore().protectSecret(value),
   sessionSecret: FABER_SESSION_SECRET,
   store: postgresUserStore,
@@ -1117,7 +1115,7 @@ const platformAccountService = createPlatformAccountService({
         return;
       }
       const sessionData = { ...session, appVersion: app.getVersion() };
-      const envelope = createSessionFileEnvelope(sessionData);
+      const envelope = platformSessionEnvelopeService.createEnvelope(sessionData);
       if (!envelope) throw new Error('Armazenamento seguro indisponivel para sessao local.');
       await fs.promises.writeFile(sessionPath, JSON.stringify(envelope, null, 2), 'utf-8');
     } catch (err) {
@@ -1129,15 +1127,10 @@ const platformAccountService = createPlatformAccountService({
       const sessionPath = path.join(app.getPath('userData'), 'fabercode_session.json');
       if (fs.existsSync(sessionPath)) {
         const content = await fs.promises.readFile(sessionPath, 'utf-8');
-        const parsedSessionFile = JSON.parse(content);
-        const loaded = parseSessionFileContent(content);
+        const loaded = platformSessionEnvelopeService.parseEnvelope(content);
         if (!loaded) {
           await fs.promises.unlink(sessionPath).catch(() => {});
           return null;
-        }
-        if (!parsedSessionFile || parsedSessionFile.protected !== true) {
-          const envelope = createSessionFileEnvelope(loaded);
-          if (envelope) await fs.promises.writeFile(sessionPath, JSON.stringify(envelope, null, 2), 'utf-8');
         }
         if (loaded && loaded.appVersion !== app.getVersion()) {
           console.log('App version mismatch. Invaliding session. Current:', app.getVersion(), 'Saved:', loaded.appVersion);
@@ -1181,13 +1174,6 @@ const platformBackendService = createPlatformBackendService({
   host: FABER_BACKEND_HOST,
   mediaService: platformMediaService,
   onAuthCompleted: () => {
-    const authorityCleanup = clearAssistantRuntimeAuthority('account_signed_in');
-    rotateAgenticDeleteActorId();
-    if (!confirmedAgenticDeleteResult(authorityCleanup)) {
-      appendAuditEvent('assistant.authority_cleanup_failed', {
-        reason: 'account_signed_in',
-      });
-    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
@@ -1281,7 +1267,6 @@ const AGENTIC_DELETE_BINDING_FIELDS = Object.freeze([
 const AGENTIC_DELETE_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const AGENTIC_DELETE_ACTOR_ID_PATTERN = /^[A-Za-z0-9._:@-]{1,256}$/;
 
-let agenticDeleteActorId = `main-process:${crypto.randomUUID()}`;
 let agenticDeleteReleaseBinding = null;
 let agenticDeleteMutationBackendSelection = null;
 let agenticDeleteRuntimeServiceInstance = null;
@@ -1293,11 +1278,17 @@ let agenticMcpDiscoveryBrokerFactoryInstance = null;
 let agenticMcpToolBrokerFactoryInstance = null;
 let agenticMcpWriteApprovalServiceInstance = null;
 let agenticProcessBrokerFactoryInstance = null;
+let agenticVisualCaptureApprovalServiceInstance = null;
 let agenticVisualEgressApprovalServiceInstance = null;
 let agenticDeleteStartupRecoveryHealthy = false;
 let assistantExecutionCoordinatorInstance = null;
 let assistantJobAuthorityServiceInstance = null;
-let assistantRuntimeLifecycleReason = null;
+let assistantRuntimeLifecycleClearServiceInstance = null;
+const assistantRuntimeWindowLeaseGateInstance =
+  createAssistantRuntimeWindowLeaseGate();
+let assistantRuntimeWindowLeaseEpochToken = null;
+let assistantRuntimeWindowLeaseWindowToken = Object.freeze(Object.create(null));
+let assistantRuntimeWindowLeaseCandidateToken = null;
 let canaryEditProductionRuntimeInstance = null;
 let portableIsolationHelperActivationRuntime = null;
 let portableIsolationHelperProviderSelection = null;
@@ -1305,23 +1296,18 @@ let executionIsolationRuntimeServices = null;
 let portableIsolationHelperShutdownPromise = null;
 let portableIsolationHelperShutdownComplete = false;
 
-function rotateAgenticDeleteActorId() {
-  agenticDeleteActorId = `main-process:${crypto.randomUUID()}`;
-  return agenticDeleteActorId;
-}
-
 function getAgenticDeleteActorId() {
   try {
-    const session = platformAccountService.getCurrentSession();
-    const user = readAgenticDeleteDataProperty(session, 'user');
-    const userId = readAgenticDeleteDataProperty(user, 'id');
-    if (typeof userId === 'string' && AGENTIC_DELETE_ACTOR_ID_PATTERN.test(userId)) {
-      return userId;
+    const principal = platformAccountService.getProductAccessPrincipal();
+    const kind = readAgenticDeleteDataProperty(principal, 'kind');
+    const actorId = readAgenticDeleteDataProperty(principal, 'actorId');
+    if ((kind === 'account' || kind === 'local_development')
+      && typeof actorId === 'string'
+      && AGENTIC_DELETE_ACTOR_ID_PATTERN.test(actorId)) {
+      return actorId;
     }
-  } catch {
-    // The process-local actor remains the fail-closed identity fallback.
-  }
-  return agenticDeleteActorId;
+  } catch {}
+  return null;
 }
 
 function assistantRecoveryRequiredResult() {
@@ -1390,6 +1376,28 @@ const {
   writeProjectsSnapshot,
 } = projectStore;
 
+function isAssistantRecoveryProjectRegistered(input = {}) {
+  const projectId = readAgenticDeleteDataProperty(input, 'projectId');
+  const rootPath = readAgenticDeleteDataProperty(input, 'rootPath');
+  if (typeof projectId !== 'string' || !projectId
+    || typeof rootPath !== 'string' || !rootPath) {
+    return false;
+  }
+  try {
+    const snapshot = readProjectsSnapshot();
+    const projects = readAgenticDeleteDataProperty(snapshot, 'projects');
+    if (!Array.isArray(projects)) return false;
+    const matches = projects.filter((project) => (
+      readAgenticDeleteDataProperty(project, 'id') === projectId
+      && readAgenticDeleteDataProperty(project, 'rootPath') === rootPath
+      && readAgenticDeleteDataProperty(project, 'state') !== 'deleted'
+    ));
+    return matches.length === 1;
+  } catch {
+    return false;
+  }
+}
+
 const orchestrationStateStore = createOrchestrationStateStore({
   CORTEX_BRIEFING_MAX_RETRIES,
   CORTEX_VALIDATION_MAX_RETRIES,
@@ -1408,6 +1416,7 @@ const orchestrationStateStore = createOrchestrationStateStore({
   computeRetryBackoffMs,
   fs,
   getUserDataPath: () => app.getPath("userData"),
+  isAuthorizedRecoveryProject: isAssistantRecoveryProjectRegistered,
   isNonRetriableProviderReason,
   onJobTerminal: observeAssistantJobTerminal,
   path,
@@ -1432,8 +1441,11 @@ const {
   markJobApprovalExpired,
   markJobCanaryRolledBack,
   markJobBlocked,
+  markJobCancellationRequested,
   markJobCancelled,
+  markJobCancelledAfterCleanup,
   markJobCompleted,
+  markJobExecutionCleanupFailed,
   markJobFailed,
   markJobAwaitingUserInput,
   markJobPausedForMemory,
@@ -5412,6 +5424,7 @@ function normalizeAssistantAgenticValidationEvidence(raw = {}) {
       opened: browserEvidence.opened === true,
       captured: browserEvidence.captured === true,
       inspected: browserEvidence.inspected === true,
+      visualDelivered: browserEvidence.visualDelivered === true,
     },
   };
 }
@@ -5421,7 +5434,12 @@ function normalizeAssistantAgenticTerminalEvidence(raw = {}) {
     return null;
   }
   const allowedProcessChecks = new Set(['lint', 'tests', 'build']);
-  const allowedBrowserChecks = new Set(['opened', 'inspected', 'captured']);
+  const allowedBrowserChecks = new Set([
+    'opened',
+    'inspected',
+    'captured',
+    'visual_delivered',
+  ]);
   const normalizeList = (values, allowed, maxItems = 12) => Array.from(new Set(
     (Array.isArray(values) ? values : [])
       .map((value) => String(value || '').trim())
@@ -5475,16 +5493,23 @@ function buildAssistantAgenticValidationFields(
   const validationEvidence = normalizeAssistantAgenticValidationEvidence(rawEvidence);
   const terminalEvidence = normalizeAssistantAgenticTerminalEvidence(rawTerminalEvidence);
   const successfulChecks = new Set(validationEvidence.process.successfulChecks);
+  const failedChecks = new Set([
+    ...validationEvidence.process.failedChecks,
+    ...(terminalEvidence ? terminalEvidence.failed.process : []),
+  ]);
   const successfulBrowserChecks = new Set([
     ...(terminalEvidence ? terminalEvidence.satisfied.browser : []),
     ...(validationEvidence.browser.opened ? ['opened'] : []),
     ...(validationEvidence.browser.inspected ? ['inspected'] : []),
     ...(validationEvidence.browser.captured ? ['captured'] : []),
+    ...(validationEvidence.browser.visualDelivered ? ['visual_delivered'] : []),
   ]);
   let pendingChecks;
-  if (terminalEvidence && fileMutationApplied !== true) {
+  if (terminalEvidence) {
     pendingChecks = terminalEvidence.required.process.filter(
-      (check) => !successfulChecks.has(check)
+      (check) => (
+        !successfulChecks.has(check) && !failedChecks.has(check)
+      )
     );
     if (terminalEvidence.required.browser.some(
       (check) => !successfulBrowserChecks.has(check)
@@ -5495,7 +5520,7 @@ function buildAssistantAgenticValidationFields(
     pendingChecks = PROCESS_EXECUTION_PENDING_CHECKS.filter((check) => (
       check === 'preview'
         ? !validationEvidence.browser.captured
-        : !successfulChecks.has(check)
+        : !successfulChecks.has(check) && !failedChecks.has(check)
     ));
   }
   pendingChecks = Array.from(new Set(pendingChecks));
@@ -5504,12 +5529,13 @@ function buildAssistantAgenticValidationFields(
   );
   const validationVerified = terminalSucceeded
     && pendingChecks.length === 0
-    && validationEvidence.process.failedChecks.length === 0;
+    && failedChecks.size === 0;
+  const validationPending = pendingChecks.length > 0;
   return {
     verified: validationVerified,
     validationVerified,
-    validationPending: !validationVerified,
-    validationPendingReason: validationVerified ? null : AGENTIC_VALIDATION_INCOMPLETE_REASON,
+    validationPending,
+    validationPendingReason: validationPending ? AGENTIC_VALIDATION_INCOMPLETE_REASON : null,
     validationPendingChecks: pendingChecks,
     processExecutionPolicy: ASSISTANT_PROCESS_EXECUTION_POLICY,
     processExecutionPerformed: validationEvidence.process.performed,
@@ -5764,6 +5790,95 @@ let mainWindowDocumentLease = null;
 let ipcSecurityInstance = null;
 let projectAccessInstance = null;
 
+function beginAssistantRuntimeWindowLeaseClear(windowToken) {
+  mainWindowDocumentLease = null;
+  const begun = assistantRuntimeWindowLeaseGateInstance.beginClear(windowToken);
+  const epochToken = readAgenticDeleteDataProperty(begun, 'epochToken');
+  assistantRuntimeWindowLeaseEpochToken = epochToken;
+  if (!epochToken) return null;
+
+  const candidateToken = assistantRuntimeWindowLeaseCandidateToken;
+  if (candidateToken && trustedMainDocumentIsCurrent()) {
+    const registered = assistantRuntimeWindowLeaseGateInstance.didFinish(
+      epochToken,
+      windowToken,
+      candidateToken
+    );
+    if (!registered || registered.ok !== true) {
+      assistantRuntimeWindowLeaseCandidateToken = null;
+    }
+  }
+  return epochToken;
+}
+
+function concludeAssistantRuntimeWindowLeaseClear(
+  targetEpochToken,
+  lifecycleResult
+) {
+  let lifecycleDiagnostics = null;
+  try {
+    lifecycleDiagnostics = assistantRuntimeLifecycleClearServiceInstance
+      ? assistantRuntimeLifecycleClearServiceInstance.diagnostics()
+      : null;
+  } catch {
+    lifecycleDiagnostics = null;
+  }
+  const concluded = assistantRuntimeWindowLeaseGateInstance.concludeClear(
+    targetEpochToken,
+    lifecycleResult,
+    lifecycleDiagnostics
+  );
+  if (targetEpochToken !== assistantRuntimeWindowLeaseEpochToken) return false;
+  if (!concluded || concluded.ok !== true || concluded.status !== 'ready') {
+    mainWindowDocumentLease = null;
+    return false;
+  }
+  return mintAssistantRuntimeWindowLeaseIfReady();
+}
+
+function mintAssistantRuntimeWindowLeaseIfReady(win = mainWindow) {
+  if (!trustedMainDocumentIsCurrent(win)) {
+    mainWindowDocumentLease = null;
+    return false;
+  }
+  const issued = assistantRuntimeWindowLeaseGateInstance.issueLease(
+    assistantRuntimeWindowLeaseEpochToken,
+    assistantRuntimeWindowLeaseWindowToken,
+    assistantRuntimeWindowLeaseCandidateToken
+  );
+  const leaseToken = readAgenticDeleteDataProperty(issued, 'leaseToken');
+  if (!issued || issued.ok !== true || !leaseToken) {
+    mainWindowDocumentLease = null;
+    return false;
+  }
+  mainWindowDocumentLease = leaseToken;
+  return true;
+}
+
+function registerAssistantRuntimeDocumentCandidate(win = mainWindow) {
+  if (!trustedMainDocumentIsCurrent(win)) {
+    mainWindowDocumentLease = null;
+    return false;
+  }
+  const candidateToken = Object.freeze(Object.create(null));
+  assistantRuntimeWindowLeaseCandidateToken = candidateToken;
+  const registered = assistantRuntimeWindowLeaseGateInstance.didFinish(
+    assistantRuntimeWindowLeaseEpochToken,
+    assistantRuntimeWindowLeaseWindowToken,
+    candidateToken
+  );
+  if (!registered || registered.ok !== true) {
+    mainWindowDocumentLease = null;
+    return false;
+  }
+  return mintAssistantRuntimeWindowLeaseIfReady(win);
+}
+
+function invalidateAssistantRuntimeDocumentCandidate() {
+  assistantRuntimeWindowLeaseCandidateToken = null;
+  mainWindowDocumentLease = null;
+}
+
 function trustedMainDocumentIsCurrent(win = mainWindow) {
   try {
     return Boolean(
@@ -5782,7 +5897,54 @@ function trustedMainDocumentIsCurrent(win = mainWindow) {
 }
 
 function getAgenticDeleteWindowLease() {
-  return trustedMainDocumentIsCurrent() ? mainWindowDocumentLease : null;
+  if (!trustedMainDocumentIsCurrent() || !mainWindowDocumentLease) return null;
+  const consumed = assistantRuntimeWindowLeaseGateInstance.consumeLease(
+    assistantRuntimeWindowLeaseEpochToken,
+    assistantRuntimeWindowLeaseWindowToken,
+    assistantRuntimeWindowLeaseCandidateToken
+  );
+  const consumedLease = readAgenticDeleteDataProperty(consumed, 'leaseToken');
+  if (!consumed || consumed.ok !== true
+    || consumedLease !== mainWindowDocumentLease) {
+    mainWindowDocumentLease = null;
+    return null;
+  }
+  return consumedLease;
+}
+
+function productAccessAuthorityReady() {
+  return Boolean(trustedMainDocumentIsCurrent() && getAgenticDeleteWindowLease());
+}
+
+function authorizeAssistantProductAccess() {
+  if (!productAccessAuthorityReady()) return null;
+  try {
+    return platformAccountService.getProductAccessPrincipal();
+  } catch {
+    return null;
+  }
+}
+
+function authorizeAssistantIpcAccess(event) {
+  try {
+    if (!event || !mainWindow || mainWindow.isDestroyed()
+      || !mainWindow.webContents || mainWindow.webContents.isDestroyed()
+      || event.sender !== mainWindow.webContents
+      || event.senderFrame !== mainWindow.webContents.mainFrame) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return authorizeAssistantProductAccess();
+}
+
+function assistantProductAccessDeniedResult() {
+  return Object.freeze({
+    ok: false,
+    code: 'assistant_access_denied',
+    message: 'Autenticação da conta ou modo local de desenvolvimento necessário.',
+  });
 }
 
 function invalidateAgenticDeleteWindow(reason = 'window_invalidated') {
@@ -5843,44 +6005,57 @@ async function showAgenticDeleteNativeDialog(payload, dialogContext) {
 }
 
 function clearAssistantRuntimeAuthority(reason = 'runtime_lifecycle_changed') {
+  const lifecycleWindowToken = assistantRuntimeWindowLeaseWindowToken;
+  const lifecycleEpochToken = beginAssistantRuntimeWindowLeaseClear(
+    lifecycleWindowToken
+  );
+  if (assistantRuntimeLifecycleClearServiceInstance) {
+    const result = assistantRuntimeLifecycleClearServiceInstance.clear(reason);
+    concludeAssistantRuntimeWindowLeaseClear(
+      lifecycleEpochToken,
+      result
+    );
+    return result;
+  }
+
   const windowInvalidation = invalidateAgenticDeleteWindow(reason);
   for (const jobId of activeExecutionControllersByJobId.keys()) {
     abortActiveJobExecution(jobId, reason);
   }
   activeExecutionControllersByJobId.clear();
   activeAgenticExecutionSignalsByJobId.clear();
-  assistantRuntimeLifecycleReason = reason;
-  try {
-    const visualEgressResult = agenticVisualEgressApprovalServiceInstance
-      ? agenticVisualEgressApprovalServiceInstance.clear()
-      : Object.freeze({ ok: true });
-    const mcpWriteApprovalResult = agenticMcpWriteApprovalServiceInstance
-      ? agenticMcpWriteApprovalServiceInstance.clear()
-      : Object.freeze({ ok: true });
-    const browserSessionResult = agenticBrowserSessionServiceInstance
-      ? agenticBrowserSessionServiceInstance.clear()
-      : Object.freeze({ ok: true });
-    const coordinatorResult = assistantExecutionCoordinatorInstance
-      ? assistantExecutionCoordinatorInstance.clear()
-      : Object.freeze({ ok: true, cleared: 0 });
-    const runtimeResult = agenticDeleteRuntimeServiceInstance
-      ? agenticDeleteRuntimeServiceInstance.clear()
-      : Object.freeze({ ok: true });
-    const cleared = Number.isSafeInteger(
-      readAgenticDeleteDataProperty(coordinatorResult, 'cleared')
-    ) ? readAgenticDeleteDataProperty(coordinatorResult, 'cleared') : 0;
-    return Object.freeze({
-      ok: confirmedAgenticDeleteResult(windowInvalidation)
-        && confirmedAgenticDeleteResult(visualEgressResult)
-        && confirmedAgenticDeleteResult(mcpWriteApprovalResult)
-        && confirmedAgenticDeleteResult(browserSessionResult)
-        && confirmedAgenticDeleteResult(coordinatorResult)
-        && confirmedAgenticDeleteResult(runtimeResult),
-      cleared,
-    });
-  } finally {
-    assistantRuntimeLifecycleReason = null;
-  }
+  const visualEgressResult = agenticVisualEgressApprovalServiceInstance
+    ? agenticVisualEgressApprovalServiceInstance.clear()
+    : Object.freeze({ ok: true });
+  const visualCaptureResult = agenticVisualCaptureApprovalServiceInstance
+    ? agenticVisualCaptureApprovalServiceInstance.clear()
+    : Object.freeze({ ok: true });
+  const mcpWriteApprovalResult = agenticMcpWriteApprovalServiceInstance
+    ? agenticMcpWriteApprovalServiceInstance.clear()
+    : Object.freeze({ ok: true });
+  const browserSessionResult = agenticBrowserSessionServiceInstance
+    ? agenticBrowserSessionServiceInstance.clear()
+    : Object.freeze({ ok: true });
+  const coordinatorResult = assistantExecutionCoordinatorInstance
+    ? assistantExecutionCoordinatorInstance.clear()
+    : Object.freeze({ ok: true, cleared: 0 });
+  const runtimeResult = agenticDeleteRuntimeServiceInstance
+    ? agenticDeleteRuntimeServiceInstance.clear()
+    : Object.freeze({ ok: true });
+  const cleared = Number.isSafeInteger(
+    readAgenticDeleteDataProperty(coordinatorResult, 'cleared')
+  ) ? readAgenticDeleteDataProperty(coordinatorResult, 'cleared') : 0;
+  const result = Object.freeze({
+    ok: confirmedAgenticDeleteResult(windowInvalidation)
+      && confirmedAgenticDeleteResult(visualEgressResult)
+      && confirmedAgenticDeleteResult(visualCaptureResult)
+      && confirmedAgenticDeleteResult(mcpWriteApprovalResult)
+      && confirmedAgenticDeleteResult(browserSessionResult)
+      && confirmedAgenticDeleteResult(coordinatorResult)
+      && confirmedAgenticDeleteResult(runtimeResult),
+    cleared,
+  });
+  return result;
 }
 
 function getIpcSecurity() {
@@ -6320,6 +6495,126 @@ function authorizeAgenticVisualEgressRoot(inputBinding) {
   return Object.freeze({ authorized: true, binding });
 }
 
+function authorizeAgenticVisualCaptureFrontier(input) {
+  const binding = currentAgenticDeleteBinding(
+    readAgenticDeleteDataProperty(input, 'binding')
+  );
+  const windowLease = readAgenticDeleteDataProperty(input, 'windowLease');
+  const browserSessionId = readAgenticDeleteDataProperty(input, 'browserSessionId');
+  const browserSessionSnapshotDigest = readAgenticDeleteDataProperty(
+    input,
+    'browserSessionSnapshotDigest'
+  );
+  const callId = readAgenticDeleteDataProperty(input, 'callId');
+  const invocationId = readAgenticDeleteDataProperty(input, 'invocationId');
+  const requestDigest = readAgenticDeleteDataProperty(input, 'requestDigest');
+  const safeId = (value) => typeof value === 'string'
+    && /^[A-Za-z0-9._:@-]{1,256}$/.test(value);
+  const signal = binding ? getActiveAgenticExecutionSignal(binding) : null;
+  if (!binding || !windowLease || windowLease !== getAgenticDeleteWindowLease()
+    || !safeId(browserSessionId) || !safeId(callId) || !safeId(invocationId)
+    || !AGENTIC_DELETE_DIGEST_PATTERN.test(String(browserSessionSnapshotDigest || ''))
+    || !AGENTIC_DELETE_DIGEST_PATTERN.test(String(requestDigest || ''))
+    || !signal || !agenticBrowserSessionServiceInstance) {
+    return Object.freeze({ authorized: false });
+  }
+  let inspected;
+  try {
+    inspected = agenticBrowserSessionServiceInstance.inspect(Object.freeze({
+      jobId: binding.jobId,
+      sessionId: browserSessionId,
+    }));
+  } catch {
+    inspected = null;
+  }
+  const inspectedSession = readAgenticDeleteDataProperty(inspected, 'session');
+  const actualSnapshotDigest = readAgenticDeleteDataProperty(inspected, 'ok') === true
+    ? createAgenticBrowserSessionSnapshotDigest(inspectedSession, browserSessionId)
+    : '';
+  const finalBinding = currentAgenticDeleteBinding(binding);
+  const finalSignal = finalBinding ? getActiveAgenticExecutionSignal(finalBinding) : null;
+  if (!actualSnapshotDigest
+    || actualSnapshotDigest !== browserSessionSnapshotDigest
+    || !finalBinding || finalSignal !== signal || signal.aborted
+    || windowLease !== getAgenticDeleteWindowLease()) {
+    return Object.freeze({ authorized: false });
+  }
+  return Object.freeze({
+    authorized: true,
+    binding: finalBinding,
+    windowLease,
+    browserSessionId,
+    browserSessionSnapshotDigest,
+    callId,
+    invocationId,
+    requestDigest,
+  });
+}
+
+function recordAgenticVisualCaptureApprovalEvent(jobId, type, payload) {
+  try {
+    const result = appendJobEvent(jobId, type, payload);
+    return Object.freeze({
+      ok: readAgenticDeleteDataProperty(result, 'ok') === true,
+    });
+  } catch {
+    return Object.freeze({ ok: false });
+  }
+}
+
+function requestAgenticVisualCaptureApproval(input) {
+  const service = agenticVisualCaptureApprovalServiceInstance;
+  const binding = currentAgenticDeleteBinding(
+    readAgenticDeleteDataProperty(input, 'binding')
+  );
+  if (!service || !binding) {
+    return Promise.resolve(Object.freeze({
+      ok: false,
+      approved: false,
+      reason: 'visual_capture_unavailable',
+    }));
+  }
+  return service.requestApproval(Object.freeze({
+    binding,
+    browserSessionId: readAgenticDeleteDataProperty(input, 'browserSessionId'),
+    browserSessionSnapshotDigest: readAgenticDeleteDataProperty(
+      input,
+      'browserSessionSnapshotDigest'
+    ),
+    callId: readAgenticDeleteDataProperty(input, 'callId'),
+    invocationId: readAgenticDeleteDataProperty(input, 'invocationId'),
+    requestDigest: readAgenticDeleteDataProperty(input, 'requestDigest'),
+    projectLabel: getAgenticDeleteProjectLabel(binding),
+  }));
+}
+
+function consumeAgenticVisualCaptureApproval(input) {
+  const service = agenticVisualCaptureApprovalServiceInstance;
+  const binding = currentAgenticDeleteBinding(
+    readAgenticDeleteDataProperty(input, 'binding')
+  );
+  if (!service || !binding) {
+    return Object.freeze({
+      ok: false,
+      authorized: false,
+      reason: 'visual_capture_unavailable',
+    });
+  }
+  return service.consumeApproval(Object.freeze({
+    binding,
+    browserSessionId: readAgenticDeleteDataProperty(input, 'browserSessionId'),
+    browserSessionSnapshotDigest: readAgenticDeleteDataProperty(
+      input,
+      'browserSessionSnapshotDigest'
+    ),
+    callId: readAgenticDeleteDataProperty(input, 'callId'),
+    invocationId: readAgenticDeleteDataProperty(input, 'invocationId'),
+    requestDigest: readAgenticDeleteDataProperty(input, 'requestDigest'),
+    projectLabel: getAgenticDeleteProjectLabel(binding),
+    receipt: readAgenticDeleteDataProperty(input, 'receipt'),
+  }));
+}
+
 function authorizeAgenticVisualEgressFrontier(input) {
   const binding = currentAgenticDeleteBinding(
     readAgenticDeleteDataProperty(input, 'binding')
@@ -6651,6 +6946,10 @@ function createWindow() {
     },
   });
   mainWindow = win;
+  assistantRuntimeWindowLeaseEpochToken = null;
+  assistantRuntimeWindowLeaseWindowToken = Object.freeze(Object.create(null));
+  assistantRuntimeWindowLeaseCandidateToken = null;
+  mainWindowDocumentLease = null;
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     const externalUrl = normalizeExternalUrl(url);
@@ -6666,6 +6965,7 @@ function createWindow() {
   });
   win.webContents.on('did-start-navigation', (_event, _url, _isInPlace, isMainFrame) => {
     if (isMainFrame && mainWindow === win) {
+      invalidateAssistantRuntimeDocumentCandidate();
       clearAssistantRuntimeAuthority('renderer_navigation');
     }
   });
@@ -6673,14 +6973,23 @@ function createWindow() {
     if (mainWindow === win
       && trustedMainDocumentIsCurrent(win)
       && win.webContents.getURL() === pathToFileURL(mainDocumentPath).href) {
-      mainWindowDocumentLease = Object.freeze(Object.create(null));
+      const accessReady = registerAssistantRuntimeDocumentCandidate(win);
+      if (accessReady && !win.webContents.isDestroyed()) {
+        win.webContents.send('account:event', { type: 'access-context-ready' });
+      }
     }
   });
   win.webContents.on('render-process-gone', () => {
-    if (mainWindow === win) clearAssistantRuntimeAuthority('renderer_process_gone');
+    if (mainWindow === win) {
+      invalidateAssistantRuntimeDocumentCandidate();
+      clearAssistantRuntimeAuthority('renderer_process_gone');
+    }
   });
   win.webContents.on('destroyed', () => {
-    if (mainWindow === win) clearAssistantRuntimeAuthority('renderer_destroyed');
+    if (mainWindow === win) {
+      invalidateAssistantRuntimeDocumentCandidate();
+      clearAssistantRuntimeAuthority('renderer_destroyed');
+    }
   });
 
   win.loadFile(mainDocumentPath);
@@ -6692,6 +7001,7 @@ function createWindow() {
   });
   win.on('closed', () => {
     if (mainWindow === win) {
+      invalidateAssistantRuntimeDocumentCandidate();
       clearAssistantRuntimeAuthority('window_closed');
       mainWindow = null;
     }
@@ -7144,13 +7454,6 @@ app.whenReady().then(async () => {
     accountService: platformAccountService,
     appendAuditEvent,
     emitAccountEvent: (payload) => {
-      if (payload && payload.type === 'signed-out') {
-        clearAssistantRuntimeAuthority('account_signed_out');
-        rotateAgenticDeleteActorId();
-      } else if (payload && payload.type === 'signed-in') {
-        clearAssistantRuntimeAuthority('account_signed_in');
-        rotateAgenticDeleteActorId();
-      }
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('account:event', payload);
       }
@@ -7296,7 +7599,9 @@ app.whenReady().then(async () => {
     return { ok: true, maximized: targetWindow.isMaximized() };
   });
 
-  registerIpcHandler('assistant:route', async (_, payload) => {
+  registerIpcHandler('assistant:route', async (event, payload) => {
+    const principal = authorizeAssistantIpcAccess(event);
+    if (!principal) return assistantProductAccessDeniedResult();
     const { projectInfo, userMessage, attachments, contextHint, conversationMessages } = payload || {};
     const project = normalizeAuthorizedProjectInfo(projectInfo);
     if (!project.ok) return project;
@@ -7626,6 +7931,10 @@ app.whenReady().then(async () => {
             enumerable: false,
             value: (processInput) => processRoute.execute(Object.freeze({
               command: readAgenticDeleteDataProperty(processInput, 'command'),
+              mutationRevision: readAgenticDeleteDataProperty(
+                processInput,
+                'mutationRevision'
+              ),
               args: readAgenticDeleteDataProperty(processInput, 'args'),
               timeoutMs: readAgenticDeleteDataProperty(processInput, 'timeoutMs'),
             })),
@@ -7702,6 +8011,8 @@ app.whenReady().then(async () => {
             enumerable: false,
             value: (browserInput) => browserRoute.capture(Object.freeze({
               sessionId: readAgenticDeleteDataProperty(browserInput, 'sessionId'),
+              callId: readAgenticDeleteDataProperty(browserInput, 'callId'),
+              invocationId: readAgenticDeleteDataProperty(browserInput, 'invocationId'),
             })),
             writable: false,
           });
@@ -7767,6 +8078,15 @@ app.whenReady().then(async () => {
             }
           } catch {
             // A terminal job cannot retain unused MCP write approval receipts.
+          }
+          try {
+            if (browserBinding && agenticVisualCaptureApprovalServiceInstance) {
+              agenticVisualCaptureApprovalServiceInstance.cancelJob(Object.freeze({
+                binding: browserBinding,
+              }));
+            }
+          } catch {
+            // A terminal job cannot retain one-shot capture approval authority.
           }
           try {
             if (browserBinding && agenticVisualEgressApprovalServiceInstance) {
@@ -8431,7 +8751,6 @@ app.whenReady().then(async () => {
       if (error && error.code === 'job_cancelled') {
         if (jobId) {
           abortActiveJobExecution(jobId, 'cancelled_by_user');
-          markJobCancelled(jobId, 'cancelled_by_user');
         }
         appendAuditEvent('assistant.execute_cancelled', {
           rootPath: projectInfo ? projectInfo.rootPath : null,
@@ -8513,11 +8832,18 @@ app.whenReady().then(async () => {
       audit: (event) => appendAuditEvent('assistant.agentic_delete_recovery', event),
     })
     : null;
+  const agenticDeleteCancellationRecoveryAdapter = agenticDeleteRecoveryService
+    ? createAgenticDeleteCancellationRecoveryAdapter({
+      getAuthorizedJobById,
+      recoverJob: agenticDeleteRecoveryService.recoverJob,
+      markJobCancelledAfterCleanup,
+    })
+    : null;
   const agenticDeleteStartupRecoveryService = createAgenticDeleteStartupRecoveryService({
     recoverInterruptedJobs,
     listAuthorizedJobRecoveryCandidates,
-    recoverJob: agenticDeleteRecoveryService
-      ? agenticDeleteRecoveryService.recoverJob
+    recoverJob: agenticDeleteCancellationRecoveryAdapter
+      ? agenticDeleteCancellationRecoveryAdapter.recoverJob
       : () => Object.freeze({ ok: false }),
     audit: (event) => appendAuditEvent('assistant.agentic_delete_startup_recovery', event),
   });
@@ -8572,6 +8898,16 @@ app.whenReady().then(async () => {
     authorizeRequest: authorizeAgenticBrowserRequest,
   });
   agenticBrowserSessionServiceInstance = agenticBrowserSessionService;
+  const agenticVisualCaptureApprovalService = createAgenticVisualCaptureApprovalService({
+    showNativeDialog: showAgenticDeleteNativeDialog,
+    authorizeLifecycle: authorizeAgenticDeleteLifecycle,
+    authorizeRoot: authorizeAgenticDeleteRoot,
+    authorizeCaptureFrontier: authorizeAgenticVisualCaptureFrontier,
+    getWindowLease: getAgenticDeleteWindowLease,
+    recordJobEvent: recordAgenticVisualCaptureApprovalEvent,
+    getSignal: getActiveAgenticExecutionSignal,
+  });
+  agenticVisualCaptureApprovalServiceInstance = agenticVisualCaptureApprovalService;
   const agenticBrowserGrantStore = createCapabilityGrantStore({
     authorizeRoot: authorizeAgenticDeleteRoot,
     platform: process.platform,
@@ -8593,6 +8929,8 @@ app.whenReady().then(async () => {
     grantStore: agenticBrowserGrantStore,
     pendingApprovalStore: agenticBrowserPendingApprovalStore,
     approvalReviewer: agenticBrowserApprovalReviewer,
+    requestCaptureApproval: requestAgenticVisualCaptureApproval,
+    consumeCaptureApproval: consumeAgenticVisualCaptureApproval,
     getSignal: getActiveAgenticExecutionSignal,
     audit: (event) => appendAuditEvent('assistant.agentic_browser_capability', event),
   });
@@ -8698,17 +9036,113 @@ app.whenReady().then(async () => {
       }
       return harnessRouter.execute(action, projectInfo, executionContext);
     },
+    onCancellationRequested: (jobId, reason) => {
+      const requested = assistantRuntimeLifecycleClearServiceInstance
+        ? assistantRuntimeLifecycleClearServiceInstance.requestCancellation(jobId, reason)
+        : markJobCancellationRequested(jobId, reason);
+      return Object.freeze({ ok: Boolean(requested && requested.ok === true) });
+    },
     onAuthorityRevoked: (jobId, reason) => {
       abortActiveJobExecution(jobId, reason);
-      if (assistantRuntimeLifecycleReason) {
-        markJobCancelled(jobId, assistantRuntimeLifecycleReason);
-      }
+    },
+    onExecutionCleanupConfirmed: (proof) => {
+      const finalized = assistantRuntimeLifecycleClearServiceInstance
+        ? assistantRuntimeLifecycleClearServiceInstance.confirmExecutionCleanup(proof)
+        : Object.freeze({ ok: false });
+      return Object.freeze({ ok: Boolean(finalized && finalized.ok === true) });
+    },
+    onExecutionCleanupFailed: (failure) => {
+      const failed = assistantRuntimeLifecycleClearServiceInstance
+        ? assistantRuntimeLifecycleClearServiceInstance.failExecutionCleanup(failure)
+        : Object.freeze({ ok: false });
+      return Object.freeze({ ok: Boolean(failed && failed.ok === true) });
     },
     onPlanningFailure: (jobId, reason) => {
       markJobFailed(jobId, reason, 'assistant_planning_failed');
     },
   });
   assistantExecutionCoordinatorInstance = assistantExecutionCoordinator;
+  assistantRuntimeLifecycleClearServiceInstance =
+    createAssistantRuntimeLifecycleClearService({
+      invalidateWindow(reason) {
+        let windowConfirmed = false;
+        try {
+          windowConfirmed = confirmedAgenticDeleteResult(
+            invalidateAgenticDeleteWindow(reason)
+          );
+        } finally {
+          for (const jobId of activeExecutionControllersByJobId.keys()) {
+            abortActiveJobExecution(jobId, reason);
+          }
+          activeExecutionControllersByJobId.clear();
+          activeAgenticExecutionSignalsByJobId.clear();
+        }
+        return Object.freeze({ ok: windowConfirmed });
+      },
+      clearPeripheralAuthority() {
+        let cleared = true;
+        for (const authorityService of [
+          agenticVisualCaptureApprovalServiceInstance,
+          agenticVisualEgressApprovalServiceInstance,
+          agenticMcpWriteApprovalServiceInstance,
+          agenticBrowserSessionServiceInstance,
+        ]) {
+          if (!authorityService) continue;
+          try {
+            cleared = confirmedAgenticDeleteResult(authorityService.clear()) && cleared;
+          } catch {
+            cleared = false;
+          }
+        }
+        return Object.freeze({ ok: cleared });
+      },
+      clearCoordinator() {
+        return assistantExecutionCoordinator.clear();
+      },
+      clearDeleteRuntime() {
+        return agenticDeleteRuntimeServiceInstance
+          ? agenticDeleteRuntimeServiceInstance.clear()
+          : Object.freeze({ ok: true });
+      },
+      markCancellationRequested(jobId, reason) {
+        const requested = markJobCancellationRequested(jobId, reason);
+        return Object.freeze({ ok: Boolean(requested && requested.ok === true) });
+      },
+      markCancelledAfterCleanup(jobId, receipt) {
+        const cancelled = markJobCancelledAfterCleanup(jobId, receipt);
+        return Object.freeze({ ok: Boolean(cancelled && cancelled.ok === true) });
+      },
+      markExecutionCleanupFailed(jobId, reason) {
+        const failed = markJobExecutionCleanupFailed(jobId, reason);
+        return Object.freeze({ ok: Boolean(failed && failed.ok === true) });
+      },
+      scheduleContinuation(continuation) {
+        const scheduledEpochToken = assistantRuntimeWindowLeaseEpochToken;
+        queueMicrotask(() => {
+          try {
+            const continuationResult = continuation();
+            concludeAssistantRuntimeWindowLeaseClear(
+              scheduledEpochToken,
+              continuationResult
+            );
+          } catch {
+            concludeAssistantRuntimeWindowLeaseClear(
+              scheduledEpochToken,
+              Object.freeze({
+                ok: false,
+                status: 'failed',
+                code: 'lifecycle_clear_continuation_failed',
+                deferred: false,
+                idempotent: false,
+              })
+            );
+            appendAuditEvent('assistant.authority_cleanup_failed', {
+              reason: 'lifecycle_clear_continuation_failed',
+            });
+          }
+        });
+      },
+    });
   const pendingApprovalStartupRecovery =
     restoreAssistantPendingApprovalsAtStartup(assistantExecutionCoordinator);
   if (!pendingApprovalStartupRecovery.ok
@@ -8831,6 +9265,7 @@ app.whenReady().then(async () => {
   });
 
   const assistantRuntime = createAssistantRuntimeFacade({
+    authorizeProductAccess: authorizeAssistantProductAccess,
     authorizePlanningPayload: (input) => (
       agenticDeleteStartupRecoveryHealthy
         ? assistantPlanningAuthorizer.authorize(input)
@@ -8866,6 +9301,7 @@ app.whenReady().then(async () => {
 
   registerAssistantHandlers({
     assistantRuntime,
+    authorizeAssistantAccess: authorizeAssistantIpcAccess,
     registerIpcHandler,
   });
 
@@ -8880,6 +9316,15 @@ app.whenReady().then(async () => {
   });
 
   const cancelAssistantJob = async ({ jobId }) => {
+    const requested = markJobCancellationRequested(jobId, 'cancelled_by_user');
+    if (!requested || requested.ok !== true) {
+      const current = getJobById(jobId);
+      if (current && current.ok && current.job
+        && ['completed', 'failed', 'blocked', 'cancelled'].includes(current.job.status)) {
+        return { ok: true, idempotent: true, job: current.job };
+      }
+      return requested;
+    }
     const revoked = assistantExecutionCoordinator.revokeJob({ jobId });
     if (!revoked.ok) {
       const current = getJobById(jobId);
@@ -8887,18 +9332,24 @@ app.whenReady().then(async () => {
         && ['completed', 'failed', 'blocked', 'cancelled'].includes(current.job.status)) {
         return { ok: true, idempotent: true, job: current.job };
       }
-      return revoked;
-    }
-    const cancelled = markJobCancelled(jobId, 'cancelled_by_user');
-    if (!cancelled || cancelled.ok !== true) {
+      const failed = markJobExecutionCleanupFailed(
+        jobId,
+        revoked.code || 'execution_cleanup_failed'
+      );
       return {
-        ok: true,
-        revoked: true,
-        persistenceWarning: true,
-        message: 'A autoridade da tarefa foi revogada, mas o histórico não pôde ser atualizado.',
+        ...revoked,
+        job: failed && failed.ok ? failed.job : current && current.job,
       };
     }
-    return { ok: true, job: cancelled.job };
+    const current = getJobById(jobId);
+    return {
+      ok: true,
+      revoked: revoked.revoked === true,
+      deferred: revoked.deferred === true,
+      cancellationRequested: true,
+      idempotent: requested.idempotent === true,
+      job: current && current.ok ? current.job : requested.job,
+    };
   };
 
   const rollbackCanaryJob = (input) => (
@@ -9025,6 +9476,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('before-quit', (event) => {
+  invalidateAssistantRuntimeDocumentCandidate();
   clearAssistantRuntimeAuthority('app_before_quit');
   beginPortableIsolationHelperShutdown(event);
   if (agenticDeleteMutationBackendSelection) {

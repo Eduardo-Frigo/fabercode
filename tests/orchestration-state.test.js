@@ -254,6 +254,27 @@ function runAuthorizedRecoveryCandidateTests(tempRoot) {
   const restartedResult = restartedStore.listAuthorizedJobRecoveryCandidates();
   assert.deepStrictEqual(new Set(restartedResult.jobIds), expectedIds);
   assert.strictEqual(restartedResult.jobIds.length, expectedIds.size);
+
+  const eligibilityChecks = [];
+  const removedProjectStore = createStore(recoveryRoot, {
+    MAX_JOBS_STORED: 100,
+    isAuthorizedRecoveryProject(identity) {
+      assert.strictEqual(Object.isFrozen(identity), true);
+      assert.deepStrictEqual(Object.keys(identity).sort(), ['projectId', 'rootPath']);
+      eligibilityChecks.push(identity);
+      return false;
+    },
+  });
+  assert.deepStrictEqual(
+    removedProjectStore.listAuthorizedJobRecoveryCandidates(),
+    { ok: true, jobIds: [] },
+    'terminal jobs from a deliberately removed project must not poison global startup recovery'
+  );
+  assert.strictEqual(
+    eligibilityChecks.length,
+    eligibleJobs.length,
+    'project eligibility must be checked only after authority and terminal-state validation'
+  );
 }
 
 function runAtomicJobsPersistenceTests(tempRoot) {
@@ -623,10 +644,20 @@ function runAuthorityAndLifecycleTests(tempRoot) {
     'action_digest_conflict'
   );
 
+  const completedValidationState = {
+    validationPending: false,
+    validationPendingReason: null,
+    validationPendingChecks: [],
+  };
+  assert.strictEqual(
+    store.setJobCheckpoint(created.job.id, 'execute_result', completedValidationState).ok,
+    true
+  );
   const completed = store.markJobCompleted(created.job.id, {
     source: 'test',
     canary: true,
     canaryPromotionId: 'canary-promotion-state-1',
+    ...completedValidationState,
   });
   assert.strictEqual(completed.ok, true);
   assert.strictEqual(terminalSnapshots.length, 1);
@@ -669,7 +700,43 @@ function runAuthorityAndLifecycleTests(tempRoot) {
   assert.strictEqual(rolledBack.job.events[0].type, 'job.canary_rolled_back');
   assert.strictEqual(terminalSnapshots.length, 1);
 
-  const restartedStore = createStore(authorityRoot);
+  const restartedTerminalSnapshots = [];
+  const restartedStore = createStore(authorityRoot, {
+    onJobTerminal: (snapshot) => restartedTerminalSnapshots.push(snapshot),
+  });
+  const restartedAuthorizedJob = restartedStore.getAuthorizedJobById(created.job.id).job;
+  const restartedPublicJob = restartedStore.getJobById(created.job.id).job;
+  for (const restartedJob of [restartedAuthorizedJob, restartedPublicJob]) {
+    assert.deepStrictEqual(
+      restartedJob.checkpoints.execute_result.data,
+      completedValidationState
+    );
+    const completedEvent = restartedJob.events.find((event) => event.type === 'job.completed');
+    assert(completedEvent);
+    assert.deepStrictEqual(
+      {
+        validationPending: completedEvent.payload.validationPending,
+        validationPendingReason: completedEvent.payload.validationPendingReason,
+        validationPendingChecks: completedEvent.payload.validationPendingChecks,
+      },
+      completedValidationState
+    );
+  }
+  assert.deepStrictEqual(
+    restartedStore.listPendingApprovalRecoveryCandidates(),
+    { ok: true, jobIds: [] }
+  );
+  const beforeRestartRecovery = restartedStore.getAuthorizedJobById(created.job.id).job;
+  assert.deepStrictEqual(
+    restartedStore.recoverInterruptedJobs('runtime_restart_test'),
+    { ok: true, recovered: 0, jobIds: [] }
+  );
+  assert.deepStrictEqual(
+    restartedStore.getAuthorizedJobById(created.job.id).job,
+    beforeRestartRecovery
+  );
+  assert.deepStrictEqual(restartedTerminalSnapshots, []);
+
   const repeatedRollback = restartedStore.markJobCanaryRolledBack(
     created.job.id,
     rollbackCompletion
@@ -860,6 +927,255 @@ function runAuthorityAndLifecycleTests(tempRoot) {
   assert.strictEqual(collisionCalls, 3);
 }
 
+function runCancellationCleanupLifecycleTests(tempRoot) {
+  const store = createStore(path.join(tempRoot, 'cancellation-cleanup-lifecycle'));
+  const created = store.createAssistantJob({ userMessage: 'cancelar com cleanup comprovado' });
+  assert.strictEqual(created.ok, true);
+
+  const requested = store.markJobCancellationRequested(created.job.id, 'cancelled_by_user');
+  assert.strictEqual(requested.ok, true);
+  assert.strictEqual(requested.idempotent, false);
+  assert.strictEqual(requested.job.status, 'running');
+  assert.strictEqual(requested.job.phase, 'cancelling');
+
+  const repeated = store.markJobCancellationRequested(created.job.id, 'cancelled_by_user');
+  assert.strictEqual(repeated.ok, true);
+  assert.strictEqual(repeated.idempotent, true);
+  assert.strictEqual(repeated.job.status, 'running');
+  assert.strictEqual(repeated.job.phase, 'cancelling');
+
+  const cleanupReceipt = Object.freeze({
+    schemaVersion: 'assistant-job-execution-cleanup-receipt.v1',
+    jobId: created.job.id,
+    cleanupCompleted: true,
+  });
+  assert.strictEqual(
+    store.markJobCancelledAfterCleanup(created.job.id).code,
+    'execution_cleanup_receipt_required'
+  );
+  assert.strictEqual(
+    store.markJobCancelledAfterCleanup(created.job.id, { ...cleanupReceipt }).code,
+    'execution_cleanup_receipt_invalid'
+  );
+  assert.strictEqual(
+    store.markJobCancelledAfterCleanup(created.job.id, Object.freeze({
+      ...cleanupReceipt,
+      cleanupCompleted: false,
+    })).code,
+    'execution_cleanup_receipt_invalid'
+  );
+  assert.strictEqual(
+    store.markJobCancelledAfterCleanup(created.job.id, Object.freeze({
+      ...cleanupReceipt,
+      extraProof: true,
+    })).code,
+    'execution_cleanup_receipt_invalid'
+  );
+  assert.strictEqual(
+    store.markJobCancelledAfterCleanup(created.job.id, Object.freeze({
+      ...cleanupReceipt,
+      jobId: 'job-00000000-0000-4000-8000-000000000099',
+    })).code,
+    'execution_cleanup_receipt_mismatch'
+  );
+
+  const cancelled = store.markJobCancelledAfterCleanup(created.job.id, cleanupReceipt);
+  assert.strictEqual(cancelled.ok, true);
+  assert.strictEqual(cancelled.idempotent, false);
+  assert.strictEqual(cancelled.job.status, 'cancelled');
+  assert.strictEqual(cancelled.job.phase, 'cancelled');
+  assert.deepStrictEqual(cancelled.job.checkpoints.execution_cleanup.data, cleanupReceipt);
+  assert.deepStrictEqual(
+    store.getAuthorizedJobById(created.job.id).job.checkpoints.execution_cleanup.data,
+    cleanupReceipt
+  );
+}
+
+function runCancellationCleanupRestartRecoveryTests(tempRoot) {
+  const recoveryRoot = path.join(tempRoot, 'cancellation-cleanup-restart');
+  const store = createStore(recoveryRoot);
+  const created = store.createAuthorizedAssistantJob({
+    userMessage: 'retomar cleanup de cancelamento após restart',
+    authorityContext: buildAuthorityContext({
+      sessionId: 'session-cancellation-cleanup-restart',
+    }),
+  });
+  assert.strictEqual(created.ok, true);
+  assert.strictEqual(
+    store.bindJobActionDigest(created.job.id, `sha256:${'c'.repeat(64)}`).ok,
+    true
+  );
+  assert.strictEqual(
+    store.markJobCancellationRequested(created.job.id, 'cancelled_by_user').ok,
+    true
+  );
+
+  const restartedStore = createStore(recoveryRoot);
+  const recovery = restartedStore.recoverInterruptedJobs('runtime_restart_test');
+  const recoveredJob = restartedStore.getAuthorizedJobById(created.job.id).job;
+  assert.strictEqual(recoveredJob.phase, 'cancelling');
+  assert.strictEqual(recoveredJob.status, 'running');
+  assert.strictEqual(recoveredJob.checkpoints.execution_cleanup, undefined);
+  assert.deepStrictEqual(recovery, { ok: true, recovered: 0, jobIds: [] });
+  assert.deepStrictEqual(
+    restartedStore.listAuthorizedJobRecoveryCandidates(),
+    { ok: true, jobIds: [created.job.id] }
+  );
+}
+
+function runCancellationCleanupFailedRecoveryTests(tempRoot) {
+  const recoveryRoot = path.join(tempRoot, 'cancellation-cleanup-failed-recovery');
+  const store = createStore(recoveryRoot);
+  const created = store.createAuthorizedAssistantJob({
+    userMessage: 'finalizar cancelamento após recovery do cleanup',
+    authorityContext: buildAuthorityContext({
+      sessionId: 'session-cancellation-cleanup-failed-recovery',
+    }),
+  });
+  assert.strictEqual(created.ok, true);
+  assert.strictEqual(
+    store.bindJobActionDigest(created.job.id, `sha256:${'d'.repeat(64)}`).ok,
+    true
+  );
+  assert.strictEqual(
+    store.markJobCancellationRequested(created.job.id, 'cancelled_by_user').ok,
+    true
+  );
+
+  const cleanupFailed = store.markJobExecutionCleanupFailed(
+    created.job.id,
+    'cleanup_recovery_pending'
+  );
+  assert.strictEqual(cleanupFailed.ok, true);
+  assert.strictEqual(cleanupFailed.idempotent, false);
+  assert.strictEqual(cleanupFailed.job.status, 'failed');
+  assert.strictEqual(cleanupFailed.job.phase, 'execution_cleanup_failed');
+  assert.strictEqual(
+    store.markJobExecutionCleanupFailed(created.job.id, 'cleanup_recovery_pending').idempotent,
+    true
+  );
+
+  const restartedStore = createStore(recoveryRoot);
+  const cleanupReceipt = Object.freeze({
+    schemaVersion: 'assistant-job-execution-cleanup-receipt.v1',
+    jobId: created.job.id,
+    cleanupCompleted: true,
+  });
+  const cancelled = restartedStore.markJobCancelledAfterCleanup(
+    created.job.id,
+    cleanupReceipt
+  );
+  assert.strictEqual(cancelled.ok, true);
+  assert.strictEqual(cancelled.idempotent, false);
+  assert.strictEqual(cancelled.job.status, 'cancelled');
+  assert.strictEqual(cancelled.job.phase, 'cancelled');
+  assert.deepStrictEqual(cancelled.job.checkpoints.execution_cleanup.data, cleanupReceipt);
+
+  const repeated = restartedStore.markJobCancelledAfterCleanup(
+    created.job.id,
+    cleanupReceipt
+  );
+  assert.strictEqual(repeated.ok, true);
+  assert.strictEqual(repeated.idempotent, true);
+}
+
+function runLegacyCancelledCleanupRecoveryTests(tempRoot) {
+  const terminalSnapshots = [];
+  const store = createStore(path.join(tempRoot, 'legacy-cancelled-cleanup-recovery'), {
+    onJobTerminal: (snapshot) => terminalSnapshots.push(snapshot),
+  });
+  const created = store.createAuthorizedAssistantJob({
+    userMessage: 'selar cancelamento legado',
+    authorityContext: buildAuthorityContext({
+      sessionId: 'session-legacy-cancelled-cleanup-recovery',
+    }),
+  });
+  assert.strictEqual(created.ok, true);
+  assert.strictEqual(
+    store.bindJobActionDigest(created.job.id, `sha256:${'e'.repeat(64)}`).ok,
+    true
+  );
+  const legacyCancelled = store.markJobCancelled(created.job.id, 'legacy_cancelled');
+  assert.strictEqual(legacyCancelled.ok, true);
+  assert.strictEqual(
+    legacyCancelled.job.events.filter((event) => event.type === 'job.cancelled').length,
+    1
+  );
+  assert.strictEqual(terminalSnapshots.length, 1);
+  assert.strictEqual(
+    store.readOrchestrationState().auditTrail
+      .filter((event) => event.type === 'job.cancelled').length,
+    1
+  );
+  assert.deepStrictEqual(
+    store.listAuthorizedJobRecoveryCandidates(),
+    { ok: true, jobIds: [created.job.id] }
+  );
+
+  const cleanupReceipt = Object.freeze({
+    schemaVersion: 'assistant-job-execution-cleanup-receipt.v1',
+    jobId: created.job.id,
+    cleanupCompleted: true,
+  });
+  const sealed = store.markJobCancelledAfterCleanup(created.job.id, cleanupReceipt);
+  assert.strictEqual(sealed.ok, true);
+  assert.strictEqual(sealed.idempotent, false);
+  assert.strictEqual(sealed.job.status, 'cancelled');
+  assert.strictEqual(sealed.job.phase, 'cancelled');
+  assert.deepStrictEqual(sealed.job.checkpoints.execution_cleanup.data, cleanupReceipt);
+  assert.strictEqual(
+    sealed.job.events.filter((event) => event.type === 'job.cancelled').length,
+    1,
+    'sealing a legacy cancellation must not duplicate its terminal event'
+  );
+  assert.strictEqual(
+    sealed.job.events.filter((event) => event.type === 'job.execution_cleanup_confirmed').length,
+    1
+  );
+  assert.strictEqual(
+    terminalSnapshots.length,
+    1,
+    'sealing a terminal legacy cancellation must not notify onJobTerminal again'
+  );
+  const sealedAuditTrail = store.readOrchestrationState().auditTrail;
+  assert.strictEqual(
+    sealedAuditTrail.filter((event) => event.type === 'job.cancelled').length,
+    1,
+    'sealing a legacy cancellation must not append another cancellation audit'
+  );
+  assert.strictEqual(
+    sealedAuditTrail.filter((event) => event.type === 'job.execution_cleanup_confirmed').length,
+    1
+  );
+  assert.deepStrictEqual(
+    store.listAuthorizedJobRecoveryCandidates(),
+    { ok: true, jobIds: [] },
+    'a sealed legacy cancellation must not be listed again'
+  );
+
+  const replay = store.markJobCancelledAfterCleanup(created.job.id, cleanupReceipt);
+  assert.strictEqual(replay.ok, true);
+  assert.strictEqual(replay.idempotent, true);
+  assert.strictEqual(
+    replay.job.events.filter((event) => event.type === 'job.cancelled').length,
+    1
+  );
+  assert.strictEqual(
+    replay.job.events.filter((event) => event.type === 'job.execution_cleanup_confirmed').length,
+    1
+  );
+  assert.strictEqual(terminalSnapshots.length, 1);
+  const replayAuditTrail = store.readOrchestrationState().auditTrail;
+  assert.strictEqual(
+    replayAuditTrail.filter((event) => event.type === 'job.cancelled').length,
+    1
+  );
+  assert.strictEqual(
+    replayAuditTrail.filter((event) => event.type === 'job.execution_cleanup_confirmed').length,
+    1
+  );
+}
+
 function run() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'faber-orchestration-state-'));
   try {
@@ -979,6 +1295,10 @@ function run() {
     assert.ok(stateAfterRemoval.auditTrail.some((event) => event.type === 'job.interrupted'));
 
     runAuthorityAndLifecycleTests(tempRoot);
+    runCancellationCleanupLifecycleTests(tempRoot);
+    runCancellationCleanupRestartRecoveryTests(tempRoot);
+    runCancellationCleanupFailedRecoveryTests(tempRoot);
+    runLegacyCancelledCleanupRecoveryTests(tempRoot);
     runPendingApprovalRestartTests(tempRoot);
     runAuthorizedRecoveryCandidateTests(tempRoot);
     runAtomicJobsPersistenceTests(tempRoot);

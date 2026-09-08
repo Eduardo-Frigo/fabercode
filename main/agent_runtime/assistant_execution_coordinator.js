@@ -15,7 +15,7 @@ const ASSISTANT_EXECUTION_COORDINATOR_VERSION = 'assistant-execution-coordinator
 const DEFAULT_MAX_ACTIVE_JOBS = 1_024;
 const HARD_MAX_ACTIVE_JOBS = 10_000;
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
-const SAFE_JOB_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/;
+const SAFE_JOB_ID_PATTERN = /^job-[A-Za-z0-9._-]{1,180}$/;
 const SAFE_ROOT_LEASE_ID_PATTERN = /^[A-Za-z0-9._:@-]{1,256}$/;
 const SUPPORTED_PLANNING_OPERATIONS = new Set(['plan', 'message', 'map_message']);
 const APPROVAL_MODES = new Set(['ask_each', 'delegate_task']);
@@ -500,6 +500,9 @@ function createAssistantExecutionCoordinator(options = {}) {
   const projectRootAuthority = fields.get('projectRootAuthority');
   const refreshProjectFromRootLease = fields.get('refreshProjectFromRootLease');
   const beforeAuthorityRelease = fields.get('beforeAuthorityRelease');
+  const onCancellationRequested = fields.get('onCancellationRequested');
+  const onExecutionCleanupConfirmed = fields.get('onExecutionCleanupConfirmed');
+  const onExecutionCleanupFailed = fields.get('onExecutionCleanupFailed');
   const onPlanningFailure = fields.get('onPlanningFailure');
   const onAuthorityRevoked = fields.get('onAuthorityRevoked');
   const maxActiveJobs = fields.has('maxActiveJobs') ? fields.get('maxActiveJobs') : DEFAULT_MAX_ACTIVE_JOBS;
@@ -576,6 +579,9 @@ function createAssistantExecutionCoordinator(options = {}) {
   for (const [name, callback] of [
     ['createAuthorizedJobExecutor', createAuthorizedJobExecutor],
     ['beforeAuthorityRelease', beforeAuthorityRelease],
+    ['onCancellationRequested', onCancellationRequested],
+    ['onExecutionCleanupConfirmed', onExecutionCleanupConfirmed],
+    ['onExecutionCleanupFailed', onExecutionCleanupFailed],
     ['onPlanningFailure', onPlanningFailure],
     ['onAuthorityRevoked', onAuthorityRevoked],
   ]) {
@@ -596,6 +602,7 @@ function createAssistantExecutionCoordinator(options = {}) {
   let authorityHealthy = true;
   let authorityFailureReason = null;
   let clearing = false;
+  let clearPending = false;
   let restoreActive = false;
   let releaseBarrierActive = false;
 
@@ -672,7 +679,35 @@ function createAssistantExecutionCoordinator(options = {}) {
     if (record.authorizedJobExecutor
       && !record.authorizedJobExecutorCloseInProgress
       && !record.authorizedJobExecutorClosePromise) {
-      closeAuthorizedJobExecutorConfirmed(record);
+      const closePromise = closeAuthorizedJobExecutorConfirmed(record);
+      try {
+        Reflect.apply(Promise.prototype.then, closePromise, [
+          (closed) => {
+            if (closed !== true) {
+              notifyExecutionCleanupFailed(record);
+              return;
+            }
+            const cleanupPromise = removeExecutionRecord(
+              record,
+              ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+              record.terminalObserved || terminalStatus,
+            );
+            try {
+              Reflect.apply(Promise.prototype.then, cleanupPromise, [
+                (cleaned) => {
+                  if (cleaned !== true) notifyExecutionCleanupFailed(record);
+                },
+                () => notifyExecutionCleanupFailed(record),
+              ]);
+            } catch {
+              notifyExecutionCleanupFailed(record);
+            }
+          },
+          () => notifyExecutionCleanupFailed(record),
+        ]);
+      } catch {
+        notifyExecutionCleanupFailed(record);
+      }
     }
   }
 
@@ -773,6 +808,95 @@ function createAssistantExecutionCoordinator(options = {}) {
 
   function poisonAuthority(reason) {
     markAuthorityUnhealthy(reason);
+  }
+
+  function confirmExecutionCleanup(record, reason, terminalStatus = null) {
+    if (reason !== ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
+      || typeof onExecutionCleanupConfirmed !== 'function') return true;
+    const proof = Object.freeze({
+      jobId: record.jobId,
+      terminalStatus: terminalStatus || record.terminalObserved || 'cancelled',
+      executorClosed: true,
+      processTreeTerminated: true,
+      workspaceRolledBack: true,
+      rootReleased: true,
+      authorityRevoked: true,
+    });
+    let result;
+    try {
+      result = onExecutionCleanupConfirmed(proof);
+    } catch {
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
+    }
+    let confirmed = false;
+    try {
+      confirmed = isSynchronousResult(result)
+        && isPlainRecord(result)
+        && dataFields(result, 'execution cleanup confirmation').get('ok') === true;
+    } catch {
+      confirmed = false;
+    }
+    if (!confirmed) {
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
+    }
+    return true;
+  }
+
+  function notifyExecutionCleanupFailed(record) {
+    if (!record || record.executionRevocationRequested !== true
+      || record.executionCleanupFailureNotified === true
+      || typeof onExecutionCleanupFailed !== 'function') return false;
+    record.executionCleanupFailureNotified = true;
+    const failure = Object.freeze({
+      jobId: record.jobId,
+      terminalStatus: record.terminalObserved || 'cancelled',
+      reason: ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED,
+    });
+    let result;
+    try {
+      result = onExecutionCleanupFailed(failure);
+    } catch {
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
+    }
+    let recorded = false;
+    try {
+      recorded = isSynchronousResult(result)
+        && isPlainRecord(result)
+        && dataFields(result, 'execution cleanup failure result').get('ok') === true;
+    } catch {
+      recorded = false;
+    }
+    if (!recorded) {
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+    }
+    return false;
+  }
+
+  function cancellationRequestedConfirmed(record, reason) {
+    if (record.cancellationRequestConfirmed === true) return true;
+    if (typeof onCancellationRequested !== 'function') {
+      record.cancellationRequestConfirmed = true;
+      return true;
+    }
+    let result;
+    try {
+      result = onCancellationRequested(record.jobId, reason);
+      if (!isSynchronousResult(result) || !isPlainRecord(result)) {
+        throw new TypeError('cancellation request callback must be synchronous');
+      }
+      const resultFields = dataFields(result, 'cancellation request result');
+      if (resultFields.size !== 1 || resultFields.get('ok') !== true) {
+        throw new TypeError('cancellation request was not confirmed');
+      }
+      record.cancellationRequestConfirmed = true;
+      return true;
+    } catch {
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return false;
+    }
   }
 
   function releaseBarrierConfirmed(record, reason, terminalStatus = null) {
@@ -1012,7 +1136,8 @@ function createAssistantExecutionCoordinator(options = {}) {
       return false;
     }
     if (!removeLocalRecord(record, reason)) return false;
-    return revokeBindingConfirmed(record.binding);
+    if (!revokeBindingConfirmed(record.binding)) return false;
+    return confirmExecutionCleanup(record, reason, terminalStatus);
   }
 
   function failPlanningRecord(record, reason, terminalStatus = null) {
@@ -1022,21 +1147,54 @@ function createAssistantExecutionCoordinator(options = {}) {
     return cleaned;
   }
 
-  async function removeExecutionRecord(record, reason, terminalStatus = null) {
-    if (clearing || !record || recordsByJobId.get(record.jobId) !== record
-      || record.executionCleanupInProgress) return false;
+  function removeExecutionRecord(record, reason, terminalStatus = null) {
+    if (clearing || !record || recordsByJobId.get(record.jobId) !== record) {
+      return Promise.resolve(false);
+    }
+    if (terminalStatus !== null && !TERMINAL_JOB_STATUSES.has(terminalStatus)) {
+      poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+      return Promise.resolve(false);
+    }
+    if (!record.terminalObserved && terminalStatus !== null) {
+      record.terminalObserved = terminalStatus;
+    }
+    if (record.executionCleanupPromise) return record.executionCleanupPromise;
+    if (record.executionCleanupInProgress) return Promise.resolve(false);
     if (record.projectRootLeaseInUse
       || record.authorizedJobExecutorCreateInProgress) {
       poisonAuthority(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
-      return false;
+      return Promise.resolve(false);
     }
     record.executionCleanupInProgress = true;
-    if (await closeAuthorizedJobExecutorConfirmed(record) !== true) return false;
-    if (!authorityHealthy) return false;
-    if (!releaseBarrierConfirmed(record, reason, terminalStatus)) return false;
-    if (await releaseProjectRootLeaseConfirmed(record) !== true) return false;
-    if (!removeLocalRecord(record, reason)) return false;
-    return revokeBindingConfirmed(record.binding);
+    record.executionCleanupPromise = (async () => {
+      if (await closeAuthorizedJobExecutorConfirmed(record) !== true) {
+        return notifyExecutionCleanupFailed(record);
+      }
+      if (!authorityHealthy) return notifyExecutionCleanupFailed(record);
+      let finalReason = record.executionRevocationRequested
+        ? ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
+        : reason;
+      let finalTerminalStatus = record.terminalObserved || terminalStatus;
+      if (!releaseBarrierConfirmed(record, finalReason, finalTerminalStatus)) {
+        return notifyExecutionCleanupFailed(record);
+      }
+      if (await releaseProjectRootLeaseConfirmed(record) !== true) {
+        return notifyExecutionCleanupFailed(record);
+      }
+      finalReason = record.executionRevocationRequested
+        ? ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED
+        : finalReason;
+      finalTerminalStatus = record.terminalObserved || finalTerminalStatus;
+      if (!removeLocalRecord(record, finalReason)) {
+        return notifyExecutionCleanupFailed(record);
+      }
+      if (!revokeBindingConfirmed(record.binding)) {
+        return notifyExecutionCleanupFailed(record);
+      }
+      const confirmed = confirmExecutionCleanup(record, finalReason, finalTerminalStatus);
+      return confirmed || notifyExecutionCleanupFailed(record);
+    })();
+    return record.executionCleanupPromise;
   }
 
   async function failExecutionRecord(record, reason, terminalStatus = null) {
@@ -1052,7 +1210,7 @@ function createAssistantExecutionCoordinator(options = {}) {
       && scope.active
       && scope.generation === generation
       && !clearing
-      && (scope.mapOnly || authorityHealthy)
+      && (scope.mapOnly || (authorityHealthy && !clearPending))
     );
   }
 
@@ -1158,6 +1316,9 @@ function createAssistantExecutionCoordinator(options = {}) {
     const scope = planningScopes.getStore();
     if (!authorityHealthy || clearing) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY);
+    }
+    if (clearPending) {
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING);
     }
     if (!scope || !scope.active || scope.generation !== generation) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.NO_PLANNING_SCOPE);
@@ -1331,7 +1492,9 @@ function createAssistantExecutionCoordinator(options = {}) {
         authorizedJobExecutorCloseInProgress: false,
         authorizedJobExecutorClosePromise: null,
         executionCleanupInProgress: false,
+        executionCleanupPromise: null,
         executionRevocationRequested: false,
+        cancellationRequestConfirmed: false,
       };
       if (!scopeIsCurrent(scope)) {
         revokeBindingConfirmed(binding);
@@ -1465,6 +1628,9 @@ function createAssistantExecutionCoordinator(options = {}) {
     if (!authorityHealthy || clearing || restoreActive) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY);
     }
+    if (clearPending) {
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING);
+    }
     restoreActive = true;
     const observedGeneration = generation;
     try {
@@ -1503,7 +1669,7 @@ function createAssistantExecutionCoordinator(options = {}) {
         || computedDigest !== actionDigest) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.ACTION_DIGEST_MISMATCH);
       }
-      if (!authorityHealthy || clearing || generation !== observedGeneration) {
+      if (!authorityHealthy || clearing || clearPending || generation !== observedGeneration) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
 
@@ -1544,7 +1710,7 @@ function createAssistantExecutionCoordinator(options = {}) {
       } catch {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.JOB_NOT_FOUND);
       }
-      if (!authorityHealthy || clearing || generation !== observedGeneration
+      if (!authorityHealthy || clearing || clearPending || generation !== observedGeneration
         || recordsByJobId.has(jobId)) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
@@ -1570,7 +1736,7 @@ function createAssistantExecutionCoordinator(options = {}) {
         || publicJob.rootPath !== binding.canonicalRootPath) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_BIND_FAILED);
       }
-      if (!authorityHealthy || clearing || generation !== observedGeneration
+      if (!authorityHealthy || clearing || clearPending || generation !== observedGeneration
         || recordsByJobId.has(jobId)) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
@@ -1606,7 +1772,7 @@ function createAssistantExecutionCoordinator(options = {}) {
       } catch {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.PROJECT_ROOT_AUTHORITY_FAILED);
       }
-      if (!authorityHealthy || clearing || generation !== observedGeneration
+      if (!authorityHealthy || clearing || clearPending || generation !== observedGeneration
         || recordsByJobId.has(jobId)) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
@@ -1628,7 +1794,7 @@ function createAssistantExecutionCoordinator(options = {}) {
         || executeAuthorizationFields.get('actionDigest') !== actionDigest) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_NOT_AUTHORIZED);
       }
-      if (!authorityHealthy || clearing || generation !== observedGeneration
+      if (!authorityHealthy || clearing || clearPending || generation !== observedGeneration
         || recordsByJobId.has(jobId)) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
@@ -1658,7 +1824,9 @@ function createAssistantExecutionCoordinator(options = {}) {
         authorizedJobExecutorCloseInProgress: false,
         authorizedJobExecutorClosePromise: null,
         executionCleanupInProgress: false,
+        executionCleanupPromise: null,
         executionRevocationRequested: false,
+        cancellationRequestConfirmed: false,
       };
       recordsByJobId.set(jobId, record);
       committed = true;
@@ -1764,6 +1932,9 @@ function createAssistantExecutionCoordinator(options = {}) {
 
     if (!authorityHealthy || clearing) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY);
+    }
+    if (clearPending) {
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING);
     }
     if (activePlanningScopes >= maxActiveJobs) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.CAPACITY_EXCEEDED);
@@ -1893,6 +2064,9 @@ function createAssistantExecutionCoordinator(options = {}) {
     const mapOnly = operation === 'map_message' || payloadFields.get('isMapChat') === true;
     if ((!authorityHealthy || clearing) && !mapOnly) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY);
+    }
+    if (clearPending && !mapOnly) {
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING);
     }
     let project = null;
     let projectIdentity = null;
@@ -2170,6 +2344,9 @@ function createAssistantExecutionCoordinator(options = {}) {
     if (!authorityHealthy || clearing) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY);
     }
+    if (clearPending) {
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING);
+    }
     if (!record || record.state === 'revoked') {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.JOB_NOT_FOUND);
     }
@@ -2346,6 +2523,12 @@ function createAssistantExecutionCoordinator(options = {}) {
     if (!record || TERMINAL_RECORD_STATES.has(record.state)) {
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.JOB_NOT_FOUND);
     }
+    if (!cancellationRequestedConfirmed(
+      record,
+      ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+    )) {
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+    }
     if (record.state === 'executing' && executionLifecycleActive(record)) {
       deferExecutionRevocation(record, 'cancelled');
       return Object.freeze({ ok: true, revoked: false, deferred: true });
@@ -2383,7 +2566,14 @@ function createAssistantExecutionCoordinator(options = {}) {
     if (deferTerminal) {
       if (record.terminalObserved && record.terminalObserved !== status) {
         if (executionActive) {
-          deferExecutionRevocation(record, 'cancelled');
+          if (record.terminalObserved === 'cancelled'
+            && !cancellationRequestedConfirmed(
+              record,
+              ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+            )) {
+            return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+          }
+          deferExecutionRevocation(record, record.terminalObserved);
           return Object.freeze({ ok: true, revoked: false, deferred: true, idempotent: false });
         }
         if (!removeRecord(record, 'job_terminal_conflict', null)) {
@@ -2392,8 +2582,16 @@ function createAssistantExecutionCoordinator(options = {}) {
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED);
       }
       const idempotent = record.terminalObserved === status;
-      if (executionActive && ['cancelled', 'runtime_interrupted'].includes(status)) {
-        deferExecutionRevocation(record, status);
+      if (executionActive) {
+        if (status === 'cancelled'
+          && !cancellationRequestedConfirmed(
+            record,
+            ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+          )) {
+          return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+        }
+        if (!record.terminalObserved) record.terminalObserved = status;
+        deferExecutionRevocation(record, record.terminalObserved);
       } else {
         record.terminalObserved = status;
       }
@@ -2408,19 +2606,34 @@ function createAssistantExecutionCoordinator(options = {}) {
   function clear() {
     if (!authorityHealthy) return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY);
     if (clearing) return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_UNHEALTHY);
-    const draining = [...recordsByJobId.values()].filter(executionLifecycleActive);
+    const records = [...recordsByJobId.values()];
+    if (!clearPending) {
+      for (const record of records) {
+        const terminalStatus = record.terminalObserved;
+        const requiresCancellation = !terminalStatus || terminalStatus === 'cancelled';
+        if (requiresCancellation && !cancellationRequestedConfirmed(
+          record,
+          ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+        )) {
+          return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+        }
+      }
+      clearPending = true;
+    }
+    const draining = records.filter(executionLifecycleActive);
     if (draining.length > 0) {
-      for (const record of draining) deferExecutionRevocation(record, 'cancelled');
+      for (const record of draining) {
+        deferExecutionRevocation(record, record.terminalObserved || 'cancelled');
+      }
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING);
     }
     clearing = true;
     generation += 1;
-    const records = [...recordsByJobId.values()];
     for (const record of records) {
       if (!releaseBarrierConfirmed(
         record,
         ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
-        null,
+        record.terminalObserved,
       )) {
         clearing = false;
         return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
@@ -2455,7 +2668,22 @@ function createAssistantExecutionCoordinator(options = {}) {
       clearing = false;
       return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
     }
+    let allCleanupConfirmed = true;
+    for (const record of records) {
+      if (!confirmExecutionCleanup(
+        record,
+        ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+        record.terminalObserved || 'cancelled',
+      )) {
+        allCleanupConfirmed = false;
+      }
+    }
+    if (!allCleanupConfirmed) {
+      clearing = false;
+      return deny(ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED);
+    }
     clearing = false;
+    clearPending = false;
     return Object.freeze({ ok: true, cleared: records.length });
   }
 
@@ -2507,6 +2735,7 @@ function createAssistantExecutionCoordinator(options = {}) {
       activePlanningScopes,
       authorityHealthy,
       authorityFailureReason,
+      clearPending,
       readyJobs,
       executingJobs,
       maxActiveJobs,

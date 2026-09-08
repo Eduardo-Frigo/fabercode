@@ -1067,6 +1067,11 @@ function createProjectCapabilityBroker({
       const sandboxExecutionContext = Object.freeze({
         ...context,
         requestDigest: prepared.requestDigest,
+        ...(Number.isSafeInteger(classification.canonicalPayload.mutationRevision)
+          && classification.canonicalPayload.mutationRevision >= 0
+          && !Object.is(classification.canonicalPayload.mutationRevision, -0)
+          ? { mutationRevision: classification.canonicalPayload.mutationRevision }
+          : {}),
       });
       return Object.freeze({
         execute() {

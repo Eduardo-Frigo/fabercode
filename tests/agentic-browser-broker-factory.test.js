@@ -8,11 +8,17 @@ const {
   createCapabilityDelegationBinding,
 } = require('../main/capabilities/capability_delegation_contracts');
 const {
+  AGENTIC_BROWSER_BROKER_FACTORY_VERSION,
+  AGENTIC_BROWSER_DESCRIPTOR_VERSION,
+  AGENTIC_BROWSER_ROUTE_VERSION,
   createAgenticBrowserBrokerFactory,
 } = require('../main/services/agentic_browser_broker_factory');
 const {
   createAgenticBrowserSessionService,
 } = require('../main/services/agentic_browser_session_service');
+const {
+  createAgenticVisualCaptureApprovalService,
+} = require('../main/services/agentic_visual_capture_approval_service');
 
 const sha256 = (value) => `sha256:${crypto.createHash('sha256').update(value).digest('hex')}`;
 
@@ -36,9 +42,13 @@ function createFakeBrowserWindowClass(state) {
       this.webContents.session = {
         webRequest: { onErrorOccurred() {} },
       };
-      this.webContents.capturePage = async () => ({
-        toPNG: () => Buffer.from('broker-png'),
-      });
+      this.webContents.capturePage = async () => {
+        state.capturePageCalls += 1;
+        state.captureEventsSeenAtPage.push(
+          state.captureApprovalEvents.map((entry) => entry.type)
+        );
+        return { toPNG: () => Buffer.from('broker-png') };
+      };
       this.webContents.executeJavaScript = async (script) => {
         state.executedScripts.push(script);
         return { ok: true, tagName: 'button' };
@@ -92,19 +102,39 @@ function createPendingApprovalStore() {
   });
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
+
 function createHarness() {
   const state = {
     active: true,
     allowExternal: false,
     audits: [],
+    captureApprovalEvents: [],
+    captureDialogCalls: 0,
+    captureDialogResponse: 1,
+    captureDialogDeferred: null,
+    captureEventsSeenAtPage: [],
+    capturePageCalls: 0,
+    captureRecordFails: false,
+    captureRecordFailType: '',
+    mismatchCaptureConsumption: false,
+    revokeBeforeCaptureConsumption: false,
+    revokeAfterCaptureConsumption: false,
+    reenterCaptureDuringRequest: false,
+    reentrantCapturePromise: null,
     grantInspections: 0,
     grantConsumptions: 0,
     executedScripts: [],
     loadedUrls: [],
     requestIds: 0,
-    signal: null,
+    signal: new AbortController().signal,
     windows: [],
   };
+  const windowLease = Object.freeze({ window: 'main' });
   const BrowserWindow = createFakeBrowserWindowClass(state);
   const browserSessionService = createAgenticBrowserSessionService({
     BrowserWindow,
@@ -132,6 +162,54 @@ function createHarness() {
         : { authorized: false, reason: 'grant_not_found' };
     },
   });
+  const visualCaptureApprovalService = createAgenticVisualCaptureApprovalService({
+    showNativeDialog() {
+      state.captureDialogCalls += 1;
+      return state.captureDialogDeferred
+        ? state.captureDialogDeferred.promise
+        : { response: state.captureDialogResponse };
+    },
+    authorizeLifecycle(candidate) {
+      return state.active
+        ? Object.freeze({ authorized: true, binding: candidate })
+        : Object.freeze({ authorized: false });
+    },
+    authorizeRoot(candidate) {
+      return state.active
+        ? Object.freeze({
+          ok: true,
+          authorized: true,
+          projectId: candidate.projectId,
+          rootPath: candidate.rootPath,
+          canonicalRootPath: candidate.rootPath,
+          realRootPath: binding.realRootPath,
+        })
+        : Object.freeze({ authorized: false });
+    },
+    authorizeCaptureFrontier(candidate) {
+      return state.active && candidate.windowLease === windowLease
+        ? Object.freeze({
+          authorized: true,
+          binding: candidate.binding,
+          windowLease: candidate.windowLease,
+          browserSessionId: candidate.browserSessionId,
+          browserSessionSnapshotDigest: candidate.browserSessionSnapshotDigest,
+          callId: candidate.callId,
+          invocationId: candidate.invocationId,
+          requestDigest: candidate.requestDigest,
+        })
+        : Object.freeze({ authorized: false });
+    },
+    getWindowLease() { return windowLease; },
+    getSignal() { return state.signal; },
+    recordJobEvent(jobId, type, payload) {
+      state.captureApprovalEvents.push({ jobId, type, payload });
+      return state.captureRecordFails || type === state.captureRecordFailType
+        ? { ok: false }
+        : { ok: true };
+    },
+  });
+  let route = null;
   const factory = createAgenticBrowserBrokerFactory({
     authorizeLifecycle(candidate) {
       return state.active
@@ -165,6 +243,41 @@ function createHarness() {
           : { verified: false };
       },
     }),
+    requestCaptureApproval(input) {
+      if (state.reenterCaptureDuringRequest) {
+        state.reenterCaptureDuringRequest = false;
+        state.reentrantCapturePromise = route.capture(captureInput(
+          input.browserSessionId,
+          { callId: input.callId, invocationId: input.invocationId }
+        ));
+      }
+      return visualCaptureApprovalService.requestApproval(Object.freeze({
+        binding: input.binding,
+        browserSessionId: input.browserSessionId,
+        browserSessionSnapshotDigest: input.browserSessionSnapshotDigest,
+        callId: input.callId,
+        invocationId: input.invocationId,
+        requestDigest: input.requestDigest,
+        projectLabel: 'Broker project',
+      }));
+    },
+    consumeCaptureApproval(input) {
+      if (state.revokeBeforeCaptureConsumption) state.active = false;
+      const consumed = visualCaptureApprovalService.consumeApproval(Object.freeze({
+        binding: input.binding,
+        browserSessionId: input.browserSessionId,
+        browserSessionSnapshotDigest: input.browserSessionSnapshotDigest,
+        callId: input.callId,
+        invocationId: input.invocationId,
+        requestDigest: state.mismatchCaptureConsumption
+          ? sha256('mismatched-capture-request')
+          : input.requestDigest,
+        projectLabel: 'Broker project',
+        receipt: input.receipt,
+      }));
+      if (state.revokeAfterCaptureConsumption) state.active = false;
+      return consumed;
+    },
     audit(event) {
       state.audits.push(event);
     },
@@ -176,12 +289,30 @@ function createHarness() {
       return state.signal;
     },
   });
-  const route = factory.createRoute(Object.freeze({ binding }));
-  return { browserSessionService, factory, route, state };
+  route = factory.createRoute(Object.freeze({ binding }));
+  return { browserSessionService, factory, route, state, visualCaptureApprovalService };
+}
+
+function captureInput(sessionId, overrides = {}) {
+  return Object.freeze({
+    sessionId,
+    callId: 'browser-capture-call-1',
+    invocationId: 'browser-capture-invocation-1',
+    ...overrides,
+  });
 }
 
 async function testLocalNavigationAndVisualCaptureStayJobBound() {
   const harness = createHarness();
+  assert.strictEqual(
+    AGENTIC_BROWSER_BROKER_FACTORY_VERSION,
+    'agentic-browser-broker-factory.v2'
+  );
+  assert.strictEqual(AGENTIC_BROWSER_ROUTE_VERSION, 'agentic-browser-route.v2');
+  assert.strictEqual(
+    AGENTIC_BROWSER_DESCRIPTOR_VERSION,
+    'agentic-browser-descriptor.v2'
+  );
   const opened = await harness.route.open(Object.freeze({
     url: 'file:///projects/browser/index.html',
     viewport: Object.freeze({ width: 1280, height: 720 }),
@@ -194,11 +325,32 @@ async function testLocalNavigationAndVisualCaptureStayJobBound() {
   assert.strictEqual(harness.state.grantConsumptions, 0);
 
   const sessionId = opened.output.session.id;
-  const capture = await harness.route.capture(Object.freeze({ sessionId }));
+  const input = captureInput(sessionId);
+  const capture = await harness.route.capture(input);
   assert.strictEqual(capture.ok, true);
   assert.strictEqual(capture.image.type, 'image');
   assert.strictEqual(capture.image.mimeType, 'image/png');
   assert.strictEqual(capture.image.data, Buffer.from('broker-png').toString('base64'));
+  assert.strictEqual(harness.state.capturePageCalls, 1);
+  assert.deepStrictEqual(harness.state.captureEventsSeenAtPage, [[
+    'job.agentic_visual_capture_approval_requested',
+    'job.agentic_visual_capture_approval_approved',
+  ]]);
+
+  const replay = await harness.route.capture(input);
+  assert.strictEqual(replay, capture);
+  assert.strictEqual(harness.state.capturePageCalls, 1);
+  assert.strictEqual(harness.state.captureDialogCalls, 1);
+
+  const conflict = await harness.route.capture(captureInput(sessionId, {
+    callId: 'browser-capture-call-conflict',
+    invocationId: input.invocationId,
+  }));
+  assert.deepStrictEqual(conflict, {
+    ok: false,
+    code: 'AGENTIC_BROWSER_ROUTE_CAPTURE_INVOCATION_CONFLICT',
+  });
+  assert.strictEqual(harness.state.capturePageCalls, 1);
 
   const inspected = harness.route.inspect(Object.freeze({ sessionId }));
   assert.strictEqual(inspected.ok, true);
@@ -206,6 +358,52 @@ async function testLocalNavigationAndVisualCaptureStayJobBound() {
   const closed = harness.route.close(Object.freeze({ sessionId }));
   assert.strictEqual(closed.ok, true);
   assert.strictEqual(harness.state.windows[0].destroyed, true);
+}
+
+async function testCaptureReservationPrecedesReentrantApprovalCallbacks() {
+  const harness = createHarness();
+  const opened = await harness.route.open(Object.freeze({
+    url: 'http://127.0.0.1:3000/',
+    viewport: Object.freeze({ width: 1024, height: 768 }),
+  }));
+  const input = captureInput(opened.output.session.id, {
+    callId: 'browser-capture-call-reentrant',
+    invocationId: 'browser-capture-invocation-reentrant',
+  });
+  harness.state.reenterCaptureDuringRequest = true;
+  const capture = harness.route.capture(input);
+  assert.strictEqual(harness.state.reentrantCapturePromise, capture);
+  assert.strictEqual((await capture).ok, true);
+  assert.strictEqual(harness.state.capturePageCalls, 1);
+  assert.strictEqual(harness.state.captureDialogCalls, 1);
+  assert.strictEqual(harness.route.diagnostics().captureReplays, 1);
+}
+
+async function testPageRevisionChangeInvalidatesFreshCaptureApproval() {
+  const harness = createHarness();
+  const opened = await harness.route.open(Object.freeze({
+    url: 'http://127.0.0.1:3000/',
+    viewport: Object.freeze({ width: 1024, height: 768 }),
+  }));
+  harness.state.captureDialogDeferred = deferred();
+  const capture = harness.route.capture(captureInput(opened.output.session.id, {
+    callId: 'browser-capture-call-revision',
+    invocationId: 'browser-capture-invocation-revision',
+  }));
+  await new Promise((resolve) => setImmediate(resolve));
+  const browserWindow = harness.state.windows[0];
+  browserWindow.url = 'http://127.0.0.1:3000/replaced';
+  browserWindow.webContents.emit(
+    'did-start-navigation',
+    {},
+    browserWindow.url,
+    false,
+    true
+  );
+  harness.state.captureDialogDeferred.resolve({ response: 1 });
+  const result = await capture;
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(harness.state.capturePageCalls, 0);
 }
 
 async function testExternalNavigationRequiresDomainGrantBeforeBrowserEffect() {
@@ -249,11 +447,48 @@ async function testRevocationBlocksFurtherNavigation() {
   assert.strictEqual(denied.error.code, 'PROJECT_SCOPE_INVALID');
   assert.deepStrictEqual(harness.state.loadedUrls, ['http://127.0.0.1:3000/']);
 
-  const captureDenied = await harness.route.capture(Object.freeze({ sessionId }));
+  const captureDenied = await harness.route.capture(captureInput(sessionId));
   assert.deepStrictEqual(captureDenied, {
     ok: false,
     code: 'AGENTIC_BROWSER_ROUTE_AUTHORITY_DENIED',
   });
+}
+
+async function testCaptureApprovalFailuresNeverReachCapturePage() {
+  for (const scenario of [
+    'denied',
+    'mismatch',
+    'stale',
+    'event_persist_failed',
+    'approved_event_persist_failed',
+    'revoked_after_consumption',
+  ]) {
+    const harness = createHarness();
+    const opened = await harness.route.open(Object.freeze({
+      url: 'http://127.0.0.1:3000/',
+      viewport: Object.freeze({ width: 1024, height: 768 }),
+    }));
+    const sessionId = opened.output.session.id;
+    if (scenario === 'denied') harness.state.captureDialogResponse = 0;
+    if (scenario === 'mismatch') harness.state.mismatchCaptureConsumption = true;
+    if (scenario === 'stale') harness.state.revokeBeforeCaptureConsumption = true;
+    if (scenario === 'event_persist_failed') harness.state.captureRecordFails = true;
+    if (scenario === 'approved_event_persist_failed') {
+      harness.state.captureRecordFailType =
+        'job.agentic_visual_capture_approval_approved';
+    }
+    if (scenario === 'revoked_after_consumption') {
+      harness.state.revokeAfterCaptureConsumption = true;
+    }
+
+    const result = await harness.route.capture(captureInput(sessionId, {
+      callId: `browser-capture-${scenario}`,
+      invocationId: `browser-capture-invocation-${scenario}`,
+    }));
+    assert.strictEqual(result.ok, false, scenario);
+    assert.strictEqual(harness.state.capturePageCalls, 0, scenario);
+    assert.deepStrictEqual(harness.state.captureEventsSeenAtPage, [], scenario);
+  }
 }
 
 async function testLocalInteractionIsIdempotentAndExternalInteractionStaysDenied() {
@@ -329,7 +564,7 @@ async function testCancelledInteractionClosesTheLocalSession() {
   assert.deepStrictEqual(cancelled, {
     ok: false,
     cancelled: true,
-    code: 'AGENTIC_BROWSER_SESSION_CANCELLED',
+    code: 'AGENTIC_BROWSER_ROUTE_CANCELLED',
   });
   assert.strictEqual(harness.state.executedScripts.length, 0);
   assert.strictEqual(harness.state.windows[0].destroyed, true);
@@ -337,8 +572,11 @@ async function testCancelledInteractionClosesTheLocalSession() {
 
 async function main() {
   await testLocalNavigationAndVisualCaptureStayJobBound();
+  await testCaptureReservationPrecedesReentrantApprovalCallbacks();
+  await testPageRevisionChangeInvalidatesFreshCaptureApproval();
   await testExternalNavigationRequiresDomainGrantBeforeBrowserEffect();
   await testRevocationBlocksFurtherNavigation();
+  await testCaptureApprovalFailuresNeverReachCapturePage();
   await testLocalInteractionIsIdempotentAndExternalInteractionStaysDenied();
   await testCancelledInteractionClosesTheLocalSession();
   console.log('agentic-browser-broker-factory.test.js: ok');

@@ -38,6 +38,7 @@ function createHarness(retryJob, options = {}) {
     getJob: [],
     listJobs: [],
     contractPreviews: [],
+    clearPending: 0,
     retryJob: [],
     showPending: [],
     startRender: [],
@@ -83,7 +84,13 @@ function createHarness(retryJob, options = {}) {
     },
     callbacks: {
       appendMessage: (...args) => calls.appendMessage.push(args),
+      clearPending: () => {
+        calls.clearPending += 1;
+        state.pendingAction = null;
+        state.pendingActionJobId = null;
+      },
       buildJobContextForPersona: () => null,
+      buildTerminalJobMessage: options.buildTerminalJobMessage || (() => null),
       getActiveConversationId: options.getActiveConversationId || (() => 'conversation-1'),
       getSubmissionEpoch: options.getSubmissionEpoch || (() => 0),
       hidePersonaThinkingIndicator: () => {},
@@ -488,6 +495,243 @@ async function run() {
     assert.strictEqual(blockedPoll.state.activeJobId, null);
     assert.strictEqual(blockedPoll.state.jobPollingTimer, null);
     assert.strictEqual(blockedPoll.state.jobTerminalNoticeById['job-blocked-terminal'], true);
+  }
+
+  {
+    const cancelledTerminalPoll = createHarness(
+      async () => ({ ok: false }),
+      {
+        buildTerminalJobMessage: (job) => (
+          job.status === 'cancelled' ? 'Tarefa cancelada após cleanup.' : null
+        ),
+        getJob: async () => ({
+          ok: true,
+          job: {
+            id: 'job-cancelled-after-cleanup',
+            projectId: 'project-1',
+            rootPath: '/workspace/project',
+            status: 'cancelled',
+            phase: 'cancelled',
+          },
+        }),
+      },
+    );
+    cancelledTerminalPoll.state.activeJobId = 'job-cancelled-after-cleanup';
+    cancelledTerminalPoll.state.jobPollingTimer = { type: 'interval' };
+    await cancelledTerminalPoll.controller.pollJob('job-cancelled-after-cleanup');
+    assert.deepStrictEqual(
+      JSON.parse(JSON.stringify(cancelledTerminalPoll.calls.appendMessage)),
+      [['assistant', 'Tarefa cancelada após cleanup.', { persistToConversation: false }]]
+    );
+    assert.strictEqual(cancelledTerminalPoll.state.activeJobId, null);
+    assert.strictEqual(cancelledTerminalPoll.state.jobPollingTimer, null);
+  }
+
+  {
+    const olderSnapshot = deferred();
+    let snapshotRequest = 0;
+    const orderedPoll = createHarness(
+      async () => ({ ok: false }),
+      {
+        getJob: async () => {
+          snapshotRequest += 1;
+          if (snapshotRequest === 1) return olderSnapshot.promise;
+          return {
+            ok: true,
+            job: {
+              id: 'job-monotonic-poll',
+              projectId: 'project-1',
+              rootPath: '/workspace/project',
+              status: 'running',
+              phase: 'awaiting_user_confirmation',
+              updatedAt: '2026-08-31T12:00:02.000Z',
+            },
+          };
+        },
+      },
+    );
+    const pendingAction = { type: 'agentic_tool_loop' };
+    orderedPoll.state.activeJobId = 'job-monotonic-poll';
+    orderedPoll.state.pendingAction = pendingAction;
+    orderedPoll.state.pendingActionJobId = 'job-monotonic-poll';
+    const stalePoll = orderedPoll.controller.pollJob('job-monotonic-poll');
+    await Promise.resolve();
+    await orderedPoll.controller.pollJob('job-monotonic-poll');
+    olderSnapshot.resolve({
+      ok: true,
+      job: {
+        id: 'job-monotonic-poll',
+        projectId: 'project-1',
+        rootPath: '/workspace/project',
+        status: 'running',
+        phase: 'created',
+        updatedAt: '2026-08-31T12:00:01.000Z',
+      },
+    });
+    await stalePoll;
+    assert.strictEqual(orderedPoll.calls.clearPending, 0);
+    assert.strictEqual(orderedPoll.state.pendingAction, pendingAction);
+    assert.strictEqual(orderedPoll.calls.startRender.length, 1);
+    assert.strictEqual(orderedPoll.calls.startRender[0].phase, 'awaiting_user_confirmation');
+  }
+
+  {
+    const lateNonTerminal = deferred();
+    let terminalRaceRequest = 0;
+    const terminalRace = createHarness(
+      async () => ({ ok: false }),
+      {
+        getJob: async () => {
+          terminalRaceRequest += 1;
+          if (terminalRaceRequest === 1) return lateNonTerminal.promise;
+          return {
+            ok: true,
+            job: {
+              id: 'job-terminal-race',
+              projectId: 'project-1',
+              rootPath: '/workspace/project',
+              status: 'cancelled',
+              phase: 'cancelled',
+              updatedAt: '2026-08-31T12:00:02.000Z',
+            },
+          };
+        },
+      },
+    );
+    terminalRace.state.activeJobId = 'job-terminal-race';
+    const latePoll = terminalRace.controller.pollJob('job-terminal-race');
+    await Promise.resolve();
+    await terminalRace.controller.pollJob('job-terminal-race');
+    lateNonTerminal.resolve({
+      ok: true,
+      job: {
+        id: 'job-terminal-race',
+        projectId: 'project-1',
+        rootPath: '/workspace/project',
+        status: 'running',
+        phase: 'cancelling',
+        updatedAt: '2026-08-31T12:00:01.000Z',
+      },
+    });
+    await latePoll;
+    assert.deepStrictEqual(terminalRace.calls.cancelJob, []);
+  }
+
+  {
+    const adoptedSnapshot = {
+      id: 'job-adopt-snapshot',
+      projectId: 'project-1',
+      rootPath: '/workspace/project',
+      status: 'running',
+      phase: 'cancelling',
+      updatedAt: '2026-08-31T12:00:03.000Z',
+    };
+    const adoptedPoll = createHarness(async () => ({ ok: false }));
+    adoptedPoll.controller.startJobPolling(adoptedSnapshot.id, adoptedSnapshot);
+    assert.strictEqual(adoptedPoll.calls.startRender[0], adoptedSnapshot);
+    assert.strictEqual(
+      adoptedPoll.calls.startRender.some((job) => job.phase === 'created'),
+      false,
+    );
+  }
+
+  {
+    const advancedPoll = createHarness(
+      async () => ({ ok: false }),
+      {
+        getJob: async () => ({
+          ok: true,
+          job: {
+            id: 'job-pending-advanced',
+            projectId: 'project-1',
+            rootPath: '/workspace/project',
+            status: 'running',
+            phase: 'execute_pending',
+          },
+        }),
+      },
+    );
+    advancedPoll.state.activeJobId = 'job-pending-advanced';
+    advancedPoll.state.pendingAction = { type: 'agentic_tool_loop' };
+    advancedPoll.state.pendingActionJobId = 'job-pending-advanced';
+    await advancedPoll.controller.pollJob('job-pending-advanced');
+    assert.strictEqual(advancedPoll.calls.clearPending, 1);
+    assert.strictEqual(advancedPoll.state.pendingAction, null);
+    assert.strictEqual(advancedPoll.state.pendingActionJobId, null);
+  }
+
+  {
+    const awaitingPoll = createHarness(
+      async () => ({ ok: false }),
+      {
+        getJob: async () => ({
+          ok: true,
+          job: {
+            id: 'job-still-awaiting',
+            projectId: 'project-1',
+            rootPath: '/workspace/project',
+            status: 'running',
+            phase: 'awaiting_user_confirmation',
+          },
+        }),
+      },
+    );
+    const action = { type: 'agentic_tool_loop' };
+    awaitingPoll.state.activeJobId = 'job-still-awaiting';
+    awaitingPoll.state.pendingAction = action;
+    awaitingPoll.state.pendingActionJobId = 'job-still-awaiting';
+    await awaitingPoll.controller.pollJob('job-still-awaiting');
+    assert.strictEqual(awaitingPoll.calls.clearPending, 0);
+    assert.strictEqual(awaitingPoll.state.pendingAction, action);
+  }
+
+  {
+    const cancelledPoll = createHarness(
+      async () => ({ ok: false }),
+      {
+        getJob: async () => ({
+          ok: true,
+          job: {
+            id: 'job-pending-cancelled',
+            projectId: 'project-1',
+            rootPath: '/workspace/project',
+            status: 'cancelled',
+            phase: 'cancelled',
+          },
+        }),
+      },
+    );
+    cancelledPoll.state.activeJobId = 'job-pending-cancelled';
+    cancelledPoll.state.pendingAction = { type: 'agentic_tool_loop' };
+    cancelledPoll.state.pendingActionJobId = 'job-pending-cancelled';
+    await cancelledPoll.controller.pollJob('job-pending-cancelled');
+    assert.strictEqual(cancelledPoll.calls.clearPending, 1);
+  }
+
+  {
+    const foreignPendingPoll = createHarness(
+      async () => ({ ok: false }),
+      {
+        getJob: async () => ({
+          ok: true,
+          job: {
+            id: 'job-current',
+            projectId: 'project-1',
+            rootPath: '/workspace/project',
+            status: 'running',
+            phase: 'execute_pending',
+          },
+        }),
+      },
+    );
+    const foreignAction = { type: 'agentic_tool_loop' };
+    foreignPendingPoll.state.activeJobId = 'job-current';
+    foreignPendingPoll.state.pendingAction = foreignAction;
+    foreignPendingPoll.state.pendingActionJobId = 'job-foreign';
+    await foreignPendingPoll.controller.pollJob('job-current');
+    assert.strictEqual(foreignPendingPoll.calls.clearPending, 0);
+    assert.strictEqual(foreignPendingPoll.state.pendingAction, foreignAction);
+    assert.strictEqual(foreignPendingPoll.state.pendingActionJobId, 'job-foreign');
   }
 
   assert.strictEqual(source.includes('api.buildPlan'), false);

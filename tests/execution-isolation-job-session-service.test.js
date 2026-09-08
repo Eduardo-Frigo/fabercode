@@ -79,6 +79,7 @@ function dependencyHarness({
   processAvailable = true,
   rootDenied = false,
   workspaceDenied = false,
+  workspaceDeniedOnAcquire = 0,
   rootReleaseFails = false,
   workspaceRollbackFails = false,
   processStopFails = false,
@@ -102,7 +103,7 @@ function dependencyHarness({
     acquire(input) {
       state.events.push(`workspace:acquire:${input.binding.jobId}`);
       state.workspaceAcquires += 1;
-      if (workspaceDenied) {
+      if (workspaceDenied || state.workspaceAcquires === workspaceDeniedOnAcquire) {
         return Promise.resolve(Object.freeze({
           ok: false,
           code: 'WORKSPACE_UNAVAILABLE',
@@ -309,6 +310,7 @@ async function main() {
   const openInput = Object.freeze({
     binding: binding(),
     sourceRootIdentityDigest: digest('b'),
+    mutationRevision: 0,
   });
   const opened = await service.open(openInput);
   assert.strictEqual(opened.ok, true);
@@ -350,6 +352,7 @@ async function main() {
       },
       timeoutMs: 10_000,
     }),
+    mutationRevision: 0,
   }));
   assert.strictEqual(executionStarted.ok, true);
   assert.strictEqual(successHarness.state.processExecs, 1);
@@ -436,6 +439,7 @@ async function main() {
       },
       timeoutMs: 10_000,
     }),
+    mutationRevision: 0,
   })), {
     ok: false,
     code: EXECUTION_ISOLATION_JOB_SESSION_REASONS.SESSION_CLOSED,
@@ -524,6 +528,7 @@ async function main() {
       },
       timeoutMs: 10_000,
     }),
+    mutationRevision: 0,
   }))).ok, true);
   assert.deepStrictEqual(await processCleanupOpened.session.close(), {
     version: EXECUTION_ISOLATION_JOB_SESSION_CLOSE_RECEIPT_VERSION,
@@ -544,17 +549,102 @@ async function main() {
   const secondOpen = await drainingService.open(Object.freeze({
     binding: binding('job-b', 'project-b'),
     sourceRootIdentityDigest: digest('e'),
+    mutationRevision: 0,
   }));
   assert.strictEqual(firstOpen.ok, true);
   assert.strictEqual(secondOpen.ok, true);
   assert.strictEqual((await drainingService.open(Object.freeze({
     binding: binding('job-a', 'project-mismatch'),
     sourceRootIdentityDigest: digest('b'),
+    mutationRevision: 0,
   }))).code, EXECUTION_ISOLATION_JOB_SESSION_REASONS.SESSION_MISMATCH);
   assert.strictEqual((await drainingService.open(Object.freeze({
     binding: binding('job-c', 'project-c'),
     sourceRootIdentityDigest: digest('f'),
+    mutationRevision: 0,
   }))).code, EXECUTION_ISOLATION_JOB_SESSION_REASONS.CAPACITY_EXCEEDED);
+
+  const refreshHarness = dependencyHarness();
+  const refreshService = createService(refreshHarness);
+  const refreshOpened = await refreshService.open(openInput);
+  assert.strictEqual(refreshOpened.ok, true);
+  assert.strictEqual((await refreshOpened.session.exec(Object.freeze({
+    sandboxRequest: createSandboxExecutionRequest({
+      executionId: 'execution-refresh-running',
+      requestId: 'request-refresh-running',
+      grantId: 'grant-refresh-running',
+      rootPath: openInput.binding.canonicalRootPath,
+      realRootPath: openInput.binding.realRootPath,
+      command: {
+        kind: SANDBOX_COMMAND_KINDS.EXECUTABLE,
+        executable: 'npm',
+        args: ['test'],
+      },
+      timeoutMs: 10_000,
+    }),
+    mutationRevision: 0,
+  }))).ok, true);
+  const revisionOneOpenInput = Object.freeze({
+    ...openInput,
+    mutationRevision: 1,
+  });
+  assert.deepStrictEqual(await refreshService.open(revisionOneOpenInput), {
+    ok: false,
+    code: EXECUTION_ISOLATION_JOB_SESSION_REASONS.PROCESS_ACTIVE,
+  });
+  assert.strictEqual(refreshHarness.state.workspaceRollbacks, 0);
+  assert.strictEqual(refreshHarness.state.workspaceAcquires, 1);
+  assert.strictEqual((await refreshOpened.session.stop(Object.freeze({
+    executionId: 'execution-refresh-running',
+    expectedRevision: 1,
+    reasonCode: 'USER_CANCELLED',
+  }))).ok, true);
+  const refreshed = await refreshService.open(revisionOneOpenInput);
+  assert.strictEqual(refreshed.ok, true);
+  assert.strictEqual(refreshed.idempotent, false);
+  assert.strictEqual(refreshed.session, refreshOpened.session);
+  assert.strictEqual(refreshHarness.state.rootAcquires, 2);
+  assert.strictEqual(refreshHarness.state.rootReleases, 1);
+  assert.strictEqual(refreshHarness.state.workspaceAcquires, 2);
+  assert.strictEqual(refreshHarness.state.workspaceRollbacks, 1);
+  assert.strictEqual((await refreshed.session.exec(Object.freeze({
+    sandboxRequest: createSandboxExecutionRequest({
+      executionId: 'execution-refresh-build',
+      requestId: 'request-refresh-build',
+      grantId: 'grant-refresh-build',
+      rootPath: openInput.binding.canonicalRootPath,
+      realRootPath: openInput.binding.realRootPath,
+      command: {
+        kind: SANDBOX_COMMAND_KINDS.EXECUTABLE,
+        executable: 'npm',
+        args: ['run', 'build'],
+      },
+      timeoutMs: 10_000,
+    }),
+    mutationRevision: 1,
+  }))).ok, true);
+  const lowerRevisionReuse = await refreshService.open(openInput);
+  assert.deepStrictEqual(lowerRevisionReuse, {
+    ok: false,
+    code: EXECUTION_ISOLATION_JOB_SESSION_REASONS.MUTATION_REVISION_MISMATCH,
+  });
+  assert.strictEqual(refreshHarness.state.workspaceAcquires, 2);
+  assert.strictEqual((await refreshService.dispose()).ok, true);
+
+  const refreshFailureHarness = dependencyHarness({ workspaceDeniedOnAcquire: 2 });
+  const refreshFailureService = createService(refreshFailureHarness);
+  assert.strictEqual((await refreshFailureService.open(openInput)).ok, true);
+  const refreshFailure = await refreshFailureService.open(revisionOneOpenInput);
+  assert.strictEqual(
+    refreshFailure.code,
+    EXECUTION_ISOLATION_JOB_SESSION_REASONS.WORKSPACE_ACQUIRE_FAILED
+  );
+  assert.strictEqual(refreshFailureService.diagnostics().quarantined, 1);
+  assert.strictEqual(refreshFailureHarness.state.processExecs, 0);
+  assert.strictEqual(
+    (await refreshFailureService.open(revisionOneOpenInput)).code,
+    EXECUTION_ISOLATION_JOB_SESSION_REASONS.SESSION_UNHEALTHY
+  );
   const drainingReceipt = await drainingService.dispose();
   assert.strictEqual(drainingReceipt.ok, true);
   assert.strictEqual(drainingReceipt.active, 0);

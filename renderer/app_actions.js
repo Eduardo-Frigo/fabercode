@@ -179,6 +179,20 @@
       return typeof value === 'string' && value.trim() ? value.trim() : null;
     }
 
+    function durableTerminalJobWon(jobId, job = null) {
+      const normalizedJobId = normalizePendingJobId(jobId);
+      if (!normalizedJobId) return false;
+      const normalizedResponseJobId = normalizePendingJobId(job && job.id);
+      const terminalStatus = ['completed', 'failed', 'blocked', 'cancelled'].includes(
+        String(job && job.status || '').toLowerCase()
+      );
+      if (normalizedResponseJobId === normalizedJobId && terminalStatus) return true;
+      return Boolean(
+        state.jobTerminalNoticeById
+        && state.jobTerminalNoticeById[normalizedJobId]
+      );
+    }
+
     function clearPendingExecution() {
       state.pendingActionJobId = null;
       clearPending();
@@ -254,7 +268,24 @@
           };
         }
         if (executionEpoch !== submissionEpoch) return;
-        pollJob(pendingJobId);
+        // The durable job snapshot is the UI authority. A concurrent polling
+        // request may already have rendered the terminal result and cleared the
+        // active job while this older IPC summary is still resolving.
+        const reconciledJob = await pollJob(pendingJobId);
+        if (executionEpoch !== submissionEpoch) return;
+        if (durableTerminalJobWon(pendingJobId, reconciledJob)) {
+          if (result && result.projectInfo && result.projectInfo.rootPath) {
+            state.selectedProjectInfo = result.projectInfo;
+          }
+          if (result && result.qualityReport) state.lastQualityReport = result.qualityReport;
+          if (result && result.nextSteps) {
+            state.nextSteps = result.nextSteps;
+            renderNextSteps();
+          }
+          if (projectFileTreeController) await projectFileTreeController.refresh();
+          clearPendingExecutionIfCurrent(pendingAction, pendingJobId);
+          return;
+        }
         if (!result || !result.ok) {
           if (result && result.projectInfo && result.projectInfo.rootPath) {
             state.selectedProjectInfo = result.projectInfo;
@@ -672,17 +703,30 @@
         return;
       }
     
-      appendMessage(
-        'assistant',
-        uiText('actionCancelled', 'Tarefa cancelada. Nenhuma nova operação será iniciada.'),
-      );
-      api
-        .appendAuditEvent('assistant.execute_cancelled', {
-          rootPath: selectedProjectInfo ? selectedProjectInfo.rootPath : null,
-          targetFile: pendingAction ? pendingAction.targetFile : null,
-          jobId,
-        })
-        .catch(() => {});
+      const cancelledStatus = String(cancelledJob && cancelledJob.status || '').toLowerCase();
+      const cancellationTerminal = ['completed', 'failed', 'blocked', 'cancelled']
+        .includes(cancelledStatus);
+      if (!cancellationTerminal && jobId) {
+        if (pendingAction) clearPendingExecutionIfCurrent(pendingAction, pendingActionJobId);
+        if (state.activeJobId !== jobId) startJobPolling(jobId);
+        if (cancelledJob) renderJobProgress(cancelledJob);
+        updateStatus(uiText('stoppingCurrentRun', 'Encerrando a execução atual...'));
+        return;
+      }
+
+      if (cancelledStatus === 'cancelled') {
+        appendMessage(
+          'assistant',
+          uiText('actionCancelled', 'Tarefa cancelada. Nenhuma nova operação será iniciada.'),
+        );
+        api
+          .appendAuditEvent('assistant.execute_cancelled', {
+            rootPath: selectedProjectInfo ? selectedProjectInfo.rootPath : null,
+            targetFile: pendingAction ? pendingAction.targetFile : null,
+            jobId,
+          })
+          .catch(() => {});
+      }
       if (state.activeJobId === jobId) {
         stopJobPolling();
         state.activeJobId = null;

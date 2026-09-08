@@ -88,6 +88,15 @@ assert.strictEqual(
   nodes.get('#btn-job-rollback-canary').attributes.title,
   'Restore the files from before this canary change'
 );
+assert.strictEqual(controller.t('phaseCancelling'), 'Stopping execution');
+assert.strictEqual(controller.t('stoppingCurrentRun'), 'Stopping the current run...');
+assert.strictEqual(controller.t('stoppingExecution'), 'Stopping execution');
+assert.strictEqual(controller.t('cancelJobFailed'), 'Could not stop this run.');
+assert.strictEqual(controller.t('previewReady'), 'preview ready');
+assert.strictEqual(
+  controller.t('projectSwitchCancellationPending'),
+  'The task is still stopping; wait for confirmation before switching context.'
+);
 
 locale = 'es-ES';
 controller.applyStaticTranslations();
@@ -103,5 +112,17 @@ assert.strictEqual(
   nodes.get('#btn-job-rollback-canary').attributes.title,
   'Restaurar los archivos anteriores a este cambio canary'
 );
+assert.strictEqual(controller.t('phaseCancelling'), 'Deteniendo la ejecución');
+assert.strictEqual(controller.t('stoppingCurrentRun'), 'Deteniendo la ejecución actual...');
+assert.strictEqual(controller.t('stoppingExecution'), 'Deteniendo la ejecución');
+assert.strictEqual(controller.t('cancelJobFailed'), 'No se pudo detener esta ejecución.');
+assert.strictEqual(controller.t('previewReady'), 'vista previa lista');
+assert.strictEqual(
+  controller.t('projectSwitchCancellationPending'),
+  'La tarea todavía se está deteniendo; espera la confirmación antes de cambiar de contexto.'
+);
+
+locale = 'pt-BR';
+assert.strictEqual(controller.t('previewReady'), 'visualização pronta');
 
 console.log('renderer-i18n.test.js: ok');

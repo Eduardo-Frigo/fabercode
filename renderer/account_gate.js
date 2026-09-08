@@ -7,9 +7,16 @@
     return Boolean(status && status.ok !== false && status.signedIn && status.user);
   }
 
+  function hasLocalUnauthenticatedAccess(status) {
+    const access = status && status.access ? status.access : {};
+    return Boolean(status && status.ok !== false && !status.signedIn
+      && access.allowed === true
+      && access.mode === 'local_development');
+  }
+
   function hasPlatformMedia(status) {
-    const media = status && status.config && status.config.media ? status.config.media : {};
-    return Boolean(media.pexelsConfigured);
+    const access = status && status.access ? status.access : {};
+    return access.platformMedia === true;
   }
 
   function formatMessage(template, replacements = {}) {
@@ -281,7 +288,8 @@
     }
 
     function canUseApp(status) {
-      if (!isSignedIn(status)) return false;
+      const accountReady = isSignedIn(status) || hasLocalUnauthenticatedAccess(status);
+      if (!accountReady) return false;
       if (requirePlatformMedia && !hasPlatformMedia(status)) return false;
       return true;
     }
@@ -304,8 +312,8 @@
         setStatusMessage('');
       }
 
-      if (signedIn) {
-        if (typeof window !== 'undefined' && window.localStorage) {
+      if (appReady) {
+        if (signedIn && typeof window !== 'undefined' && window.localStorage) {
           window.localStorage.setItem('fabercode:onboarding-completed', 'true');
         }
         if (elements.wizard) elements.wizard.classList.add('hidden');
@@ -742,8 +750,7 @@
     }
 
     function renderFlowStep() {
-      const signedIn = isSignedIn(currentStatus);
-      const showWizard = !signedIn;
+      const showWizard = !canUseApp(currentStatus);
       if (elements.wizard) elements.wizard.classList.toggle('hidden', !showWizard);
       if (!showWizard) return;
 
@@ -1230,6 +1237,7 @@
     formatGithubSetupMessage,
     getPreferredDeviceLanguage,
     getPreferredSignupLanguage,
+    hasLocalUnauthenticatedAccess,
     hasPlatformMedia,
     isSignedIn,
     normalizeLanguagePreference,

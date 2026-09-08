@@ -26,13 +26,14 @@ const {
 } = require('../agent_runtime/execution/process_supervisor');
 const {
   EXECUTION_ISOLATION_JOB_PROCESS_GATEWAY_DISPOSE_RECEIPT_VERSION,
+  EXECUTION_ISOLATION_JOB_PROCESS_GATEWAY_VERSION,
   createExecutionIsolationJobProcessGateway,
 } = require('./execution_isolation_job_process_gateway');
 
 const EXECUTION_ISOLATION_JOB_SESSION_SERVICE_VERSION =
-  'execution-isolation-job-session-service.v2';
+  'execution-isolation-job-session-service.v3';
 const EXECUTION_ISOLATION_JOB_SESSION_VERSION =
-  'execution-isolation-job-session.v2';
+  'execution-isolation-job-session.v3';
 const EXECUTION_ISOLATION_JOB_SESSION_DISPOSE_RECEIPT_VERSION =
   'execution-isolation-job-session-dispose-receipt.v2';
 const EXECUTION_ISOLATION_JOB_SESSION_CLOSE_RECEIPT_VERSION =
@@ -56,6 +57,8 @@ const EXECUTION_ISOLATION_JOB_SESSION_REASONS = Object.freeze({
   CAPACITY_EXCEEDED: 'EXECUTION_ISOLATION_SESSION_CAPACITY_EXCEEDED',
   DISPOSED: 'EXECUTION_ISOLATION_SESSION_SERVICE_DISPOSED',
   INVALID_INPUT: 'EXECUTION_ISOLATION_SESSION_INVALID_INPUT',
+  MUTATION_REVISION_MISMATCH: 'EXECUTION_ISOLATION_SESSION_MUTATION_REVISION_MISMATCH',
+  PROCESS_ACTIVE: 'EXECUTION_ISOLATION_SESSION_PROCESS_ACTIVE',
   PROCESS_UNAVAILABLE: 'EXECUTION_ISOLATION_PROCESS_UNAVAILABLE',
   PROCESS_GATEWAY_FAILED: 'EXECUTION_ISOLATION_PROCESS_GATEWAY_FAILED',
   ROOT_ACQUIRE_FAILED: 'EXECUTION_ISOLATION_ROOT_ACQUIRE_FAILED',
@@ -153,15 +156,23 @@ function invokeCaptured(captured, args = []) {
 }
 
 function normalizeOpenInput(value) {
-  const fields = exactOwnDataFields(value, ['binding', 'sourceRootIdentityDigest']);
+  const fields = exactOwnDataFields(value, [
+    'binding',
+    'sourceRootIdentityDigest',
+    'mutationRevision',
+  ]);
   if (!fields) return null;
   try {
+    const mutationRevision = fields.get('mutationRevision');
+    if (!Number.isSafeInteger(mutationRevision) || mutationRevision < 0
+      || Object.is(mutationRevision, -0)) return null;
     return Object.freeze({
       binding: createCapabilityDelegationBinding(fields.get('binding')),
       sourceRootIdentityDigest: normalizeDigest(
         fields.get('sourceRootIdentityDigest'),
         'sourceRootIdentityDigest'
       ),
+      mutationRevision,
     });
   } catch (error) {
     preflightDataGraph(error);
@@ -453,6 +464,38 @@ function createExecutionIsolationJobSessionService(options = {}) {
     return successfulProcessGatewayDispose(outcome);
   }
 
+  function processGatewayIsIdle(record) {
+    const captured = record.processGatewayMethods
+      && record.processGatewayMethods.diagnostics;
+    if (!captured) return null;
+    let value;
+    try {
+      value = Reflect.apply(captured.method, captured.receiver, []);
+    } catch (error) {
+      preflightDataGraph(error);
+      return null;
+    }
+    const fields = exactOwnDataFields(value, [
+      'version',
+      'state',
+      'disposed',
+      'active',
+      'starting',
+      'running',
+      'terminal',
+      'quarantined',
+    ]);
+    if (!fields || !Object.isFrozen(value)
+      || fields.get('version') !== EXECUTION_ISOLATION_JOB_PROCESS_GATEWAY_VERSION
+      || typeof fields.get('state') !== 'string'
+      || typeof fields.get('disposed') !== 'boolean'
+      || !['active', 'starting', 'running', 'terminal', 'quarantined']
+        .every((key) => Number.isSafeInteger(fields.get(key))
+          && fields.get(key) >= 0
+          && !Object.is(fields.get(key), -0))) return null;
+    return fields.get('active') === 0;
+  }
+
   function invokeProcessGateway(record, name, input) {
     if (record.closeRequested || ['closing', 'closed'].includes(record.state)) {
       return Promise.resolve(denied(
@@ -518,6 +561,9 @@ function createExecutionIsolationJobSessionService(options = {}) {
     if (record.closePromise) return record.closePromise;
     record.closeRequested = true;
     record.closePromise = Promise.resolve().then(async () => {
+      if (record.refreshPromise) {
+        await settledOutcome(record.refreshPromise);
+      }
       if (record.openPromise && record.state === 'opening') {
         await settledOutcome(record.openPromise);
       }
@@ -579,7 +625,9 @@ function createExecutionIsolationJobSessionService(options = {}) {
     });
   }
 
-  function failOpen(record, code, { retain = false } = {}) {
+  function failOpen(record, code, {
+    retain = record.refreshAttempt === true,
+  } = {}) {
     record.state = retain ? 'quarantined' : 'released';
     if (retain) {
       serviceState = 'degraded';
@@ -637,7 +685,7 @@ function createExecutionIsolationJobSessionService(options = {}) {
       return failOpen(
         record,
         beforeWorkspaceInterruption,
-        { retain: !cleanup.clean }
+        { retain: record.refreshAttempt === true || !cleanup.clean }
       );
     }
 
@@ -658,7 +706,7 @@ function createExecutionIsolationJobSessionService(options = {}) {
         cleanup.clean
           ? EXECUTION_ISOLATION_JOB_SESSION_REASONS.WORKSPACE_ACQUIRE_FAILED
           : EXECUTION_ISOLATION_JOB_SESSION_REASONS.SESSION_UNHEALTHY,
-        { retain: !cleanup.clean }
+        { retain: record.refreshAttempt === true || !cleanup.clean }
       );
     }
     record.workspaceLease = workspaceLease;
@@ -669,6 +717,7 @@ function createExecutionIsolationJobSessionService(options = {}) {
         binding: record.input.binding,
         workspaceLease,
         processSupervisor: dependencies.processSupervisor,
+        mutationRevision: record.input.mutationRevision,
       });
       processGatewayMethods = Object.freeze(Object.fromEntries(
         ['exec', 'read', 'wait', 'stop', 'diagnostics', 'dispose'].map((name) => {
@@ -687,15 +736,16 @@ function createExecutionIsolationJobSessionService(options = {}) {
         cleanup.clean
           ? EXECUTION_ISOLATION_JOB_SESSION_REASONS.PROCESS_GATEWAY_FAILED
           : EXECUTION_ISOLATION_JOB_SESSION_REASONS.SESSION_UNHEALTHY,
-        { retain: !cleanup.clean }
+        { retain: record.refreshAttempt === true || !cleanup.clean }
       );
     }
     record.processGateway = processGateway;
     record.processGatewayMethods = processGatewayMethods;
     record.processGatewayDispose = processGatewayMethods.dispose;
-    record.session = createSessionFacade(record);
+    if (!record.session) record.session = createSessionFacade(record);
     record.wasActive = true;
     record.state = 'active';
+    record.refreshAttempt = false;
     const activeInterruption = interruptionReason(record);
     if (activeInterruption) {
       return denied(activeInterruption);
@@ -707,23 +757,71 @@ function createExecutionIsolationJobSessionService(options = {}) {
     });
   }
 
+  function beginRefresh(record, normalized) {
+    const idle = processGatewayIsIdle(record);
+    if (idle === false) {
+      return Promise.resolve(denied(
+        EXECUTION_ISOLATION_JOB_SESSION_REASONS.PROCESS_ACTIVE
+      ));
+    }
+    if (idle !== true) {
+      record.state = 'quarantined';
+      serviceState = 'degraded';
+      return Promise.resolve(denied(
+        EXECUTION_ISOLATION_JOB_SESSION_REASONS.SESSION_UNHEALTHY
+      ));
+    }
+
+    record.state = 'refreshing';
+    record.refreshInput = normalized;
+    record.refreshAttempt = true;
+    const operation = Promise.resolve().then(async () => {
+      const gatewayReleased = await releaseProcessGateway(record);
+      if (!gatewayReleased) {
+        record.state = 'quarantined';
+        serviceState = 'degraded';
+        return denied(EXECUTION_ISOLATION_JOB_SESSION_REASONS.SESSION_UNHEALTHY);
+      }
+      record.processGateway = null;
+      record.processGatewayMethods = null;
+      record.processGatewayDispose = null;
+
+      const cleanup = await releaseAuthorities(record);
+      if (!cleanup.clean) {
+        record.state = 'quarantined';
+        serviceState = 'degraded';
+        return denied(EXECUTION_ISOLATION_JOB_SESSION_REASONS.SESSION_UNHEALTHY);
+      }
+
+      record.input = normalized;
+      record.state = 'opening';
+      return beginOpen(record);
+    }).then((outcome) => outcome, (error) => {
+      preflightDataGraph(error);
+      record.state = 'quarantined';
+      serviceState = 'degraded';
+      return denied(EXECUTION_ISOLATION_JOB_SESSION_REASONS.SESSION_UNHEALTHY);
+    });
+    record.refreshPromise = operation.then((outcome) => {
+      record.refreshPromise = null;
+      record.refreshInput = null;
+      return outcome;
+    });
+    return record.refreshPromise;
+  }
+
   function activeReservationCount() {
     let count = 0;
     for (const record of records.values()) {
-      if (['opening', 'active', 'closing', 'quarantined'].includes(record.state)) {
+      if (['opening', 'refreshing', 'active', 'closing', 'quarantined']
+        .includes(record.state)) {
         count += 1;
       }
     }
     return count;
   }
 
-  function open(input) {
-    const normalized = normalizeOpenInput(input);
-    if (!normalized) {
-      return Promise.resolve(denied(
-        EXECUTION_ISOLATION_JOB_SESSION_REASONS.INVALID_INPUT
-      ));
-    }
+  function openNormalized(normalized) {
     if (disposeRequested || disposeReceipt) {
       return Promise.resolve(denied(EXECUTION_ISOLATION_JOB_SESSION_REASONS.DISPOSED));
     }
@@ -734,8 +832,44 @@ function createExecutionIsolationJobSessionService(options = {}) {
           EXECUTION_ISOLATION_JOB_SESSION_REASONS.SESSION_MISMATCH
         ));
       }
-      if (existing.state === 'opening') return existing.openPromise;
+      if (existing.refreshPromise) {
+        const targetRevision = existing.refreshInput
+          ? existing.refreshInput.mutationRevision
+          : existing.input.mutationRevision;
+        if (normalized.mutationRevision === targetRevision) {
+          return existing.refreshPromise;
+        }
+        if (normalized.mutationRevision < targetRevision) {
+          return Promise.resolve(denied(
+            EXECUTION_ISOLATION_JOB_SESSION_REASONS.MUTATION_REVISION_MISMATCH
+          ));
+        }
+        return existing.refreshPromise.then((outcome) => (
+          outcome && outcome.ok === true ? openNormalized(normalized) : outcome
+        ));
+      }
+      if (existing.state === 'opening') {
+        if (normalized.mutationRevision === existing.input.mutationRevision) {
+          return existing.openPromise;
+        }
+        if (normalized.mutationRevision < existing.input.mutationRevision) {
+          return Promise.resolve(denied(
+            EXECUTION_ISOLATION_JOB_SESSION_REASONS.MUTATION_REVISION_MISMATCH
+          ));
+        }
+        return existing.openPromise.then((outcome) => (
+          outcome && outcome.ok === true ? openNormalized(normalized) : outcome
+        ));
+      }
       if (existing.state === 'active') {
+        if (normalized.mutationRevision > existing.input.mutationRevision) {
+          return beginRefresh(existing, normalized);
+        }
+        if (normalized.mutationRevision < existing.input.mutationRevision) {
+          return Promise.resolve(denied(
+            EXECUTION_ISOLATION_JOB_SESSION_REASONS.MUTATION_REVISION_MISMATCH
+          ));
+        }
         return Promise.resolve(Object.freeze({
           ok: true,
           session: existing.session,
@@ -770,10 +904,23 @@ function createExecutionIsolationJobSessionService(options = {}) {
       processGatewayDispose: null,
       session: null,
       wasActive: false,
+      refreshAttempt: false,
+      refreshInput: null,
+      refreshPromise: null,
     };
     records.set(normalized.binding.jobId, record);
     record.openPromise = Promise.resolve().then(() => beginOpen(record));
     return record.openPromise;
+  }
+
+  function open(input) {
+    const normalized = normalizeOpenInput(input);
+    if (!normalized) {
+      return Promise.resolve(denied(
+        EXECUTION_ISOLATION_JOB_SESSION_REASONS.INVALID_INPUT
+      ));
+    }
+    return openNormalized(normalized);
   }
 
   function close(input) {
@@ -800,6 +947,7 @@ function createExecutionIsolationJobSessionService(options = {}) {
   function diagnostics() {
     const counts = {
       opening: 0,
+      refreshing: 0,
       active: 0,
       closing: 0,
       quarantined: 0,
@@ -813,7 +961,7 @@ function createExecutionIsolationJobSessionService(options = {}) {
       processIsolationState: processState,
       disposed: Boolean(disposeReceipt),
       opening: counts.opening,
-      active: counts.opening + counts.active + counts.closing,
+      active: counts.opening + counts.refreshing + counts.active + counts.closing,
       closed: closedCount,
       quarantined: counts.quarantined,
       maxActiveSessions: dependencies.maxActiveSessions,

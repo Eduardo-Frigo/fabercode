@@ -24,6 +24,7 @@ const visualReceipt = Object.freeze(Object.create(null));
 async function main() {
   const calls = [];
   const visualApprovalCalls = [];
+  const visualConsumptionCalls = [];
   let turn = 0;
   let activeSessionId = '';
 
@@ -33,7 +34,7 @@ async function main() {
     executeTool: async () => ({ ok: true }),
     getEffectiveOpenAiModel: () => 'gpt-5-codex',
     getSelectedAiProvider: () => 'openai',
-    requestModelTurn: async ({ systemPrompt, tools, toolResults }) => {
+    requestModelTurn: async ({ systemPrompt, tools, toolResults, consumeVisualEgress }) => {
       turn += 1;
       const names = tools.map((tool) => tool.name);
       for (const name of [
@@ -150,6 +151,17 @@ async function main() {
         assert.strictEqual(toolResults[0].visualEgress.mimeType, 'image/png');
         assert.strictEqual(toolResults[0].visualEgress.bytes, png.length);
         assert.strictEqual(toolResults[0].output.includes(pngDigest), false);
+        assert.strictEqual(typeof consumeVisualEgress, 'function');
+        const consumed = consumeVisualEgress(Object.freeze({
+          callId: toolResults[0].callId,
+          receipt: toolResults[0].visualEgress.receipt,
+          providerId: 'openai',
+          providerOrigin: 'https://api.openai.com',
+          payloadDigest: toolResults[0].visualEgress.payloadDigest,
+          mimeType: toolResults[0].visualEgress.mimeType,
+          bytes: toolResults[0].visualEgress.bytes,
+        }));
+        assert.strictEqual(consumed.authorized, true);
         return {
           responseId: 'browser-turn-5',
           text: '',
@@ -193,7 +205,7 @@ async function main() {
 
   const result = await service.executeAction({
     type: 'agentic_tool_loop',
-    userMessage: 'Valide visualmente o preview local.',
+    userMessage: 'Perform a visual audit of the local preview and capture it. Do not finish as success unless tool evidence confirms that the approved visual image was delivered to the model.',
     attachments: [],
     conversationMessages: [],
     jobId: 'job-browser-tool-loop',
@@ -210,6 +222,14 @@ async function main() {
         approved: true,
         reason: 'visual_egress_approved',
         receipt: visualReceipt,
+      });
+    },
+    consumeVisualEgress(input) {
+      visualConsumptionCalls.push(input);
+      return Object.freeze({
+        ok: true,
+        authorized: true,
+        reason: 'visual_egress_consumed',
       });
     },
     openBrowser(input) {
@@ -276,7 +296,20 @@ async function main() {
     'close',
   ]);
   assert.ok(calls.every((entry) => Object.isFrozen(entry.input)));
+  const captureInvocation = calls.find((entry) => entry.operation === 'capture');
+  assert(captureInvocation);
+  assert.deepStrictEqual(Object.keys(captureInvocation.input).sort(), [
+    'callId',
+    'invocationId',
+    'sessionId',
+  ]);
+  assert.strictEqual(captureInvocation.input.callId, 'browser-capture');
+  assert.match(
+    captureInvocation.input.invocationId,
+    /^browser-capture:4:[a-f0-9]{32}$/
+  );
   assert.strictEqual(visualApprovalCalls.length, 1);
+  assert.strictEqual(visualConsumptionCalls.length, 1);
   assert.deepStrictEqual(visualApprovalCalls[0], {
     jobId: 'job-browser-tool-loop',
     callId: 'browser-capture',
@@ -296,6 +329,115 @@ async function main() {
   ]);
   assert.match(result.message, /preview visual capturado/i);
   assert.doesNotMatch(result.message, /preview não foi capturado/i);
+  assert.deepStrictEqual(result.terminalEvidence.required.browser, [
+    'opened',
+    'captured',
+    'visual_delivered',
+  ]);
+  assert.deepStrictEqual(result.terminalEvidence.satisfied.browser, [
+    'opened',
+    'inspected',
+    'captured',
+    'visual_delivered',
+  ]);
+
+  // A local PNG is not proof that the model received visual evidence. If the
+  // fresh egress approval is denied or expires, a visual audit cannot finish
+  // successfully on the capture receipt alone.
+  const deniedVisualEvents = [];
+  let deniedVisualTurn = 0;
+  const deniedVisualService = createAgenticToolLoopService({
+    appendJobEvent(jobId, type, payload) {
+      deniedVisualEvents.push({ jobId, type, payload });
+    },
+    executeCapability: async () => ({ ok: true }),
+    executeTool: async () => ({ ok: true }),
+    getEffectiveOpenAiModel: () => 'gpt-5-codex',
+    getSelectedAiProvider: () => 'openai',
+    requestModelTurn: async ({ toolResults }) => {
+      deniedVisualTurn += 1;
+      if (deniedVisualTurn === 1) {
+        return {
+          responseId: 'visual-denied-1',
+          text: '',
+          toolCalls: [{
+            callId: 'visual-denied-open',
+            name: 'open_browser_preview',
+            input: { url: session.url, viewport: session.viewport },
+          }],
+        };
+      }
+      if (deniedVisualTurn === 2) {
+        return {
+          responseId: 'visual-denied-2',
+          text: '',
+          toolCalls: [{
+            callId: 'visual-denied-capture',
+            name: 'capture_browser_preview',
+            input: { sessionId: session.id },
+          }],
+        };
+      }
+      assert.strictEqual(toolResults.length, 1);
+      assert.strictEqual(Object.hasOwn(toolResults[0], 'visual'), false);
+      return {
+        responseId: 'visual-denied-3',
+        text: '',
+        toolCalls: [{
+          callId: 'visual-denied-finish',
+          name: 'finish_task',
+          input: { status: 'success', summary: 'auditoria visual concluida' },
+        }],
+      };
+    },
+    setJobCheckpoint() {},
+    shouldUseModel: () => true,
+    maxSteps: 3,
+  });
+  const deniedVisualResult = await deniedVisualService.executeAction({
+    type: 'agentic_tool_loop',
+    userMessage: 'Perform a visual audit and capture the browser preview.',
+    attachments: [],
+    conversationMessages: [],
+    jobId: 'job-visual-egress-denied',
+  }, {
+    id: 'project-browser-tool-loop',
+    rootPath: '/projects/browser-tool-loop',
+  }, Object.freeze({
+    jobId: 'job-visual-egress-denied',
+    authorizeVisualEgress: async () => Object.freeze({
+      ok: false,
+      approved: false,
+      reason: 'visual_egress_expired',
+      receipt: null,
+    }),
+    openBrowser: async () => ({
+      status: 'completed',
+      decision: 'allow',
+      output: { ok: true, session },
+    }),
+    navigateBrowser: async () => ({
+      status: 'completed',
+      decision: 'allow',
+      output: { ok: true, session },
+    }),
+    interactBrowser: async () => ({ ok: true }),
+    captureBrowser: async () => ({
+      ok: true,
+      session,
+      image: { type: 'image', mimeType: 'image/png', data: pngBase64, bytes: png.length },
+    }),
+    inspectBrowser: async () => ({ ok: true, session, console: [], requestFailures: [] }),
+    closeBrowser: async () => ({ ok: true, closed: true, sessionId: session.id }),
+  }));
+  assert.strictEqual(deniedVisualResult.ok, false);
+  const deniedVisualFinish = deniedVisualEvents.find((entry) => (
+    entry.type === 'job.agentic_tool_result'
+    && entry.payload.toolName === 'finish_task'
+  ));
+  assert(deniedVisualFinish);
+  assert.strictEqual(deniedVisualFinish.payload.ok, false);
+  assert.match(deniedVisualFinish.payload.message, /captura.*provedor|evidencia visual/i);
 
   // Browser verbs explicitly requested by the user are evidence obligations.
   // A textual finish_task claim cannot replace a governed open receipt.
@@ -352,6 +494,79 @@ async function main() {
   assert.strictEqual(rejectedPrematureBrowserFinish.payload.ok, false);
   assert.match(rejectedPrematureBrowserFinish.payload.message, /abrir.*preview/i);
   assert.doesNotMatch(rejectedPrematureBrowserFinish.payload.message, /captur/i);
+
+  // An explicit user prohibition has precedence over positive browser verbs,
+  // including a contradictory execution message produced by the internal route.
+  // Negated preview language must never become a browser evidence obligation.
+  const deniedBrowserCases = [
+    {
+      id: 'pt-nao-abra',
+      userMessage: 'Faça uma auditoria somente leitura. Não abra preview no navegador.',
+      routeDecision: {
+        executionMessage: 'Abra o preview no navegador antes de concluir.',
+      },
+    },
+    {
+      id: 'pt-sem-abrir',
+      userMessage: 'Faça uma auditoria somente leitura sem abrir o preview.',
+      routeDecision: null,
+    },
+    {
+      id: 'en-do-not-open',
+      userMessage: 'Read the project tree. Do not open the browser preview.',
+      routeDecision: null,
+    },
+  ];
+  for (const deniedCase of deniedBrowserCases) {
+    let deniedTurn = 0;
+    const deniedService = createAgenticToolLoopService({
+      appendJobEvent() {},
+      executeCapability: async () => ({ ok: true }),
+      executeTool: async () => ({ ok: true }),
+      getEffectiveOpenAiModel: () => 'gpt-5-codex',
+      getSelectedAiProvider: () => 'openai',
+      requestModelTurn: async () => {
+        deniedTurn += 1;
+        if (deniedTurn === 1) {
+          return {
+            responseId: `denied-browser-${deniedCase.id}-1`,
+            text: '',
+            toolCalls: [{
+              callId: `denied-browser-tree-${deniedCase.id}`,
+              name: 'project_tree',
+              input: {},
+            }],
+          };
+        }
+        return {
+          responseId: `denied-browser-${deniedCase.id}-2`,
+          text: '',
+          toolCalls: [{
+            callId: `denied-browser-finish-${deniedCase.id}`,
+            name: 'finish_task',
+            input: { status: 'success', summary: 'auditoria somente leitura concluída' },
+          }],
+        };
+      },
+      setJobCheckpoint() {},
+      shouldUseModel: () => true,
+      maxSteps: 2,
+    });
+    const deniedResult = await deniedService.executeAction({
+      type: 'agentic_tool_loop',
+      userMessage: deniedCase.userMessage,
+      routeDecision: deniedCase.routeDecision,
+      attachments: [],
+      conversationMessages: [],
+      jobId: `job-denied-browser-${deniedCase.id}`,
+    }, {
+      id: 'project-browser-tool-loop',
+      rootPath: '/projects/browser-tool-loop',
+    }, Object.freeze({ jobId: `job-denied-browser-${deniedCase.id}` }));
+    assert.strictEqual(deniedResult.ok, true, deniedCase.id);
+    assert.strictEqual(deniedTurn, 2, deniedCase.id);
+    assert.deepStrictEqual(deniedResult.terminalEvidence.required.browser, [], deniedCase.id);
+  }
 
   let failureTurn = 0;
   let sanitizedInteractionFailure = null;

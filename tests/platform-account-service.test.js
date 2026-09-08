@@ -16,7 +16,41 @@ async function run() {
   const disabledStatus = disabled.getStatus();
   assert.strictEqual(disabledStatus.ok, true);
   assert.strictEqual(disabledStatus.config.enabled, false);
+  assert.strictEqual(disabledStatus.config.localUnauthenticated, false);
   assert.ok(disabledStatus.config.missing.includes('DATABASE_URL'));
+  assert.deepStrictEqual(disabledStatus.access, {
+    allowed: false,
+    mode: 'none',
+    contextRevision: 0,
+    platformMedia: false,
+    platformSync: false,
+  });
+  assert.strictEqual(disabled.getProductAccessPrincipal(), null);
+
+  let localPrincipalSequence = 0;
+  const localUnauthenticated = createPlatformAccountService({
+    allowLocalUnauthenticated: true,
+    createLocalPrincipalId: () => `local-development:test-process-${++localPrincipalSequence}`,
+    databaseUrl: '',
+    isProductAccessAuthorityReady: () => true,
+    sessionSecret: '',
+  });
+  const localUnauthenticatedStatus = localUnauthenticated.getStatus();
+  assert.strictEqual(localUnauthenticatedStatus.signedIn, false);
+  assert.strictEqual(localUnauthenticatedStatus.user, null);
+  assert.strictEqual(localUnauthenticatedStatus.config.localUnauthenticated, true);
+  assert.deepStrictEqual(localUnauthenticatedStatus.access, {
+    allowed: true,
+    mode: 'local_development',
+    contextRevision: 1,
+    platformMedia: false,
+    platformSync: false,
+  });
+  assert.deepStrictEqual(localUnauthenticated.getProductAccessPrincipal(), {
+    kind: 'local_development',
+    actorId: 'local-development:test-process-1',
+  });
+  assert.strictEqual(Object.isFrozen(localUnauthenticated.getProductAccessPrincipal()), true);
 
   const savedSessions = [];
   const upsertedProfiles = [];
@@ -64,6 +98,7 @@ async function run() {
   };
 
   const fetchCalls = [];
+  const principalChanges = [];
   const service = createPlatformAccountService({
     allowDevEmailCodes: true,
     appBaseUrl: 'http://127.0.0.1:4141',
@@ -127,6 +162,11 @@ async function run() {
     githubClientSecret: 'github-client-secret',
     pexelsApiKey: 'pexels-secret-1234',
     protectSecret: (value) => `protected:${value}`,
+    beforeProductAccessContextChange: (event) => {
+      principalChanges.push(event);
+      return Object.freeze({ ok: true });
+    },
+    isProductAccessAuthorityReady: () => true,
     sessionSecret: 'session-secret',
     store,
     unprotectSecret: (value) => String(value || '').replace(/^protected:/, ''),
@@ -137,6 +177,13 @@ async function run() {
   assert.strictEqual(status.config.google.configured, true);
   assert.strictEqual(status.config.github.configured, true);
   assert.strictEqual(status.config.media.pexelsConfigured, true);
+  assert.deepStrictEqual(status.access, {
+    allowed: false,
+    mode: 'none',
+    contextRevision: 0,
+    platformMedia: false,
+    platformSync: false,
+  });
 
   const login = service.createGoogleLoginRequest();
   assert.strictEqual(login.ok, true);
@@ -147,6 +194,16 @@ async function run() {
   const completed = await service.exchangeGoogleCode({ code: 'oauth-code', state: login.state });
   assert.strictEqual(completed.ok, true);
   assert.strictEqual(completed.session.user.email, 'owner@example.com');
+  assert.deepStrictEqual(principalChanges[0], {
+    previous: null,
+    next: { kind: 'account', actorId: 'usr_google' },
+    reason: 'signed_in',
+  });
+  assert.strictEqual(service.getStatus().access.allowed, true);
+  assert.strictEqual(service.getStatus().access.mode, 'account');
+  assert.strictEqual(service.getStatus().access.contextRevision, 1);
+  assert.strictEqual(service.getStatus().access.platformMedia, true);
+  assert.strictEqual(Object.isFrozen(principalChanges[0]), true);
   assert.strictEqual(upsertedProfiles[0].provider, 'google');
   assert.strictEqual(savedSessions.length, 1);
   assert.strictEqual(savedSessions[0].sessionId, hashSessionToken(completed.session.id, 'session-secret'));
@@ -206,6 +263,8 @@ async function run() {
 
   const degradedService = createPlatformAccountService({
     databaseUrl: 'postgresql://faber.local/db',
+    beforeProductAccessContextChange: () => Object.freeze({ ok: true }),
+    isProductAccessAuthorityReady: () => true,
     loadSessionFile: async () => ({
       id: 'local-session',
       createdAt: '2026-07-10T12:00:00.000Z',
@@ -229,9 +288,72 @@ async function run() {
   assert.strictEqual(degradedRestore.reason, 'session_record_sync_failed');
   assert.strictEqual(degradedService.getStatus().signedIn, true);
 
-  const signedOut = await service.signOut();
+  const signOutPromise = service.signOut();
+  assert.strictEqual(principalChanges.at(-1).reason, 'signed_out');
+  assert.strictEqual(principalChanges.at(-1).next, null);
+  const signedOut = await signOutPromise;
   assert.strictEqual(signedOut.ok, true);
   assert.strictEqual(service.getStatus().signedIn, false);
+  assert.strictEqual(service.getStatus().access.allowed, false);
+
+  let rotatingSequence = 0;
+  const transitionSnapshots = [];
+  let transitionService = null;
+  transitionService = createPlatformAccountService({
+    allowLocalUnauthenticated: true,
+    beforeProductAccessContextChange: (event) => {
+      transitionSnapshots.push({
+        event,
+        sessionBeforeChange: transitionService.getCurrentSession(),
+      });
+      return Object.freeze({ ok: true });
+    },
+    createLocalPrincipalId: () => `local-development:rotation-${++rotatingSequence}`,
+    isProductAccessAuthorityReady: () => true,
+    loadSessionFile: async () => ({
+      id: 'restored-session',
+      createdAt: '2026-07-10T12:00:00.000Z',
+      user: { id: 'usr_restored', email: 'restored@example.com', name: 'Restored' },
+    }),
+  });
+  const firstLocalPrincipal = transitionService.getProductAccessPrincipal();
+  assert.strictEqual(firstLocalPrincipal.actorId, 'local-development:rotation-1');
+  assert.strictEqual((await transitionService.initializeSession()).ok, true);
+  assert.strictEqual(transitionSnapshots[0].sessionBeforeChange, null);
+  assert.strictEqual(transitionService.getProductAccessPrincipal().actorId, 'usr_restored');
+  assert.strictEqual(transitionService.getStatus().access.contextRevision, 2);
+  await transitionService.signOut();
+  const secondLocalPrincipal = transitionService.getProductAccessPrincipal();
+  assert.strictEqual(secondLocalPrincipal.kind, 'local_development');
+  assert.strictEqual(secondLocalPrincipal.actorId, 'local-development:rotation-2');
+  assert.notStrictEqual(secondLocalPrincipal.actorId, firstLocalPrincipal.actorId);
+  assert.strictEqual(transitionService.getStatus().access.contextRevision, 3);
+
+  const asynchronousTransition = createPlatformAccountService({
+    allowLocalUnauthenticated: true,
+    beforeProductAccessContextChange: async () => Object.freeze({ ok: true }),
+    createLocalPrincipalId: () => 'local-development:async-denied',
+    isProductAccessAuthorityReady: () => true,
+    loadSessionFile: async () => ({
+      id: 'forbidden-session',
+      user: { id: 'usr_forbidden', email: 'forbidden@example.com' },
+    }),
+  });
+  await assert.rejects(
+    asynchronousTransition.initializeSession(),
+    /product_access_context_change_rejected/,
+  );
+  assert.strictEqual(asynchronousTransition.getProductAccessPrincipal(), null);
+  assert.strictEqual(asynchronousTransition.getStatus().access.allowed, false);
+
+  const unreadyLocal = createPlatformAccountService({
+    allowLocalUnauthenticated: true,
+    createLocalPrincipalId: () => 'local-development:not-ready',
+    isProductAccessAuthorityReady: () => false,
+  });
+  assert.strictEqual(unreadyLocal.getStatus().config.localUnauthenticated, true);
+  assert.strictEqual(unreadyLocal.getStatus().access.allowed, false);
+  assert.strictEqual(unreadyLocal.getProductAccessPrincipal(), null);
 
   console.log('platform-account-service.test.js: ok');
 }

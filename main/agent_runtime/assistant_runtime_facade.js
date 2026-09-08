@@ -5,8 +5,11 @@ const ASSISTANT_RUNTIME_FACADE_VERSION = 'assistant-runtime-facade.v1';
 const ASSISTANT_RUNTIME_FACADE_REASONS = Object.freeze({
   INVALID_INPUT: 'assistant_runtime_invalid_input',
   PROJECT_NOT_AUTHORIZED: 'assistant_runtime_project_not_authorized',
+  PRODUCT_ACCESS_REQUIRED: 'assistant_runtime_product_access_required',
   RETRY_REQUIRES_RETRY_API: 'assistant_runtime_retry_requires_retry_api',
 });
+const PRODUCT_ACCESS_PRINCIPAL_KINDS = new Set(['account', 'local_development']);
+const FORBIDDEN_IDENTITY_FIELDS = new Set(['principal', 'actorId', 'access', 'accessContext']);
 
 function isPlainRecord(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -45,6 +48,7 @@ function createAssistantRuntimeFacade(options = {}) {
   const coordinator = fields.get('coordinator');
   const harnessRouter = fields.get('harnessRouter');
   const authorizePlanningPayload = fields.get('authorizePlanningPayload');
+  const authorizeProductAccess = fields.get('authorizeProductAccess');
   const kernelId = fields.get('kernelId');
 
   if (!coordinator || typeof coordinator !== 'object') {
@@ -66,8 +70,27 @@ function createAssistantRuntimeFacade(options = {}) {
   if (typeof authorizePlanningPayload !== 'function') {
     throw new TypeError('authorizePlanningPayload is required');
   }
+  if (typeof authorizeProductAccess !== 'function') {
+    throw new TypeError('authorizeProductAccess is required');
+  }
   if (typeof kernelId !== 'string' || !kernelId.trim() || kernelId !== kernelId.trim() || kernelId.includes('\0')) {
     throw new TypeError('kernelId is required');
+  }
+
+  function hasProductAccess(operation) {
+    try {
+      const principal = authorizeProductAccess(Object.freeze({ operation }));
+      if (!isSynchronousResult(principal) || !Object.isFrozen(principal)) return false;
+      const principalFields = dataFields(principal, 'product access principal');
+      return principalFields.size === 2
+        && principalFields.has('kind')
+        && principalFields.has('actorId')
+        && PRODUCT_ACCESS_PRINCIPAL_KINDS.has(principalFields.get('kind'))
+        && typeof principalFields.get('actorId') === 'string'
+        && /^[A-Za-z0-9._:@-]{1,256}$/.test(principalFields.get('actorId'));
+    } catch {
+      return false;
+    }
   }
 
   function authorizePayload(operation, payload) {
@@ -75,6 +98,9 @@ function createAssistantRuntimeFacade(options = {}) {
     try {
       payloadFields = dataFields(payload, `${operation} payload`);
     } catch {
+      return deny(ASSISTANT_RUNTIME_FACADE_REASONS.INVALID_INPUT);
+    }
+    if (Array.from(payloadFields.keys()).some((key) => FORBIDDEN_IDENTITY_FIELDS.has(key))) {
       return deny(ASSISTANT_RUNTIME_FACADE_REASONS.INVALID_INPUT);
     }
     if (payloadFields.has('jobId')) {
@@ -103,6 +129,12 @@ function createAssistantRuntimeFacade(options = {}) {
   }
 
   async function coordinate(operation, payload, invoke) {
+    if (!hasProductAccess(operation)) {
+      return deny(
+        ASSISTANT_RUNTIME_FACADE_REASONS.PRODUCT_ACCESS_REQUIRED,
+        'Autenticação da conta ou modo local de desenvolvimento necessário.',
+      );
+    }
     const authorization = authorizePayload(operation, payload);
     if (!authorization.ok) return authorization;
     return coordinator.coordinatePlanning({
@@ -130,10 +162,30 @@ function createAssistantRuntimeFacade(options = {}) {
   }
 
   function execute(input) {
+    if (!hasProductAccess('execute')) {
+      return Promise.resolve(deny(
+        ASSISTANT_RUNTIME_FACADE_REASONS.PRODUCT_ACCESS_REQUIRED,
+        'Autenticação da conta ou modo local de desenvolvimento necessário.',
+      ));
+    }
+    try {
+      const inputFields = dataFields(input, 'execute input');
+      if (inputFields.size !== 1 || !inputFields.has('jobId')) {
+        throw new TypeError('execute accepts jobId only');
+      }
+    } catch {
+      return Promise.resolve(deny(ASSISTANT_RUNTIME_FACADE_REASONS.INVALID_INPUT));
+    }
     return coordinator.execute(input);
   }
 
   function retry(input) {
+    if (!hasProductAccess('retry')) {
+      return Promise.resolve(deny(
+        ASSISTANT_RUNTIME_FACADE_REASONS.PRODUCT_ACCESS_REQUIRED,
+        'Autenticação da conta ou modo local de desenvolvimento necessário.',
+      ));
+    }
     let inputFields;
     try {
       inputFields = dataFields(input, 'retry input');

@@ -17,6 +17,7 @@
 
     const {
       appendMessage = () => {},
+      clearPending = () => {},
       buildJobContextForPersona = () => null,
       buildTerminalJobMessage = () => null,
       getActiveConversationId = () => null,
@@ -28,9 +29,40 @@
       updateStatus = () => {},
     } = callbacks;
     const staleJobCancellations = new Set();
+    const terminalAppliedJobIds = new Set();
+    const latestAppliedSnapshotByJobId = new Map();
+    let pollRequestSequence = 0;
 
     function normalizeJobId(value) {
       return typeof value === 'string' && value.trim() ? value.trim() : null;
+    }
+
+    function jobSnapshotUpdatedAtMs(job) {
+      const value = job && typeof job.updatedAt === 'string'
+        ? Date.parse(job.updatedAt)
+        : NaN;
+      return Number.isFinite(value) ? value : null;
+    }
+
+    function acceptMonotonicJobSnapshot(jobId, job, requestSequence) {
+      const normalizedJobId = normalizeJobId(jobId);
+      if (!normalizedJobId) return false;
+      const updatedAtMs = jobSnapshotUpdatedAtMs(job);
+      const previous = latestAppliedSnapshotByJobId.get(normalizedJobId);
+      if (previous) {
+        if (updatedAtMs !== null && previous.updatedAtMs !== null) {
+          if (updatedAtMs < previous.updatedAtMs) return false;
+          if (updatedAtMs === previous.updatedAtMs
+            && requestSequence < previous.requestSequence) return false;
+        } else if (requestSequence < previous.requestSequence) {
+          return false;
+        }
+      }
+      latestAppliedSnapshotByJobId.set(normalizedJobId, { updatedAtMs, requestSequence });
+      if (latestAppliedSnapshotByJobId.size > 256) {
+        latestAppliedSnapshotByJobId.delete(latestAppliedSnapshotByJobId.keys().next().value);
+      }
+      return true;
     }
 
     function captureJobUiContext() {
@@ -78,7 +110,17 @@
 
     function discardStaleJob(jobId) {
       const normalizedJobId = normalizeJobId(jobId);
+      if (normalizedJobId && terminalAppliedJobIds.has(normalizedJobId)) return false;
       return cancelStaleJobOnce(normalizedJobId);
+    }
+
+    function rememberAppliedTerminalJob(jobId) {
+      const normalizedJobId = normalizeJobId(jobId);
+      if (!normalizedJobId) return;
+      terminalAppliedJobIds.add(normalizedJobId);
+      if (terminalAppliedJobIds.size > 256) {
+        terminalAppliedJobIds.delete(terminalAppliedJobIds.values().next().value);
+      }
     }
 
     function stopJobPolling() {
@@ -94,6 +136,22 @@
     
     function renderJobProgress(job) {
       if (jobProgressController) jobProgressController.render(job);
+    }
+
+    function clearPendingIfJobAdvanced(job) {
+      const responseJobId = normalizeJobId(job && job.id);
+      const pendingJobId = normalizeJobId(state.pendingActionJobId);
+      if (!responseJobId || responseJobId !== pendingJobId) return false;
+      const status = String(job && job.status || '').toLowerCase();
+      const phase = String(job && job.phase || '').toLowerCase();
+      const terminal = ['completed', 'failed', 'blocked', 'cancelled'].includes(status);
+      if (!terminal && phase === 'awaiting_user_confirmation') return false;
+      state.pendingAction = null;
+      state.pendingActionJobId = null;
+      try {
+        clearPending();
+      } catch {}
+      return true;
     }
     
     
@@ -181,6 +239,7 @@
     
     async function pollJob(jobId, expectedContext = captureJobUiContext()) {
       if (!jobId) return null;
+      const requestSequence = ++pollRequestSequence;
       try {
         const response = await api.getJob({ jobId });
         if (!jobUiContextIsCurrent(expectedContext)) {
@@ -197,12 +256,15 @@
           if (responseJobId && responseJobId !== normalizeJobId(jobId)) cancelStaleJobOnce(responseJobId);
           return null;
         }
+        if (!acceptMonotonicJobSnapshot(responseJobId, response.job, requestSequence)) return null;
         renderJobProgress(response.job);
+        clearPendingIfJobAdvanced(response.job);
         state.lastJobContext = buildJobContextForPersona(response.job);
         await maybeAutoRetryPendingJob(response.job, expectedContext);
         if (!jobUiContextIsCurrent(expectedContext)) return null;
     
         if (['completed', 'failed', 'blocked', 'cancelled'].includes(response.job.status)) {
+          rememberAppliedTerminalJob(responseJobId);
           const alreadyNotified = Boolean(state.jobTerminalNoticeById[jobId]);
           if (!alreadyNotified) {
             const terminalMessage = buildTerminalJobMessage(response.job);
@@ -221,21 +283,34 @@
       }
     }
     
-    function startJobPolling(jobId) {
-      if (!jobId) return;
+    function startJobPolling(jobId, initialJob = null) {
+      const normalizedJobId = normalizeJobId(jobId);
+      if (!normalizedJobId) return;
       stopJobPolling();
-      state.activeJobId = jobId;
+      state.activeJobId = normalizedJobId;
       const expectedContext = captureJobUiContext();
-      renderJobProgress({
-        id: jobId,
-        status: 'running',
-        phase: 'created',
-        events: [],
-        attemptsByPhase: {},
-      });
-      pollJob(jobId, expectedContext);
+      const initialJobMatches = initialJob
+        && typeof initialJob === 'object'
+        && normalizeJobId(initialJob.id) === normalizedJobId;
+      if (initialJobMatches) {
+        const initialSequence = ++pollRequestSequence;
+        if (acceptMonotonicJobSnapshot(normalizedJobId, initialJob, initialSequence)) {
+          renderJobProgress(initialJob);
+          clearPendingIfJobAdvanced(initialJob);
+          state.lastJobContext = buildJobContextForPersona(initialJob);
+        }
+      } else {
+        renderJobProgress({
+          id: normalizedJobId,
+          status: 'running',
+          phase: 'created',
+          events: [],
+          attemptsByPhase: {},
+        });
+      }
+      pollJob(normalizedJobId, expectedContext);
       state.jobPollingTimer = setInterval(() => {
-        pollJob(jobId, expectedContext);
+        pollJob(normalizedJobId, expectedContext);
       }, 1200);
     }
 

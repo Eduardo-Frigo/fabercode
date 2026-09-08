@@ -14,8 +14,30 @@ assert.ok(accountGate, 'FaberAccountGate should be registered');
 
 assert.strictEqual(accountGate.isSignedIn({ ok: true, signedIn: true, user: { email: 'a@b.com' } }), true);
 assert.strictEqual(accountGate.isSignedIn({ ok: true, signedIn: false }), false);
-assert.strictEqual(accountGate.hasPlatformMedia({ config: { media: { pexelsConfigured: true } } }), true);
-assert.strictEqual(accountGate.hasPlatformMedia({ config: { media: { pexelsConfigured: false } } }), false);
+assert.strictEqual(accountGate.hasLocalUnauthenticatedAccess({
+  ok: true,
+  signedIn: false,
+  config: { localUnauthenticated: true },
+}), false);
+assert.strictEqual(accountGate.hasLocalUnauthenticatedAccess({
+  ok: true,
+  signedIn: false,
+  access: {
+    allowed: true,
+    mode: 'local_development',
+    contextRevision: 1,
+    platformMedia: false,
+    platformSync: false,
+  },
+}), true);
+assert.strictEqual(accountGate.hasLocalUnauthenticatedAccess({
+  ok: true,
+  signedIn: false,
+  access: { allowed: true, mode: 'account' },
+}), false);
+assert.strictEqual(accountGate.hasPlatformMedia({ access: { platformMedia: true } }), true);
+assert.strictEqual(accountGate.hasPlatformMedia({ access: { platformMedia: false } }), false);
+assert.strictEqual(accountGate.hasPlatformMedia({ config: { media: { pexelsConfigured: true } } }), false);
 assert.strictEqual(accountGate.normalizeWorkspacePreference('programador'), 'ide');
 assert.strictEqual(accountGate.normalizeWorkspacePreference('anything'), 'chat');
 assert.strictEqual(accountGate.getPreferredDeviceLanguage({ navigator: { language: 'en-US' } }), 'en-US');
@@ -180,6 +202,13 @@ async function run() {
     ok: true,
     signedIn: false,
     user: null,
+    access: {
+      allowed: false,
+      mode: 'none',
+      contextRevision: 0,
+      platformMedia: false,
+      platformSync: false,
+    },
     config: {
       media: { pexelsConfigured: true },
       google: { configured: true, missing: [] },
@@ -207,6 +236,7 @@ async function run() {
   const controller = accountGate.createAccountGateController({
     api,
     documentRef,
+    requirePlatformMedia: false,
     getInterfaceLanguage: () => 'pt-BR',
     onStatusChange: (status, unlocked) => statusChanges.push({ status, unlocked }),
     onWorkspacePreferenceSelected: (mode) => workspaceSelections.push(mode),
@@ -226,6 +256,44 @@ async function run() {
   assert.strictEqual(onboardingLanguageSelect.value, 'pt-BR');
   assert.strictEqual(onboardingThemeSelect.value, 'light');
   assert.strictEqual(stepLanguage.classList.contains('is-active'), true);
+
+  accountStatus = {
+    ...accountStatus,
+    config: { ...accountStatus.config, localUnauthenticated: true },
+  };
+  await controller.refresh();
+  assert.strictEqual(controller.isUnlocked(), false);
+  assert.strictEqual(body.classList.contains('account-locked'), true);
+
+  accountStatus = {
+    ...accountStatus,
+    access: {
+      allowed: true,
+      mode: 'local_development',
+      contextRevision: 1,
+      platformMedia: false,
+      platformSync: false,
+    },
+  };
+  await controller.refresh();
+  assert.strictEqual(controller.isUnlocked(), true);
+  assert.strictEqual(body.classList.contains('account-locked'), false);
+  assert.strictEqual(gateEl.classList.contains('hidden'), true);
+  assert.strictEqual(wizardEl.classList.contains('hidden'), true);
+
+  accountStatus = {
+    ...accountStatus,
+    access: {
+      allowed: false,
+      mode: 'none',
+      contextRevision: 2,
+      platformMedia: false,
+      platformSync: false,
+    },
+  };
+  await controller.refresh();
+  assert.strictEqual(controller.isUnlocked(), false);
+  assert.strictEqual(body.classList.contains('account-locked'), true);
   controller.showThemeScreen();
   assert.strictEqual(languageScreen.classList.contains('hidden'), true);
   assert.strictEqual(themeScreen.classList.contains('hidden'), false);
@@ -299,8 +367,8 @@ async function run() {
     },
   };
   await controller.refresh();
-  assert.strictEqual(controller.isUnlocked(), false);
-  assert.match(statusEl.textContent, /mídia da plataforma/i);
+  assert.strictEqual(controller.isUnlocked(), true);
+  assert.strictEqual(statusEl.textContent, '');
   assert.strictEqual(wizardEl.classList.contains('hidden'), true);
 
   console.log('renderer-account-gate.test.js: ok');

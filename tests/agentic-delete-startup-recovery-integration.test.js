@@ -14,6 +14,9 @@ const {
   createAgenticDeleteRecoveryService,
 } = require('../main/services/agentic_delete_recovery_service');
 const {
+  createAgenticDeleteCancellationRecoveryAdapter,
+} = require('../main/services/agentic_delete_cancellation_recovery_adapter');
+const {
   createAgenticDeleteStartupRecoveryService,
 } = require('../main/services/agentic_delete_startup_recovery_service');
 const {
@@ -77,6 +80,13 @@ try {
   );
 
   const stateStore = createStateStore(userDataRoot);
+  const cancellationRequested = stateStore.markJobCancellationRequested(
+    childResult.rollbackJobId,
+    'cancelled_by_user'
+  );
+  assert.strictEqual(cancellationRequested.ok, true);
+  assert.strictEqual(cancellationRequested.job.status, 'running');
+  assert.strictEqual(cancellationRequested.job.phase, 'cancelling');
   const journalAuthenticator = createTransactionJournalAuthenticator({ storageDir: userDataRoot });
   const mutationBackend = createAnchoredMutationTestBackend();
   const recoveryService = createAgenticDeleteRecoveryService({
@@ -110,10 +120,15 @@ try {
       });
     },
   });
+  const cancellationRecoveryAdapter = createAgenticDeleteCancellationRecoveryAdapter({
+    getAuthorizedJobById: stateStore.getAuthorizedJobById,
+    recoverJob: recoveryService.recoverJob,
+    markJobCancelledAfterCleanup: stateStore.markJobCancelledAfterCleanup,
+  });
   const startupRecovery = createAgenticDeleteStartupRecoveryService({
     recoverInterruptedJobs: stateStore.recoverInterruptedJobs,
     listAuthorizedJobRecoveryCandidates: stateStore.listAuthorizedJobRecoveryCandidates,
-    recoverJob: recoveryService.recoverJob,
+    recoverJob: cancellationRecoveryAdapter.recoverJob,
   });
 
   const result = startupRecovery.recoverAtStartup({
@@ -121,7 +136,7 @@ try {
   });
   assert.deepStrictEqual(result, {
     ok: true,
-    interruptedJobs: 1,
+    interruptedJobs: 0,
     listedCandidates: 2,
     uniqueCandidates: 2,
     attemptedRecoveries: 2,
@@ -136,20 +151,29 @@ try {
     'completed/done must purge its retained quarantine rather than restore the source'
   );
   assert.deepStrictEqual(fs.readdirSync(path.join(projectRoot, '.faber', 'transactions')), []);
-  assert.strictEqual(
-    stateStore.getAuthorizedJobById(childResult.rollbackJobId).job.phase,
-    'runtime_interrupted'
-  );
+  const cancelledJob = stateStore.getAuthorizedJobById(childResult.rollbackJobId).job;
+  assert.strictEqual(cancelledJob.status, 'cancelled');
+  assert.strictEqual(cancelledJob.phase, 'cancelled');
+  assert.deepStrictEqual(cancelledJob.checkpoints.execution_cleanup.data, {
+    schemaVersion: 'assistant-job-execution-cleanup-receipt.v1',
+    jobId: childResult.rollbackJobId,
+    cleanupCompleted: true,
+  });
   assert.strictEqual(
     stateStore.getAuthorizedJobById(childResult.purgeJobId).job.phase,
     'done'
   );
 
   const replayStore = createStateStore(userDataRoot);
+  const replayCancellationRecoveryAdapter = createAgenticDeleteCancellationRecoveryAdapter({
+    getAuthorizedJobById: replayStore.getAuthorizedJobById,
+    recoverJob: recoveryService.recoverJob,
+    markJobCancelledAfterCleanup: replayStore.markJobCancelledAfterCleanup,
+  });
   const replayRecovery = createAgenticDeleteStartupRecoveryService({
     recoverInterruptedJobs: replayStore.recoverInterruptedJobs,
     listAuthorizedJobRecoveryCandidates: replayStore.listAuthorizedJobRecoveryCandidates,
-    recoverJob: recoveryService.recoverJob,
+    recoverJob: replayCancellationRecoveryAdapter.recoverJob,
   });
   const replay = replayRecovery.recoverAtStartup({
     reason: 'runtime_restarted_before_job_completed',
@@ -157,11 +181,11 @@ try {
   assert.strictEqual(replay.interruptedJobs, 0);
   assert.strictEqual(
     replay.listedCandidates,
-    2,
-    'terminal recovery candidates survive another restart'
+    1,
+    'cancelled jobs with cleanup receipts are excluded while completed legacy jobs remain'
   );
-  assert.strictEqual(replay.attemptedRecoveries, 2);
-  assert.strictEqual(replay.successfulRecoveries, 2);
+  assert.strictEqual(replay.attemptedRecoveries, 1);
+  assert.strictEqual(replay.successfulRecoveries, 1);
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true });
 }

@@ -178,6 +178,21 @@ async function main() {
     { ok: true, rolledBack: true, idempotent: true }
   );
   assert.strictEqual(basicHarness.state.discards, 1);
+  const reacquiredA = await basic.acquire(acquireInput('job-a'));
+  assert.strictEqual(reacquiredA.ok, true);
+  assert.strictEqual(reacquiredA.lease.leaseId, 'workspace-lease-3');
+  assert.notStrictEqual(reacquiredA.lease, acquiredA.lease);
+  assert.strictEqual(basicHarness.state.acquires, 3);
+  assert.deepStrictEqual(
+    await basic.rollback({ binding: binding('job-a'), leaseId: acquiredA.lease.leaseId }),
+    { ok: true, rolledBack: true, idempotent: true }
+  );
+  assert.strictEqual(
+    basicHarness.state.discards,
+    1,
+    'a late rollback for the discarded lease must not discard the replacement workspace'
+  );
+  assert.strictEqual((await basic.acquire(acquireInput('job-a'))).lease, reacquiredA.lease);
 
   const changedJobHarness = createBackend();
   const changedJob = createExecutionWorkspaceRegistry({

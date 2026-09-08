@@ -220,6 +220,24 @@ const cancelledTerminal = model.buildJobProgressPresentation({
   events: [{ type: 'job.cancelled', payload: { reason: 'cancelled_by_user' } }],
 });
 assert.strictEqual(cancelledTerminal.statusText, '100%');
+const cancelledEvidenceCopy = cancelledTerminal.finalDetailLines.join('\n');
+assert.match(cancelledEvidenceCopy, /Execução cancelada/i);
+assert.doesNotMatch(
+  cancelledEvidenceCopy,
+  /job\.cancelled|cancelled_by_user/i
+);
+
+const cancellingRun = model.buildJobProgressPresentation({
+  status: 'running',
+  phase: 'cancelling',
+  progress: { pct: 77 },
+  events: [{ type: 'job.cancellation_requested', payload: { reason: 'cancelled_by_user' } }],
+});
+assert.strictEqual(cancellingRun.title, 'Encerrando execução');
+assert.strictEqual(cancellingRun.phaseLabel, 'Encerrando execução');
+assert.strictEqual(cancellingRun.statusLabel, 'Parando');
+assert.strictEqual(cancellingRun.busy, true);
+assert.strictEqual(cancellingRun.tone, 'warning');
 
 const cortexValidationFailed = model.buildJobProgressPresentation({
   status: 'failed',
@@ -412,18 +430,42 @@ const groundedProcessFailure = model.buildJobProgressPresentation({
         },
       },
     },
+    execute_result: {
+      data: {
+        ok: false,
+        validationVerified: false,
+        validationPending: false,
+        validationPendingReason: null,
+        validationPendingChecks: [],
+      },
+    },
   },
   events: [{
     type: 'job.failed',
     payload: { reason: 'agentic_execute_failed', phase: 'execute_failed' },
   }],
 });
+const groundedFailureCopy = [
+  groundedProcessFailure.transientStatus,
+  groundedProcessFailure.detailText,
+  ...groundedProcessFailure.finalSummaryLines,
+].join('\n');
 assert.strictEqual(groundedProcessFailure.tone, 'danger');
 assert.strictEqual(groundedProcessFailure.title, 'Não consegui concluir essa execução');
+assert.strictEqual(groundedProcessFailure.statusLabel, 'Falha');
 assert.match(groundedProcessFailure.detailText, /Verificações com falha comprovada: testes e build\./i);
 assert.match(
   groundedProcessFailure.finalSummaryLines.join('\n'),
   /Verificações com falha comprovada: testes e build\./i
+);
+assert.match(groundedFailureCopy, /Verificações com falha comprovada: testes e build\./i);
+assert.doesNotMatch(
+  groundedFailureCopy,
+  /\bpendente(?:s)?\b|permanecem pendentes|validação pendente/i
+);
+assert.doesNotMatch(
+  groundedFailureCopy,
+  /validação real passou|processamento concluído com sucesso/i
 );
 
 const completedWithCheckpointOnlyPending = model.buildJobProgressPresentation({

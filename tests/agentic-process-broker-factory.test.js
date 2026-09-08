@@ -31,7 +31,7 @@ const binding = createCapabilityDelegationBinding({
   submissionDigest: `sha256:${'a'.repeat(64)}`,
 });
 
-function createHarness() {
+function createHarness({ factoryCreator = createAgenticProcessBrokerFactory } = {}) {
   const state = {
     active: true,
     backendExecutions: 0,
@@ -43,6 +43,7 @@ function createHarness() {
     rootChecks: 0,
     effectChecks: 0,
     audits: [],
+    rejectNextAudit: false,
     requestIds: 0,
   };
   const selectionOnlyBackend = Object.freeze({
@@ -141,7 +142,7 @@ function createHarness() {
       }));
     },
   });
-  const factory = createAgenticProcessBrokerFactory({
+  const factory = factoryCreator({
     authorizeLifecycle(candidate) {
       state.lifecycleChecks += 1;
       return state.active
@@ -174,6 +175,11 @@ function createHarness() {
     },
     audit(event) {
       state.audits.push(event);
+      if (state.rejectNextAudit) {
+        state.rejectNextAudit = false;
+        return Promise.reject(new Error('injected audit rejection'));
+      }
+      return undefined;
     },
   });
   return { factory, sandboxExecutor, state };
@@ -208,6 +214,7 @@ function createHarness() {
     command: 'npm',
     args: ['test', '--', '--runInBand'],
     timeoutMs: 120_000,
+    mutationRevision: 0,
   });
   assert.strictEqual(result.status, 'completed');
   assert.strictEqual(result.decision, 'allow');
@@ -242,10 +249,52 @@ function createHarness() {
   assert.strictEqual(executionContext.projectSession.jobId, binding.jobId);
   assert.deepStrictEqual(executionContext.effects, ['process_execute']);
   assert.match(executionContext.requestDigest, /^[a-f0-9]{64}$/);
+  assert.strictEqual(executionContext.mutationRevision, 0);
   assert.strictEqual(
     route.diagnostics().requests,
     1
   );
+
+  const duplicateResult = await route.execute({
+    command: 'npm',
+    args: ['test', '--', '--runInBand'],
+    timeoutMs: 120_000,
+    mutationRevision: 0,
+  });
+  assert.strictEqual(
+    duplicateResult,
+    result,
+    'an exact retry while the process is active must reuse the first authority-bound receipt'
+  );
+  assert.strictEqual(harness.state.executorCalls.length, 1);
+  assert.strictEqual(harness.state.requestIds, 1);
+
+  assert.deepStrictEqual(
+    await route.execute({
+      command: 'npm',
+      args: ['test', '--', '--runInBand'],
+      timeoutMs: 120_000,
+      mutationRevision: 1,
+    }),
+    Object.freeze({
+      ok: false,
+      code: AGENTIC_PROCESS_ROUTE_REASONS.PROCESS_ALREADY_ACTIVE,
+    })
+  );
+
+  assert.deepStrictEqual(
+    await route.execute({
+      command: 'npm',
+      args: ['run', 'build'],
+      timeoutMs: 120_000,
+      mutationRevision: 0,
+    }),
+    Object.freeze({
+      ok: false,
+      code: AGENTIC_PROCESS_ROUTE_REASONS.PROCESS_ALREADY_ACTIVE,
+    })
+  );
+  assert.strictEqual(harness.state.executorCalls.length, 1);
 
   const internalExecutionId = result.output.executionId;
   const readResult = await route.read({ cursor: 0, maxBytes: 4096 });
@@ -265,10 +314,27 @@ function createHarness() {
     timeoutMs: 1000,
   })]);
 
+  const sequentialResult = await route.execute({
+    command: 'npm',
+    args: ['run', 'build'],
+    timeoutMs: 120_000,
+    mutationRevision: 1,
+  });
+  assert.strictEqual(sequentialResult.status, 'completed');
+  assert.strictEqual(sequentialResult.decision, 'allow');
+  assert.strictEqual(harness.state.executorCalls.length, 2);
+  const sequentialExecutionId = sequentialResult.output.executionId;
+  assert.notStrictEqual(sequentialExecutionId, internalExecutionId);
+  assert.strictEqual(harness.state.executorCalls[1].executionContext.mutationRevision, 1);
+  assert.notStrictEqual(
+    harness.state.executorCalls[1].executionContext.requestDigest,
+    executionContext.requestDigest
+  );
+
   const stopResult = await route.stop({ expectedRevision: 1 });
   assert.strictEqual(stopResult.treeTerminated, true);
   assert.deepStrictEqual(harness.state.stopCalls, [Object.freeze({
-    executionId: internalExecutionId,
+    executionId: sequentialExecutionId,
     expectedRevision: 1,
     reasonCode: 'AGENTIC_PROCESS_STOP_REQUESTED',
   })]);
@@ -276,7 +342,7 @@ function createHarness() {
     version: AGENTIC_PROCESS_ROUTE_VERSION,
     capability: 'process',
     action: 'run',
-    requests: 1,
+    requests: 2,
     reads: 1,
     waits: 1,
     stops: 1,
@@ -324,16 +390,90 @@ function createHarness() {
   assert.strictEqual(harness.state.readCalls.length, 1);
   assert.strictEqual(harness.state.waitCalls.length, 1);
 
+  const rejectedStartHarness = createHarness();
+  const rejectedStartRoute = rejectedStartHarness.factory.createRoute({
+    binding,
+    sandboxExecutor: rejectedStartHarness.sandboxExecutor,
+  });
+  const retryInput = Object.freeze({
+    command: 'npm',
+    args: Object.freeze(['test']),
+    timeoutMs: 10_000,
+    mutationRevision: 0,
+  });
+  const capabilityBrokerPath = require.resolve('../main/capabilities/project_capability_broker');
+  const processBrokerFactoryPath = require.resolve('../main/services/agentic_process_broker_factory');
+  const capabilityBrokerModule = require(capabilityBrokerPath);
+  const originalCreateProjectCapabilityBroker = capabilityBrokerModule.createProjectCapabilityBroker;
+  let synchronousBrokerCalls = 0;
+  let synchronousThrowFactoryCreator;
+  try {
+    capabilityBrokerModule.createProjectCapabilityBroker = () => Object.freeze({
+      execute() {
+        synchronousBrokerCalls += 1;
+        if (synchronousBrokerCalls === 1) {
+          throw new Error('injected synchronous broker execution failure');
+        }
+        return Promise.resolve(Object.freeze({
+          status: 'completed',
+          decision: 'allow',
+          output: Object.freeze({
+            executionId: `sandbox-exec:${'b'.repeat(64)}`,
+            status: 'running',
+          }),
+        }));
+      },
+    });
+    delete require.cache[processBrokerFactoryPath];
+    ({ createAgenticProcessBrokerFactory: synchronousThrowFactoryCreator } = require(
+      processBrokerFactoryPath
+    ));
+  } finally {
+    capabilityBrokerModule.createProjectCapabilityBroker = originalCreateProjectCapabilityBroker;
+    delete require.cache[processBrokerFactoryPath];
+    require(processBrokerFactoryPath);
+  }
+  const synchronousThrowHarness = createHarness({
+    factoryCreator: synchronousThrowFactoryCreator,
+  });
+  const synchronousThrowRoute = synchronousThrowHarness.factory.createRoute({
+    binding,
+    sandboxExecutor: synchronousThrowHarness.sandboxExecutor,
+  });
+  await assert.rejects(
+    synchronousThrowRoute.execute(retryInput),
+    /injected synchronous broker execution failure/
+  );
+  const retriedAfterSynchronousThrow = await synchronousThrowRoute.execute(retryInput);
+  assert.strictEqual(retriedAfterSynchronousThrow.status, 'completed');
+  assert.strictEqual(retriedAfterSynchronousThrow.decision, 'allow');
+  assert.strictEqual(synchronousBrokerCalls, 2);
+
+  rejectedStartHarness.state.active = false;
+  rejectedStartHarness.state.rejectNextAudit = true;
+  await assert.rejects(
+    rejectedStartRoute.execute(retryInput),
+    /injected audit rejection/
+  );
+  rejectedStartHarness.state.active = true;
+  const retriedAfterRejection = await rejectedStartRoute.execute(retryInput);
+  assert.strictEqual(retriedAfterRejection.status, 'completed');
+  assert.strictEqual(retriedAfterRejection.decision, 'allow');
+  assert.strictEqual(rejectedStartHarness.state.executorCalls.length, 1);
+
   for (const invalid of [
+    { command: 'npm', args: [], timeoutMs: 1000 },
     { command: 'npm test', args: 'not-an-array', timeoutMs: 1000 },
-    { command: '', args: [], timeoutMs: 1000 },
-    { command: 'npm', args: new Array(1), timeoutMs: 1000 },
-    { command: 'npm', args: [], timeoutMs: 999 },
-    { command: 'npm', args: [], timeoutMs: 1000, env: { SECRET: 'x' } },
+    { command: '', args: [], timeoutMs: 1000, mutationRevision: 0 },
+    { command: 'npm', args: new Array(1), timeoutMs: 1000, mutationRevision: 0 },
+    { command: 'npm', args: [], timeoutMs: 999, mutationRevision: 0 },
+    { command: 'npm', args: [], timeoutMs: 1000, mutationRevision: -1 },
+    { command: 'npm', args: [], timeoutMs: 1000, mutationRevision: -0 },
+    { command: 'npm', args: [], timeoutMs: 1000, mutationRevision: 0, env: { SECRET: 'x' } },
   ]) {
     await assert.rejects(route.execute(invalid), TypeError);
   }
-  assert.strictEqual(harness.state.executorCalls.length, 1);
+  assert.strictEqual(harness.state.executorCalls.length, 2);
 
   let commandGetterCalls = 0;
   const hostileInput = {};
@@ -352,13 +492,22 @@ function createHarness() {
     enumerable: true,
     value: 1000,
   });
+  Object.defineProperty(hostileInput, 'mutationRevision', {
+    enumerable: true,
+    value: 0,
+  });
   await assert.rejects(route.execute(hostileInput), TypeError);
   assert.strictEqual(commandGetterCalls, 0);
 
   harness.state.active = false;
-  const revoked = await route.execute({ command: 'npm', args: ['test'], timeoutMs: 10_000 });
+  const revoked = await route.execute({
+    command: 'npm',
+    args: ['test'],
+    timeoutMs: 10_000,
+    mutationRevision: 1,
+  });
   assert.strictEqual(revoked.status, 'denied');
-  assert.strictEqual(harness.state.executorCalls.length, 1);
+  assert.strictEqual(harness.state.executorCalls.length, 2);
   assert.deepStrictEqual(
     await route.wait({ afterRevision: 1, timeoutMs: 1000 }),
     Object.freeze({

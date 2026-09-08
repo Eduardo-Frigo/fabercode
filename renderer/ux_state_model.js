@@ -405,6 +405,7 @@
       runtime_interrupted: uxText('phaseInterrupted', 'Execução interrompida'),
       execute_failed: uxText('phaseExecutionFailed', 'Falha na execução'),
       execute_blocked: uxText('phaseExecutionBlocked', 'Execução bloqueada'),
+      cancelling: uxText('phaseCancelling', 'Encerrando execução'),
       cancelled: uxText('cancelled', 'Cancelado'),
       done: uxText('completed', 'Concluído'),
       failed: uxText('failed', 'Falhou'),
@@ -423,6 +424,7 @@
     'awaiting_user_confirmation',
     'execute_pending',
     'execute_validation',
+    'cancelling',
     'done',
   ];
 
@@ -671,6 +673,7 @@
     if (isPartialSuccess(job)) return 'partial_success';
     if (status === 'failed') return 'danger';
     if (status === 'cancelled' || status === 'retry_pending') return 'warning';
+    if (String(job && job.phase || '').toLowerCase() === 'cancelling') return 'warning';
     return 'working';
   }
 
@@ -714,6 +717,9 @@
     }
 
     const phase = String(job.phase || '').toLowerCase();
+    if (phase === 'cancelling') {
+      return uxText('stoppingCurrentRun', 'Encerrando a execução atual...');
+    }
     if (phase === 'created') return uxText('personaAuthorized', 'A Persona autorizou iniciar a análise técnica.');
     if (phase === 'persona_plan' || phase === 'cortex_briefing' || phase === 'cortex_intake') {
       return uxText('analyzingProject', 'Analisando contexto e código do projeto.');
@@ -744,6 +750,9 @@
     }
     if (job.status === 'retry_pending') return uxText('retrySoon', 'Vou tentar novamente em instantes');
     if (job.status === 'cancelled') return uxText('executionCancelled', 'Execução cancelada');
+    if (String(job.phase || '').toLowerCase() === 'cancelling') {
+      return uxText('stoppingExecution', 'Encerrando execução');
+    }
     return uxText('workingProject', 'Trabalhando no projeto');
   }
 
@@ -766,6 +775,9 @@
     }
     if (job.status === 'cancelled') return uxText('cancelled', 'Cancelado');
     if (job.status === 'retry_pending') return uxText('waitingRetryLabel', 'Aguardando retentativa');
+    if (String(job.phase || '').toLowerCase() === 'cancelling') {
+      return uxText('stopping', 'Parando');
+    }
     return uxText('underway', 'Em andamento');
   }
 
@@ -900,6 +912,13 @@
         return `${ts} ${payload.noFileChanges
           ? uxText('responseWithoutRun', 'Resposta concluída sem execução')
           : uxText('processingCompleted', 'Processamento concluído')}`.trim();
+      }
+      if (type === 'job.cancelled') {
+        const reason = compactUxReason(payload.reason);
+        return `${ts} ${uxText('executionCancelled', 'Execução cancelada')}${reason && !/cancelled_by_user/i.test(reason) ? ` - ${reason}` : ''}`.trim();
+      }
+      if (type === 'job.cancellation_requested') {
+        return `${ts} ${uxText('stoppingExecution', 'Encerrando execução')}`.trim();
       }
       if (type === 'job.blocked') {
         const reason = compactUxReason(payload.reason);

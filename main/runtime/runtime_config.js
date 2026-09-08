@@ -3,6 +3,7 @@ function createMainRuntimeConfig({
   dirname = __dirname,
   env = process.env,
   fs,
+  isPackaged = true,
   normalizeAiProviderName,
   path,
   platform = process.platform,
@@ -37,6 +38,10 @@ function createMainRuntimeConfig({
     env.FABER_POSTGRES_SSL_REJECT_UNAUTHORIZED || 'true'
   ).toLowerCase() !== 'false';
   const FABER_AUTH_DEV_CODES = String(env.FABER_AUTH_DEV_CODES || 'false').toLowerCase() === 'true';
+  const FABER_LOCAL_UNAUTHENTICATED = Boolean(
+    isPackaged === false
+    && String(env.FABER_LOCAL_UNAUTHENTICATED || 'false') === 'true'
+  );
   const GOOGLE_CLIENT_ID = env.GOOGLE_CLIENT_ID || '';
   const GOOGLE_CLIENT_SECRET = env.GOOGLE_CLIENT_SECRET || '';
   const GOOGLE_REDIRECT_URI = env.GOOGLE_REDIRECT_URI || '';
@@ -290,6 +295,7 @@ function createMainRuntimeConfig({
     FABER_POSTGRES_SSL,
     FABER_POSTGRES_SSL_REJECT_UNAUTHORIZED,
     FABER_AUTH_DEV_CODES,
+    FABER_LOCAL_UNAUTHENTICATED,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
     GOOGLE_REDIRECT_URI,

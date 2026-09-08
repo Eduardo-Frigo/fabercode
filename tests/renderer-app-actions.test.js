@@ -43,6 +43,7 @@ function createHarness({
   ensureActiveConversationForSend,
   executePlan,
   getActiveConversationId,
+  pollJob,
   plan,
   sendAssistantMessage,
 } = {}) {
@@ -74,6 +75,7 @@ function createHarness({
     lastJobContext: null,
     lastQualityReport: null,
     nextSteps: [],
+    jobTerminalNoticeById: {},
     pendingAction: null,
     pendingActionJobId: null,
     selectedProjectId: 'project-1',
@@ -130,7 +132,10 @@ function createHarness({
       getActiveConversationId: getActiveConversationId || (() => null),
       getRecentConversationMessagesForPersona: () => [],
       hidePersonaThinkingIndicator: () => {},
-      pollJob: async (jobId) => { calls.pollJob.push(jobId); },
+      pollJob: async (jobId) => {
+        calls.pollJob.push(jobId);
+        return pollJob ? pollJob({ jobId, state, calls }) : null;
+      },
       prepareNewConversationForProject: async () => {
         calls.prepareNewConversation += 1;
       },
@@ -235,6 +240,44 @@ async function run() {
   assert.strictEqual(harness.state.pendingActionJobId, null);
 
   {
+    const terminalWins = createHarness({
+      executePlan: async () => ({
+        ok: false,
+        message: 'Resposta IPC antiga contradiz o job persistido.',
+      }),
+      pollJob: async ({ jobId, state: jobState, calls }) => {
+        jobState.jobTerminalNoticeById[jobId] = true;
+        jobState.activeJobId = null;
+        calls.updateStatus.push('Processamento concluído com sucesso.');
+        return {
+          id: jobId,
+          status: 'completed',
+          phase: 'done',
+          progress: { pct: 100 },
+        };
+      },
+    });
+    terminalWins.state.pendingAction = {
+      rootPath: '/workspace/project',
+      targetFile: 'src/terminal-wins.js',
+    };
+    terminalWins.state.pendingActionJobId = 'job-terminal-wins';
+
+    await terminalWins.controller.onConfirm();
+
+    assert.strictEqual(
+      terminalWins.calls.updateStatus.at(-1),
+      'Processamento concluído com sucesso.',
+      'a durable terminal job must outrank a contradictory late IPC summary',
+    );
+    assert.strictEqual(
+      terminalWins.calls.appendMessage.some((entry) => String(entry[1]).includes('Resposta IPC antiga')),
+      false,
+      'the renderer must not announce a stale failure after the durable job completed',
+    );
+  }
+
+  {
     const staleExecutionGate = deferred();
     const staleExecution = createHarness({
       executePlan: () => staleExecutionGate.promise,
@@ -313,6 +356,37 @@ async function run() {
     JSON.stringify([{ jobId: 'job-authorized-cancel' }])
   );
   assert.strictEqual(cancellation.state.pendingActionJobId, null);
+
+  const cancellationPending = createHarness({
+    cancelJob: async ({ jobId }) => ({
+      ok: true,
+      job: { id: jobId, status: 'running', phase: 'cancelling' },
+    }),
+  });
+  cancellationPending.state.activeJobId = 'job-cleanup-pending';
+  await cancellationPending.controller.onCancel();
+  assert.strictEqual(cancellationPending.state.activeJobId, 'job-cleanup-pending');
+  assert.strictEqual(cancellationPending.calls.stopJobPolling, 0);
+  assert.strictEqual(cancellationPending.calls.hideJobProgress, 0);
+  assert.strictEqual(
+    cancellationPending.calls.appendMessage.some((entry) => (
+      entry[0] === 'assistant' && /tarefa cancelada/i.test(String(entry[1] || ''))
+    )),
+    false,
+    'cancellation must not be announced before cleanup reaches a terminal snapshot'
+  );
+
+  const cancellationTerminal = createHarness();
+  cancellationTerminal.state.activeJobId = 'job-cleanup-terminal';
+  await cancellationTerminal.controller.onCancel();
+  assert.strictEqual(cancellationTerminal.state.activeJobId, null);
+  assert.strictEqual(cancellationTerminal.calls.stopJobPolling, 1);
+  assert.strictEqual(
+    cancellationTerminal.calls.appendMessage.some((entry) => (
+      entry[0] === 'assistant' && /tarefa cancelada/i.test(String(entry[1] || ''))
+    )),
+    true
+  );
 
   for (const cancelJob of [
     async () => ({ ok: false, message: 'Cancel denied.' }),

@@ -2,7 +2,7 @@
 
 const defaultCrypto = require('crypto');
 
-const AGENTIC_BROWSER_SESSION_VERSION = 'agentic-browser-session.v1';
+const AGENTIC_BROWSER_SESSION_VERSION = 'agentic-browser-session.v2';
 const AGENTIC_BROWSER_SESSION_REASONS = Object.freeze({
   AUTHORITY_DENIED: 'AGENTIC_BROWSER_SESSION_AUTHORITY_DENIED',
   CANCELLED: 'AGENTIC_BROWSER_SESSION_CANCELLED',
@@ -11,6 +11,7 @@ const AGENTIC_BROWSER_SESSION_REASONS = Object.freeze({
   NAVIGATION_DENIED: 'AGENTIC_BROWSER_SESSION_NAVIGATION_DENIED',
   OPERATION_FAILED: 'AGENTIC_BROWSER_SESSION_OPERATION_FAILED',
   SESSION_NOT_FOUND: 'AGENTIC_BROWSER_SESSION_NOT_FOUND',
+  SESSION_CHANGED: 'AGENTIC_BROWSER_SESSION_CHANGED',
   UNAVAILABLE: 'AGENTIC_BROWSER_SESSION_UNAVAILABLE',
 });
 
@@ -139,6 +140,7 @@ function createAgenticBrowserSessionService(dependencies = {}) {
       viewport: session.viewport,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
+      revision: session.revision,
     });
   }
 
@@ -304,9 +306,15 @@ function createAgenticBrowserSessionService(dependencies = {}) {
         createdAt: now(),
       });
     };
+    const markTopLevelNavigation = (_event, _targetUrl, _isInPlace, isMainFrame) => {
+      if (isMainFrame === false || session.closed) return;
+      session.revision += 1;
+      session.updatedAt = now();
+    };
     if (typeof webContents.on === 'function') {
       webContents.on('will-navigate', guardTopLevelNavigation);
       webContents.on('will-redirect', guardTopLevelNavigation);
+      webContents.on('did-start-navigation', markTopLevelNavigation);
     }
 
     const webRequest = webContents.session && webContents.session.webRequest;
@@ -342,6 +350,7 @@ function createAgenticBrowserSessionService(dependencies = {}) {
       if (typeof webContents.removeListener === 'function') {
         webContents.removeListener('will-navigate', guardTopLevelNavigation);
         webContents.removeListener('will-redirect', guardTopLevelNavigation);
+        webContents.removeListener('did-start-navigation', markTopLevelNavigation);
       }
     };
   }
@@ -464,6 +473,7 @@ function createAgenticBrowserSessionService(dependencies = {}) {
         removeAbortListener: null,
         removeNavigationGuards: null,
         authorizedNavigationUrl: targetUrl,
+        revision: 0,
       };
       sessions.set(id, session);
       registerDiagnostics(session);
@@ -472,6 +482,7 @@ function createAgenticBrowserSessionService(dependencies = {}) {
       await waitWithCancellation(window.loadURL(targetUrl), signal, session);
       if (session.closed) return cancelledResult();
       session.authorizedNavigationUrl = '';
+      session.revision += 1;
       session.updatedAt = now();
       return deepFreeze({
         ok: true,
@@ -517,6 +528,7 @@ function createAgenticBrowserSessionService(dependencies = {}) {
       if (session.closed) return cancelledResult();
       session.url = targetUrl;
       session.authorizedNavigationUrl = '';
+      session.revision += 1;
       session.updatedAt = now();
       return deepFreeze({ ok: true, session: summarizeSession(session) });
     } catch (error) {
@@ -622,6 +634,23 @@ function createAgenticBrowserSessionService(dependencies = {}) {
     if (signal && signal.aborted) {
       closeSession(lookup.session);
       return cancelledResult();
+    }
+    const hasExpectedSnapshot = input && (
+      input.expectedRevision !== undefined || input.expectedUrl !== undefined
+    );
+    if (hasExpectedSnapshot) {
+      const expectedRevision = input.expectedRevision;
+      const expectedUrl = normalizeUrl(input.expectedUrl);
+      const currentUrl = summarizeSession(lookup.session).url;
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1
+        || !expectedUrl
+        || lookup.session.revision !== expectedRevision
+        || currentUrl !== expectedUrl) {
+        return Object.freeze({
+          ok: false,
+          code: AGENTIC_BROWSER_SESSION_REASONS.SESSION_CHANGED,
+        });
+      }
     }
     const webContents = lookup.session.window && lookup.session.window.webContents;
     if (!webContents || typeof webContents.capturePage !== 'function') {

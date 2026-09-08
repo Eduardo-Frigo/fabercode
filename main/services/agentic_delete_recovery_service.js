@@ -71,6 +71,7 @@ const SAFE_ROOT_LEASE_ID = /^[A-Za-z0-9._:@-]{1,256}$/;
 const FAILED_TERMINAL_PHASES = new Set([
   'failed',
   'runtime_interrupted',
+  'execution_cleanup_failed',
   'execute_authorization_failed',
   'execute_validation_fresh_approval_required',
   'execute_pending_fresh_approval_required',
@@ -255,6 +256,8 @@ function normalizeTerminalJob(job, requestedJobId) {
   let outcome;
   if (status === 'completed' && phase === 'done') {
     outcome = 'completed';
+  } else if (status === 'running' && phase === 'cancelling') {
+    outcome = 'cancelled';
   } else if (status === 'failed' && FAILED_TERMINAL_PHASES.has(phase)) {
     outcome = phase === 'runtime_interrupted' ? 'runtime_interrupted' : 'failed';
   } else if (status === 'cancelled' && phase === 'cancelled') {

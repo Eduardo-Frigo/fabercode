@@ -37,6 +37,45 @@ function run() {
       platform: process.platform,
     });
     assert.strictEqual(mainRuntimeConfig.OPENAI_MODEL_BRAIN_ENV, 'gpt-5.6-sol');
+    assert.strictEqual(mainRuntimeConfig.FABER_LOCAL_UNAUTHENTICATED, false);
+
+    const localUnauthenticatedRuntimeConfig = createMainRuntimeConfig({
+      cwd: tempRoot,
+      dirname: path.join(__dirname, '..'),
+      env: { FABER_LOCAL_UNAUTHENTICATED: 'true' },
+      fs,
+      isPackaged: false,
+      normalizeAiProviderName,
+      path,
+      platform: process.platform,
+    });
+    assert.strictEqual(localUnauthenticatedRuntimeConfig.FABER_LOCAL_UNAUTHENTICATED, true);
+
+    const packagedRuntimeConfig = createMainRuntimeConfig({
+      cwd: tempRoot,
+      dirname: path.join(__dirname, '..'),
+      env: { FABER_LOCAL_UNAUTHENTICATED: 'true' },
+      fs,
+      isPackaged: true,
+      normalizeAiProviderName,
+      path,
+      platform: process.platform,
+    });
+    assert.strictEqual(packagedRuntimeConfig.FABER_LOCAL_UNAUTHENTICATED, false);
+
+    for (const malformedValue of ['1', 'yes', ' true ', 'TRUE!']) {
+      const malformedRuntimeConfig = createMainRuntimeConfig({
+        cwd: tempRoot,
+        dirname: path.join(__dirname, '..'),
+        env: { FABER_LOCAL_UNAUTHENTICATED: malformedValue },
+        fs,
+        isPackaged: false,
+        normalizeAiProviderName,
+        path,
+        platform: process.platform,
+      });
+      assert.strictEqual(malformedRuntimeConfig.FABER_LOCAL_UNAUTHENTICATED, false);
+    }
 
     const secrets = createSecretHarness();
     const service = createAiRuntimeSettingsService({

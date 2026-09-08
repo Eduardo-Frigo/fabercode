@@ -665,6 +665,7 @@ async function main() {
   const registrySessionOpen = await runtimeServices.jobSessionService.open({
     binding: binding(),
     sourceRootIdentityDigest: digest('b'),
+    mutationRevision: 0,
   });
   assert.strictEqual(
     registrySessionOpen.ok,
@@ -689,6 +690,7 @@ async function main() {
       },
       timeoutMs: 10_000,
     }),
+    mutationRevision: 0,
   }));
   assert.strictEqual(registryExecution.ok, true);
   assert.strictEqual(registryHarness.state.processExecs, 1);

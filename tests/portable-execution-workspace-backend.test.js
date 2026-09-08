@@ -215,6 +215,32 @@ async function run() {
       assert.strictEqual(fs.existsSync(workspaceEscapeLink), false);
     }
 
+    fs.writeFileSync(path.join(sourceRoot, 'created-after-first-snapshot.js'), 'fresh-state\n');
+    const refreshedRequest = requestFor(sourceRoot, 'refreshed-snapshot');
+    const refreshedLease = assertExecutionWorkspaceLease(
+      backend.acquire(refreshedRequest),
+      refreshedRequest
+    );
+    workspacePaths.push(refreshedLease.workspaceRootPath);
+    assert.strictEqual(
+      fs.readFileSync(
+        path.join(refreshedLease.workspaceRootPath, 'created-after-first-snapshot.js'),
+        'utf8'
+      ),
+      'fresh-state\n'
+    );
+    const refreshedDiscardRequest = createExecutionWorkspaceDiscardRequest({
+      request: refreshedRequest,
+      lease: refreshedLease,
+    });
+    assert.strictEqual(
+      assertExecutionWorkspaceDiscardReceipt(
+        backend.discard(refreshedDiscardRequest),
+        refreshedDiscardRequest
+      ).discarded,
+      true
+    );
+
     const mismatchedRequest = requestFor(sourceRoot, 'mismatch', {
       sourceRootIdentityDigest: digest('f'),
     });

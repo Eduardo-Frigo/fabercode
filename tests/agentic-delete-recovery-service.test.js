@@ -629,10 +629,14 @@ withProject((rootPath) => {
   }
 });
 
-// Failed/cancelled terminal jobs use rollback; extended or async terminal replies are rejected.
+// Failed/cancelled jobs, including cancellation in progress, use rollback.
 withProject((rootPath) => {
   const binding = bindingFor(rootPath, 'job-recovery-failed', 'f');
-  for (const [status, phase] of [['failed', 'execute_failed'], ['cancelled', 'cancelled']]) {
+  for (const [status, phase, rollbackOutcome = status] of [
+    ['failed', 'execute_failed'],
+    ['cancelled', 'cancelled'],
+    ['running', 'cancelling', 'cancelled'],
+  ]) {
     let rollbackReason = null;
     const harness = createRecoveryHarness({
       binding,
@@ -654,7 +658,7 @@ withProject((rootPath) => {
     const result = harness.service.recoverJob({ jobId: binding.jobId });
     assert.strictEqual(result.ok, true);
     assert.strictEqual(result.disposition, 'rollback');
-    assert.strictEqual(rollbackReason, `startup_${status}`);
+    assert.strictEqual(rollbackReason, `startup_${rollbackOutcome}`);
   }
 
   const extendedTerminal = createRecoveryHarness({

@@ -23,7 +23,7 @@ const {
 } = require('./execution_isolation_job_session_service');
 
 const EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION =
-  'execution-isolation-authorized-job-executor.v2';
+  'execution-isolation-authorized-job-executor.v3';
 const EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION =
   'execution-isolation-authorized-job-executor-close-receipt.v1';
 
@@ -33,10 +33,13 @@ const EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS = Object.freeze({
   CLEANUP_FAILED: 'EXECUTION_ISOLATION_JOB_CLEANUP_FAILED',
   CLOSED: 'EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSED',
   EXECUTION_FAILED: 'EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTION_FAILED',
+  MUTATION_REVISION_MISMATCH:
+    'EXECUTION_ISOLATION_AUTHORIZED_JOB_MUTATION_REVISION_MISMATCH',
   PROCESS_NOT_FOUND: 'EXECUTION_ISOLATION_AUTHORIZED_PROCESS_NOT_FOUND',
   PROCESS_OPERATION_FAILED: 'EXECUTION_ISOLATION_AUTHORIZED_PROCESS_OPERATION_FAILED',
   PROCESS_REQUEST_INVALID: 'EXECUTION_ISOLATION_AUTHORIZED_PROCESS_REQUEST_INVALID',
   SESSION_OPEN_FAILED: 'EXECUTION_ISOLATION_AUTHORIZED_JOB_SESSION_OPEN_FAILED',
+  SESSION_REFRESH_FAILED: 'EXECUTION_ISOLATION_AUTHORIZED_JOB_SESSION_REFRESH_FAILED',
 });
 
 const BINDING_KEYS = Object.freeze([
@@ -66,6 +69,16 @@ const SANDBOX_REQUEST_KEYS = Object.freeze([
   'timeoutMs',
 ]);
 const BROKER_CONTEXT_KEYS = Object.freeze([
+  'requestId',
+  'principal',
+  'projectSession',
+  'capability',
+  'action',
+  'effects',
+  'requestDigest',
+  'mutationRevision',
+]);
+const BROKER_CONTEXT_REQUIRED_KEYS = Object.freeze([
   'requestId',
   'principal',
   'projectSession',
@@ -191,7 +204,11 @@ function bindingsMatch(left, right) {
 
 function normalizeBrokerExecution(sandboxRequest, brokerContext, binding) {
   const requestFields = exactOwnDataFields(sandboxRequest, SANDBOX_REQUEST_KEYS);
-  const contextFields = exactOwnDataFields(brokerContext, BROKER_CONTEXT_KEYS);
+  const contextFields = exactOwnDataFields(
+    brokerContext,
+    BROKER_CONTEXT_KEYS,
+    BROKER_CONTEXT_REQUIRED_KEYS
+  );
   if (!requestFields || !contextFields
     || !Object.isFrozen(sandboxRequest) || !Object.isFrozen(brokerContext)
     || !Object.isFrozen(requestFields.get('command'))
@@ -263,7 +280,14 @@ function normalizeBrokerExecution(sandboxRequest, brokerContext, binding) {
   if ((sandboxRequest.networkMode === SANDBOX_NETWORK_MODES.APPROVED) !== allowsNetwork) {
     throw new TypeError('Broker network authorization does not match the request');
   }
-  return Object.freeze({ sandboxRequest, brokerContext });
+  const mutationRevision = contextFields.has('mutationRevision')
+    ? contextFields.get('mutationRevision')
+    : 0;
+  if (!Number.isSafeInteger(mutationRevision) || mutationRevision < 0
+    || Object.is(mutationRevision, -0)) {
+    throw new TypeError('Broker mutation revision is invalid');
+  }
+  return Object.freeze({ sandboxRequest, brokerContext, mutationRevision });
 }
 
 function normalizeAuthorityDecision(value, binding) {
@@ -507,7 +531,11 @@ function createExecutionIsolationAuthorizedJobExecutor(options = {}) {
   const authorizedExecutionIds = new Set();
   let sessionRecord = null;
   let sessionRootIdentityDigest = null;
+  let sessionMutationRevision = null;
+  let sessionFailureCode = null;
   let openPromise = null;
+  let openRootIdentityDigest = null;
+  let openMutationRevision = null;
   let openedReservation = false;
   let closeRequested = false;
   let closePromise = null;
@@ -549,6 +577,8 @@ function createExecutionIsolationAuthorizedJobExecutor(options = {}) {
     openedReservation = false;
     sessionRecord = null;
     sessionRootIdentityDigest = null;
+    sessionMutationRevision = null;
+    sessionFailureCode = null;
     authorizedExecutionIds.clear();
     return true;
   }
@@ -578,22 +608,62 @@ function createExecutionIsolationAuthorizedJobExecutor(options = {}) {
     return closePromise;
   }
 
-  function ensureSession(sourceRootIdentityDigest) {
+  function ensureSession(sourceRootIdentityDigest, mutationRevision) {
     if (sessionRecord) {
-      return Promise.resolve(sessionRootIdentityDigest === sourceRootIdentityDigest
-        ? sessionRecord
-        : null);
+      if (sessionRootIdentityDigest !== sourceRootIdentityDigest) {
+        return Promise.resolve(Object.freeze({
+          opened: null,
+          code: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.AUTHORITY_DENIED,
+        }));
+      }
+      if (mutationRevision < sessionMutationRevision) {
+        return Promise.resolve(Object.freeze({
+          opened: null,
+          code: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS
+            .MUTATION_REVISION_MISMATCH,
+        }));
+      }
+      if (mutationRevision === sessionMutationRevision) {
+        return Promise.resolve(Object.freeze({ opened: sessionRecord, code: null }));
+      }
     }
-    if (openPromise) return openPromise;
-    state = 'opening';
+    if (openPromise) {
+      if (openRootIdentityDigest !== sourceRootIdentityDigest) {
+        return Promise.resolve(Object.freeze({
+          opened: null,
+          code: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.AUTHORITY_DENIED,
+        }));
+      }
+      if (mutationRevision < openMutationRevision) {
+        return Promise.resolve(Object.freeze({
+          opened: null,
+          code: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS
+            .MUTATION_REVISION_MISMATCH,
+        }));
+      }
+      if (mutationRevision === openMutationRevision) return openPromise;
+      return openPromise.then((result) => (
+        result.opened
+          ? ensureSession(sourceRootIdentityDigest, mutationRevision)
+          : result
+      ));
+    }
+    const refreshing = Boolean(sessionRecord);
+    state = refreshing ? 'refreshing' : 'opening';
+    openRootIdentityDigest = sourceRootIdentityDigest;
+    openMutationRevision = mutationRevision;
     openPromise = Promise.resolve().then(async () => {
       const outcome = await invokeNative(dependencies.sessionOpen, [Object.freeze({
         binding: dependencies.binding,
         sourceRootIdentityDigest,
+        mutationRevision,
       })]);
       if (!outcome.ok) {
         state = 'blocked';
-        return null;
+        sessionFailureCode = refreshing
+          ? EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.SESSION_REFRESH_FAILED
+          : EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.SESSION_OPEN_FAILED;
+        return Object.freeze({ opened: null, code: sessionFailureCode });
       }
       const opened = normalizeOpenedSession(outcome.value, dependencies.binding);
       if (!opened) {
@@ -608,21 +678,35 @@ function createExecutionIsolationAuthorizedJobExecutor(options = {}) {
           if (!cleaned) state = 'quarantined';
         }
         if (state !== 'quarantined') state = 'blocked';
-        return null;
+        sessionFailureCode = state === 'quarantined'
+          ? EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.CLEANUP_FAILED
+          : refreshing
+            ? EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.SESSION_REFRESH_FAILED
+            : EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.SESSION_OPEN_FAILED;
+        return Object.freeze({ opened: null, code: sessionFailureCode });
       }
       openedReservation = true;
       sessionRecord = opened;
       sessionRootIdentityDigest = sourceRootIdentityDigest;
+      sessionMutationRevision = mutationRevision;
+      sessionFailureCode = null;
       state = 'active';
-      return opened;
-    }).then((opened) => {
+      return Object.freeze({ opened, code: null });
+    }).then((result) => {
       openPromise = null;
-      return opened;
+      openRootIdentityDigest = null;
+      openMutationRevision = null;
+      return result;
     }, (error) => {
       preflightDataGraph(error);
       openPromise = null;
+      openRootIdentityDigest = null;
+      openMutationRevision = null;
       state = 'blocked';
-      return null;
+      sessionFailureCode = refreshing
+        ? EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.SESSION_REFRESH_FAILED
+        : EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.SESSION_OPEN_FAILED;
+      return Object.freeze({ opened: null, code: sessionFailureCode });
     });
     return openPromise;
   }
@@ -643,7 +727,8 @@ function createExecutionIsolationAuthorizedJobExecutor(options = {}) {
     }
     if (state === 'blocked') {
       return Promise.reject(failure(
-        EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.SESSION_OPEN_FAILED
+        sessionFailureCode
+          || EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.SESSION_OPEN_FAILED
       ));
     }
     if (closeRequested || ['closed', 'closing', 'quarantined'].includes(state)) {
@@ -651,8 +736,13 @@ function createExecutionIsolationAuthorizedJobExecutor(options = {}) {
         EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.CLOSED
       ));
     }
+    let normalizedExecution;
     try {
-      normalizeBrokerExecution(sandboxRequest, brokerContext, dependencies.binding);
+      normalizedExecution = normalizeBrokerExecution(
+        sandboxRequest,
+        brokerContext,
+        dependencies.binding
+      );
     } catch (error) {
       preflightDataGraph(error);
       return Promise.reject(failure(
@@ -677,19 +767,20 @@ function createExecutionIsolationAuthorizedJobExecutor(options = {}) {
         EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.AUTHORITY_DENIED
       );
     }
-    const execInput = Object.freeze({ sandboxRequest });
+    const execInput = Object.freeze({
+      sandboxRequest,
+      mutationRevision: normalizedExecution.mutationRevision,
+    });
 
-    return ensureSession(firstAuthorization.physicalRootIdentityDigest).then(async (opened) => {
-      if (!opened) {
-        if (state === 'quarantined') {
-          throw failure(
-            EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.CLEANUP_FAILED
-          );
-        }
-        throw failure(
-          EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.SESSION_OPEN_FAILED
-        );
+    return ensureSession(
+      firstAuthorization.physicalRootIdentityDigest,
+      normalizedExecution.mutationRevision
+    ).then(async (sessionOutcome) => {
+      if (!sessionOutcome.opened) {
+        throw failure(sessionOutcome.code
+          || EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.SESSION_OPEN_FAILED);
       }
+      const opened = sessionOutcome.opened;
       if (closeRequested) {
         throw failure(EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.CLOSED);
       }
@@ -760,7 +851,8 @@ function createExecutionIsolationAuthorizedJobExecutor(options = {}) {
     }
     if (state === 'blocked') {
       return Promise.reject(failure(
-        EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.SESSION_OPEN_FAILED
+        sessionFailureCode
+          || EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_REASONS.SESSION_OPEN_FAILED
       ));
     }
     if (closeRequested || ['closed', 'closing', 'quarantined'].includes(state)) {

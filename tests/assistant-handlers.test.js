@@ -25,6 +25,17 @@ async function run() {
     () => registerAssistantHandlers({ assistantRuntime: {}, registerIpcHandler: () => {} }),
     /runtime missing method: plan/
   );
+  assert.throws(
+    () => registerAssistantHandlers({
+      assistantRuntime: {
+        plan: async () => ({}),
+        message: async () => ({}),
+        execute: async () => ({}),
+      },
+      registerIpcHandler: () => {},
+    }),
+    /authorizeAssistantAccess/
+  );
 
   const calls = [];
   const planPayload = { projectInfo: { rootPath: '/tmp/project' }, userMessage: 'planejar' };
@@ -48,7 +59,11 @@ async function run() {
     },
   };
   const { handlers, registerIpcHandler } = createHandlerMap();
-  registerAssistantHandlers({ assistantRuntime, registerIpcHandler });
+  registerAssistantHandlers({
+    assistantRuntime,
+    authorizeAssistantAccess: () => ({ kind: 'local_development', actorId: 'local:test' }),
+    registerIpcHandler,
+  });
 
   assert.deepStrictEqual(Object.keys(handlers).sort(), [
     'assistant:execute',
@@ -58,6 +73,44 @@ async function run() {
   assert.strictEqual(Object.hasOwn(handlers, 'assistant:route'), false);
   assert.strictEqual(Object.hasOwn(handlers, 'job:cancel'), false);
   assert.strictEqual(Object.hasOwn(handlers, 'tools:list'), false);
+
+  const deniedCalls = [];
+  const deniedMap = createHandlerMap();
+  registerAssistantHandlers({
+    assistantRuntime: {
+      plan: async () => deniedCalls.push('plan'),
+      message: async () => deniedCalls.push('message'),
+      execute: async () => deniedCalls.push('execute'),
+    },
+    authorizeAssistantAccess: () => null,
+    registerIpcHandler: deniedMap.registerIpcHandler,
+  });
+  const accessDenied = {
+    ok: false,
+    code: 'assistant_access_denied',
+    message: 'Autenticação da conta ou modo local de desenvolvimento necessário.',
+  };
+  assert.deepStrictEqual(await deniedMap.handlers['assistant:plan'](null, planPayload), accessDenied);
+  assert.deepStrictEqual(await deniedMap.handlers['assistant:message'](null, messagePayload), accessDenied);
+  assert.deepStrictEqual(await deniedMap.handlers['assistant:execute'](null, executePayload), accessDenied);
+  assert.deepStrictEqual(deniedCalls, []);
+
+  const asynchronousAuthorizationCalls = [];
+  const asynchronousAuthorizationMap = createHandlerMap();
+  registerAssistantHandlers({
+    assistantRuntime: {
+      plan: async () => asynchronousAuthorizationCalls.push('plan'),
+      message: async () => asynchronousAuthorizationCalls.push('message'),
+      execute: async () => asynchronousAuthorizationCalls.push('execute'),
+    },
+    authorizeAssistantAccess: async () => ({ kind: 'account', actorId: 'user:test' }),
+    registerIpcHandler: asynchronousAuthorizationMap.registerIpcHandler,
+  });
+  assert.deepStrictEqual(
+    await asynchronousAuthorizationMap.handlers['assistant:plan'](null, planPayload),
+    accessDenied,
+  );
+  assert.deepStrictEqual(asynchronousAuthorizationCalls, []);
 
   assert.strictEqual(await handlers['assistant:plan'](null, planPayload), planResult);
   assert.strictEqual(await handlers['assistant:message'](null, messagePayload), messageResult);
@@ -125,6 +178,7 @@ async function run() {
       message: async () => { throw rejection; },
       execute: async () => { throw rejection; },
     },
+    authorizeAssistantAccess: () => ({ kind: 'account', actorId: 'user:test' }),
     registerIpcHandler: rejectedMap.registerIpcHandler,
   });
   await assert.rejects(

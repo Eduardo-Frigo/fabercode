@@ -13,6 +13,9 @@ const {
 const {
   createActionDigest,
 } = require('../main/services/assistant_job_authority_service');
+const {
+  createAssistantRuntimeLifecycleClearService,
+} = require('../main/services/assistant_runtime_lifecycle_clear_service');
 
 const digest = (character) => `sha256:${character.repeat(64)}`;
 
@@ -36,6 +39,9 @@ async function waitForEvent(events, expected) {
 function createHarness({
   acquireGate = null,
   executeAction: executeOverride = null,
+  onCancellationRequested = undefined,
+  onExecutionCleanupConfirmed = undefined,
+  onExecutionCleanupFailed = undefined,
   refreshProjectFromRootLease: refreshOverride = null,
   releaseGate = null,
   releaseResult = null,
@@ -243,6 +249,9 @@ function createHarness({
       assert.strictEqual(rootActive, true);
       return { ok: true };
     },
+    onCancellationRequested,
+    onExecutionCleanupConfirmed,
+    onExecutionCleanupFailed,
   });
 
   async function createReadyJob() {
@@ -413,6 +422,100 @@ async function run() {
     'root_release',
     'authority_revoke',
   ]);
+
+  const lifecycleReleaseGate = deferred();
+  const cleanupProofs = [];
+  const cleanupReceipts = [];
+  const cancellationWrites = [];
+  const continuationResults = [];
+  const continuationErrors = [];
+  let lifecycle = null;
+  const rootLifecycle = createHarness({
+    releaseGate: lifecycleReleaseGate,
+    onCancellationRequested(jobId, reason) {
+      const result = lifecycle.requestCancellation(jobId, reason);
+      return { ok: result.ok };
+    },
+    onExecutionCleanupConfirmed(proof) {
+      cleanupProofs.push(proof);
+      const result = lifecycle.confirmExecutionCleanup(proof);
+      return { ok: result.ok };
+    },
+    onExecutionCleanupFailed(failure) {
+      const result = lifecycle.failExecutionCleanup(failure);
+      return { ok: result.ok };
+    },
+  });
+  lifecycle = createAssistantRuntimeLifecycleClearService({
+    invalidateWindow() {
+      return { ok: true };
+    },
+    clearPeripheralAuthority() {
+      return { ok: true };
+    },
+    clearCoordinator() {
+      return rootLifecycle.coordinator.clear();
+    },
+    clearDeleteRuntime() {
+      return { ok: true };
+    },
+    markCancellationRequested(jobId, reason) {
+      cancellationWrites.push({ jobId, reason });
+      return { ok: true };
+    },
+    markCancelledAfterCleanup(jobId, receipt) {
+      cleanupReceipts.push({ jobId, receipt });
+      return { ok: true };
+    },
+    markExecutionCleanupFailed() {
+      return { ok: true };
+    },
+    scheduleContinuation(continuation) {
+      setImmediate(() => {
+        try {
+          continuationResults.push(continuation());
+        } catch (error) {
+          continuationErrors.push(error);
+        }
+      });
+    },
+  });
+  const rootLifecycleJobId = await rootLifecycle.createReadyJob();
+  const rootLifecycleExecution = rootLifecycle.coordinator.execute({
+    jobId: rootLifecycleJobId,
+  });
+  await waitForEvent(rootLifecycle.events, 'root_release');
+  const lifecycleClear = lifecycle.clear('window_reload');
+  assert.strictEqual(lifecycleClear.ok, true);
+  assert.strictEqual(lifecycleClear.status, 'deferred');
+  assert.strictEqual(lifecycleClear.code, 'execution_draining');
+  assert.deepStrictEqual(cancellationWrites, []);
+
+  lifecycleReleaseGate.resolve();
+  assert.strictEqual(
+    (await rootLifecycleExecution).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+  );
+  for (let attempt = 0;
+    attempt < 50 && (lifecycle.diagnostics().active
+      || rootLifecycle.coordinator.diagnostics().activeJobs > 0);
+    attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  if (continuationErrors.length > 0) throw continuationErrors[0];
+  assert.strictEqual(cleanupProofs.length, 1);
+  assert.strictEqual(cleanupProofs[0].terminalStatus, 'completed');
+  assert.strictEqual(cleanupProofs[0].rootReleased, true);
+  assert.deepStrictEqual(cleanupReceipts, []);
+  assert.deepStrictEqual(cancellationWrites, []);
+  assert.strictEqual(continuationResults.length, 1);
+  assert.strictEqual(continuationResults[0].status, 'completed');
+  assert.strictEqual(lifecycle.diagnostics().active, false);
+  assert.strictEqual(lifecycle.diagnostics().drainOnlyOutcomes, 1);
+  assert.strictEqual(lifecycle.diagnostics().completedSessions, 1);
+  assert.strictEqual(rootLifecycle.coordinator.diagnostics().activeJobs, 0);
+  assert.strictEqual(rootLifecycle.coordinator.diagnostics().authorityHealthy, true);
+  assert.strictEqual(rootLifecycle.isRootActive(), false);
 
   const closeFailure = createHarness({
     releaseResult: Object.freeze({

@@ -50,6 +50,9 @@ function createHarness({
     authorityClears: [],
     authorityRevocations: [],
     boundActions: [],
+    cancellationRequests: [],
+    cleanupConfirmations: [],
+    cleanupFailures: [],
     executions: [],
     failures: [],
     lifecycleReleases: [],
@@ -266,6 +269,30 @@ function createHarness({
     onAuthorityRevoked(jobId, reason) {
       calls.revocations.push({ jobId, reason });
       calls.releaseOrder.push({ type: 'legacy_callback', jobId, reason });
+    },
+    ...(typeof hooks.onCancellationRequested === 'function'
+      ? {
+        onCancellationRequested(jobId, reason) {
+          calls.cancellationRequests.push({ jobId, reason });
+          calls.releaseOrder.push({ type: 'cancellation_requested', jobId, reason });
+          return hooks.onCancellationRequested({ coordinator, jobId, jobs, reason });
+        },
+      }
+      : {}),
+    onExecutionCleanupConfirmed(input) {
+      calls.cleanupConfirmations.push(input);
+      calls.releaseOrder.push({ type: 'cleanup_confirmed', input });
+      if (typeof hooks.onExecutionCleanupConfirmed === 'function') {
+        return hooks.onExecutionCleanupConfirmed({ coordinator, input, jobs });
+      }
+      return { ok: true };
+    },
+    onExecutionCleanupFailed(input) {
+      calls.cleanupFailures.push(input);
+      if (typeof hooks.onExecutionCleanupFailed === 'function') {
+        return hooks.onExecutionCleanupFailed({ coordinator, input, jobs });
+      }
+      return { ok: true };
     },
     onPlanningFailure(jobId, reason) {
       calls.failures.push({ jobId, reason });
@@ -519,6 +546,18 @@ async function run() {
   ));
   assert.strictEqual(plan.ok, true);
   assert.strictEqual(plan.jobId, createdJobId);
+  assert.strictEqual(createdJobId, 'job-1');
+  const rejectedJobIds = ['job:1', 'legacy-job', 'job-a:b', `job-${'a'.repeat(181)}`];
+  for (const rejectedJobId of rejectedJobIds) {
+    assert.deepStrictEqual(
+      basic.coordinator.onJobTerminal({ jobId: rejectedJobId, status: 'cancelled' }),
+      {
+        ok: false,
+        code: ASSISTANT_EXECUTION_COORDINATOR_REASONS.INVALID_INPUT,
+        message: 'A operação foi rejeitada pelo coordenador.',
+      },
+    );
+  }
   assert.strictEqual(Object.hasOwn(plan, 'submissionId'), false);
   assert.strictEqual(Object.hasOwn(plan, 'authorityContext'), false);
   assert.strictEqual(Object.hasOwn(plan.meta, 'autoExecute'), false);
@@ -568,6 +607,19 @@ async function run() {
   const restartRecovery = restart.jobs.get(restartedJobId).pendingApprovalRecovery;
   assert.strictEqual(restart.coordinator.clear().ok, true);
   assert.strictEqual(restart.coordinator.diagnostics().activeJobs, 0);
+  for (const rejectedJobId of rejectedJobIds) {
+    assert.deepStrictEqual(
+      restart.coordinator.restorePendingApproval({
+        jobId: rejectedJobId,
+        recovery: restartRecovery,
+      }),
+      {
+        ok: false,
+        code: ASSISTANT_EXECUTION_COORDINATOR_REASONS.INVALID_INPUT,
+        message: 'A operação foi rejeitada pelo coordenador.',
+      },
+    );
+  }
   assert.deepStrictEqual(
     restart.coordinator.restorePendingApproval({
       jobId: restartedJobId,
@@ -859,15 +911,12 @@ async function run() {
   );
   assert.strictEqual(activeCancellationSignal.aborted, true);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepStrictEqual(
-    activeCancellation.coordinator.revokeJob({ jobId: activeCancellationJobId }),
-    { ok: true, revoked: false, deferred: true },
-  );
-  assert.strictEqual(activeCancellation.calls.authorityRevocations.length, 0);
   assert.strictEqual(
-    activeCancellation.coordinator.clear().code,
-    ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING,
+    activeCancellation.coordinator.revokeJob({ jobId: activeCancellationJobId }).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.JOB_NOT_FOUND,
   );
+  assert.strictEqual(activeCancellation.calls.authorityRevocations.length, 1);
+  assert.deepStrictEqual(activeCancellation.coordinator.clear(), { ok: true, cleared: 0 });
   activeActionGate.resolve();
   assert.strictEqual(
     (await activeCancellationExecution).code,
@@ -923,6 +972,10 @@ async function run() {
         drainEvents.push('authority_revoke');
         return baseAuthorityService.revokeExact(input);
       },
+      onExecutionCleanupConfirmed() {
+        drainEvents.push('cleanup_confirmed');
+        return { ok: true };
+      },
     },
   });
   const drainingJobId = await createReadyJob(draining, 'isolated-drain');
@@ -940,6 +993,7 @@ async function run() {
   );
   assert.strictEqual(draining.calls.lifecycleReleases.length, 0);
   assert.strictEqual(draining.calls.authorityRevocations.length, 0);
+  assert.strictEqual(draining.calls.cleanupConfirmations.length, 0);
   closeGate.resolve(Object.freeze({
     version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION,
     ok: true,
@@ -955,8 +1009,344 @@ async function run() {
     'executor_close_confirmed',
     'release_barrier',
     'authority_revoke',
+    'cleanup_confirmed',
   ]);
+  assert.deepStrictEqual(draining.calls.cleanupConfirmations, [Object.freeze({
+    jobId: drainingJobId,
+    terminalStatus: 'completed',
+    executorClosed: true,
+    processTreeTerminated: true,
+    workspaceRolledBack: true,
+    rootReleased: true,
+    authorityRevoked: true,
+  })]);
   assert.strictEqual(draining.coordinator.diagnostics().activeJobs, 0);
+
+  // Durable non-cancellation terminal outcomes win the race with lifecycle
+  // clear. Each active executor is drained, but the coordinator must neither
+  // persist a cancellation request nor rewrite the cleanup proof to cancelled.
+  for (const terminalStatus of ['completed', 'failed', 'blocked', 'runtime_interrupted']) {
+    const terminalActionStarted = deferred();
+    const terminalActionGate = deferred();
+    const terminalCloseGate = deferred();
+    let terminalCloseCalls = 0;
+    let terminalSignal = null;
+    const terminalDrain = createHarness({
+      createAuthorizedJobExecutor() {
+        return Object.freeze({
+          version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
+          execute() { return Promise.reject(new Error('not exercised')); },
+          read() { return Promise.reject(new Error('not exercised')); },
+          wait() { return Promise.reject(new Error('not exercised')); },
+          stop() { return Promise.reject(new Error('not exercised')); },
+          close() {
+            terminalCloseCalls += 1;
+            return terminalCloseGate.promise;
+          },
+          diagnostics() { return Object.freeze({ state: 'active' }); },
+        });
+      },
+      executeAction: async (_action, _projectInfo, context) => {
+        terminalSignal = context.signal;
+        terminalActionStarted.resolve();
+        await terminalActionGate.promise;
+        return { ok: terminalStatus !== 'failed' };
+      },
+      hooks: {
+        onCancellationRequested() { return { ok: true }; },
+      },
+    });
+    const terminalJobId = await createReadyJob(
+      terminalDrain,
+      `active-terminal-drain-${terminalStatus}`,
+    );
+    const terminalExecution = terminalDrain.coordinator.execute({ jobId: terminalJobId });
+    await terminalActionStarted.promise;
+    assert.deepStrictEqual(
+      terminalDrain.coordinator.onJobTerminal({ jobId: terminalJobId, status: terminalStatus }),
+      { ok: true, revoked: false, deferred: true, idempotent: false },
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(terminalCloseCalls, 1, `${terminalStatus} must start executor drain`);
+    assert.strictEqual(terminalSignal.aborted, true);
+    assert.strictEqual(
+      terminalDrain.coordinator.clear().code,
+      ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING,
+    );
+    assert.deepStrictEqual(
+      terminalDrain.calls.cancellationRequests,
+      [],
+      `${terminalStatus} must not be persisted as cancellation`,
+    );
+    terminalCloseGate.resolve(Object.freeze({
+      version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION,
+      ok: true,
+      closed: true,
+      sessionClosed: false,
+    }));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepStrictEqual(terminalDrain.calls.cleanupConfirmations, [Object.freeze({
+      jobId: terminalJobId,
+      terminalStatus,
+      executorClosed: true,
+      processTreeTerminated: true,
+      workspaceRolledBack: true,
+      rootReleased: true,
+      authorityRevoked: true,
+    })]);
+    assert.strictEqual(terminalDrain.coordinator.diagnostics().activeJobs, 0);
+    assert.strictEqual(terminalDrain.coordinator.diagnostics().authorityHealthy, true);
+    terminalActionGate.resolve();
+    assert.strictEqual(
+      (await terminalExecution).code,
+      ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+    );
+    assert.deepStrictEqual(terminalDrain.coordinator.clear(), { ok: true, cleared: 0 });
+    assert.strictEqual(terminalDrain.coordinator.diagnostics().clearPending, false);
+  }
+
+  // Explicit cancellation keeps the distinct contract: one durable request,
+  // an active-executor drain and a cancelled cleanup receipt.
+  const terminalCancelActionStarted = deferred();
+  const terminalCancelActionGate = deferred();
+  const terminalCancelCloseGate = deferred();
+  const terminalCancel = createHarness({
+    createAuthorizedJobExecutor() {
+      return Object.freeze({
+        version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
+        execute() { return Promise.reject(new Error('not exercised')); },
+        read() { return Promise.reject(new Error('not exercised')); },
+        wait() { return Promise.reject(new Error('not exercised')); },
+        stop() { return Promise.reject(new Error('not exercised')); },
+        close() { return terminalCancelCloseGate.promise; },
+        diagnostics() { return Object.freeze({ state: 'active' }); },
+      });
+    },
+    executeAction: async () => {
+      terminalCancelActionStarted.resolve();
+      await terminalCancelActionGate.promise;
+      return { ok: true, stale: true };
+    },
+    hooks: {
+      onCancellationRequested() { return { ok: true }; },
+    },
+  });
+  const terminalCancelJobId = await createReadyJob(terminalCancel, 'active-terminal-cancel');
+  const terminalCancelExecution = terminalCancel.coordinator.execute({
+    jobId: terminalCancelJobId,
+  });
+  await terminalCancelActionStarted.promise;
+  assert.deepStrictEqual(
+    terminalCancel.coordinator.onJobTerminal({
+      jobId: terminalCancelJobId,
+      status: 'cancelled',
+    }),
+    { ok: true, revoked: false, deferred: true, idempotent: false },
+  );
+  assert.strictEqual(terminalCancel.calls.cancellationRequests.length, 1);
+  assert.strictEqual(
+    terminalCancel.coordinator.clear().code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING,
+  );
+  assert.strictEqual(terminalCancel.calls.cancellationRequests.length, 1);
+  terminalCancelCloseGate.resolve(Object.freeze({
+    version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION,
+    ok: true,
+    closed: true,
+    sessionClosed: false,
+  }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(terminalCancel.calls.cleanupConfirmations.length, 1);
+  assert.strictEqual(
+    terminalCancel.calls.cleanupConfirmations[0].terminalStatus,
+    'cancelled',
+  );
+  assert.strictEqual(terminalCancel.coordinator.diagnostics().authorityHealthy, true);
+  terminalCancelActionGate.resolve();
+  assert.strictEqual(
+    (await terminalCancelExecution).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+  );
+  assert.deepStrictEqual(terminalCancel.coordinator.clear(), { ok: true, cleared: 0 });
+
+  // Once clear has requested cancellation for an execution that is still
+  // draining, all new job admissions remain closed until a later clear can
+  // finish the complete authority cleanup.
+  const latchCloseStarted = deferred();
+  const latchCloseGate = deferred();
+  const clearLatch = createHarness({
+    createAuthorizedJobExecutor() {
+      return Object.freeze({
+        version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
+        execute() { return Promise.reject(new Error('not exercised')); },
+        read() { return Promise.reject(new Error('not exercised')); },
+        wait() { return Promise.reject(new Error('not exercised')); },
+        stop() { return Promise.reject(new Error('not exercised')); },
+        close() {
+          latchCloseStarted.resolve();
+          return latchCloseGate.promise;
+        },
+        diagnostics() { return Object.freeze({ state: 'closing' }); },
+      });
+    },
+    executeAction: async () => ({ ok: true, stale: true }),
+    hooks: {
+      onCancellationRequested() { return { ok: true }; },
+    },
+  });
+  const latchExecutingJobId = await createReadyJob(clearLatch, 'clear-latch-executing');
+  const latchReadyJobId = await createReadyJob(clearLatch, 'clear-latch-ready');
+  const latchExecution = clearLatch.coordinator.execute({ jobId: latchExecutingJobId });
+  await latchCloseStarted.promise;
+  assert.strictEqual(
+    clearLatch.coordinator.clear().code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING,
+  );
+  assert.strictEqual(clearLatch.calls.cancellationRequests.length, 1);
+  let latchPlanningInvocations = 0;
+  assert.strictEqual(
+    (await clearLatch.coordinator.coordinatePlanning(planningInput(
+      project('project-a'),
+      async () => {
+        latchPlanningInvocations += 1;
+        return { ok: true };
+      },
+    ))).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING,
+  );
+  assert.strictEqual(latchPlanningInvocations, 0);
+  assert.strictEqual(
+    (await clearLatch.coordinator.retry({
+      jobId: 'job-missing',
+      kernelId: 'kernel-a',
+      invoke: async () => ({ ok: true }),
+    })).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING,
+  );
+  assert.strictEqual(
+    clearLatch.coordinator.restorePendingApproval({}).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING,
+  );
+  assert.strictEqual(
+    (await clearLatch.coordinator.execute({ jobId: latchReadyJobId })).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.EXECUTION_DRAINING,
+  );
+  assert.strictEqual(clearLatch.coordinator.diagnostics().clearPending, true);
+  latchCloseGate.resolve(Object.freeze({
+    version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION,
+    ok: true,
+    closed: true,
+    sessionClosed: false,
+  }));
+  assert.strictEqual(
+    (await latchExecution).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+  );
+  assert.strictEqual(clearLatch.coordinator.diagnostics().clearPending, true);
+  assert.deepStrictEqual(clearLatch.coordinator.clear(), { ok: true, cleared: 1 });
+  assert.strictEqual(clearLatch.calls.cancellationRequests.length, 1);
+  assert.strictEqual(clearLatch.calls.cleanupConfirmations[0].terminalStatus, 'completed');
+  assert.strictEqual(clearLatch.coordinator.diagnostics().clearPending, false);
+
+  const detachedActionStarted = deferred();
+  const detachedActionGate = deferred();
+  const detachedCleanup = createHarness({
+    createAuthorizedJobExecutor() {
+      return Object.freeze({
+        version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
+        execute() { return Promise.reject(new Error('not exercised')); },
+        read() { return Promise.reject(new Error('not exercised')); },
+        wait() { return Promise.reject(new Error('not exercised')); },
+        stop() { return Promise.reject(new Error('not exercised')); },
+        close() {
+          return Promise.resolve(Object.freeze({
+            version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION,
+            ok: true,
+            closed: true,
+            sessionClosed: false,
+          }));
+        },
+        diagnostics() { return Object.freeze({ state: 'active' }); },
+      });
+    },
+    executeAction: async () => {
+      detachedActionStarted.resolve();
+      await detachedActionGate.promise;
+      return { ok: true, stale: true };
+    },
+  });
+  const detachedCleanupJobId = await createReadyJob(
+    detachedCleanup,
+    'isolated-detached-cleanup',
+  );
+  const detachedExecution = detachedCleanup.coordinator.execute({
+    jobId: detachedCleanupJobId,
+  });
+  await detachedActionStarted.promise;
+  assert.deepStrictEqual(
+    detachedCleanup.coordinator.revokeJob({ jobId: detachedCleanupJobId }),
+    { ok: true, revoked: false, deferred: true },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(detachedCleanup.calls.cleanupConfirmations.length, 1);
+  assert.strictEqual(detachedCleanup.coordinator.diagnostics().activeJobs, 0);
+  detachedActionGate.resolve();
+  assert.strictEqual(
+    (await detachedExecution).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+  );
+
+  const failedCancelStarted = deferred();
+  const failedCancelGate = deferred();
+  const failedCancellation = createHarness({
+    createAuthorizedJobExecutor() {
+      return Object.freeze({
+        version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_VERSION,
+        execute() { return Promise.reject(new Error('not exercised')); },
+        read() { return Promise.reject(new Error('not exercised')); },
+        wait() { return Promise.reject(new Error('not exercised')); },
+        stop() { return Promise.reject(new Error('not exercised')); },
+        close() {
+          return Promise.resolve(Object.freeze({
+            version: EXECUTION_ISOLATION_AUTHORIZED_JOB_EXECUTOR_CLOSE_RECEIPT_VERSION,
+            ok: false,
+            closed: false,
+            sessionClosed: false,
+          }));
+        },
+        diagnostics() { return Object.freeze({ state: 'quarantined' }); },
+      });
+    },
+    executeAction: async () => {
+      failedCancelStarted.resolve();
+      await failedCancelGate.promise;
+      return { ok: true };
+    },
+  });
+  const failedCancellationJobId = await createReadyJob(
+    failedCancellation,
+    'isolated-cancel-cleanup-failure',
+  );
+  const failedCancellationExecution = failedCancellation.coordinator.execute({
+    jobId: failedCancellationJobId,
+  });
+  await failedCancelStarted.promise;
+  assert.deepStrictEqual(
+    failedCancellation.coordinator.revokeJob({ jobId: failedCancellationJobId }),
+    { ok: true, revoked: false, deferred: true },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(failedCancellation.calls.cleanupConfirmations.length, 0);
+  assert.deepStrictEqual(failedCancellation.calls.cleanupFailures, [Object.freeze({
+    jobId: failedCancellationJobId,
+    terminalStatus: 'cancelled',
+    reason: ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED,
+  })]);
+  failedCancelGate.resolve();
+  assert.strictEqual(
+    (await failedCancellationExecution).code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.REVOKED,
+  );
 
   // A malformed close receipt quarantines the lifecycle: broader authority is
   // retained and the coordinator becomes unhealthy instead of claiming cleanup.
@@ -1693,9 +2083,48 @@ async function run() {
   assert.strictEqual(clearReleaseFault.calls.authorityRevocations.length, 0);
   assert.strictEqual(clearReleaseFault.calls.revocations.length, 0);
 
+  const cancellationRequestFault = createHarness({
+    hooks: {
+      onCancellationRequested() { return { ok: false }; },
+    },
+  });
+  await createReadyJob(cancellationRequestFault, 'cancellation-request-fault-a');
+  await createReadyJob(cancellationRequestFault, 'cancellation-request-fault-b');
+  assert.strictEqual(
+    cancellationRequestFault.coordinator.clear().code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED,
+  );
+  assert.strictEqual(cancellationRequestFault.calls.cancellationRequests.length, 1);
+  assert.strictEqual(cancellationRequestFault.calls.lifecycleReleases.length, 0);
+  assert.strictEqual(cancellationRequestFault.calls.authorityClears.length, 0);
+  assert.strictEqual(cancellationRequestFault.coordinator.diagnostics().activeJobs, 2);
+
+  const cancellationRequestSuccess = createHarness({
+    hooks: {
+      onCancellationRequested() { return { ok: true }; },
+    },
+  });
+  await createReadyJob(cancellationRequestSuccess, 'cancellation-request-success-a');
+  await createReadyJob(cancellationRequestSuccess, 'cancellation-request-success-b');
+  assert.deepStrictEqual(
+    cancellationRequestSuccess.coordinator.clear(),
+    { ok: true, cleared: 2 },
+  );
+  assert.strictEqual(cancellationRequestSuccess.calls.cancellationRequests.length, 2);
+  assert.deepStrictEqual(
+    cancellationRequestSuccess.calls.releaseOrder.slice(0, 2).map((entry) => entry.type),
+    ['cancellation_requested', 'cancellation_requested'],
+  );
+
   const clearReleaseSuccess = createHarness();
-  await createReadyJob(clearReleaseSuccess, 'clear-release-success-a');
-  await createReadyJob(clearReleaseSuccess, 'clear-release-success-b');
+  const clearReleaseSuccessJobA = await createReadyJob(
+    clearReleaseSuccess,
+    'clear-release-success-a',
+  );
+  const clearReleaseSuccessJobB = await createReadyJob(
+    clearReleaseSuccess,
+    'clear-release-success-b',
+  );
   assert.deepStrictEqual(clearReleaseSuccess.coordinator.clear(), { ok: true, cleared: 2 });
   assert.deepStrictEqual(
     clearReleaseSuccess.calls.lifecycleReleases.map((release) => release.terminalStatus),
@@ -1707,8 +2136,40 @@ async function run() {
     'legacy_callback',
     'legacy_callback',
     'authority_clear',
+    'cleanup_confirmed',
+    'cleanup_confirmed',
   ]);
+  assert.deepStrictEqual(
+    clearReleaseSuccess.calls.cleanupConfirmations.map((proof) => proof.jobId),
+    [clearReleaseSuccessJobA, clearReleaseSuccessJobB],
+  );
+  assert.strictEqual(
+    clearReleaseSuccess.calls.releaseOrder.findIndex((entry) => entry.type === 'cleanup_confirmed')
+      > clearReleaseSuccess.calls.releaseOrder.findIndex((entry) => entry.type === 'authority_clear'),
+    true,
+  );
   assert.strictEqual(clearReleaseSuccess.coordinator.diagnostics().activeJobs, 0);
+
+  let refusedClearConfirmationCount = 0;
+  const refusedClearConfirmation = createHarness({
+    hooks: {
+      onExecutionCleanupConfirmed() {
+        refusedClearConfirmationCount += 1;
+        return { ok: refusedClearConfirmationCount !== 1 };
+      },
+    },
+  });
+  await createReadyJob(refusedClearConfirmation, 'refused-clear-confirmation-a');
+  await createReadyJob(refusedClearConfirmation, 'refused-clear-confirmation-b');
+  assert.strictEqual(
+    refusedClearConfirmation.coordinator.clear().code,
+    ASSISTANT_EXECUTION_COORDINATOR_REASONS.AUTHORITY_CLEANUP_FAILED,
+  );
+  assert.strictEqual(refusedClearConfirmation.calls.authorityClears.length, 1);
+  assert.strictEqual(refusedClearConfirmation.calls.cleanupConfirmations.length, 2);
+  assert.strictEqual(refusedClearConfirmation.coordinator.diagnostics().activeJobs, 0);
+  assert.strictEqual(refusedClearConfirmation.coordinator.diagnostics().authorityHealthy, false);
+  assert.strictEqual(refusedClearConfirmation.coordinator.diagnostics().clearPending, true);
 
   const interruptedRelease = createHarness();
   const interruptedReleaseJobId = await createReadyJob(

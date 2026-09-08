@@ -98,6 +98,41 @@ function run() {
   });
   assert.strictEqual(completions.length, 1);
 
+  job = createCompletedJob({
+    status: 'failed',
+    phase: 'execute_failed',
+    checkpoints: {
+      execute_result: {
+        savedAt: '2026-08-25T14:04:59.000Z',
+        data: {
+          ok: false,
+          processExecutionPerformed: true,
+          validationPending: false,
+          validationVerified: false,
+        },
+      },
+    },
+    events: [{
+      id: 'event-failed-1',
+      type: 'job.failed',
+      createdAt: '2026-08-25T14:05:00.000Z',
+      payload: {
+        processExecutionPerformed: true,
+        validationPending: false,
+        validationVerified: false,
+      },
+    }],
+  });
+  const groundedFailure = service.completeActiveMilestoneFromJob(
+    '/authorized/project',
+    'job-validated-1',
+  );
+  assert.deepStrictEqual(groundedFailure, {
+    ok: false,
+    code: MILESTONE_VALIDATION_REASONS.JOB_UNAVAILABLE,
+  });
+  assert.strictEqual(completions.length, 1);
+
   job = createCompletedJob({ rootPath: '/other/project' });
   assert.deepStrictEqual(
     service.completeActiveMilestoneFromJob('/authorized/project', 'job-validated-1'),

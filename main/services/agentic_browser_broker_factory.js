@@ -25,11 +25,16 @@ const {
   preflightDataGraph,
 } = require('../capabilities/execution_workspace_contract');
 
-const AGENTIC_BROWSER_BROKER_FACTORY_VERSION = 'agentic-browser-broker-factory.v1';
-const AGENTIC_BROWSER_ROUTE_VERSION = 'agentic-browser-route.v1';
-const AGENTIC_BROWSER_DESCRIPTOR_VERSION = 'agentic-browser-descriptor.v1';
+const AGENTIC_BROWSER_BROKER_FACTORY_VERSION = 'agentic-browser-broker-factory.v2';
+const AGENTIC_BROWSER_ROUTE_VERSION = 'agentic-browser-route.v2';
+const AGENTIC_BROWSER_DESCRIPTOR_VERSION = 'agentic-browser-descriptor.v2';
 const AGENTIC_BROWSER_ROUTE_REASONS = Object.freeze({
   AUTHORITY_DENIED: 'AGENTIC_BROWSER_ROUTE_AUTHORITY_DENIED',
+  CAPTURE_APPROVAL_DENIED: 'AGENTIC_BROWSER_ROUTE_CAPTURE_APPROVAL_DENIED',
+  CAPTURE_APPROVAL_INVALID: 'AGENTIC_BROWSER_ROUTE_CAPTURE_APPROVAL_INVALID',
+  CAPTURE_INVOCATION_CONFLICT: 'AGENTIC_BROWSER_ROUTE_CAPTURE_INVOCATION_CONFLICT',
+  CAPTURE_SESSION_CHANGED: 'AGENTIC_BROWSER_ROUTE_CAPTURE_SESSION_CHANGED',
+  CANCELLED: 'AGENTIC_BROWSER_ROUTE_CANCELLED',
   IDEMPOTENCY_CONFLICT: 'AGENTIC_BROWSER_ROUTE_IDEMPOTENCY_CONFLICT',
   INTERACTION_DENIED: 'AGENTIC_BROWSER_ROUTE_INTERACTION_DENIED',
   INVALID_INPUT: 'AGENTIC_BROWSER_ROUTE_INVALID_INPUT',
@@ -44,6 +49,7 @@ const MAX_URL_LENGTH = 8192;
 const MAX_SELECTOR_LENGTH = 2048;
 const MAX_FILL_VALUE_LENGTH = 65536;
 const MAX_INTERACTION_RECORDS = 256;
+const MAX_CAPTURE_RECORDS = 256;
 const BINDING_KEYS = Object.freeze([
   'projectId',
   'canonicalRootPath',
@@ -61,6 +67,8 @@ const OPTION_KEYS = Object.freeze([
   'grantStore',
   'pendingApprovalStore',
   'approvalReviewer',
+  'requestCaptureApproval',
+  'consumeCaptureApproval',
   'audit',
   'now',
   'requestIdFactory',
@@ -74,6 +82,9 @@ const REQUIRED_OPTION_KEYS = Object.freeze([
   'grantStore',
   'pendingApprovalStore',
   'approvalReviewer',
+  'requestCaptureApproval',
+  'consumeCaptureApproval',
+  'getSignal',
 ]);
 
 function exactOwnDataFields(value, allowedKeys, requiredKeys = allowedKeys) {
@@ -119,6 +130,25 @@ function dataValue(value, key) {
     preflightDataGraph(error);
     return undefined;
   }
+}
+
+function isOpaqueApprovalReceipt(value) {
+  return Boolean(value)
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && !util.types.isProxy(value);
+}
+
+function activeAbortSignal(value) {
+  return Boolean(value)
+    && typeof value === 'object'
+    && !util.types.isProxy(value)
+    && typeof value.aborted === 'boolean'
+    && typeof value.addEventListener === 'function'
+    && typeof value.removeEventListener === 'function'
+    && (typeof AbortSignal !== 'function' || value instanceof AbortSignal)
+    ? value
+    : null;
 }
 
 function captureFrozenOwnMethod(receiver, name, fieldName) {
@@ -246,6 +276,76 @@ function normalizeSessionInput(input) {
   return Object.freeze({ sessionId: fields.get('sessionId') });
 }
 
+function normalizeCaptureInput(input) {
+  const fields = exactOwnDataFields(
+    input,
+    ['sessionId', 'callId', 'invocationId'],
+    ['sessionId', 'callId', 'invocationId']
+  );
+  if (!fields
+    || typeof fields.get('sessionId') !== 'string'
+    || !SESSION_ID_PATTERN.test(fields.get('sessionId'))
+    || typeof fields.get('callId') !== 'string'
+    || !REQUEST_ID_PATTERN.test(fields.get('callId'))
+    || typeof fields.get('invocationId') !== 'string'
+    || !REQUEST_ID_PATTERN.test(fields.get('invocationId'))) {
+    throw new TypeError('Browser capture input is invalid');
+  }
+  return Object.freeze({
+    sessionId: fields.get('sessionId'),
+    callId: fields.get('callId'),
+    invocationId: fields.get('invocationId'),
+  });
+}
+
+function normalizeCaptureSessionSnapshot(value, expectedSessionId = '') {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || util.types.isProxy(value)) return null;
+  const id = dataValue(value, 'id');
+  const status = dataValue(value, 'status');
+  const revision = dataValue(value, 'revision');
+  let url;
+  try {
+    url = normalizeUrl(dataValue(value, 'url'));
+  } catch {
+    return null;
+  }
+  if (typeof id !== 'string' || !SESSION_ID_PATTERN.test(id)
+    || (expectedSessionId && id !== expectedSessionId)
+    || status !== 'open'
+    || !Number.isSafeInteger(revision) || revision < 1) return null;
+  const snapshotDigest = `sha256:${crypto.createHash('sha256').update(JSON.stringify({
+    version: 'agentic-browser-session-snapshot.v1',
+    id,
+    url,
+    revision,
+  })).digest('hex')}`;
+  return Object.freeze({ id, url, revision, snapshotDigest });
+}
+
+function createAgenticBrowserSessionSnapshotDigest(value, expectedSessionId = '') {
+  const snapshot = normalizeCaptureSessionSnapshot(value, expectedSessionId);
+  return snapshot ? snapshot.snapshotDigest : '';
+}
+
+function captureRequestDigest(binding, input, browserSessionSnapshotDigest) {
+  const payload = JSON.stringify({
+    version: 'agentic-browser-capture-request.v2',
+    projectId: binding.projectId,
+    canonicalRootPath: binding.canonicalRootPath,
+    realRootPath: binding.realRootPath,
+    projectSessionId: binding.sessionId,
+    jobId: binding.jobId,
+    kernelId: binding.kernelId,
+    submissionDigest: binding.submissionDigest,
+    browserSessionId: input.sessionId,
+    browserSessionSnapshotDigest,
+    callId: input.callId,
+    invocationId: input.invocationId,
+  });
+  return `sha256:${crypto.createHash('sha256').update(payload).digest('hex')}`;
+}
+
 function normalizeInteractionInput(input) {
   const fields = exactOwnDataFields(
     input,
@@ -342,12 +442,14 @@ function createAgenticBrowserBrokerFactory(options = {}) {
   const grantStore = fields.get('grantStore');
   const pendingApprovalStore = fields.get('pendingApprovalStore');
   const approvalReviewer = fields.get('approvalReviewer');
+  const requestCaptureApproval = fields.get('requestCaptureApproval');
+  const consumeCaptureApproval = fields.get('consumeCaptureApproval');
   const audit = fields.has('audit') ? fields.get('audit') : () => {};
   const now = fields.has('now') ? fields.get('now') : () => Date.now();
   const requestIdFactory = fields.has('requestIdFactory')
     ? fields.get('requestIdFactory')
     : () => `agentic-browser:${crypto.randomUUID()}`;
-  const getSignal = fields.has('getSignal') ? fields.get('getSignal') : () => null;
+  const getSignal = fields.get('getSignal');
 
   for (const [name, callback] of [
     ['authorizeLifecycle', authorizeLifecycle],
@@ -357,6 +459,8 @@ function createAgenticBrowserBrokerFactory(options = {}) {
     ['now', now],
     ['requestIdFactory', requestIdFactory],
     ['getSignal', getSignal],
+    ['requestCaptureApproval', requestCaptureApproval],
+    ['consumeCaptureApproval', consumeCaptureApproval],
   ]) {
     if (typeof callback !== 'function' || util.types.isProxy(callback)) {
       throw new TypeError(`${name} must be a trusted function`);
@@ -428,7 +532,14 @@ function createAgenticBrowserBrokerFactory(options = {}) {
     }
 
     function allAuthorityActive() {
-      return Boolean(rootAuthorization() && lifecycleAuthorization() && effectAuthorization());
+      const signal = currentSignal();
+      return Boolean(
+        rootAuthorization()
+        && lifecycleAuthorization()
+        && effectAuthorization()
+        && signal
+        && signal.aborted === false
+      );
     }
 
     function authorizeSession(session) {
@@ -454,7 +565,7 @@ function createAgenticBrowserBrokerFactory(options = {}) {
         preflightDataGraph(error);
         return null;
       }
-      return signal && typeof signal === 'object' ? signal : null;
+      return activeAbortSignal(signal);
     }
 
     const descriptor = createProjectCapabilityDescriptor({
@@ -532,11 +643,33 @@ function createAgenticBrowserBrokerFactory(options = {}) {
     let idempotentReplays = 0;
     let idempotencyConflicts = 0;
     let captures = 0;
+    let captureApprovalRequests = 0;
+    let captureApprovalConsumptions = 0;
+    let captureApprovalDenials = 0;
+    let captureReplays = 0;
+    let captureInvocationConflicts = 0;
     let inspections = 0;
     let closes = 0;
 
     const localSessions = new Set();
     const interactionRecords = new Map();
+    const captureRecords = new Map();
+
+    function inspectCaptureSession(sessionId, signal) {
+      let raw;
+      try {
+        raw = Reflect.apply(browserInspect.method, browserInspect.receiver, [Object.freeze({
+          jobId: binding.jobId,
+          sessionId,
+          signal,
+        })]);
+      } catch (error) {
+        preflightDataGraph(error);
+        return null;
+      }
+      if (util.types.isPromise(raw) || dataValue(raw, 'ok') !== true) return null;
+      return normalizeCaptureSessionSnapshot(dataValue(raw, 'session'), sessionId);
+    }
 
     async function executeNavigation(payload) {
       let requestId;
@@ -595,6 +728,23 @@ function createAgenticBrowserBrokerFactory(options = {}) {
 
     function interact(rawInput) {
       const normalized = normalizeInteractionInput(rawInput);
+      const signal = currentSignal();
+      if (signal && signal.aborted === true) {
+        try {
+          Reflect.apply(browserClose.method, browserClose.receiver, [Object.freeze({
+            jobId: binding.jobId,
+            sessionId: normalized.sessionId,
+            signal,
+          })]);
+        } catch (error) {
+          preflightDataGraph(error);
+        }
+        return Object.freeze({
+          ok: false,
+          cancelled: true,
+          code: AGENTIC_BROWSER_ROUTE_REASONS.CANCELLED,
+        });
+      }
       if (!allAuthorityActive()) {
         return routeFailure(AGENTIC_BROWSER_ROUTE_REASONS.AUTHORITY_DENIED);
       }
@@ -612,7 +762,6 @@ function createAgenticBrowserBrokerFactory(options = {}) {
         return existing.promise;
       }
 
-      const signal = currentSignal();
       const invocation = Object.freeze({
         jobId: binding.jobId,
         sessionId: normalized.sessionId,
@@ -647,10 +796,26 @@ function createAgenticBrowserBrokerFactory(options = {}) {
 
     function directOperation(rawInput, captured, counter) {
       const normalized = normalizeSessionInput(rawInput);
+      const signal = currentSignal();
+      if (signal && signal.aborted === true) {
+        try {
+          Reflect.apply(browserClose.method, browserClose.receiver, [Object.freeze({
+            jobId: binding.jobId,
+            sessionId: normalized.sessionId,
+            signal,
+          })]);
+        } catch (error) {
+          preflightDataGraph(error);
+        }
+        return Object.freeze({
+          ok: false,
+          cancelled: true,
+          code: AGENTIC_BROWSER_ROUTE_REASONS.CANCELLED,
+        });
+      }
       if (!allAuthorityActive()) {
         return routeFailure(AGENTIC_BROWSER_ROUTE_REASONS.AUTHORITY_DENIED);
       }
-      const signal = currentSignal();
       const invocation = Object.freeze({
         jobId: binding.jobId,
         sessionId: normalized.sessionId,
@@ -686,7 +851,183 @@ function createAgenticBrowserBrokerFactory(options = {}) {
     }
 
     function capture(rawInput) {
-      return directOperation(rawInput, browserCapture, () => { captures += 1; });
+      const normalized = normalizeCaptureInput(rawInput);
+      if (!allAuthorityActive()) {
+        return Promise.resolve(routeFailure(
+          AGENTIC_BROWSER_ROUTE_REASONS.AUTHORITY_DENIED
+        ));
+      }
+      const signal = currentSignal();
+      if (!signal) {
+        return Promise.resolve(Object.freeze({
+          ok: false,
+          cancelled: true,
+          code: AGENTIC_BROWSER_ROUTE_REASONS.CANCELLED,
+        }));
+      }
+      const sessionSnapshot = inspectCaptureSession(normalized.sessionId, signal);
+      if (!sessionSnapshot) {
+        return Promise.resolve(routeFailure(
+          AGENTIC_BROWSER_ROUTE_REASONS.CAPTURE_SESSION_CHANGED
+        ));
+      }
+      const requestDigest = captureRequestDigest(
+        binding,
+        normalized,
+        sessionSnapshot.snapshotDigest
+      );
+      const existing = captureRecords.get(normalized.invocationId);
+      if (existing) {
+        if (existing.requestDigest !== requestDigest) {
+          captureInvocationConflicts += 1;
+          return Promise.resolve(routeFailure(
+            AGENTIC_BROWSER_ROUTE_REASONS.CAPTURE_INVOCATION_CONFLICT
+          ));
+        }
+        captureReplays += 1;
+        return existing.promise;
+      }
+
+      const approvalInput = Object.freeze({
+        binding,
+        browserSessionId: normalized.sessionId,
+        browserSessionSnapshotDigest: sessionSnapshot.snapshotDigest,
+        callId: normalized.callId,
+        invocationId: normalized.invocationId,
+        requestDigest,
+      });
+      let settleOperation;
+      const operation = new Promise((resolve) => { settleOperation = resolve; });
+      if (captureRecords.size >= MAX_CAPTURE_RECORDS) {
+        captureRecords.delete(captureRecords.keys().next().value);
+      }
+      captureRecords.set(normalized.invocationId, Object.freeze({
+        requestDigest,
+        promise: operation,
+      }));
+      const runner = (async () => {
+        if (!allAuthorityActive() || currentSignal() !== signal) {
+          return routeFailure(AGENTIC_BROWSER_ROUTE_REASONS.AUTHORITY_DENIED);
+        }
+        let approval;
+        try {
+          approval = Reflect.apply(requestCaptureApproval, undefined, [approvalInput]);
+          if (approval && typeof approval.then === 'function'
+            && !util.types.isPromise(approval)) {
+            throw new TypeError('Capture approval returned an untrusted thenable');
+          }
+          if (util.types.isPromise(approval)) approval = await approval;
+          captureApprovalRequests += 1;
+        } catch (error) {
+          preflightDataGraph(error);
+          captureApprovalDenials += 1;
+          return routeFailure(AGENTIC_BROWSER_ROUTE_REASONS.CAPTURE_APPROVAL_INVALID);
+        }
+        if (signal.aborted === true) {
+          return Object.freeze({
+            ok: false,
+            cancelled: true,
+            code: AGENTIC_BROWSER_ROUTE_REASONS.CANCELLED,
+          });
+        }
+        if (!approval || typeof approval !== 'object' || util.types.isProxy(approval)
+          || dataValue(approval, 'ok') !== true
+          || dataValue(approval, 'approved') !== true) {
+          captureApprovalDenials += 1;
+          return routeFailure(
+            dataValue(approval, 'ok') === true
+              && dataValue(approval, 'approved') === false
+              ? AGENTIC_BROWSER_ROUTE_REASONS.CAPTURE_APPROVAL_DENIED
+              : AGENTIC_BROWSER_ROUTE_REASONS.CAPTURE_APPROVAL_INVALID
+          );
+        }
+        const receipt = dataValue(approval, 'receipt');
+        if (!isOpaqueApprovalReceipt(receipt) || !allAuthorityActive()) {
+          captureApprovalDenials += 1;
+          return routeFailure(
+            !allAuthorityActive()
+              ? AGENTIC_BROWSER_ROUTE_REASONS.AUTHORITY_DENIED
+              : AGENTIC_BROWSER_ROUTE_REASONS.CAPTURE_APPROVAL_INVALID
+          );
+        }
+        const freshSignal = currentSignal();
+        if (signal.aborted === true || freshSignal !== signal) {
+          return Object.freeze({
+            ok: false,
+            cancelled: true,
+            code: AGENTIC_BROWSER_ROUTE_REASONS.CANCELLED,
+          });
+        }
+        let consumed;
+        try {
+          consumed = Reflect.apply(consumeCaptureApproval, undefined, [Object.freeze({
+            ...approvalInput,
+            receipt,
+          })]);
+          captureApprovalConsumptions += 1;
+        } catch (error) {
+          preflightDataGraph(error);
+          captureApprovalDenials += 1;
+          return routeFailure(AGENTIC_BROWSER_ROUTE_REASONS.CAPTURE_APPROVAL_INVALID);
+        }
+        if (util.types.isPromise(consumed)
+          || !consumed || typeof consumed !== 'object' || util.types.isProxy(consumed)
+          || dataValue(consumed, 'ok') !== true
+          || dataValue(consumed, 'authorized') !== true) {
+          preflightDataGraph(consumed);
+          captureApprovalDenials += 1;
+          return routeFailure(AGENTIC_BROWSER_ROUTE_REASONS.CAPTURE_APPROVAL_INVALID);
+        }
+
+        // The one-shot receipt has now been consumed and its durable APPROVED
+        // event persisted. Revalidate synchronously against reentrant
+        // revocation, then keep this point free of asynchronous boundaries
+        // until entry into the browser session's capture operation.
+        const postConsumeSignal = currentSignal();
+        if (!allAuthorityActive()
+          || signal.aborted === true
+          || freshSignal !== signal
+          || postConsumeSignal !== signal) {
+          captureApprovalDenials += 1;
+          return routeFailure(AGENTIC_BROWSER_ROUTE_REASONS.AUTHORITY_DENIED);
+        }
+        const currentSessionSnapshot = inspectCaptureSession(
+          normalized.sessionId,
+          signal
+        );
+        if (!currentSessionSnapshot
+          || currentSessionSnapshot.snapshotDigest !== sessionSnapshot.snapshotDigest) {
+          captureApprovalDenials += 1;
+          return routeFailure(AGENTIC_BROWSER_ROUTE_REASONS.CAPTURE_SESSION_CHANGED);
+        }
+        const invocation = Object.freeze({
+          jobId: binding.jobId,
+          sessionId: normalized.sessionId,
+          expectedRevision: sessionSnapshot.revision,
+          expectedUrl: sessionSnapshot.url,
+          signal,
+        });
+        let raw;
+        try {
+          captures += 1;
+          raw = Reflect.apply(browserCapture.method, browserCapture.receiver, [invocation]);
+          if (util.types.isPromise(raw)) raw = await raw;
+        } catch (error) {
+          preflightDataGraph(error);
+          return routeFailure(AGENTIC_BROWSER_ROUTE_REASONS.OPERATION_FAILED);
+        }
+        return allAuthorityActive()
+          ? raw
+          : routeFailure(AGENTIC_BROWSER_ROUTE_REASONS.AUTHORITY_DENIED);
+      })();
+      runner.then(
+        (result) => settleOperation(result),
+        (error) => {
+          preflightDataGraph(error);
+          settleOperation(routeFailure(AGENTIC_BROWSER_ROUTE_REASONS.OPERATION_FAILED));
+        }
+      );
+      return operation;
     }
 
     function inspect(rawInput) {
@@ -709,11 +1050,17 @@ function createAgenticBrowserBrokerFactory(options = {}) {
         idempotentReplays,
         idempotencyConflicts,
         captures,
+        captureApprovalRequests,
+        captureApprovalConsumptions,
+        captureApprovalDenials,
+        captureReplays,
+        captureInvocationConflicts,
         inspections,
         closes,
         interactionEnabled: true,
         externalInteractionPolicy: 'disabled',
         externalNavigationPolicy: 'grant_or_approval',
+        visualCapturePolicy: 'fresh_digest_bound_native_approval_per_invocation',
         authorityBoundary: 'job_binding',
       });
     }
@@ -740,6 +1087,7 @@ function createAgenticBrowserBrokerFactory(options = {}) {
       capability: BROWSER_CAPABILITY,
       action: BROWSER_ACTION,
       externalNavigationPolicy: 'grant_or_approval',
+      visualCapturePolicy: 'fresh_digest_bound_native_approval_per_invocation',
       localInteractionPolicy: 'idempotency_key_required',
       externalInteractionDefault: 'disabled',
       authorityBoundary: 'main_process_only',
@@ -754,5 +1102,6 @@ module.exports = {
   AGENTIC_BROWSER_DESCRIPTOR_VERSION,
   AGENTIC_BROWSER_ROUTE_REASONS,
   AGENTIC_BROWSER_ROUTE_VERSION,
+  createAgenticBrowserSessionSnapshotDigest,
   createAgenticBrowserBrokerFactory,
 };

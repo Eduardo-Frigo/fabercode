@@ -83,7 +83,7 @@ function sourceSandboxRequest({
   });
 }
 
-function backendHarness({ stopFails = false } = {}) {
+function backendHarness({ stopFails = false, waitUntilStop = false } = {}) {
   const state = {
     events: [],
     execRequests: [],
@@ -91,6 +91,7 @@ function backendHarness({ stopFails = false } = {}) {
     reads: 0,
     waits: 0,
     stops: 0,
+    resolveWait: null,
   };
   const backend = Object.freeze({
     version: PROCESS_SUPERVISOR_BACKEND_VERSION,
@@ -140,6 +141,15 @@ function backendHarness({ stopFails = false } = {}) {
       state.events.push(`wait:${request.executionId}`);
       state.waits += 1;
       const snapshot = state.executions.get(request.executionId);
+      if (waitUntilStop) {
+        return new Promise((resolve) => {
+          state.resolveWait = () => resolve(createProcessSupervisorWaitResult({
+            request,
+            ...state.executions.get(request.executionId),
+            changed: true,
+          }));
+        });
+      }
       return createProcessSupervisorWaitResult({
         request,
         ...snapshot,
@@ -160,6 +170,7 @@ function backendHarness({ stopFails = false } = {}) {
         stopped: true,
       };
       state.executions.set(request.executionId, snapshot);
+      if (state.resolveWait) state.resolveWait();
       return createProcessSupervisorStopReceipt({
         request,
         ...snapshot,
@@ -175,12 +186,13 @@ function backendHarness({ stopFails = false } = {}) {
   return { backend, state };
 }
 
-function createGateway(harness, jobBinding = binding()) {
+function createGateway(harness, jobBinding = binding(), mutationRevision = 0) {
   const processSupervisor = createProcessSupervisor({ backend: harness.backend });
   const gateway = createExecutionIsolationJobProcessGateway({
     binding: jobBinding,
     workspaceLease: workspaceLease(jobBinding),
     processSupervisor,
+    mutationRevision,
   });
   return { gateway, processSupervisor };
 }
@@ -201,7 +213,7 @@ async function main() {
   ]);
 
   const sandboxRequest = sourceSandboxRequest();
-  const execInput = Object.freeze({ sandboxRequest });
+  const execInput = Object.freeze({ sandboxRequest, mutationRevision: 0 });
   const firstExecPromise = gateway.exec(execInput);
   const duplicateExecPromise = gateway.exec(execInput);
   assert.strictEqual(firstExecPromise, duplicateExecPromise);
@@ -249,6 +261,7 @@ async function main() {
 
   const conflict = await gateway.exec(Object.freeze({
     sandboxRequest: sourceSandboxRequest({ grantId: 'grant-forged' }),
+    mutationRevision: 0,
   }));
   assert.deepStrictEqual(conflict, {
     ok: false,
@@ -262,11 +275,42 @@ async function main() {
       rootPath: '/workspace/other-project',
       realRootPath: '/private/workspace/other-project',
     }),
+    mutationRevision: 0,
   }));
   assert.strictEqual(
     forgedRoot.code,
     EXECUTION_ISOLATION_JOB_PROCESS_GATEWAY_REASONS.INVALID_INPUT
   );
+  assert.strictEqual(harness.state.execRequests.length, 1);
+
+  const staleRevisionHarness = backendHarness();
+  const staleRevisionRuntime = createGateway(
+    staleRevisionHarness,
+    binding('job-stale-revision'),
+    1
+  );
+  const staleRevision = await staleRevisionRuntime.gateway.exec(Object.freeze({
+    sandboxRequest: sourceSandboxRequest({
+      executionId: 'execution-stale-revision',
+    }),
+    mutationRevision: 0,
+  }));
+  assert.deepStrictEqual(staleRevision, {
+    ok: false,
+    code: EXECUTION_ISOLATION_JOB_PROCESS_GATEWAY_REASONS.MUTATION_REVISION_MISMATCH,
+  });
+  assert.strictEqual(staleRevisionHarness.state.execRequests.length, 0);
+  assert.strictEqual((await staleRevisionRuntime.gateway.dispose()).ok, true);
+  assert.strictEqual((await staleRevisionRuntime.processSupervisor.dispose()).ok, true);
+
+  const mismatchedRevision = await gateway.exec(Object.freeze({
+    sandboxRequest: sourceSandboxRequest({ executionId: 'execution-stale-snapshot' }),
+    mutationRevision: 1,
+  }));
+  assert.deepStrictEqual(mismatchedRevision, {
+    ok: false,
+    code: EXECUTION_ISOLATION_JOB_PROCESS_GATEWAY_REASONS.MUTATION_REVISION_MISMATCH,
+  });
   assert.strictEqual(harness.state.execRequests.length, 1);
 
   const stopped = await gateway.stop(Object.freeze({
@@ -301,6 +345,7 @@ async function main() {
   const autoStopRuntime = createGateway(autoStopHarness, binding('job-b'));
   const autoStarted = await autoStopRuntime.gateway.exec(Object.freeze({
     sandboxRequest: sourceSandboxRequest({ executionId: 'execution-b' }),
+    mutationRevision: 0,
   }));
   assert.strictEqual(autoStarted.ok, true);
   const autoDispose = await autoStopRuntime.gateway.dispose();
@@ -309,10 +354,34 @@ async function main() {
   assert.deepStrictEqual(autoStopHarness.state.events.slice(-1), ['stop:execution-b']);
   assert.strictEqual((await autoStopRuntime.processSupervisor.dispose()).ok, true);
 
+  const pendingWaitHarness = backendHarness({ waitUntilStop: true });
+  const pendingWaitRuntime = createGateway(pendingWaitHarness, binding('job-d'));
+  assert.strictEqual((await pendingWaitRuntime.gateway.exec(Object.freeze({
+    sandboxRequest: sourceSandboxRequest({ executionId: 'execution-d' }),
+    mutationRevision: 0,
+  }))).ok, true);
+  const pendingWait = pendingWaitRuntime.gateway.wait(Object.freeze({
+    executionId: 'execution-d',
+    afterRevision: 1,
+    timeoutMs: 10_000,
+  }));
+  await new Promise((resolve) => setImmediate(resolve));
+  const pendingWaitDispose = pendingWaitRuntime.gateway.dispose();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(
+    pendingWaitHarness.state.stops,
+    1,
+    'dispose must stop the execution before draining a pending wait'
+  );
+  assert.strictEqual((await pendingWait).ok, true);
+  assert.strictEqual((await pendingWaitDispose).ok, true);
+  assert.strictEqual((await pendingWaitRuntime.processSupervisor.dispose()).ok, true);
+
   const failedStopHarness = backendHarness({ stopFails: true });
   const failedStopRuntime = createGateway(failedStopHarness, binding('job-c'));
   assert.strictEqual((await failedStopRuntime.gateway.exec(Object.freeze({
     sandboxRequest: sourceSandboxRequest({ executionId: 'execution-c' }),
+    mutationRevision: 0,
   }))).ok, true);
   const failedDispose = await failedStopRuntime.gateway.dispose();
   assert.strictEqual(failedDispose.ok, false);

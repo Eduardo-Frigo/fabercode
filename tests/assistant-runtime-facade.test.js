@@ -74,6 +74,7 @@ async function run() {
   };
 
   const facade = createAssistantRuntimeFacade({
+    authorizeProductAccess: () => Object.freeze({ kind: 'local_development', actorId: 'local:test' }),
     authorizePlanningPayload,
     coordinator,
     harnessRouter,
@@ -165,8 +166,60 @@ async function run() {
     (await facade.message(Object.defineProperty({}, 'userMessage', { get() { return 'hostile'; }, enumerable: true }))).code,
     ASSISTANT_RUNTIME_FACADE_REASONS.INVALID_INPUT,
   );
+  assert.strictEqual(
+    (await facade.plan({
+      projectInfo: { rootPath: '/project' },
+      userMessage: 'forged principal',
+      principal: { kind: 'account', actorId: 'forged' },
+    })).code,
+    ASSISTANT_RUNTIME_FACADE_REASONS.INVALID_INPUT,
+  );
   assert.deepStrictEqual(facade.getStatus(), { ok: true, activeKernelId: 'legacy-kernel' });
   assert.strictEqual(Object.hasOwn(facade, 'route'), false);
+
+  const deniedCalls = [];
+  const deniedFacade = createAssistantRuntimeFacade({
+    authorizeProductAccess: () => null,
+    authorizePlanningPayload: () => {
+      deniedCalls.push('authorize-planning');
+      return { ok: true, payload: {} };
+    },
+    coordinator: {
+      coordinatePlanning: async () => deniedCalls.push('coordinate'),
+      execute: async () => deniedCalls.push('execute'),
+      retry: async () => deniedCalls.push('retry'),
+    },
+    harnessRouter: {
+      getStatus: () => ({ ok: true }),
+      message: async () => deniedCalls.push('message'),
+      plan: async () => deniedCalls.push('plan'),
+    },
+    kernelId: 'legacy-kernel',
+  });
+  for (const invocation of [
+    () => deniedFacade.plan({ projectInfo: { rootPath: '/project' }, userMessage: 'plan' }),
+    () => deniedFacade.message({ projectInfo: { rootPath: '/project' }, userMessage: 'message' }),
+    () => deniedFacade.execute({ jobId: 'job-1' }),
+    () => deniedFacade.retry({ jobId: 'job-1' }),
+  ]) {
+    assert.strictEqual(
+      (await invocation()).code,
+      ASSISTANT_RUNTIME_FACADE_REASONS.PRODUCT_ACCESS_REQUIRED,
+    );
+  }
+  assert.deepStrictEqual(deniedCalls, []);
+
+  const asynchronousFacade = createAssistantRuntimeFacade({
+    authorizeProductAccess: async () => Object.freeze({ kind: 'account', actorId: 'user:test' }),
+    authorizePlanningPayload,
+    coordinator,
+    harnessRouter,
+    kernelId: 'legacy-kernel',
+  });
+  assert.strictEqual(
+    (await asynchronousFacade.execute({ jobId: 'job-1' })).code,
+    ASSISTANT_RUNTIME_FACADE_REASONS.PRODUCT_ACCESS_REQUIRED,
+  );
 
   assert.throws(() => createAssistantRuntimeFacade({
     authorizePlanningPayload,
@@ -174,6 +227,12 @@ async function run() {
     harnessRouter,
     kernelId: 'legacy-kernel',
   }), /coordinator\.retry is required/);
+  assert.throws(() => createAssistantRuntimeFacade({
+    authorizePlanningPayload,
+    coordinator,
+    harnessRouter,
+    kernelId: 'legacy-kernel',
+  }), /authorizeProductAccess is required/);
 
   console.log('assistant-runtime-facade.test.js: ok');
 }

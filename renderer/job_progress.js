@@ -23,7 +23,7 @@
   function createJobProgressController(options = {}) {
     const updateStatus = typeof options.updateStatus === 'function' ? options.updateStatus : () => {};
     const onVisibilityChange = typeof options.onVisibilityChange === 'function' ? options.onVisibilityChange : () => {};
-    const api = options.api || window.api || null;
+    const api = options.api || null;
     const confirmRollback = typeof options.confirmRollback === 'function'
       ? options.confirmRollback
       : (message) => typeof window.confirm === 'function' && window.confirm(message);
@@ -54,6 +54,7 @@
     let currentJob = null;
     let currentRollbackCandidate = null;
     let rollbackInFlightJobId = null;
+    let cancelInFlightJobId = null;
 
     function syncRollbackAction() {
       currentRollbackCandidate = getCanaryRollbackCandidate(currentJob);
@@ -64,6 +65,37 @@
       elements.rollbackBtn.textContent = rollbackInFlightJobId
         ? textFor('undoingCanaryChange', 'Desfazendo...')
         : textFor('undoCanaryChange', 'Desfazer alteração canary');
+    }
+
+    function syncCancelAction() {
+      if (!elements.cancelBtn) return;
+      const jobId = currentJob && typeof currentJob.id === 'string' ? currentJob.id : '';
+      const terminal = Boolean(currentJob) && ['completed', 'failed', 'blocked', 'cancelled']
+        .includes(String(currentJob.status || '').toLowerCase());
+      const cancellationPending = Boolean(currentJob)
+        && String(currentJob.phase || '').toLowerCase() === 'cancelling';
+      if (terminal && cancelInFlightJobId === jobId) cancelInFlightJobId = null;
+      if (jobId && cancelInFlightJobId && cancelInFlightJobId !== jobId) {
+        cancelInFlightJobId = null;
+      }
+      elements.cancelBtn.style.display = currentJob && !terminal ? 'block' : 'none';
+      const stopping = cancellationPending
+        || Boolean(jobId && cancelInFlightJobId === jobId);
+      elements.cancelBtn.disabled = stopping;
+      elements.cancelBtn.textContent = stopping
+        ? textFor('stopping', 'Parando...')
+        : textFor('stop', 'Parar');
+    }
+
+    function currentCancellableJobId() {
+      const jobId = currentJob && typeof currentJob.id === 'string' ? currentJob.id : '';
+      const terminal = currentJob && ['completed', 'failed', 'blocked', 'cancelled']
+        .includes(String(currentJob.status || '').toLowerCase());
+      const cancellationPending = currentJob
+        && String(currentJob.phase || '').toLowerCase() === 'cancelling';
+      return !terminal && !cancellationPending && ROLLBACK_JOB_ID_PATTERN.test(jobId)
+        ? jobId
+        : null;
     }
 
     // Toggle collapse on header click, persisting it in localStorage
@@ -80,21 +112,40 @@
     }
 
     if (elements.cancelBtn) {
-      elements.cancelBtn.addEventListener('click', () => {
-        const appState = window.FaberAppState || {};
-        const jobContext = appState.lastJobContext;
-        if (jobContext && jobContext.jobId) {
-          elements.cancelBtn.disabled = true;
-          elements.cancelBtn.textContent = textFor('stopping', 'Parando...');
-          window.api.cancelJob({ jobId: jobContext.jobId }).then(() => {
-            setTimeout(() => {
-              elements.cancelBtn.disabled = false;
-              elements.cancelBtn.textContent = textFor('stop', 'Parar');
-            }, 2000);
-          }).catch(() => {
-            elements.cancelBtn.disabled = false;
-            elements.cancelBtn.textContent = textFor('stop', 'Parar');
-          });
+      elements.cancelBtn.addEventListener('click', async () => {
+        const requestedJobId = currentCancellableJobId();
+        if (!requestedJobId || cancelInFlightJobId
+          || !api || typeof api.cancelJob !== 'function') return false;
+        cancelInFlightJobId = requestedJobId;
+        syncCancelAction();
+        let accepted = false;
+        try {
+          const result = await api.cancelJob(Object.freeze({ jobId: requestedJobId }));
+          const stillCurrent = currentJob && currentJob.id === requestedJobId;
+          if (!result || result.ok !== true) {
+            if (stillCurrent) {
+              const message = result && typeof result.message === 'string'
+                ? result.message.slice(0, 240)
+                : textFor('cancelJobFailed', 'Não foi possível parar esta execução.');
+              updateStatus(message);
+            }
+            return false;
+          }
+          accepted = true;
+          if (stillCurrent) {
+            updateStatus(textFor('stoppingCurrentRun', 'Encerrando a execução atual...'));
+          }
+          return true;
+        } catch {
+          if (currentJob && currentJob.id === requestedJobId) {
+            updateStatus(textFor('cancelJobFailed', 'Não foi possível parar esta execução.'));
+          }
+          return false;
+        } finally {
+          if (!accepted && cancelInFlightJobId === requestedJobId) {
+            cancelInFlightJobId = null;
+          }
+          syncCancelAction();
         }
       });
     }
@@ -248,6 +299,7 @@
         cortex_validation_retry_exhausted: 'Validação esgotada',
         persona_retry_exhausted: 'Retentativas esgotadas',
         runtime_interrupted: 'Execução interrompida',
+        cancelling: 'Encerrando execução',
         cancelled: 'Cancelado',
         done: 'Concluído',
         failed: 'Falhou',
@@ -381,6 +433,10 @@
         }
 
         if (type === 'job.completed') return `${ts} Processamento concluído`.trim();
+        if (type === 'job.cancelled') {
+          const reason = compactReason(payload.reason);
+          return `${ts} Execução cancelada${reason && !/cancelled_by_user/i.test(reason) ? ` — ${reason}` : ''}`.trim();
+        }
         if (type === 'job.failed') {
           const reason = compactReason(payload.reason);
           return `${ts} Falha final${reason ? ` — ${reason}` : ''}`.trim();
@@ -507,6 +563,8 @@
 
     function hide() {
       currentJob = null;
+      cancelInFlightJobId = null;
+      syncCancelAction();
       syncRollbackAction();
       if (elements.root) elements.root.classList.add('hidden');
       if (elements.detail) elements.detail.textContent = '';
@@ -707,6 +765,7 @@
         return;
       }
       currentJob = job;
+      syncCancelAction();
       syncRollbackAction();
 
       const presentation = uxStateModel && typeof uxStateModel.buildJobProgressPresentation === 'function'
@@ -735,11 +794,6 @@
                 ? 'Vou tentar novamente em instantes'
                 : 'Trabalhando no projeto';
       if (elements.title) elements.title.textContent = presentation ? presentation.title : titleByStatus;
-
-      if (elements.cancelBtn) {
-        const isTerminal = ['completed', 'failed', 'blocked', 'cancelled'].includes(String(job.status || '').toLowerCase());
-        elements.cancelBtn.style.display = isTerminal ? 'none' : 'block';
-      }
 
       const phaseLabel = mapPhaseLabel(job.phase);
       const statusLabel =

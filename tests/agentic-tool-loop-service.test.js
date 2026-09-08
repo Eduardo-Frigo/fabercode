@@ -425,11 +425,13 @@ async function run() {
         'args',
         'timeoutMs',
         'signal',
+        'mutationRevision',
       ]);
       assert.strictEqual(request.command, 'npm');
       assert.deepStrictEqual(request.args, ['test', '--', '--runInBand']);
       assert.strictEqual(request.timeoutMs, 120_000);
       assert.strictEqual(request.signal, processSignalController.signal);
+      assert.strictEqual(request.mutationRevision, 0);
       return Object.freeze({
         schemaVersion: 'project-capability.result.v1',
         requestId: processCallbackSecret,
@@ -551,9 +553,457 @@ async function run() {
       successfulChecks: ['tests'],
       failedChecks: [],
     },
-    browser: { opened: false, captured: false, inspected: false },
+    browser: {
+      opened: false,
+      captured: false,
+      inspected: false,
+      visualDelivered: false,
+    },
   });
   assert.match(brokeredProcessResult.message, /processo isolado concluído com sucesso/i);
+
+  // The host owns the project mutation revision. A successful write advances
+  // it before the next process launch, so tests and a later build cannot run
+  // against a workspace snapshot captured before the corresponding mutation.
+  const snapshotRevisionRequests = [];
+  let snapshotRevisionTurn = 0;
+  const snapshotRevisionService = buildCancellationService({
+    maxSteps: 5,
+    executeTool: async () => ({
+      ok: true,
+      message: 'Arquivo atualizado.',
+      modifiedFiles: ['src/value.js'],
+    }),
+    requestModelTurn: async () => {
+      snapshotRevisionTurn += 1;
+      if (snapshotRevisionTurn === 1) {
+        return {
+          responseId: 'snapshot-revision-1',
+          text: '',
+          toolCalls: [{
+            callId: 'snapshot-revision-write-1',
+            name: 'write_file',
+            input: { path: 'src/value.js', content: 'module.exports = 1;\n' },
+          }],
+        };
+      }
+      if (snapshotRevisionTurn === 2) {
+        return {
+          responseId: 'snapshot-revision-2',
+          text: '',
+          toolCalls: [{
+            callId: 'snapshot-revision-test',
+            name: 'run_command',
+            input: { command: 'npm', args: ['test'], timeoutMs: 120_000 },
+          }],
+        };
+      }
+      if (snapshotRevisionTurn === 3) {
+        return {
+          responseId: 'snapshot-revision-3',
+          text: '',
+          toolCalls: [{
+            callId: 'snapshot-revision-write-2',
+            name: 'write_file',
+            input: { path: 'src/value.js', content: 'module.exports = 2;\n' },
+          }],
+        };
+      }
+      if (snapshotRevisionTurn === 4) {
+        return {
+          responseId: 'snapshot-revision-4',
+          text: '',
+          toolCalls: [{
+            callId: 'snapshot-revision-build',
+            name: 'run_command',
+            input: { command: 'npm', args: ['run', 'build'], timeoutMs: 120_000 },
+          }],
+        };
+      }
+      return {
+        responseId: 'snapshot-revision-5',
+        text: '',
+        toolCalls: [{
+          callId: 'snapshot-revision-finish',
+          name: 'finish_task',
+          input: { status: 'success', summary: 'testes e build concluídos' },
+        }],
+      };
+    },
+  });
+  const snapshotRevisionOptions = {
+    jobId: 'job-snapshot-revision',
+    processExecutionPolicy: AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED,
+  };
+  Object.defineProperty(snapshotRevisionOptions, 'executeProcess', {
+    configurable: false,
+    enumerable: false,
+    value: async (request) => {
+      snapshotRevisionRequests.push(request);
+      return Object.freeze({
+        decision: 'allow',
+        status: 'completed',
+        output: Object.freeze({
+          status: 'succeeded',
+          revision: 1,
+          exitCode: 0,
+          timedOut: false,
+          stopped: false,
+          availableFromCursor: 0,
+          outputCursor: 0,
+        }),
+      });
+    },
+    writable: false,
+  });
+  const snapshotRevisionResult = await snapshotRevisionService.executeAction(
+    buildAction(
+      'job-snapshot-revision',
+      'Corrija o arquivo e execute npm test e npm run build antes de concluir.'
+    ),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    Object.freeze(snapshotRevisionOptions)
+  );
+  assert.strictEqual(snapshotRevisionResult.ok, true);
+  assert.deepStrictEqual(
+    snapshotRevisionRequests.map(({ command, args, mutationRevision }) => ({
+      command,
+      args,
+      mutationRevision,
+    })),
+    [
+      { command: 'npm', args: ['test'], mutationRevision: 1 },
+      { command: 'npm', args: ['run', 'build'], mutationRevision: 2 },
+    ]
+  );
+
+  // A failed mutator may still carry durable partial-effect evidence. That
+  // must advance the host revision before any process launch and invalidate a
+  // creation inspection captured before the partial write.
+  const partialMutationProcessRequests = [];
+  let partialMutationTurn = 0;
+  let staleInspectionFeedback = '';
+  const partialMutationService = buildCancellationService({
+    maxSteps: 5,
+    inspectProjectValidation: async () => ({
+      ok: true,
+      staticReady: true,
+      processValidationPending: false,
+      staticChecks: [],
+      pendingCommands: [],
+      warnings: [],
+    }),
+    executeCapability: async ({ capability, action }) => (
+      capability === 'structured_edit' && action === 'apply'
+        ? {
+            ok: false,
+            status: 'failed',
+            message: 'Falha após aplicação parcial.',
+            errors: ['STRUCTURED_EDIT_PARTIAL_FAILURE'],
+            data: { applied: ['src/partial.js'] },
+          }
+        : { ok: true }
+    ),
+    requestModelTurn: async ({ toolResults }) => {
+      partialMutationTurn += 1;
+      if (partialMutationTurn === 1) {
+        return {
+          responseId: 'partial-mutation-1',
+          text: '',
+          toolCalls: [{
+            callId: 'partial-inspection-before-write',
+            name: 'inspect_project_validation',
+            input: {},
+          }],
+        };
+      }
+      if (partialMutationTurn === 2) {
+        return {
+          responseId: 'partial-mutation-2',
+          text: '',
+          toolCalls: [{
+            callId: 'partial-structured-edit',
+            name: 'structured_edit_apply',
+            input: { prompt: 'Atualize o módulo.' },
+          }],
+        };
+      }
+      if (partialMutationTurn === 3) {
+        return {
+          responseId: 'partial-mutation-3',
+          text: '',
+          toolCalls: [{
+            callId: 'partial-mutation-test',
+            name: 'run_command',
+            input: { command: 'npm', args: ['test'], timeoutMs: 120_000 },
+          }],
+        };
+      }
+      if (partialMutationTurn === 4) {
+        return {
+          responseId: 'partial-mutation-4',
+          text: '',
+          toolCalls: [{
+            callId: 'partial-mutation-premature-finish',
+            name: 'finish_task',
+            input: { status: 'success', summary: 'teste concluído' },
+          }],
+        };
+      }
+      staleInspectionFeedback = toolResults.map((entry) => entry.output).join('\n');
+      return {
+        responseId: 'partial-mutation-5',
+        text: '',
+        toolCalls: [{
+          callId: 'partial-mutation-failure-finish',
+          name: 'finish_task',
+          input: { status: 'failure', summary: 'edição parcial falhou' },
+        }],
+      };
+    },
+  });
+  const partialMutationOptions = {
+    jobId: 'job-partial-mutation',
+    processExecutionPolicy: AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED,
+  };
+  Object.defineProperty(partialMutationOptions, 'executeProcess', {
+    configurable: false,
+    enumerable: false,
+    value: async (request) => {
+      partialMutationProcessRequests.push(request);
+      return Object.freeze({
+        decision: 'allow',
+        status: 'completed',
+        output: Object.freeze({
+          status: 'succeeded',
+          revision: 1,
+          exitCode: 0,
+          timedOut: false,
+          stopped: false,
+          availableFromCursor: 0,
+          outputCursor: 0,
+        }),
+      });
+    },
+    writable: false,
+  });
+  const partialMutationResult = await partialMutationService.executeAction(
+    {
+      ...buildAction(
+        'job-partial-mutation',
+        'Crie o módulo, execute npm test e só então conclua.'
+      ),
+      routeDecision: {
+        productRoute: {
+          capability: 'create_project',
+          executionIntent: 'init_project',
+        },
+      },
+    },
+    { id: 'project-1', rootPath: '/tmp/project' },
+    Object.freeze(partialMutationOptions)
+  );
+  assert.strictEqual(partialMutationResult.ok, false);
+  assert.deepStrictEqual(partialMutationResult.modifiedFiles, ['src/partial.js']);
+  assert.strictEqual(partialMutationProcessRequests.length, 1);
+  assert.strictEqual(partialMutationProcessRequests[0].mutationRevision, 1);
+  assert.match(staleInspectionFeedback, /inspeção adaptativa ficou obsoleta/i);
+
+  // When a provider emits an empty turn, the Responses continuation must be
+  // rebuilt without forgetting a still-running process. Otherwise the model
+  // can launch the same command again and turn a valid long task into a false
+  // failure.
+  let activeProcessContinuationTurn = 0;
+  let activeProcessContinuationPrompt = '';
+  let activeProcessContinuationRuns = 0;
+  const activeProcessContinuationService = buildCancellationService({
+    maxSteps: 4,
+    requestModelTurn: async ({ conversationMessages, toolResults }) => {
+      activeProcessContinuationTurn += 1;
+      if (activeProcessContinuationTurn === 1) {
+        return {
+          responseId: 'active-process-continuation-1',
+          text: '',
+          toolCalls: [{
+            callId: 'active-process-continuation-run',
+            name: 'run_command',
+            input: { command: 'npm', args: ['run', 'slow'], timeoutMs: 120_000 },
+          }],
+        };
+      }
+      if (activeProcessContinuationTurn === 2) {
+        assert.strictEqual(toolResults.length, 1);
+        return {
+          responseId: 'active-process-continuation-2',
+          text: 'O processo continua em execução.',
+          toolCalls: [],
+        };
+      }
+      if (activeProcessContinuationTurn === 3) {
+        activeProcessContinuationPrompt = conversationMessages
+          .map((entry) => String(entry && entry.content || ''))
+          .join('\n');
+        assert.match(activeProcessContinuationPrompt, /processo isolado.*ativo/i);
+        assert.match(activeProcessContinuationPrompt, /status running/i);
+        assert.match(activeProcessContinuationPrompt, /revis[aã]o 1/i);
+        assert.match(activeProcessContinuationPrompt, /cursor 0/i);
+        assert.match(activeProcessContinuationPrompt, /n[aã]o chame.*run_command.*novamente/i);
+        assert.match(activeProcessContinuationPrompt, /read_command_output.*wait_command/i);
+        return {
+          responseId: 'active-process-continuation-3',
+          text: '',
+          toolCalls: [{
+            callId: 'active-process-continuation-wait',
+            name: 'wait_command',
+            input: { afterRevision: 1, timeoutMs: 1000 },
+          }],
+        };
+      }
+      return {
+        responseId: 'active-process-continuation-4',
+        text: '',
+        toolCalls: [{
+          callId: 'active-process-continuation-finish',
+          name: 'finish_task',
+          input: { status: 'success', summary: 'processo concluído' },
+        }],
+      };
+    },
+  });
+  const activeProcessContinuationOptions = {
+    jobId: 'job-active-process-continuation',
+    processExecutionPolicy: AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED,
+  };
+  Object.defineProperty(activeProcessContinuationOptions, 'executeProcess', {
+    configurable: false,
+    enumerable: false,
+    value: async () => {
+      activeProcessContinuationRuns += 1;
+      return Object.freeze({
+        decision: 'allow',
+        status: 'completed',
+        output: Object.freeze({
+          status: 'running',
+          revision: 1,
+          exitCode: null,
+          timedOut: false,
+          stopped: false,
+          availableFromCursor: 0,
+          outputCursor: 0,
+        }),
+      });
+    },
+    writable: false,
+  });
+  Object.defineProperty(activeProcessContinuationOptions, 'readProcess', {
+    configurable: false,
+    enumerable: false,
+    value: async () => { throw new Error('read must not be needed in this scenario'); },
+    writable: false,
+  });
+  Object.defineProperty(activeProcessContinuationOptions, 'waitProcess', {
+    configurable: false,
+    enumerable: false,
+    value: async () => Object.freeze({
+      status: 'succeeded',
+      revision: 2,
+      exitCode: 0,
+      timedOut: false,
+      stopped: false,
+      availableFromCursor: 0,
+      outputCursor: 0,
+      changed: true,
+    }),
+    writable: false,
+  });
+  Object.defineProperty(activeProcessContinuationOptions, 'stopProcess', {
+    configurable: false,
+    enumerable: false,
+    value: async () => { throw new Error('stop must not be needed in this scenario'); },
+    writable: false,
+  });
+  const activeProcessContinuationResult = await activeProcessContinuationService.executeAction(
+    buildAction('job-active-process-continuation', 'execute npm run slow e acompanhe até terminar'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    Object.freeze(activeProcessContinuationOptions)
+  );
+  assert.strictEqual(activeProcessContinuationResult.ok, true);
+  assert.strictEqual(activeProcessContinuationRuns, 1);
+  assert.match(activeProcessContinuationResult.message, /processo isolado concluído com sucesso/i);
+
+  let activeFinishTurn = 0;
+  let activeFinishGateOutput = '';
+  const activeFinishService = buildCancellationService({
+    maxSteps: 4,
+    requestModelTurn: async ({ toolResults }) => {
+      activeFinishTurn += 1;
+      if (activeFinishTurn === 1) {
+        return {
+          responseId: 'active-finish-1',
+          text: '',
+          toolCalls: [{
+            callId: 'active-finish-run',
+            name: 'run_command',
+            input: { command: 'npm', args: ['run', 'slow'], timeoutMs: 120_000 },
+          }],
+        };
+      }
+      if (activeFinishTurn === 2) {
+        return {
+          responseId: 'active-finish-2',
+          text: '',
+          toolCalls: [{
+            callId: 'active-finish-premature',
+            name: 'finish_task',
+            input: { status: 'success', summary: 'comando concluído' },
+          }],
+        };
+      }
+      if (activeFinishTurn === 3) {
+        assert.strictEqual(toolResults.length, 1);
+        activeFinishGateOutput = toolResults[0].output;
+        assert.match(activeFinishGateOutput, /processo isolado.*ativo/i);
+        assert.match(activeFinishGateOutput, /wait_command/i);
+        return {
+          responseId: 'active-finish-3',
+          text: '',
+          toolCalls: [{
+            callId: 'active-finish-wait',
+            name: 'wait_command',
+            input: { afterRevision: 1, timeoutMs: 1000 },
+          }],
+        };
+      }
+      return {
+        responseId: 'active-finish-4',
+        text: '',
+        toolCalls: [{
+          callId: 'active-finish-complete',
+          name: 'finish_task',
+          input: { status: 'success', summary: 'comando concluído' },
+        }],
+      };
+    },
+  });
+  const activeFinishOptions = {
+    jobId: 'job-active-finish',
+    processExecutionPolicy: AGENTIC_PROCESS_EXECUTION_POLICIES.BROKERED,
+  };
+  for (const callbackName of ['executeProcess', 'readProcess', 'waitProcess', 'stopProcess']) {
+    Object.defineProperty(
+      activeFinishOptions,
+      callbackName,
+      Object.getOwnPropertyDescriptor(activeProcessContinuationOptions, callbackName)
+    );
+  }
+  const activeFinishResult = await activeFinishService.executeAction(
+    buildAction('job-active-finish', 'execute npm run slow e acompanhe até terminar'),
+    { id: 'project-1', rootPath: '/tmp/project' },
+    Object.freeze(activeFinishOptions)
+  );
+  assert.strictEqual(activeFinishTurn, 4);
+  assert.match(activeFinishGateOutput, /running/i);
+  assert.strictEqual(activeFinishResult.ok, true);
 
   // Explicitly requested process checks are terminal obligations. A model
   // cannot turn an audit green by calling finish_task before every named check
@@ -827,6 +1277,15 @@ async function run() {
     groundedFailureResult.validationEvidence.process.failedChecks,
     ['tests']
   );
+  const groundedFailureFinishRun = groundedFailureResult.toolRuns.find(
+    (entry) => entry.toolName === 'finish_task'
+  );
+  assert(groundedFailureFinishRun);
+  assert.strictEqual(groundedFailureFinishRun.message, groundedFailureResult.message);
+  assert.match(groundedFailureFinishRun.message, /testes.*falhou/i);
+  assert.doesNotMatch(groundedFailureFinishRun.message, /não foram executados/i);
+  assert.doesNotMatch(groundedFailureFinishRun.message, /preview não foi capturado/i);
+
   assert.strictEqual(processCallbackRequests.length, 1);
   assert.deepStrictEqual(readProcessRequests, [Object.freeze({
     cursor: 0,

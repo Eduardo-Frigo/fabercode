@@ -36,7 +36,7 @@ const {
 } = require('../capabilities/transactional_delete_contracts');
 
 const EXECUTION_ISOLATION_JOB_PROCESS_GATEWAY_VERSION =
-  'execution-isolation-job-process-gateway.v1';
+  'execution-isolation-job-process-gateway.v2';
 const EXECUTION_ISOLATION_JOB_PROCESS_GATEWAY_DISPOSE_RECEIPT_VERSION =
   'execution-isolation-job-process-gateway-dispose-receipt.v1';
 
@@ -45,6 +45,7 @@ const EXECUTION_ISOLATION_JOB_PROCESS_GATEWAY_REASONS = Object.freeze({
   EXECUTION_MISMATCH: 'EXECUTION_ISOLATION_PROCESS_EXECUTION_MISMATCH',
   EXECUTION_NOT_FOUND: 'EXECUTION_ISOLATION_PROCESS_EXECUTION_NOT_FOUND',
   INVALID_INPUT: 'EXECUTION_ISOLATION_PROCESS_INVALID_INPUT',
+  MUTATION_REVISION_MISMATCH: 'EXECUTION_ISOLATION_PROCESS_MUTATION_REVISION_MISMATCH',
   PROCESS_FAILED: 'EXECUTION_ISOLATION_PROCESS_OPERATION_FAILED',
 });
 
@@ -174,6 +175,7 @@ function captureDependencies(options) {
     'binding',
     'workspaceLease',
     'processSupervisor',
+    'mutationRevision',
   ]);
   if (!fields) {
     throw new TypeError('Invalid execution isolation job process gateway options');
@@ -186,6 +188,11 @@ function captureDependencies(options) {
     throw new TypeError('Invalid execution isolation job process binding');
   }
   const workspaceLease = normalizeWorkspaceLease(fields.get('workspaceLease'), binding);
+  const mutationRevision = fields.get('mutationRevision');
+  if (!Number.isSafeInteger(mutationRevision) || mutationRevision < 0
+    || Object.is(mutationRevision, -0)) {
+    throw new TypeError('Invalid execution isolation workspace mutation revision');
+  }
   const processSupervisor = fields.get('processSupervisor');
   const processFields = exactOwnDataFields(processSupervisor, [
     'version',
@@ -213,6 +220,7 @@ function captureDependencies(options) {
   return Object.freeze({
     binding,
     workspaceLease,
+    mutationRevision,
     ...captured,
   });
 }
@@ -392,6 +400,7 @@ function createExecutionIsolationJobProcessGateway(options = {}) {
   const dependencies = captureDependencies(options);
   const executions = new Map();
   const pendingOperations = new Set();
+  const pendingExecutionStarts = new Set();
   let state = 'ready';
   let disposeRequested = false;
   let disposePromise = null;
@@ -403,9 +412,13 @@ function createExecutionIsolationJobProcessGateway(options = {}) {
     return result;
   }
 
-  function trackOperation(operation) {
+  function trackOperation(operation, executionStart = false) {
     pendingOperations.add(operation);
-    const forget = () => pendingOperations.delete(operation);
+    if (executionStart) pendingExecutionStarts.add(operation);
+    const forget = () => {
+      pendingOperations.delete(operation);
+      pendingExecutionStarts.delete(operation);
+    };
     try {
       Reflect.apply(Promise.prototype.then, operation, [forget, forget]);
     } catch (error) {
@@ -421,11 +434,22 @@ function createExecutionIsolationJobProcessGateway(options = {}) {
         EXECUTION_ISOLATION_JOB_PROCESS_GATEWAY_REASONS.DISPOSED
       ));
     }
-    const fields = exactOwnDataFields(input, ['sandboxRequest']);
+    const fields = exactOwnDataFields(input, ['sandboxRequest', 'mutationRevision']);
     let request;
     let fingerprint;
     try {
       if (!fields) throw new TypeError('Invalid process execution input');
+      const requestedMutationRevision = fields.get('mutationRevision');
+      if (!Number.isSafeInteger(requestedMutationRevision)
+        || requestedMutationRevision < 0
+        || Object.is(requestedMutationRevision, -0)) {
+        throw new TypeError('Invalid requested mutation revision');
+      }
+      if (requestedMutationRevision !== dependencies.mutationRevision) {
+        return Promise.resolve(denied(
+          EXECUTION_ISOLATION_JOB_PROCESS_GATEWAY_REASONS.MUTATION_REVISION_MISMATCH
+        ));
+      }
       request = workspaceBoundProcessRequest(
         dependencies,
         fields.get('sandboxRequest')
@@ -475,7 +499,7 @@ function createExecutionIsolationJobProcessGateway(options = {}) {
       return accepted('receipt', outcome.value);
     });
     execution.execPromise = operation;
-    return trackOperation(operation);
+    return trackOperation(operation, true);
   }
 
   function prepareOperation(input, operationKeys, createRequest) {
@@ -623,7 +647,7 @@ function createExecutionIsolationJobProcessGateway(options = {}) {
     disposeRequested = true;
     state = 'disposing';
     disposePromise = Promise.resolve().then(async () => {
-      await Promise.all([...pendingOperations]);
+      await Promise.all([...pendingExecutionStarts]);
       for (const execution of executions.values()) {
         if (execution.state === 'terminal') continue;
         if (!execution.snapshot) {
@@ -653,6 +677,7 @@ function createExecutionIsolationJobProcessGateway(options = {}) {
         }
         updateSnapshot(execution, outcome.value);
       }
+      await Promise.all([...pendingOperations]);
 
       const after = diagnostics();
       const clean = after.active === 0 && after.quarantined === 0;

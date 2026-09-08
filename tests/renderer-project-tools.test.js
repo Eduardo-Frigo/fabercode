@@ -322,6 +322,171 @@ async function runAsyncAssertions() {
     event.type === 'faber:project-preview-failed'
     && event.detail.rootPath === '/tmp/faber-preview-failure'
   )));
+
+  function createPreviewSurfaceHarness(previewResult) {
+    const elementsById = new Map();
+    const delayedTimers = [];
+
+    class FakeClassList {
+      constructor() {
+        this.values = new Set();
+      }
+
+      set(value) {
+        this.values = new Set(String(value || '').split(/\s+/).filter(Boolean));
+      }
+
+      add(...names) {
+        names.forEach((name) => this.values.add(name));
+      }
+
+      remove(...names) {
+        names.forEach((name) => this.values.delete(name));
+      }
+
+      contains(name) {
+        return this.values.has(name);
+      }
+    }
+
+    class FakeElement {
+      constructor() {
+        this.children = [];
+        this.classList = new FakeClassList();
+        this.dataset = {};
+        this.style = {};
+        this.attributes = new Map();
+        this.listeners = new Map();
+        this.textContent = '';
+        this._id = '';
+      }
+
+      set id(value) {
+        this._id = String(value || '');
+        if (this._id) elementsById.set(this._id, this);
+      }
+
+      get id() {
+        return this._id;
+      }
+
+      set className(value) {
+        this.classList.set(value);
+      }
+
+      get className() {
+        return [...this.classList.values].join(' ');
+      }
+
+      set innerHTML(value) {
+        this.children = [];
+        this.textContent = String(value || '');
+      }
+
+      append(...children) {
+        children.forEach((child) => this.appendChild(child));
+      }
+
+      appendChild(child) {
+        this.children.push(child);
+        child.parentNode = this;
+        return child;
+      }
+
+      setAttribute(name, value) {
+        this.attributes.set(name, String(value));
+      }
+
+      getAttribute(name) {
+        return this.attributes.get(name) || null;
+      }
+
+      addEventListener(type, listener) {
+        this.listeners.set(type, listener);
+      }
+    }
+
+    const document = {
+      body: new FakeElement(),
+      createElement: () => new FakeElement(),
+      getElementById: (id) => elementsById.get(id) || null,
+    };
+    sandbox.document = document;
+    sandbox.window.document = document;
+    sandbox.setTimeout = (callback, delay) => {
+      if (Number(delay) <= 120) {
+        callback();
+        return 1;
+      }
+      delayedTimers.push(callback);
+      return delayedTimers.length + 1;
+    };
+
+    const controller = tools.createProjectToolsController({
+      api: {
+        startProjectPreview: async () => previewResult,
+      },
+      getSelectedProjectInfo: () => ({ rootPath: '/tmp/faber-preview-surface' }),
+    });
+
+    return {
+      controller,
+      delayedTimers,
+      document,
+    };
+  }
+
+  const completedSurface = createPreviewSurfaceHarness({
+    ok: true,
+    session: {
+      mode: 'static_server',
+      status: 'ready',
+      url: 'http://127.0.0.1:4173/',
+    },
+  });
+  assert.strictEqual(await completedSurface.controller.startPreview(), true);
+  const completedRoot = completedSurface.document.getElementById('right-tool-lightbox');
+  const completedBody = completedSurface.document.getElementById('right-tool-lightbox-body');
+  assert.ok(completedRoot && !completedRoot.classList.contains('hidden'));
+  assert.strictEqual(
+    completedBody.children[0].children[2].textContent,
+    '100% · visualização pronta'
+  );
+  assert.strictEqual(
+    completedSurface.delayedTimers.length,
+    1,
+    'a successful preview should schedule the completed lightbox to close'
+  );
+  assert.strictEqual(await completedSurface.controller.startPreview(), true);
+  assert.strictEqual(completedSurface.delayedTimers.length, 2);
+  completedSurface.delayedTimers[0]();
+  assert.ok(
+    !completedRoot.classList.contains('hidden'),
+    'a stale completion timer must not close a newer preview run'
+  );
+  completedSurface.delayedTimers[1]();
+  assert.ok(
+    completedRoot.classList.contains('hidden'),
+    'the completed preview lightbox should close automatically after exposing its final state'
+  );
+  assert.strictEqual(completedRoot.getAttribute('aria-hidden'), 'true');
+  assert.ok(!completedSurface.document.body.classList.contains('right-tool-lightbox-open'));
+
+  const failedSurface = createPreviewSurfaceHarness({
+    ok: false,
+    message: 'preview bloqueado',
+  });
+  assert.strictEqual(await failedSurface.controller.startPreview(), false);
+  const failedRoot = failedSurface.document.getElementById('right-tool-lightbox');
+  assert.ok(
+    failedRoot && !failedRoot.classList.contains('hidden'),
+    'a failed preview must remain visible so the failure is not hidden'
+  );
+  assert.strictEqual(
+    failedSurface.delayedTimers.length,
+    0,
+    'a failed preview must never schedule an automatic close'
+  );
 }
 
 runAsyncAssertions()

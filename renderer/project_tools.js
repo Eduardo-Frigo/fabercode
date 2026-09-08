@@ -16,6 +16,7 @@
     inferGithubRepoNameFromProject,
   } = projectToolsSupport;
   const { createProjectGitTool } = projectToolsGit;
+  const PREVIEW_COMPLETION_VISIBLE_MS = 650;
 
   function uiText(key, fallback, replacements = {}) {
     let value = window.t ? window.t(key, fallback) : fallback;
@@ -112,6 +113,7 @@
       body: null,
       close: null,
       backdrop: null,
+      revision: 0,
     };
 
     function ensureToolSurface() {
@@ -171,6 +173,7 @@
 
     function closeToolSurface() {
       if (!toolSurface.root) return;
+      toolSurface.revision += 1;
       toolSurface.root.classList.add('hidden');
       toolSurface.root.setAttribute('aria-hidden', 'true');
       document.body.classList.remove('right-tool-lightbox-open');
@@ -179,6 +182,7 @@
 
     function openToolSurface(title, subtitle = '', kind = '') {
       const surface = ensureToolSurface();
+      surface.revision += 1;
 
       if (kind === 'git' || kind === 'github') {
         surface.root.classList.add('hidden');
@@ -234,6 +238,16 @@
       surface.root.setAttribute('aria-hidden', 'false');
       document.body.classList.add('right-tool-lightbox-open');
       return surface.body;
+    }
+
+    function isCurrentToolSurface(body, revision, kind) {
+      return Boolean(
+        toolSurface.root
+        && toolSurface.body === body
+        && toolSurface.revision === revision
+        && body.dataset.toolKind === kind
+        && !toolSurface.root.classList.contains('hidden')
+      );
     }
 
     function renderToolLoading(body, text) {
@@ -620,6 +634,7 @@
           return started;
         }
         const body = openToolSurface(window.t ? window.t('runAppTitle', 'Executar') : 'Executar', window.t ? window.t('runAppDesc', 'Rodar e abrir a visualização local do projeto.') : 'Rodar e abrir a visualização local do projeto.', 'run');
+        const previewSurfaceRevision = toolSurface.revision;
         const projectInfo = getProjectRootOrNotify(body);
         if (!projectInfo) {
           dispatchTutorialPreviewFailed({ message: uiText('noProjectSelectedError', 'Nenhum projeto selecionado para esta ferramenta.') });
@@ -627,12 +642,23 @@
         }
         renderPreviewToolProgress(body, 18, window.t ? window.t('previewPlanning', 'planejando visualização') : 'planejando visualização');
         await new Promise((resolve) => setTimeout(resolve, 120));
-        renderPreviewToolProgress(body, 46, window.t ? window.t('previewPreparing', 'preparando terminal ou servidor local') : 'preparando terminal ou servidor local');
+        if (isCurrentToolSurface(body, previewSurfaceRevision, 'run')) {
+          renderPreviewToolProgress(body, 46, window.t ? window.t('previewPreparing', 'preparando terminal ou servidor local') : 'preparando terminal ou servidor local');
+        }
         await new Promise((resolve) => setTimeout(resolve, 120));
-        renderPreviewToolProgress(body, 72, window.t ? window.t('previewStarting', 'iniciando execução') : 'iniciando execução');
+        if (isCurrentToolSurface(body, previewSurfaceRevision, 'run')) {
+          renderPreviewToolProgress(body, 72, window.t ? window.t('previewStarting', 'iniciando execução') : 'iniciando execução');
+        }
         const started = await runPreviewStart();
         if (started) {
-          renderPreviewToolProgress(body, 100, window.t ? window.t('previewRequested', 'visualização solicitada') : 'visualização solicitada');
+          if (isCurrentToolSurface(body, previewSurfaceRevision, 'run')) {
+            renderPreviewToolProgress(body, 100, window.t ? window.t('previewReady', 'visualização pronta') : 'visualização pronta');
+            setTimeout(() => {
+              if (isCurrentToolSurface(body, previewSurfaceRevision, 'run')) {
+                closeToolSurface();
+              }
+            }, PREVIEW_COMPLETION_VISIBLE_MS);
+          }
           dispatchTutorialPreviewStarted({ rootPath: projectInfo.rootPath });
         } else {
           dispatchTutorialPreviewFailed({ rootPath: projectInfo.rootPath });

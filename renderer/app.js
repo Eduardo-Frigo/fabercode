@@ -241,6 +241,7 @@ const inlineInputDialogController = window.FaberInlineInputDialog
   : null;
 const jobProgressController = window.FaberJobProgress
   ? window.FaberJobProgress.createJobProgressController({
+      api: window.localcodeApi,
       updateStatus,
       onVisibilityChange: renderWelcomePanel,
     })
@@ -306,6 +307,7 @@ jobController = window.FaberAppJobs
       automataContractsController,
       callbacks: {
         appendMessage,
+        clearPending,
         buildJobContextForPersona,
         buildPersonaRequestContextHint,
         buildTerminalJobMessage,
@@ -431,6 +433,10 @@ const accountGateController = window.FaberAccountGate
       },
       onStatusChange: (status, unlocked) => {
         const previousUser = state.accountStatus && state.accountStatus.user;
+        const previousAccess = state.accountStatus && state.accountStatus.access
+          ? state.accountStatus.access
+          : {};
+        const nextAccess = status && status.access ? status.access : {};
         const nextUser = status && status.user;
         const previousIdentity = previousUser
           ? String(previousUser.id || previousUser.email || '').trim().toLowerCase()
@@ -438,7 +444,15 @@ const accountGateController = window.FaberAccountGate
         const nextIdentity = nextUser
           ? String(nextUser.id || nextUser.email || '').trim().toLowerCase()
           : '';
-        if ((!unlocked || previousIdentity !== nextIdentity) && actionController) {
+        const previousMode = String(previousAccess.mode || 'none');
+        const nextMode = String(nextAccess.mode || 'none');
+        const previousRevision = Number.isSafeInteger(previousAccess.contextRevision)
+          ? previousAccess.contextRevision : 0;
+        const nextRevision = Number.isSafeInteger(nextAccess.contextRevision)
+          ? nextAccess.contextRevision : 0;
+        const contextChanged = previousIdentity !== nextIdentity
+          || previousMode !== nextMode || previousRevision !== nextRevision;
+        if ((!unlocked || contextChanged) && actionController) {
           actionController.resetForAccountContextChange('account_context_change');
         }
         state.accountStatus = status || null;
@@ -672,6 +686,7 @@ projectController = window.FaberAppProjects
         renderNextSteps,
         renderSystemNotice,
         renderWelcomePanel,
+        startJobPolling,
         stopJobPolling,
         resetApprovalMode: (reason) => {
           if (actionController) actionController.resetApprovalMode(reason);
@@ -1294,8 +1309,8 @@ async function pollJob(jobId) {
   return jobController ? jobController.pollJob(jobId) : null;
 }
 
-function startJobPolling(jobId) {
-  if (jobController) jobController.startJobPolling(jobId);
+function startJobPolling(jobId, initialJob = null) {
+  if (jobController) jobController.startJobPolling(jobId, initialJob);
 }
 
 function watchLatestProjectJob(request) {

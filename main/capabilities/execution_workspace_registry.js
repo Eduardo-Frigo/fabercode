@@ -247,6 +247,7 @@ function createExecutionWorkspaceRegistry(options = {}) {
   const ownersBySourceIdentity = new Map();
   const ownersByWorkspaceIdentity = new Map();
   const usedLeaseIds = new Set();
+  const discardedBindingsByLeaseId = new Map();
   const backendCallState = { depth: 0 };
   let backendState = 'unprobed';
   let probePromise = null;
@@ -493,9 +494,11 @@ function createExecutionWorkspaceRegistry(options = {}) {
             EXECUTION_WORKSPACE_REGISTRY_REASONS.BACKEND_REJECTED
           ));
         case 'discarded':
-          return Promise.resolve(denied(
-            EXECUTION_WORKSPACE_REGISTRY_REASONS.LEASE_DISCARDED
-          ));
+          // A completed rollback is a tombstone for the old lease, not a
+          // permanent ban on refreshing this job's source snapshot. The old
+          // lease id can no longer match the replacement record.
+          recordsByJobId.delete(normalized.binding.jobId);
+          break;
         default:
           return Promise.resolve(denied(EXECUTION_WORKSPACE_REGISTRY_REASONS.UNAVAILABLE));
       }
@@ -598,6 +601,10 @@ function createExecutionWorkspaceRegistry(options = {}) {
             record.status = 'discarded';
             discarded += 1;
             releaseWorkspaceClaim(record);
+            discardedBindingsByLeaseId.set(
+              record.request.leaseId,
+              record.input.binding
+            );
             record.lease = null;
             releaseReservation(record, { removeJob: false });
             finishDiscard(record, frozenResult({
@@ -638,6 +645,14 @@ function createExecutionWorkspaceRegistry(options = {}) {
     const record = recordsByJobId.get(normalized.binding.jobId);
     if (!record || !bindingsMatch(record.input.binding, normalized.binding)
       || !record.request || record.request.leaseId !== normalized.leaseId) {
+      const discardedBinding = discardedBindingsByLeaseId.get(normalized.leaseId);
+      if (discardedBinding && bindingsMatch(discardedBinding, normalized.binding)) {
+        return Promise.resolve(frozenResult({
+          ok: true,
+          rolledBack: true,
+          idempotent: true,
+        }));
+      }
       return Promise.resolve(denied(EXECUTION_WORKSPACE_REGISTRY_REASONS.LEASE_MISMATCH));
     }
     if (record.status === 'discarded') {

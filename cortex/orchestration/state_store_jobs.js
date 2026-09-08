@@ -4,6 +4,7 @@ const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'blocked', 'cancel
 const AUTHORIZED_RECOVERY_FAILED_TERMINAL_PHASES = new Set([
   'failed',
   'runtime_interrupted',
+  'execution_cleanup_failed',
   'execute_authorization_failed',
   'execute_validation_fresh_approval_required',
   'execute_pending_fresh_approval_required',
@@ -53,6 +54,13 @@ const PUBLIC_JOB_REDACTED_KEYS = new Set([
 ]);
 const PENDING_APPROVAL_RECOVERY_SCHEMA_VERSION =
   'assistant-pending-approval-recovery.v1';
+const EXECUTION_CLEANUP_RECEIPT_SCHEMA_VERSION =
+  'assistant-job-execution-cleanup-receipt.v1';
+const EXECUTION_CLEANUP_RECEIPT_KEYS = Object.freeze([
+  'schemaVersion',
+  'jobId',
+  'cleanupCompleted',
+]);
 const PENDING_APPROVAL_RECOVERY_KEYS = Object.freeze([
   'schemaVersion',
   'actionDigest',
@@ -79,6 +87,7 @@ function createJobStateStore(dependencies = {}) {
     MAX_JOBS_STORED = 180,
     appendAuditEvent,
     computeRetryBackoffMs,
+    isAuthorizedRecoveryProject = () => true,
     isJobsStorageHealthy = () => true,
     isNonRetriableProviderReason,
     onJobTerminal,
@@ -699,6 +708,13 @@ function createJobStateStore(dependencies = {}) {
     if (options.rejectTerminal && isTerminalJob(previousJob)) {
       return { ok: false, code: 'job_terminal', message: 'Job já está em estado terminal.' };
     }
+    if (previousJob.phase === 'cancelling' && options.allowCancellationPending !== true) {
+      return {
+        ok: false,
+        code: 'job_cancellation_pending',
+        message: 'O cancelamento aguarda confirmação do cleanup.',
+      };
+    }
 
     const nextJob = mutator({ ...previousJob });
     if (!nextJob || typeof nextJob !== 'object') {
@@ -1052,7 +1068,7 @@ function createJobStateStore(dependencies = {}) {
         ...(Array.isArray(job.events) ? job.events : []),
       ].slice(0, MAX_JOB_EVENTS);
       return job;
-    }, { rejectTerminal: true, notifyTerminal: true });
+    }, { rejectTerminal: true, rejectCancellationPending: true, notifyTerminal: true });
     if (next.ok) {
       appendJobAuditBestEffort('job.completed', { jobId });
     }
@@ -1149,7 +1165,7 @@ function createJobStateStore(dependencies = {}) {
         ...(Array.isArray(job.events) ? job.events : []),
       ].slice(0, MAX_JOB_EVENTS);
       return job;
-    }, { rejectTerminal: true, notifyTerminal: true });
+    }, { rejectTerminal: true, rejectCancellationPending: true, notifyTerminal: true });
     if (next.ok) {
       appendJobAuditBestEffort('job.awaiting_user_input', { jobId });
     }
@@ -1177,7 +1193,7 @@ function createJobStateStore(dependencies = {}) {
         ...(Array.isArray(job.events) ? job.events : []),
       ].slice(0, MAX_JOB_EVENTS);
       return job;
-    }, { rejectTerminal: true, notifyTerminal: true });
+    }, { rejectTerminal: true, rejectCancellationPending: true, notifyTerminal: true });
     if (next.ok) {
       appendJobAuditBestEffort('job.failed', { jobId, phase, reason: String(reason || '') });
     }
@@ -1205,7 +1221,7 @@ function createJobStateStore(dependencies = {}) {
         ...(Array.isArray(job.events) ? job.events : []),
       ].slice(0, MAX_JOB_EVENTS);
       return job;
-    }, { rejectTerminal: true, notifyTerminal: true });
+    }, { rejectTerminal: true, rejectCancellationPending: true, notifyTerminal: true });
     if (next.ok) {
       appendJobAuditBestEffort('job.blocked', { jobId, phase, reason: String(reason || '') });
     }
@@ -1235,6 +1251,245 @@ function createJobStateStore(dependencies = {}) {
     }, { rejectTerminal: true, notifyTerminal: true });
     if (next.ok) {
       appendJobAuditBestEffort('job.cancelled', { jobId, reason: String(reason || 'cancelled_by_user') });
+    }
+    return next;
+  }
+
+  function markJobCancellationRequested(jobId, reason = 'cancelled_by_user') {
+    if (!isSafeJobId(jobId)) return invalidJobIdResult(jobId);
+    const current = readJobsState();
+    if (!Object.hasOwn(current.jobsById, jobId)) {
+      return { ok: false, code: 'job_not_found', message: 'Job não encontrado.' };
+    }
+    const previousJob = current.jobsById[jobId];
+    if (!previousJob || typeof previousJob !== 'object' || Array.isArray(previousJob)) {
+      return { ok: false, code: 'job_invalid', message: 'Job persistido inválido.' };
+    }
+    if (previousJob.status === 'running' && previousJob.phase === 'cancelling') {
+      return { ok: true, job: previousJob, idempotent: true };
+    }
+    if (isTerminalJob(previousJob)) {
+      return { ok: false, code: 'job_terminal', message: 'Job já está em estado terminal.' };
+    }
+    const safeReason = String(reason || 'cancelled_by_user');
+    const next = mutateJobState(jobId, (job) => {
+      const retryState = ensureJobRetryState(job);
+      retryState.retryable = false;
+      retryState.nextRetryAt = null;
+      retryState.lastReason = safeReason;
+      job.status = 'running';
+      job.phase = 'cancelling';
+      job.lastError = null;
+      job.cancellation = {
+        requestedAt: new Date().toISOString(),
+        reason: safeReason,
+      };
+      job.events = [
+        buildJobEvent('job.cancellation_requested', { reason: safeReason }),
+        ...(Array.isArray(job.events) ? job.events : []),
+      ].slice(0, MAX_JOB_EVENTS);
+      return job;
+    }, { rejectTerminal: true });
+    if (next.ok) {
+      appendJobAuditBestEffort('job.cancellation_requested', { jobId, reason: safeReason });
+      return { ...next, idempotent: false };
+    }
+    return next;
+  }
+
+  function normalizeExecutionCleanupReceipt(value, expectedJobId) {
+    if (value === undefined) {
+      return { ok: false, code: 'execution_cleanup_receipt_required' };
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || !Object.isFrozen(value)
+      || (Object.getPrototypeOf(value) !== Object.prototype
+        && Object.getPrototypeOf(value) !== null)) {
+      return { ok: false, code: 'execution_cleanup_receipt_invalid' };
+    }
+    let keys;
+    try {
+      keys = Reflect.ownKeys(value);
+    } catch {
+      return { ok: false, code: 'execution_cleanup_receipt_invalid' };
+    }
+    if (keys.length !== EXECUTION_CLEANUP_RECEIPT_KEYS.length
+      || EXECUTION_CLEANUP_RECEIPT_KEYS.some((key) => !keys.includes(key))) {
+      return { ok: false, code: 'execution_cleanup_receipt_invalid' };
+    }
+    const fields = Object.create(null);
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (typeof key !== 'string' || !EXECUTION_CLEANUP_RECEIPT_KEYS.includes(key)
+        || !descriptor || descriptor.enumerable !== true
+        || !Object.hasOwn(descriptor, 'value')) {
+        return { ok: false, code: 'execution_cleanup_receipt_invalid' };
+      }
+      fields[key] = descriptor.value;
+    }
+    if (fields.schemaVersion !== EXECUTION_CLEANUP_RECEIPT_SCHEMA_VERSION
+      || fields.cleanupCompleted !== true
+      || !isSafeJobId(fields.jobId)) {
+      return { ok: false, code: 'execution_cleanup_receipt_invalid' };
+    }
+    if (fields.jobId !== expectedJobId) {
+      return { ok: false, code: 'execution_cleanup_receipt_mismatch' };
+    }
+    return {
+      ok: true,
+      receipt: Object.freeze({
+        schemaVersion: fields.schemaVersion,
+        jobId: fields.jobId,
+        cleanupCompleted: true,
+      }),
+    };
+  }
+
+  function hasPersistedExecutionCleanupReceipt(job, expectedJobId) {
+    const checkpoints = ownDataValue(job, 'checkpoints');
+    const checkpoint = ownDataValue(checkpoints, 'execution_cleanup');
+    const receipt = ownDataValue(checkpoint, 'data');
+    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return false;
+    let prototype;
+    let keys;
+    let descriptors;
+    try {
+      prototype = Object.getPrototypeOf(receipt);
+      keys = Reflect.ownKeys(receipt);
+      descriptors = Object.getOwnPropertyDescriptors(receipt);
+    } catch {
+      return false;
+    }
+    if ((prototype !== Object.prototype && prototype !== null)
+      || keys.length !== EXECUTION_CLEANUP_RECEIPT_KEYS.length
+      || keys.some((key) => typeof key !== 'string'
+        || !EXECUTION_CLEANUP_RECEIPT_KEYS.includes(key))) {
+      return false;
+    }
+    for (const key of EXECUTION_CLEANUP_RECEIPT_KEYS) {
+      const descriptor = descriptors[key];
+      if (!descriptor || descriptor.enumerable !== true
+        || !Object.hasOwn(descriptor, 'value')) return false;
+    }
+    return descriptors.schemaVersion.value === EXECUTION_CLEANUP_RECEIPT_SCHEMA_VERSION
+      && descriptors.jobId.value === expectedJobId
+      && descriptors.cleanupCompleted.value === true;
+  }
+
+  function markJobCancelledAfterCleanup(jobId, receiptValue) {
+    if (!isSafeJobId(jobId)) return invalidJobIdResult(jobId);
+    const normalized = normalizeExecutionCleanupReceipt(receiptValue, jobId);
+    if (!normalized.ok) return normalized;
+    const current = readJobsState();
+    if (!Object.hasOwn(current.jobsById, jobId)) {
+      return { ok: false, code: 'job_not_found', message: 'Job não encontrado.' };
+    }
+    const previousJob = current.jobsById[jobId];
+    const previousReceipt = previousJob
+      && previousJob.checkpoints
+      && previousJob.checkpoints.execution_cleanup
+      && previousJob.checkpoints.execution_cleanup.data;
+    if (previousJob && previousJob.status === 'cancelled' && previousReceipt) {
+      const sameReceipt = EXECUTION_CLEANUP_RECEIPT_KEYS.every(
+        (key) => previousReceipt[key] === normalized.receipt[key]
+      );
+      return sameReceipt
+        ? { ok: true, job: previousJob, idempotent: true }
+        : { ok: false, code: 'execution_cleanup_receipt_conflict' };
+    }
+    const cancellationPending = previousJob
+      && previousJob.status === 'running'
+      && previousJob.phase === 'cancelling';
+    const cleanupRecoveryPending = previousJob
+      && previousJob.status === 'failed'
+      && previousJob.phase === 'execution_cleanup_failed';
+    const legacyCancellationPending = previousJob
+      && previousJob.status === 'cancelled'
+      && previousJob.phase === 'cancelled'
+      && !previousReceipt;
+    if (!cancellationPending && !cleanupRecoveryPending && !legacyCancellationPending) {
+      return { ok: false, code: 'execution_cleanup_not_requested' };
+    }
+    const next = mutateJobState(jobId, (job) => {
+      const progressResult = applyProgressUpdate(job, 100, 'cancelled');
+      const retryState = ensureJobRetryState(job);
+      retryState.retryable = false;
+      retryState.nextRetryAt = null;
+      job.checkpoints = {
+        ...(job.checkpoints || {}),
+        execution_cleanup: {
+          savedAt: new Date().toISOString(),
+          data: normalized.receipt,
+        },
+      };
+      job.status = 'cancelled';
+      job.phase = 'cancelled';
+      job.lastError = null;
+      job.events = [
+        ...(!legacyCancellationPending ? [buildJobEvent('job.cancelled', {
+          reason: job.cancellation && job.cancellation.reason
+            ? job.cancellation.reason
+            : 'cancelled_by_user',
+          progressPct: progressResult.progress.pct,
+          executionCleanupConfirmed: true,
+        })] : []),
+        buildJobEvent('job.execution_cleanup_confirmed', {
+          schemaVersion: normalized.receipt.schemaVersion,
+        }),
+        ...(Array.isArray(job.events) ? job.events : []),
+      ].slice(0, MAX_JOB_EVENTS);
+      return job;
+    }, {
+      rejectTerminal: !cleanupRecoveryPending && !legacyCancellationPending,
+      allowCancellationPending: true,
+      notifyTerminal: !legacyCancellationPending,
+    });
+    if (next.ok) {
+      appendJobAuditBestEffort('job.execution_cleanup_confirmed', { jobId });
+      if (!legacyCancellationPending) {
+        appendJobAuditBestEffort('job.cancelled', { jobId, reason: 'cleanup_confirmed' });
+      }
+      return { ...next, idempotent: false };
+    }
+    return next;
+  }
+
+  function markJobExecutionCleanupFailed(jobId, reason = 'execution_cleanup_failed') {
+    if (!isSafeJobId(jobId)) return invalidJobIdResult(jobId);
+    const current = readJobsState();
+    if (!Object.hasOwn(current.jobsById, jobId)) {
+      return { ok: false, code: 'job_not_found', message: 'Job não encontrado.' };
+    }
+    const previousJob = current.jobsById[jobId];
+    if (previousJob && previousJob.status === 'failed'
+      && previousJob.phase === 'execution_cleanup_failed') {
+      return { ok: true, job: previousJob, idempotent: true };
+    }
+    if (!previousJob || previousJob.status !== 'running' || previousJob.phase !== 'cancelling') {
+      return { ok: false, code: 'execution_cleanup_not_requested' };
+    }
+    const safeReason = String(reason || 'execution_cleanup_failed');
+    const next = mutateJobState(jobId, (job) => {
+      const progressResult = applyProgressUpdate(job, 100, 'execution_cleanup_failed');
+      const retryState = ensureJobRetryState(job);
+      retryState.retryable = false;
+      retryState.nextRetryAt = null;
+      retryState.lastReason = safeReason;
+      job.status = 'failed';
+      job.phase = 'execution_cleanup_failed';
+      job.lastError = safeReason;
+      job.events = [
+        buildJobEvent('job.execution_cleanup_failed', {
+          reason: safeReason,
+          progressPct: progressResult.progress.pct,
+        }),
+        ...(Array.isArray(job.events) ? job.events : []),
+      ].slice(0, MAX_JOB_EVENTS);
+      return job;
+    }, { rejectTerminal: true, allowCancellationPending: true, notifyTerminal: true });
+    if (next.ok) {
+      appendJobAuditBestEffort('job.execution_cleanup_failed', { jobId, reason: safeReason });
+      return { ...next, idempotent: false };
     }
     return next;
   }
@@ -1321,7 +1576,8 @@ function createJobStateStore(dependencies = {}) {
   function isJobCancelled(jobId) {
     if (!jobId) return false;
     const found = getAuthorizedJobById(jobId);
-    return Boolean(found.ok && found.job && found.job.status === 'cancelled');
+    return Boolean(found.ok && found.job
+      && (found.job.status === 'cancelled' || found.job.phase === 'cancelling'));
   }
 
   function markJobPausedForMemory(jobId, payload = {}) {
@@ -1522,6 +1778,8 @@ function createJobStateStore(dependencies = {}) {
       if (!job || typeof job !== 'object' || Array.isArray(job)
         || !interruptedStatuses.has(job.status)) continue;
 
+      if (job.status === 'running' && job.phase === 'cancelling') continue;
+
       const pendingApproval = job.status === 'running'
         && job.phase === 'awaiting_user_confirmation';
       if (pendingApproval) {
@@ -1682,11 +1940,26 @@ function createJobStateStore(dependencies = {}) {
       const phase = readDataProperty('phase');
       if (storedId !== jobId) return false;
 
-      return (
+      const cancellationRecoveryEligible = status === 'running' && phase === 'cancelling';
+      const terminalRecoveryEligible = (
         (status === 'completed' && phase === 'done') ||
-        (status === 'cancelled' && phase === 'cancelled') ||
+        (status === 'cancelled' && phase === 'cancelled'
+          && !hasPersistedExecutionCleanupReceipt(job, jobId)) ||
         (status === 'failed' && AUTHORIZED_RECOVERY_FAILED_TERMINAL_PHASES.has(phase))
       );
+      if (!cancellationRecoveryEligible && !terminalRecoveryEligible) return false;
+
+      const projectId = readDataProperty('projectId');
+      const rootPath = readDataProperty('rootPath');
+      if (typeof projectId !== 'string' || typeof rootPath !== 'string') return false;
+      try {
+        return isAuthorizedRecoveryProject(Object.freeze({
+          projectId,
+          rootPath,
+        })) === true;
+      } catch {
+        return false;
+      }
     });
 
     return { ok: true, jobIds };
@@ -1722,7 +1995,10 @@ function createJobStateStore(dependencies = {}) {
     markJobApprovalExpired,
     markJobAwaitingUserInput,
     markJobBlocked,
+    markJobCancellationRequested,
     markJobCancelled,
+    markJobCancelledAfterCleanup,
+    markJobExecutionCleanupFailed,
     markJobCanaryRolledBack,
     markJobCompleted,
     markJobFailed,

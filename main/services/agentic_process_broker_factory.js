@@ -43,9 +43,11 @@ const BROKER_EXECUTION_ID = /^sandbox-exec:[a-f0-9]{64}$/;
 const MAX_READ_BYTES = 1024 * 1024;
 const MAX_WAIT_MS = 60_000;
 const PROCESS_STOP_REASON_CODE = 'AGENTIC_PROCESS_STOP_REQUESTED';
+const TERMINAL_PROCESS_STATUSES = new Set(['succeeded', 'failed', 'stopped', 'timed_out']);
 const AGENTIC_PROCESS_ROUTE_REASONS = Object.freeze({
   AUTHORITY_DENIED: 'AGENTIC_PROCESS_ROUTE_AUTHORITY_DENIED',
   OPERATION_FAILED: 'AGENTIC_PROCESS_ROUTE_OPERATION_FAILED',
+  PROCESS_ALREADY_ACTIVE: 'AGENTIC_PROCESS_ROUTE_PROCESS_ALREADY_ACTIVE',
   PROCESS_UNAVAILABLE: 'AGENTIC_PROCESS_ROUTE_PROCESS_UNAVAILABLE',
 });
 const OPTION_KEYS = Object.freeze([
@@ -64,7 +66,12 @@ const REQUIRED_OPTION_KEYS = Object.freeze([
   'sandboxRegistry',
 ]);
 const CREATE_KEYS = Object.freeze(['binding', 'sandboxExecutor']);
-const EXECUTE_KEYS = Object.freeze(['command', 'args', 'timeoutMs']);
+const EXECUTE_KEYS = Object.freeze([
+  'command',
+  'args',
+  'timeoutMs',
+  'mutationRevision',
+]);
 const READ_KEYS = Object.freeze(['cursor', 'maxBytes']);
 const WAIT_KEYS = Object.freeze(['afterRevision', 'timeoutMs']);
 const STOP_KEYS = Object.freeze(['expectedRevision']);
@@ -195,6 +202,7 @@ function normalizeProcessInput(input) {
   const command = fields.get('command');
   const args = fields.get('args');
   const timeoutMs = fields.get('timeoutMs');
+  const mutationRevision = fields.get('mutationRevision');
   if (typeof command !== 'string' || command.trim().length < 1
     || command.length > MAX_COMMAND_LENGTH || command.includes('\0')) {
     throw new TypeError('Agentic process command is invalid');
@@ -234,11 +242,29 @@ function normalizeProcessInput(input) {
     || timeoutMs > MAX_TIMEOUT_MS || Object.is(timeoutMs, -0)) {
     throw new TypeError('Agentic process timeout is outside the supported bounds');
   }
+  if (!Number.isSafeInteger(mutationRevision) || mutationRevision < 0
+    || Object.is(mutationRevision, -0)) {
+    throw new TypeError('Agentic process mutation revision is invalid');
+  }
   return Object.freeze({
     command: command.trim(),
     args: Object.freeze(normalizedArgs),
     timeoutMs,
+    mutationRevision,
   });
+}
+
+function sameProcessInput(left, right) {
+  return Boolean(left && right)
+    && left.command === right.command
+    && left.timeoutMs === right.timeoutMs
+    && left.mutationRevision === right.mutationRevision
+    && left.args.length === right.args.length
+    && left.args.every((value, index) => value === right.args[index]);
+}
+
+function isTerminalProcessStatus(status) {
+  return TERMINAL_PROCESS_STATUSES.has(status);
 }
 
 function safeOperationInteger(value, {
@@ -485,9 +511,19 @@ function createAgenticProcessBrokerFactory(options = {}) {
     let waits = 0;
     let stops = 0;
     let currentExecutionId = null;
+    let currentProcessRecord = null;
 
     async function execute(rawInput) {
       const payload = normalizeProcessInput(rawInput);
+      if (currentProcessRecord && currentProcessRecord.state !== 'terminal') {
+        if (!controlAuthorized()) {
+          return routeFailure(AGENTIC_PROCESS_ROUTE_REASONS.AUTHORITY_DENIED);
+        }
+        if (sameProcessInput(currentProcessRecord.input, payload)) {
+          return currentProcessRecord.promise;
+        }
+        return routeFailure(AGENTIC_PROCESS_ROUTE_REASONS.PROCESS_ALREADY_ACTIVE);
+      }
       let requestId;
       try {
         requestId = requestIdFactory();
@@ -520,10 +556,39 @@ function createAgenticProcessBrokerFactory(options = {}) {
           correlationId: binding.jobId,
         }),
       });
-      const result = await broker.execute(request);
-      const executionId = executionIdFromBrokerResult(result);
-      if (executionId) currentExecutionId = executionId;
-      return result;
+      const record = {
+        input: payload,
+        state: 'starting',
+        status: '',
+        executionId: null,
+        promise: null,
+      };
+      currentExecutionId = null;
+      currentProcessRecord = record;
+      record.promise = Promise.resolve().then(() => broker.execute(request)).then(
+        (result) => {
+          const executionId = executionIdFromBrokerResult(result);
+          if (!executionId) {
+            if (currentProcessRecord === record) currentProcessRecord = null;
+            return result;
+          }
+          const output = dataValue(result, 'output');
+          const status = dataValue(output, 'status');
+          record.executionId = executionId;
+          record.status = status;
+          record.state = isTerminalProcessStatus(status) ? 'terminal' : 'running';
+          if (currentProcessRecord === record) currentExecutionId = executionId;
+          return result;
+        },
+        (error) => {
+          if (currentProcessRecord === record) {
+            currentProcessRecord = null;
+            currentExecutionId = null;
+          }
+          throw error;
+        }
+      );
+      return record.promise;
     }
 
     function processOperation(operation, rawInput, captured) {
@@ -532,14 +597,14 @@ function createAgenticProcessBrokerFactory(options = {}) {
       if (operation === 'wait') normalized = normalizeWaitInput(rawInput);
       if (operation === 'stop') normalized = normalizeStopInput(rawInput);
       if (!normalized) throw new TypeError('Unsupported agentic process operation');
-      if (!currentExecutionId) {
-        return Promise.resolve(routeFailure(
-          AGENTIC_PROCESS_ROUTE_REASONS.PROCESS_UNAVAILABLE
-        ));
-      }
       if (!controlAuthorized()) {
         return Promise.resolve(routeFailure(
           AGENTIC_PROCESS_ROUTE_REASONS.AUTHORITY_DENIED
+        ));
+      }
+      if (!currentExecutionId) {
+        return Promise.resolve(routeFailure(
+          AGENTIC_PROCESS_ROUTE_REASONS.PROCESS_UNAVAILABLE
         ));
       }
       const executionId = currentExecutionId;
@@ -571,6 +636,14 @@ function createAgenticProcessBrokerFactory(options = {}) {
           if (!result) {
             resolve(routeFailure(AGENTIC_PROCESS_ROUTE_REASONS.OPERATION_FAILED));
             return;
+          }
+          if (currentProcessRecord
+            && currentProcessRecord.executionId === executionId) {
+            const status = dataValue(result, 'status');
+            currentProcessRecord.status = status;
+            currentProcessRecord.state = isTerminalProcessStatus(status)
+              ? 'terminal'
+              : 'running';
           }
           if (operation === 'read') reads += 1;
           if (operation === 'wait') waits += 1;

@@ -13,9 +13,20 @@ const EMAIL_CODE_TTL_MS = 10 * 60 * 1000;
 const EMAIL_CODE_MAX_ATTEMPTS = 5;
 const PASSWORD_FAILURE_WINDOW_MS = 15 * 60 * 1000;
 const PASSWORD_FAILURE_LIMIT = 8;
+const PRODUCT_ACCESS_ACTOR_ID_PATTERN = /^[A-Za-z0-9._:@-]{1,256}$/;
 
 function normalizeEmail(value = '') {
   return String(value || '').trim().toLowerCase();
+}
+
+function createProductAccessPrincipal(kind = '', actorId = '') {
+  const normalizedKind = kind === 'account' || kind === 'local_development' ? kind : '';
+  const normalizedActorId = String(actorId || '').trim();
+  if (!normalizedKind || !PRODUCT_ACCESS_ACTOR_ID_PATTERN.test(normalizedActorId)) return null;
+  return Object.freeze({
+    kind: normalizedKind,
+    actorId: normalizedActorId,
+  });
 }
 
 function normalizeUrl(value = '') {
@@ -117,6 +128,7 @@ function sanitizeUserProfile(profile = {}) {
 function createPlatformAccountService(dependencies = {}) {
   const {
     allowDevEmailCodes = false,
+    allowLocalUnauthenticated = false,
     appBaseUrl = 'http://127.0.0.1:37418',
     databaseUrl = '',
     fetchFn = typeof fetch === 'function' ? fetch : null,
@@ -131,6 +143,9 @@ function createPlatformAccountService(dependencies = {}) {
     now = () => new Date(),
     pexelsApiKey = '',
     platformMediaEndpoint = '',
+    beforeProductAccessContextChange = () => Object.freeze({ ok: false }),
+    createLocalPrincipalId = () => '',
+    isProductAccessAuthorityReady = () => false,
     protectSecret = (value) => String(value || ''),
     saveSessionFile = null,
     loadSessionFile = null,
@@ -144,6 +159,87 @@ function createPlatformAccountService(dependencies = {}) {
   const pendingEmailCodes = new Map();
   const passwordFailures = new Map();
   let currentSession = null;
+  let productAccessContextRevision = 0;
+  let productAccessTransitionHealthy = true;
+
+  function mintLocalUnauthenticatedPrincipal() {
+    if (!allowLocalUnauthenticated || typeof createLocalPrincipalId !== 'function') return null;
+    try {
+      const actorId = createLocalPrincipalId();
+      if (actorId && typeof actorId.then === 'function') return null;
+      return createProductAccessPrincipal('local_development', actorId);
+    } catch {
+      return null;
+    }
+  }
+
+  let localUnauthenticatedPrincipal = mintLocalUnauthenticatedPrincipal();
+  if (localUnauthenticatedPrincipal) productAccessContextRevision = 1;
+
+  function resolveRawProductAccessPrincipal(session = null, localPrincipal = localUnauthenticatedPrincipal) {
+    if (session && session.user) {
+      const actorId = session.user.id || session.user.email || '';
+      return createProductAccessPrincipal('account', actorId);
+    }
+    return localPrincipal;
+  }
+
+  function productAccessPrincipalsMatch(left, right) {
+    if (!left || !right) return left === right;
+    return left.kind === right.kind && left.actorId === right.actorId;
+  }
+
+  function productAccessAuthorityIsReady() {
+    if (!productAccessTransitionHealthy || typeof isProductAccessAuthorityReady !== 'function') {
+      return false;
+    }
+    try {
+      const result = isProductAccessAuthorityReady();
+      return result === true;
+    } catch {
+      return false;
+    }
+  }
+
+  function successfulContextChangeResult(value) {
+    try {
+      if (!value || typeof value !== 'object' || Array.isArray(value)
+        || (value && typeof value.then === 'function')) return false;
+      const descriptor = Object.getOwnPropertyDescriptor(value, 'ok');
+      return Boolean(descriptor && Object.hasOwn(descriptor, 'value') && descriptor.value === true);
+    } catch {
+      return false;
+    }
+  }
+
+  function transitionCurrentSession(nextSession = null, reason = 'principal_changed') {
+    const normalizedSession = nextSession && typeof nextSession === 'object' ? nextSession : null;
+    const previous = resolveRawProductAccessPrincipal(currentSession);
+    let candidateLocalPrincipal = localUnauthenticatedPrincipal;
+    if (currentSession && currentSession.user && !normalizedSession && allowLocalUnauthenticated) {
+      candidateLocalPrincipal = mintLocalUnauthenticatedPrincipal();
+    }
+    const next = resolveRawProductAccessPrincipal(normalizedSession, candidateLocalPrincipal);
+    const sessionChanged = normalizedSession !== currentSession;
+    if (sessionChanged || !productAccessPrincipalsMatch(previous, next)) {
+      productAccessTransitionHealthy = false;
+      let result = null;
+      try {
+        result = beforeProductAccessContextChange(Object.freeze({ previous, next, reason }));
+      } catch {
+        result = null;
+      }
+      if (!successfulContextChangeResult(result)) {
+        throw new Error('product_access_context_change_rejected');
+      }
+      localUnauthenticatedPrincipal = candidateLocalPrincipal;
+      currentSession = normalizedSession;
+      productAccessContextRevision += 1;
+      productAccessTransitionHealthy = true;
+      return;
+    }
+    currentSession = normalizedSession;
+  }
 
   function isExpired(timestamp, ttlMs) {
     return Date.now() - Number(timestamp || 0) > ttlMs;
@@ -225,6 +321,7 @@ function createPlatformAccountService(dependencies = {}) {
         configured: true,
         mode: 'password',
       },
+      localUnauthenticated: Boolean(localUnauthenticatedPrincipal),
       media: {
         pexelsConfigured: platformMediaConfigured,
         mode: String(platformMediaEndpoint || '').trim() ? 'endpoint' : String(pexelsApiKey || '').trim() ? 'local-key' : 'none',
@@ -248,12 +345,30 @@ function createPlatformAccountService(dependencies = {}) {
     return currentSession ? { ...currentSession, user: { ...currentSession.user } } : null;
   }
 
+  function getProductAccessPrincipal() {
+    const principal = resolveRawProductAccessPrincipal(currentSession);
+    return principal && productAccessAuthorityIsReady() ? principal : null;
+  }
+
   function getStatus() {
     const config = getConfigStatus();
+    const principal = getProductAccessPrincipal();
+    const signedIn = Boolean(currentSession && currentSession.user);
+    const authenticatedAccess = Boolean(principal && principal.kind === 'account' && signedIn);
+    const databaseAvailable = Boolean(
+      config.database && config.database.configured && config.database.available
+    );
     return {
       ok: true,
-      signedIn: Boolean(currentSession && currentSession.user),
+      signedIn,
       user: currentSession && currentSession.user ? { ...currentSession.user } : null,
+      access: {
+        allowed: Boolean(principal),
+        mode: principal ? principal.kind : 'none',
+        contextRevision: productAccessContextRevision,
+        platformMedia: Boolean(authenticatedAccess && config.media.pexelsConfigured),
+        platformSync: Boolean(authenticatedAccess && databaseAvailable),
+      },
       config,
     };
   }
@@ -285,7 +400,7 @@ function createPlatformAccountService(dependencies = {}) {
       user: sanitized,
       createdAt: now().toISOString(),
     };
-    currentSession = session;
+    transitionCurrentSession(session, 'signed_in');
     if (typeof saveSessionFile === 'function') {
       await saveSessionFile(session);
     }
@@ -598,7 +713,7 @@ function createPlatformAccountService(dependencies = {}) {
 
   async function signOut() {
     const session = currentSession;
-    currentSession = null;
+    transitionCurrentSession(null, 'signed_out');
     if (typeof saveSessionFile === 'function') {
       await saveSessionFile(null);
     }
@@ -614,7 +729,7 @@ function createPlatformAccountService(dependencies = {}) {
     const loaded = await loadSessionFile();
     if (!loaded) return { ok: true, restored: false };
 
-    currentSession = loaded;
+    transitionCurrentSession(loaded, 'session_restored');
     try {
       await saveSessionRecord(currentSession);
       return { ok: true, restored: true };
@@ -629,6 +744,7 @@ function createPlatformAccountService(dependencies = {}) {
   }
 
   function getPlatformPexelsApiKey() {
+    if (!currentSession || !currentSession.user) return '';
     return String(pexelsApiKey || '').trim();
   }
 
@@ -639,6 +755,7 @@ function createPlatformAccountService(dependencies = {}) {
     exchangeGithubCode,
     exchangeGoogleCode,
     getCurrentSession,
+    getProductAccessPrincipal,
     getPlatformPexelsApiKey,
     getStatus,
     initializeSession,
