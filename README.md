@@ -1,50 +1,124 @@
 # Faber Code
 
-Faber Code is an advanced, local-first Spec-Driven Development (SDD) IDE powered by AI. It empowers developers to create, edit, run, version, and deploy software projects directly from their local machine, ensuring the user remains entirely in control of their files, repositories, and final decisions.
+[Official website](https://www.fabercode.site/)
 
-Faber Code is distributed under the Apache-2.0 License.
+Faber Code is a local-first, AI-assisted Spec-Driven Development (SDD) IDE. It
+brings planning, code editing, execution, validation, Git, and project context
+into one desktop workspace while keeping the user in control of files,
+repositories, permissions, and final decisions.
 
-## Core Features
+Faber Code is free and distributed under the Apache-2.0 License.
 
-Faber Code is built around the concept of **Spec-Driven Development (SDD)**, fundamentally changing how applications are planned and built through visual and AI-assisted workflows.
+## Harness v2
 
-### Application Map & Spec-Driven Development
-Every project has its own Application Map. Users can visually map out their application by organizing texts, inserting images, and connecting concepts in a mind-map structure. 
-- **Map Chat:** Users can interact with an AI directly on the map. The AI analyzes the organized information, answers questions based on the input, and helps refine missing parts of the development scope.
-- **Auto-Documentation:** All text generated and refined in the map is automatically saved as Markdown files in the project folder, keeping images and documentation perfectly organized.
+Faber Code v0.2.0 introduces Harness v2, a governed agent runtime that can plan,
+edit, run, inspect, repair, and validate projects within explicit authority and
+isolated workspaces.
 
-### Milestone Rendering
-Once the Application Map is complete, the user can "Render" the map. A dedicated AI process reviews the mapped information and translates it into an actionable development plan broken down into **Milestones**. This simplifies the dialogue with the development AI and ensures the project follows a clear path.
+- [Faber Code v0.2.0 release notes](docs/GITHUB_RELEASE_NOTES_V0.2.0.md)
+- [Complete Harness v2 technical release record](docs/FABER_CODE_RELEASE_HARNESS_V2_2026-09-09.md)
+- [Public release checklist](docs/PUBLIC_RELEASE_CHECKLIST.md)
 
-### Development Chat
-The Development Chat is context-aware and deeply integrated with your planning. 
-- Users can jump straight into the Development Chat to start coding immediately.
-- If the project was planned using the Application Map and rendered into Milestones, the Development Chat uses this context. When the user decides to work on "Milestone 1", the AI automatically briefs the development plan by reading the associated Markdown files and organized assets from that specific project phase.
+Version 0.2.0 is the first public release of the governed Harness v2 cycle.
+The technical record documents its architecture, migration, validation, and
+known limitations.
 
-### Multi-API AI Support
-Faber Code's AI actions are fully flexible and depend on the API connected by the user. Supported integrations include:
-- OpenAI
-- Google Gemini
-- Anthropic Claude
-- DeepSeek
-- Local AIs (via compatible endpoints)
+## Core features
 
-## Additional Tools & Capabilities
+### Governed development agent
 
-Beyond its advanced development and planning features, Faber Code functions as a complete IDE:
+Harness v2 coordinates agent work through project- and job-scoped authority.
+Sensitive operations require the appropriate approval, changes can be staged in
+isolation before controlled promotion, and durable receipts support validation,
+recovery, and targeted rollback.
 
-- **Custom File Tree:** A proprietary, highly optimized file explorer built directly into the workspace.
-- **Visual Git Tool:** A comprehensive visual panel that makes versioning, staging, committing, and deploying straightforward, without requiring manual terminal commands or AI intervention.
-- **Integrated Terminal:** A custom-built terminal for executing commands within the project's context.
-- **Application Executor:** A built-in runner that seamlessly launches the application in the user's main browser, handling local runtimes and port management automatically.
+Faber Code never treats model confidence as proof of completion. Required
+builds, tests, browser checks, external effects, or visual delivery must produce
+the corresponding evidence before a governed job can report verified success.
 
-## Installation & Setup
+### Application Map and Spec-Driven Development
+
+Every project has an Application Map for organizing requirements, text, images,
+and relationships in a visual structure.
+
+- **Map Chat:** discuss the mapped scope with AI without giving the map chat
+  direct authority to mutate project code.
+- **Auto-documentation:** map content can be projected into Markdown files and
+  organized assets inside the project.
+- **Milestone rendering:** turn an approved map into an actionable development
+  plan with milestones and acceptance criteria.
+
+### Context-aware development
+
+Development Chat can start directly from a user request or work from an active
+milestone. ContextPack assembles the relevant conversation, Cortex memory,
+Application Map data, milestone criteria, Git state, selected files,
+instructions, permissions, and provenance without handing canonical product
+state to the model.
+
+### Guided onboarding
+
+The multilingual tutorial covers the product journey from initial briefing and
+design-system choices through project structure, Application Map, milestones,
+incremental development, Git review, local execution, and preview. Tutorial
+simulations do not consume provider credits.
+
+### Browser-assisted validation
+
+Governed browser sessions can open an authorized local preview, inspect console
+output and failed requests, perform bounded local interactions, and request
+visual captures. Capturing an image and sending it to an AI provider are
+separate, freshly approved operations.
+
+Normal project preview remains unchanged: Faber Code opens the result in the
+user's default browser instead of creating a second Electron preview window.
+
+### Flexible AI providers and models
+
+Provider availability depends on the adapters and endpoints configured by the
+user. Faber Code supports native integrations, compatible APIs, and custom
+connectors without freezing the interface to a permanent model list. The
+current qualified OpenAI discovery path includes `gpt-5.6-sol` and
+`gpt-5.6-terra` when exposed by the configured runtime.
+
+External providers are optional and may have their own usage costs. A local
+RWKV model is not bundled or configured in this repository; the planned RWKV
+integration is a separate open project.
+
+## IDE tools
+
+- **File workspace:** project tree, reading, editing, rename, refresh, and
+  incremental AI changes.
+- **Visual Git workflow:** review new and modified files, select changes, stage,
+  commit, and send to GitHub through explicit user actions.
+- **Integrated terminal:** a manual terminal in the active project context,
+  separate from the governed agent process runtime.
+- **Application executor:** local runtime and port management with preview in
+  the user's default browser.
+- **Cortex:** memory, topics, RAG/MemPalace context, and provenance.
+- **Application Map and milestones:** structured planning connected to
+  development and validation.
+
+## Safety and control
+
+- Network access is denied by default for governed agent execution.
+- External MCP mutations require an exact server/tool allowlist, fresh
+  digest-bound approval, idempotency, and an auditable receipt.
+- Visual capture and visual egress require separate approvals.
+- Project-root authority, symlink checks, process supervision, cleanup, and
+  rollout interlocks protect the local workspace.
+- Faber Code does not automatically commit, push, publish, or deploy changes.
+
+Read [SECURITY.md](SECURITY.md) before publishing a fork or release.
+
+## Installation and development
 
 Requirements:
-- Node.js (compatible with `package.json`)
+
+- Node.js compatible with `package.json`
 - npm
 - Git
-- Electron-compatible desktop environment
+- an Electron-compatible desktop environment
 
 ```bash
 npm install
@@ -52,19 +126,22 @@ cp .env.example .env
 npm run dev
 ```
 
-*Note: Only `.env.example` should be committed to Git. Never publish your `.env`, API keys, tokens, local databases, private memories, or client projects.*
+Only `.env.example` should be committed. Never publish `.env`, API keys,
+tokens, local databases, private memories, generated artifacts, or client
+projects.
 
-## Security and Privacy
+## Release validation
 
-Faber Code is designed with a local-first philosophy to prevent accidental leaks of private information:
-- `.env` and local variants are ignored by Git.
-- Local models, databases, caches, memories, artifacts, and generated projects are not versioned.
-- External integrations are strictly opt-in and configured entirely by the user.
+Release candidates must pass the checks selected by
+[`docs/PUBLIC_RELEASE_CHECKLIST.md`](docs/PUBLIC_RELEASE_CHECKLIST.md). Live
+provider qualification remains opt-in because it requires credentials, network
+access, usage credits, and fresh human approvals.
 
-Please read [SECURITY.md](SECURITY.md) before publishing a fork or release.
+## License and trademarks
 
-## License and Trademarks
+The source code is licensed under the Apache License 2.0. See
+[LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-The source code is licensed under the Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
-
-The name Faber Code, logos, icons, and brand assets identify the official project. The Apache-2.0 license does not grant trademark rights or use that implies official endorsement, distribution, or affiliation without permission.
+The Faber Code name, logos, icons, and brand assets identify the official
+project. The Apache-2.0 license does not grant trademark rights or permission to
+imply official endorsement, distribution, or affiliation.

@@ -6,8 +6,42 @@ const {
 
 const PORTABLE_ISOLATION_HELPER_RELEASE_TRUST_VERSION =
   'portable-isolation-helper-release-trust.v1';
-const PORTABLE_ISOLATION_HELPER_RELEASE_TRUST_STATE = 'unconfigured';
-const PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS = Object.freeze([]);
+const PORTABLE_ISOLATION_HELPER_RELEASE_TRUST_STATE = 'configured';
+const PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS = Object.freeze([
+  Object.freeze({
+    version: 'portable-isolation-helper-distribution-trusted-key.v1',
+    keyId: 'faber-portable-helper-release-v0.2.0-darwin-arm64',
+    algorithm: 'ed25519',
+    platform: 'darwin',
+    architecture: 'arm64',
+    publicKeySpkiDerBase64:
+      'MCowBQYDK2VwAyEAOoC8d1cipvAQLPAPTq3r5ezj2seAuEVyopdvB5NEDWw=',
+    publicKeyDigest:
+      'sha256:0e95c3c71cdf46d8a89065bd00b966bc78557726238257daac10c4436f1d0d5a',
+  }),
+  Object.freeze({
+    version: 'portable-isolation-helper-distribution-trusted-key.v1',
+    keyId: 'faber-portable-helper-release-v0.2.0-linux-arm64',
+    algorithm: 'ed25519',
+    platform: 'linux',
+    architecture: 'arm64',
+    publicKeySpkiDerBase64:
+      'MCowBQYDK2VwAyEAYVC1v2wekDW99yzeTT9n72cwXoPOeh8cFz8a5IRPTEo=',
+    publicKeyDigest:
+      'sha256:0da2aecb28e2c7d384700a7d19b4e7c9e67fc043720a0b6c4076a607dd091c47',
+  }),
+  Object.freeze({
+    version: 'portable-isolation-helper-distribution-trusted-key.v1',
+    keyId: 'faber-portable-helper-release-v0.2.0-win32-arm64',
+    algorithm: 'ed25519',
+    platform: 'win32',
+    architecture: 'arm64',
+    publicKeySpkiDerBase64:
+      'MCowBQYDK2VwAyEAols72Wz8BBOy/DIEMWfkLsZ1AizZWaEMt2NDMoohJK0=',
+    publicKeyDigest:
+      'sha256:b9eb3ea511240fca02b0ba4ee9c406e1ddc4a7d6a36634cce7da1664206d9ded',
+  }),
+]);
 
 class PortableIsolationHelperReleaseTrustError extends Error {
   constructor(code) {

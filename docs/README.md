@@ -1,55 +1,79 @@
-# Documentacao do Faber Code
+# Faber Code Documentation
 
-Este diretorio organiza a documentacao publica e tecnica do Faber Code.
+This directory organizes the public and technical documentation for Faber
+Code. Documents whose names include a date are historical records of a specific
+development cycle and may remain in the language in which that work was
+conducted.
 
-Nota atual sobre RWKV: o Faber Code ainda nao vem com RWKV configurado. A IA local baseada em RWKV sera um projeto separado, aberto, desenhado para conectar perfeitamente ao Faber Code. Alguns documentos historicos antigos registram investigacoes e decisoes anteriores sobre RWKV; eles devem ser lidos como historico, nao como estado atual do produto.
+Current RWKV note: Faber Code does not currently bundle or configure RWKV. The
+planned local RWKV integration is a separate, open project designed to connect
+cleanly to Faber Code. Older documents describing RWKV experiments are
+historical and do not represent the current public product state.
 
-Nota sobre provedores de IA: o Faber Code foi desenhado para aceitar provedores configurados pelo usuario, incluindo GPT/OpenAI, Gemini, Claude/Anthropic e outros por API nativa, API compativel ou conector customizado. A documentacao deve diferenciar o que esta configurado hoje do que e caminho de integracao.
+AI provider note: Faber Code is designed to accept user-configured providers,
+including GPT/OpenAI, Gemini, Claude/Anthropic, and others through native APIs,
+compatible APIs, or custom connectors. Documentation must distinguish what is
+currently configured from a possible integration path.
 
-Nota sobre Git/GitHub: a ordem publica do fluxo e revisar arquivos novos/modificados, selecionar o que avanca, preparar `Staged`, criar `Commit`, enviar para o GitHub e so entao publicar/deployar com revisao.
+Git/GitHub note: the public workflow is to review new and modified files,
+select the changes that should advance, stage them, create a commit, send it to
+GitHub, and only then publish or deploy after review.
 
-Para GitHub, a ordem recomendada e:
+## Recommended public reading order
 
-1. [README principal](../README.md)
-2. [Checklist de publicacao](PUBLIC_RELEASE_CHECKLIST.md)
-3. [Security Policy](../SECURITY.md)
-4. [Pentest defensivo e prompt injection](FABER_CODE_PENTEST_PROMPT_INJECTION_SEGURANCA_2026-06-01.md)
-5. [Refatoracao segura de arquitetura](FABER_CODE_ARQUITETURA_REFATORACAO_SEGURA_2026-06-01.md)
-6. [Runtime agentic e humanizacao do chat](FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md)
-7. [Forge MRP, liberdade de execucao e loop visual](FABER_CODE_FORGE_MRP_LOOP_AVANCOS_2026-06-02.md)
-8. [Handoff 2026-06-02, pausa por limite da API](FABER_CODE_HANDOFF_2026-06-02_API_LIMIT.md)
-9. [Stresstest Forge MRP, contratos flexiveis e validacao ponta a ponta](FABER_CODE_STRESSTEST_FORGE_MRP_CORRECOES_2026-06-01.md)
-10. [Avancos de documentacao publica e release prep](FABER_CODE_PUBLIC_RELEASE_PREP_AVANCOS_2026-06-01.md)
-11. [QA exaustivo e correcoes recentes](FABER_CODE_QA_EXAUSTIVO_CORRECOES_2026-05-30.md)
-12. [Handoff tecnico QA/Git/Preview/OAuth](FABER_CODE_QA_HANDOFF_TECNICO_2026-05-30.md)
-13. [Indice historico detalhado](FABER_CODE_DOCS_INDEX_2026-05-25.md)
+1. [Main README](../README.md)
+2. [Faber Code v0.2.0 GitHub Release notes](GITHUB_RELEASE_NOTES_V0.2.0.md)
+3. [Complete Harness v2 technical release record](FABER_CODE_RELEASE_HARNESS_V2_2026-09-09.md)
+4. [Public release checklist](PUBLIC_RELEASE_CHECKLIST.md)
+5. [Security Policy](../SECURITY.md)
+6. [Defensive pentest and prompt injection](FABER_CODE_PENTEST_PROMPT_INJECTION_SEGURANCA_2026-06-01.md)
+7. [Safe architecture refactor](FABER_CODE_ARQUITETURA_REFATORACAO_SEGURA_2026-06-01.md)
+8. [Agentic runtime and chat humanization](FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md)
+9. [Forge MRP, execution freedom, and visual loop](FABER_CODE_FORGE_MRP_LOOP_AVANCOS_2026-06-02.md)
+10. [2026-06-02 handoff: API limit pause](FABER_CODE_HANDOFF_2026-06-02_API_LIMIT.md)
+11. [Forge MRP stress test and end-to-end validation](FABER_CODE_STRESSTEST_FORGE_MRP_CORRECOES_2026-06-01.md)
+12. [Public documentation and release-preparation advances](FABER_CODE_PUBLIC_RELEASE_PREP_AVANCOS_2026-06-01.md)
+13. [Exhaustive QA and recent fixes](FABER_CODE_QA_EXAUSTIVO_CORRECOES_2026-05-30.md)
+14. [Technical QA/Git/Preview/OAuth handoff](FABER_CODE_QA_HANDOFF_TECNICO_2026-05-30.md)
+15. [Detailed historical index](FABER_CODE_DOCS_INDEX_2026-05-25.md)
 
-## Documentos publicos essenciais
+## Essential public documents
 
-- [PUBLIC_RELEASE_CHECKLIST.md](PUBLIC_RELEASE_CHECKLIST.md): checklist antes de publicar no GitHub.
-- [AUTOMATA_CONTRACTS.md](AUTOMATA_CONTRACTS.md): contratos Automata e ledger.
-- [FABER_CODE_PENTEST_PROMPT_INJECTION_SEGURANCA_2026-06-01.md](FABER_CODE_PENTEST_PROMPT_INJECTION_SEGURANCA_2026-06-01.md): pentest defensivo, prompt injection, hardening e E2E real com OpenAI.
-- [FABER_CODE_ARQUITETURA_REFATORACAO_SEGURA_2026-06-01.md](FABER_CODE_ARQUITETURA_REFATORACAO_SEGURA_2026-06-01.md): refatoracao modular protegida por testes e smoke visual.
-- [FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md](FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md): corte do fluxo `plano -> confirmacao` para um caminho mais agentic, com humanizacao do chat e autoexecucao quando houver tool calling compativel.
-- [FABER_CODE_FORGE_MRP_LOOP_AVANCOS_2026-06-02.md](FABER_CODE_FORGE_MRP_LOOP_AVANCOS_2026-06-02.md): rodada Forge MRP com contrato advisory, modo de fases, validacao contra conteudo instrucional e bloqueio atual por limite da API.
-- [FABER_CODE_HANDOFF_2026-06-02_API_LIMIT.md](FABER_CODE_HANDOFF_2026-06-02_API_LIMIT.md): handoff para retomar o reparo do Forge MRP quando a API voltar.
-- [FABER_CODE_STRESSTEST_FORGE_MRP_CORRECOES_2026-06-01.md](FABER_CODE_STRESSTEST_FORGE_MRP_CORRECOES_2026-06-01.md): stresstest Forge MRP, contratos flexiveis, preview/runtime, validacao visual operacional e evidencias.
-- [FABER_CODE_PUBLIC_RELEASE_PREP_AVANCOS_2026-06-01.md](FABER_CODE_PUBLIC_RELEASE_PREP_AVANCOS_2026-06-01.md): avancos de documentacao publica, arquitetura e release prep.
-- [FABER_CODE_QA_EXAUSTIVO_CORRECOES_2026-05-30.md](FABER_CODE_QA_EXAUSTIVO_CORRECOES_2026-05-30.md): bateria de QA, correcoes e evidencias.
-- [FABER_CODE_QA_HANDOFF_TECNICO_2026-05-30.md](FABER_CODE_QA_HANDOFF_TECNICO_2026-05-30.md): contratos tecnicos para continuar a partir da ultima rodada.
-- [FABER_CODE_GITHUB_DEPLOY_UX_QA_2026-05-30.md](FABER_CODE_GITHUB_DEPLOY_UX_QA_2026-05-30.md): GitHub, Git, deploy e UX da publicacao.
+- [GITHUB_RELEASE_NOTES_V0.2.0.md](GITHUB_RELEASE_NOTES_V0.2.0.md): concise English
+  copy for the Faber Code v0.2.0 GitHub Release.
+- [FABER_CODE_RELEASE_HARNESS_V2_2026-09-09.md](FABER_CODE_RELEASE_HARNESS_V2_2026-09-09.md):
+  complete English technical record from guided onboarding through Harness v2.
+- [PUBLIC_RELEASE_CHECKLIST.md](PUBLIC_RELEASE_CHECKLIST.md): English checklist
+  to complete before publishing on GitHub.
+- [AUTOMATA_CONTRACTS.md](AUTOMATA_CONTRACTS.md): Automata and ledger contracts.
+- [FABER_CODE_PENTEST_PROMPT_INJECTION_SEGURANCA_2026-06-01.md](FABER_CODE_PENTEST_PROMPT_INJECTION_SEGURANCA_2026-06-01.md):
+  defensive pentest, prompt-injection hardening, and real OpenAI E2E work.
+- [FABER_CODE_ARQUITETURA_REFATORACAO_SEGURA_2026-06-01.md](FABER_CODE_ARQUITETURA_REFATORACAO_SEGURA_2026-06-01.md):
+  modular refactor protected by tests and visual smoke checks.
+- [FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md](FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md):
+  evolution from plan/confirmation into a more agentic execution path.
+- [FABER_CODE_FORGE_MRP_LOOP_AVANCOS_2026-06-02.md](FABER_CODE_FORGE_MRP_LOOP_AVANCOS_2026-06-02.md):
+  Forge MRP advisory contract, phased execution, and visual-loop work.
+- [FABER_CODE_STRESSTEST_FORGE_MRP_CORRECOES_2026-06-01.md](FABER_CODE_STRESSTEST_FORGE_MRP_CORRECOES_2026-06-01.md):
+  stress-test results, flexible contracts, preview runtime, and evidence.
+- [FABER_CODE_PUBLIC_RELEASE_PREP_AVANCOS_2026-06-01.md](FABER_CODE_PUBLIC_RELEASE_PREP_AVANCOS_2026-06-01.md):
+  public documentation, architecture, and release-preparation record.
+- [FABER_CODE_GITHUB_DEPLOY_UX_QA_2026-05-30.md](FABER_CODE_GITHUB_DEPLOY_UX_QA_2026-05-30.md):
+  GitHub, Git, deployment, and publication UX.
 
-## Guias por area
+## Guides by area
 
-### GitHub, Git, terminal e ferramentas
+### GitHub, Git, terminal, and tools
 
 - [FABER_CODE_GITHUB_DEPLOY_UX_QA_2026-05-30.md](FABER_CODE_GITHUB_DEPLOY_UX_QA_2026-05-30.md)
 - [FABER_CODE_GIT_ARQUIVOS_ROLLBACK_2026-06-19.md](FABER_CODE_GIT_ARQUIVOS_ROLLBACK_2026-06-19.md)
 - [FABER_CODE_UX_FERRAMENTAS_GIT_TERMINAL_AVANCOS_2026-05-30.md](FABER_CODE_UX_FERRAMENTAS_GIT_TERMINAL_AVANCOS_2026-05-30.md)
 - [FABER_CODE_UX_CONFIG_TERMINAL_HOME_LIGHTMODE_2026-05-30.md](FABER_CODE_UX_CONFIG_TERMINAL_HOME_LIGHTMODE_2026-05-30.md)
 
-### QA, smoke e release
+### QA, smoke, and release
 
+- [GITHUB_RELEASE_NOTES_V0.2.0.md](GITHUB_RELEASE_NOTES_V0.2.0.md)
+- [FABER_CODE_RELEASE_HARNESS_V2_2026-09-09.md](FABER_CODE_RELEASE_HARNESS_V2_2026-09-09.md)
 - [FABER_CODE_PENTEST_PROMPT_INJECTION_SEGURANCA_2026-06-01.md](FABER_CODE_PENTEST_PROMPT_INJECTION_SEGURANCA_2026-06-01.md)
 - [FABER_CODE_ARQUITETURA_REFATORACAO_SEGURA_2026-06-01.md](FABER_CODE_ARQUITETURA_REFATORACAO_SEGURA_2026-06-01.md)
 - [FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md](FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md)
@@ -63,7 +87,7 @@ Para GitHub, a ordem recomendada e:
 - [FABER_CODE_SMOKE_TESTS_2026-05-25.md](FABER_CODE_SMOKE_TESTS_2026-05-25.md)
 - [FABER_CODE_PROXIMO_SMOKE_E_RISCOS_2026-05-25.md](FABER_CODE_PROXIMO_SMOKE_E_RISCOS_2026-05-25.md)
 
-### Produto, blueprints e orquestracao
+### Product, blueprints, and orchestration
 
 - [FABER_CODE_INTAKE_ROBUSTO_AVANCOS_2026-05-29.md](FABER_CODE_INTAKE_ROBUSTO_AVANCOS_2026-05-29.md)
 - [FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md](FABER_CODE_AGENTIC_RUNTIME_HUMANIZACAO_2026-06-12.md)
@@ -74,27 +98,27 @@ Para GitHub, a ordem recomendada e:
 - [FABER_CODE_ORQUESTRADOR_CONTEXT_FRAME_2026-05-26.md](FABER_CODE_ORQUESTRADOR_CONTEXT_FRAME_2026-05-26.md)
 - [FABER_CODE_V1_PRIMEIRO_SITE_ALTERACAO_REAL_2026-05-29.md](FABER_CODE_V1_PRIMEIRO_SITE_ALTERACAO_REAL_2026-05-29.md)
 
-### Preview, workspace e UX
+### Preview, workspace, and UX
 
 - [FABER_CODE_PREVIEW_VISUAL_AUTH_2026-05-25.md](FABER_CODE_PREVIEW_VISUAL_AUTH_2026-05-25.md)
 - [FABER_CODE_WORKSPACE_IDE_UX_2026-05-25.md](FABER_CODE_WORKSPACE_IDE_UX_2026-05-25.md)
-- [FABER_CODE_CHANGES_2026-06-17.md](FABER_CODE_CHANGES_2026-06-17.md): rodada consolidada de UX, Git, terminal e pré-visualização de imagens.
-- [FABER_CODE_GIT_ARQUIVOS_ROLLBACK_2026-06-19.md](FABER_CODE_GIT_ARQUIVOS_ROLLBACK_2026-06-19.md): ajustes do painel Arquivos, historico completo de commits e rollback seguro por commit.
+- [FABER_CODE_CHANGES_2026-06-17.md](FABER_CODE_CHANGES_2026-06-17.md)
+- [FABER_CODE_GIT_ARQUIVOS_ROLLBACK_2026-06-19.md](FABER_CODE_GIT_ARQUIVOS_ROLLBACK_2026-06-19.md)
 
-### Arquitetura modular
+### Modular architecture
 
 - [FABER_CODE_ARQUITETURA_REFATORACAO_SEGURA_2026-06-01.md](FABER_CODE_ARQUITETURA_REFATORACAO_SEGURA_2026-06-01.md)
 - [FABER_CODE_MAPA_MODULAR_POS_SMOKE_2026-05-25.md](FABER_CODE_MAPA_MODULAR_POS_SMOKE_2026-05-25.md)
 - [FABER_CODE_MCP_CAPABILITY_LAYER_2026-05-25.md](FABER_CODE_MCP_CAPABILITY_LAYER_2026-05-25.md)
 - [FABER_CODE_ORQUESTRADOR_CONTEXT_FRAME_2026-05-26.md](FABER_CODE_ORQUESTRADOR_CONTEXT_FRAME_2026-05-26.md)
 
-### Seguranca e pentest
+### Security and pentest
 
 - [FABER_CODE_PENTEST_PROMPT_INJECTION_SEGURANCA_2026-06-01.md](FABER_CODE_PENTEST_PROMPT_INJECTION_SEGURANCA_2026-06-01.md)
 - [PUBLIC_RELEASE_CHECKLIST.md](PUBLIC_RELEASE_CHECKLIST.md)
-- [../SECURITY.md](../SECURITY.md)
+- [Security Policy](../SECURITY.md)
 
-### MCP, memoria, RAG e MemPalace
+### MCP, memory, RAG, and MemPalace
 
 - [FABER_CODE_MCP_CAPABILITY_LAYER_2026-05-25.md](FABER_CODE_MCP_CAPABILITY_LAYER_2026-05-25.md)
 - [FABER_CODE_MCP_CONTRATOS_BLUEPRINTS_2026-05-27.md](FABER_CODE_MCP_CONTRATOS_BLUEPRINTS_2026-05-27.md)
@@ -102,9 +126,9 @@ Para GitHub, a ordem recomendada e:
 - [FABER_CODE_MCP_EXTERNO_AVANCOS_COMPLETOS_2026-05-27.md](FABER_CODE_MCP_EXTERNO_AVANCOS_COMPLETOS_2026-05-27.md)
 - [FABER_CODE_MEMORIA_RAG_MEMPALACE_AVANCOS_2026-05-28.md](FABER_CODE_MEMORIA_RAG_MEMPALACE_AVANCOS_2026-05-28.md)
 
-## Historico consolidado
+## Consolidated history
 
-- [FABER_CODE_DOCS_INDEX_2026-05-25.md](FABER_CODE_DOCS_INDEX_2026-05-25.md): indice historico detalhado do ciclo 2026-05-25 a 2026-05-30.
+- [FABER_CODE_DOCS_INDEX_2026-05-25.md](FABER_CODE_DOCS_INDEX_2026-05-25.md): detailed index for the 2026-05-25 through 2026-05-30 cycle.
 - [FABER_CODE_AVANCOS_COMPLETOS_2026-05-25.md](FABER_CODE_AVANCOS_COMPLETOS_2026-05-25.md)
 - [FABER_CODE_AVANCOS_COMPLETOS_2026-05-27.md](FABER_CODE_AVANCOS_COMPLETOS_2026-05-27.md)
 - [FABER_CODE_AVANCOS_COMPLETOS_2026-05-28.md](FABER_CODE_AVANCOS_COMPLETOS_2026-05-28.md)
@@ -114,7 +138,7 @@ Para GitHub, a ordem recomendada e:
 - [FABER_CODE_ATUALIZACOES_PROJETO_2026-05-25.md](FABER_CODE_ATUALIZACOES_PROJETO_2026-05-25.md)
 - [FABER_CODE_AVANCOS_PROJETO_2026-05-24.md](FABER_CODE_AVANCOS_PROJETO_2026-05-24.md)
 
-## Handoffs antigos e documentacao de base
+## Historical handoffs and foundation documents
 
 - [FABER_CODE_HANDOFF_2026-05-19.md](FABER_CODE_HANDOFF_2026-05-19.md)
 - [FABER_CODE_HANDOFF_2026-05-22_CONTEXT_CLOSE.md](FABER_CODE_HANDOFF_2026-05-22_CONTEXT_CLOSE.md)
@@ -124,12 +148,13 @@ Para GitHub, a ordem recomendada e:
 - [DOCUMENTACAO_COMPLETA_UX_UI_FABER_CODE_2026-05-04.md](DOCUMENTACAO_COMPLETA_UX_UI_FABER_CODE_2026-05-04.md)
 - [DOCUMENTACAO_COMPLETA_DECISOES_RECENTES_E_SISTEMAS_EXTERNOS_2026-05-04.md](DOCUMENTACAO_COMPLETA_DECISOES_RECENTES_E_SISTEMAS_EXTERNOS_2026-05-04.md)
 
-## Regra para novos documentos
+## Rules for new documents
 
-Ao criar um novo documento:
-
-1. Use nome claro e data quando for historico de rodada.
-2. Evite caminhos absolutos locais e dados pessoais.
-3. Inclua comandos de validacao quando houver mudanca tecnica.
-4. Atualize este `docs/README.md`.
-5. Atualize o indice historico se o documento registrar decisao ou marco importante.
+1. Use a clear name and include a date for historical development records.
+2. Avoid absolute local paths and personal data.
+3. Include validation commands when documenting a technical change.
+4. Update this `docs/README.md`.
+5. Update the historical index when a document records a significant decision
+   or milestone.
+6. Write material intended directly for the public README or a GitHub Release
+   in English.

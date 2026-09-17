@@ -312,7 +312,7 @@ async function assertInactive(config, expectedReason) {
     assert.strictEqual(trustBlockedForks, 0);
     assert.strictEqual(
       trustBlocked.diagnostics().activationBlockReason,
-      'RELEASE_TRUST_UNCONFIGURED'
+      'HOST_SIGNATURE_REJECTED'
     );
     assert.strictEqual(
       (await trustBlocked.dispose()).zeroOrphanShutdownConfirmed,

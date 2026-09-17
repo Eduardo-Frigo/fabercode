@@ -4,6 +4,18 @@ const path = require('path');
 const vm = require('vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'account_gate.js'), 'utf8');
+const appSource = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'app.js'), 'utf8');
+
+assert.match(
+  appSource,
+  /createAccountGateController\(\{[\s\S]*?requirePlatformMedia:\s*true,/,
+  'production bootstrap must require platform media before unlocking the account gate'
+);
+assert.doesNotMatch(
+  appSource,
+  /createAccountGateController\(\{[\s\S]*?requirePlatformMedia:\s*false,/,
+  'the temporary platform-media bypass must not ship'
+);
 const sandbox = { window: {} };
 sandbox.window.window = sandbox.window;
 

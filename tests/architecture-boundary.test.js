@@ -3061,16 +3061,19 @@ function assertExecutionWorkspaceBoundary() {
       "'portable-isolation-helper-release-trust.v1'"
     )
       && portableIsolationHelperReleaseTrustSource.includes(
-        "PORTABLE_ISOLATION_HELPER_RELEASE_TRUST_STATE = 'unconfigured'"
+        "PORTABLE_ISOLATION_HELPER_RELEASE_TRUST_STATE = 'configured'"
       )
-      && portableIsolationHelperReleaseTrustSource.includes('Object.freeze([])')
+      && portableIsolationHelperReleaseTrustSource.includes("platform: 'darwin'")
+      && portableIsolationHelperReleaseTrustSource.includes("platform: 'linux'")
+      && portableIsolationHelperReleaseTrustSource.includes("platform: 'win32'")
+      && portableIsolationHelperReleaseTrustSource.includes("architecture: 'arm64'")
       && portableIsolationHelperReleaseTrustSource.includes(
         "'RELEASE_TRUST_UNCONFIGURED'"
       )
       && portableIsolationHelperReleaseTrustSource.includes(
         'createPortableIsolationHelperPlatformSignatureVerifier'
       ),
-    'production release trust must remain explicitly unconfigured and fail closed until a public release root is provisioned'
+    'production release trust must contain only the configured public ARM64 release roots and retain fail-closed validation'
   );
   assertDoesNotMatch(
     portableIsolationHelperBundleBuilderSource,

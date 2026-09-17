@@ -21,7 +21,6 @@ const {
   PORTABLE_ISOLATION_HELPER_RELEASE_TRUST_STATE,
   PORTABLE_ISOLATION_HELPER_RELEASE_TRUST_VERSION,
   PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS,
-  PortableIsolationHelperReleaseTrustError,
   createPortableIsolationHelperReleaseSignatureVerifier,
 } = require('../main/security/portable_isolation_helper_release_trust');
 const afterPackModule = require('../build/portable_isolation_helper_after_pack');
@@ -171,14 +170,31 @@ async function expectCode(action, code) {
       PORTABLE_ISOLATION_HELPER_RELEASE_TRUST_VERSION,
       'portable-isolation-helper-release-trust.v1'
     );
-    assert.strictEqual(PORTABLE_ISOLATION_HELPER_RELEASE_TRUST_STATE, 'unconfigured');
+    assert.strictEqual(PORTABLE_ISOLATION_HELPER_RELEASE_TRUST_STATE, 'configured');
     assert.ok(Object.isFrozen(PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS));
-    assert.deepStrictEqual(PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS, []);
-    assert.throws(
-      () => createPortableIsolationHelperReleaseSignatureVerifier(),
-      (error) => error instanceof PortableIsolationHelperReleaseTrustError
-        && error.code === 'RELEASE_TRUST_UNCONFIGURED'
+    assert.strictEqual(PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS.length, 3);
+    assert.deepStrictEqual(
+      PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS.map((key) =>
+        `${key.platform}/${key.architecture}`
+      ).sort(),
+      ['darwin/arm64', 'linux/arm64', 'win32/arm64']
     );
+    const releaseKeyIds = new Set();
+    for (const trustedKey of PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS) {
+      assert.ok(Object.isFrozen(trustedKey));
+      assert.strictEqual(
+        trustedKey.version,
+        'portable-isolation-helper-distribution-trusted-key.v1'
+      );
+      assert.strictEqual(trustedKey.algorithm, 'ed25519');
+      assert.match(trustedKey.keyId, /^faber-portable-helper-release-v0\.2\.0-/);
+      assert.match(trustedKey.publicKeySpkiDerBase64, /^[A-Za-z0-9+/]+={0,2}$/);
+      assert.match(trustedKey.publicKeyDigest, /^sha256:[a-f0-9]{64}$/);
+      releaseKeyIds.add(trustedKey.keyId);
+    }
+    assert.strictEqual(releaseKeyIds.size, 3);
+    const releaseVerifier = createPortableIsolationHelperReleaseSignatureVerifier();
+    assert.ok(Object.isFrozen(releaseVerifier));
 
     const keys = keyMaterial();
     const hook = createPortableIsolationHelperAfterPackHook({

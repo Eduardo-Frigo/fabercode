@@ -414,7 +414,7 @@ const aiSettingsController = window.FaberAiSettings
 const accountGateController = window.FaberAccountGate
   ? window.FaberAccountGate.createAccountGateController({
       api: window.localcodeApi,
-      requirePlatformMedia: false,
+      requirePlatformMedia: true,
       notify: (message) => appendMessage('assistant', message, { persistToConversation: false }),
       getInterfaceLanguage: () => state.interfaceLanguage,
       onLanguagePreferenceSelected: (locale) => {

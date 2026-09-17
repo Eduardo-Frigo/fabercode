@@ -17,6 +17,7 @@ function registerUpdateHandlers(dependencies = {}) {
     dialog,
     appendAuditEvent = () => {},
     fetchFn = typeof fetch === 'function' ? fetch : null,
+    platform = process.platform,
   } = dependencies;
 
   let validatedUpdate = null;
@@ -224,6 +225,20 @@ function registerUpdateHandlers(dependencies = {}) {
   }
 
   registerIpcHandler('app:update:check', async () => {
+    if (platform !== 'darwin') {
+      validatedUpdate = null;
+      appendAuditEvent('app.update_check_unsupported', {
+        platform,
+      });
+      return {
+        ok: true,
+        available: false,
+        currentVersion: getCurrentVersion(),
+        latestVersion: 'N/A',
+        downloadUrl: '',
+        reasonCode: 'UPDATE_PLATFORM_UNSUPPORTED',
+      };
+    }
     try {
       return await fetchLatestUpdateMetadata();
     } catch (error) {
@@ -233,6 +248,14 @@ function registerUpdateHandlers(dependencies = {}) {
   });
 
   registerIpcHandler('app:update:install', async (_, payload = {}) => {
+    if (platform !== 'darwin') {
+      appendAuditEvent('app.update_install_unsupported', { platform });
+      return {
+        ok: false,
+        reasonCode: 'UPDATE_PLATFORM_UNSUPPORTED',
+        message: 'Atualizações automáticas estão disponíveis apenas no macOS.',
+      };
+    }
     try {
       const resolved = await getValidatedUpdateForInstall(payload);
       if (!resolved.ok) return resolved;

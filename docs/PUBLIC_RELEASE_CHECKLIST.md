@@ -1,42 +1,74 @@
 # Public Release Checklist
 
-Use este checklist antes de publicar ou atualizar o repositorio publico do Faber Code no GitHub.
+Use this checklist before publishing or updating the public Faber Code
+repository on GitHub.
 
-## Posicionamento publico
+## Public positioning
 
-- [ ] O README explica que Faber Code e um IDE local-first com IA.
-- [ ] O README deixa claro que a ferramenta permite codar manualmente, nao apenas pedir geracao por IA.
-- [ ] O README descreve as ferramentas principais: editor, terminal, executar/preview, Git, GitHub, memoria e validacao.
-- [ ] O README descreve o fluxo Git/GitHub na ordem correta: revisar novos/modificados, selecionar, staged, commit, envio ao GitHub e deploy/publicacao.
-- [ ] O README explica que o projeto e gratuito e licenciado sob Apache-2.0.
-- [ ] O README explica que provedores de IA podem ser configurados por API nativa, API compativel ou conector customizado.
-- [ ] O README explica que a IA local RWKV ainda nao esta configurada no Faber Code.
-- [ ] O README explica que o RWKV sera um projeto separado, aberto e desenhado para conectar perfeitamente ao Faber Code.
-- [ ] O README informa que provedores externos de IA sao opcionais e podem ter custos proprios.
-- [ ] A documentacao evita prometer instalador final ou release assinada enquanto isso nao existir.
+- [ ] The README explains that Faber Code is a local-first, AI-assisted IDE.
+- [ ] The README makes clear that users can code manually and are not limited
+      to requesting AI-generated work.
+- [ ] The README describes the main tools: editor, terminal, execution/preview,
+      Git, GitHub, memory, and validation.
+- [ ] The README describes the Git/GitHub flow in the correct order: review new
+      and modified files, select changes, stage, commit, send to GitHub, and
+      then publish or deploy.
+- [ ] The README explains that the project is free and licensed under
+      Apache-2.0.
+- [ ] The README explains that AI providers may be configured through a native
+      API, a compatible API, or a custom connector.
+- [ ] The README explains that a local RWKV model is not currently bundled or
+      configured in Faber Code.
+- [ ] The README explains that the planned RWKV integration is a separate,
+      open project designed to connect cleanly to Faber Code.
+- [ ] The documentation states that external AI providers are optional and may
+      have their own usage costs.
+- [ ] The documentation does not promise a final installer or signed release
+      until those artifacts exist.
+- [ ] GitHub release notes, the public README, and user-facing release material
+      are written in English.
 
-## Seguranca de publicacao
+## Release metadata
 
-- [ ] `.env` e variantes locais nao estao trackeados.
-- [ ] `.env.example` contem apenas placeholders e nao seleciona RWKV como provedor padrao.
-- [ ] `private_context/` nao esta trackeado.
-- [ ] `.faber/`, memorias locais, bancos, ledgers, caches, screenshots e artifacts gerados nao estao trackeados.
-- [ ] Modelos locais, pesos de IA, arquivos `.gguf`, `.safetensors`, `.onnx`, `.pt`, `.pth`, `.bin` e similares nao estao trackeados.
-- [ ] Projetos de usuarios, workspaces gerados e codigo de clientes nao estao trackeados.
-- [ ] A documentacao nao contem caminhos absolutos locais, contas pessoais, tokens ou nomes de clientes.
-- [ ] `cortex_bootstrap/knowledge_sources/` contem apenas placeholders ou documentacao segura.
+- [ ] The release title, package version, tag, and update metadata use the same
+      approved semantic version.
+- [ ] The official landing-page URL is final, uses HTTPS, and returns a successful
+      response.
+- [ ] No `TBD`, placeholder URL, temporary link, or draft-only instruction
+      remains in the published release body.
+- [ ] The concise GitHub release notes match the final technical release record.
+- [ ] Artifact signing and notarization status is stated accurately and does not
+      imply platform-vendor trust that the artifacts do not have.
 
-## Licenca, marca e terceiros
+## Publication security
 
-- [ ] `LICENSE` usa Apache-2.0.
-- [ ] `NOTICE` inclui copyright, atribuicao e orientacao de marca.
-- [ ] O README explica que a licenca nao concede direitos de marca.
-- [ ] Integracoes externas sao descritas como opcionais, salvo codigo realmente vendorizado.
-- [ ] Nomes de terceiros, licencas e links nao implicam patrocinio, endosso ou afiliacao.
+- [ ] `.env` and local variants are not tracked.
+- [ ] `.env.example` contains placeholders only and does not select RWKV as the
+      default provider.
+- [ ] `private_context/` is not tracked.
+- [ ] `.faber/`, local memories, databases, ledgers, caches, screenshots, and
+      generated artifacts are not tracked.
+- [ ] Local models, AI weights, `.gguf`, `.safetensors`, `.onnx`, `.pt`, `.pth`,
+      `.bin`, and similar files are not tracked.
+- [ ] User projects, generated workspaces, and client code are not tracked.
+- [ ] Documentation contains no absolute local paths, personal accounts,
+      tokens, or client names.
+- [ ] `cortex_bootstrap/knowledge_sources/` contains only safe placeholders or
+      public documentation.
 
-## Auditoria e testes
+## License, brand, and third parties
 
-Rodar antes de publicar:
+- [ ] `LICENSE` uses Apache-2.0.
+- [ ] `NOTICE` includes copyright, attribution, and trademark guidance.
+- [ ] The README explains that the license does not grant trademark rights.
+- [ ] External integrations are described as optional unless their code is
+      actually vendored.
+- [ ] Third-party names, licenses, and links do not imply sponsorship,
+      endorsement, or affiliation.
+
+## Audit and tests
+
+Run before publication:
 
 ```bash
 npm run audit:release
@@ -45,7 +77,7 @@ npm audit --omit=dev --audit-level=moderate
 git diff --check
 ```
 
-Rodar conforme a area alterada:
+Run as required by the changed area:
 
 ```bash
 npm run test:ai-trust-boundary
@@ -57,7 +89,8 @@ npm run smoke:full-tool-loop
 npm run smoke:briefing-loop-matrix
 ```
 
-Rodar quando a alteracao tocar IA, contexto externo, memoria, RAG, anexos, MCP ou capability privilegiada:
+Run when a change affects AI, external context, memory, RAG, attachments, MCP,
+or another privileged capability:
 
 ```bash
 npm run test:ai-trust-boundary
@@ -65,25 +98,40 @@ npm run test:render-pass-service
 npm run test:real-openai-prompt-injection
 ```
 
-Observacao: `test:real-openai-prompt-injection` e opt-in, usa Electron para ler a chave protegida em `safeStorage`, depende de rede e pode consumir creditos de API. Ele nao deve entrar na suite padrao de arquitetura.
+`test:real-openai-prompt-injection` is opt-in. It uses Electron to read a
+protected key from `safeStorage`, requires network access, and may consume API
+credits. It must not be part of the default architecture suite.
 
-## Pentest e hardening
+## Pentest and hardening
 
-- [ ] Conteudo externo enviado para IA passa por `wrapUntrustedPromptSection` ou barreira equivalente.
-- [ ] Capabilities privilegiadas recebem `aiTrustBoundary` quando usam fonte nao confiavel.
-- [ ] Escritas de IA em `.env`, `.ssh`, `.git`, `private_context`, chaves privadas e arquivos de credenciais seguem bloqueadas.
-- [ ] URL externa usa allowlist, `https` e bloqueia credenciais embutidas.
-- [ ] Preview abre apenas `file:` local ou `localhost`/`127.0.0.1`/`::1`.
-- [ ] Processos locais sao chamados com `shell: false` quando usam argumentos estruturados.
-- [ ] MCP externo protege secrets persistidos e bloqueia escape fisico por symlink.
-- [ ] Fluxos Git/GitHub validam paths, branch, remote, owner e destino de clone.
+- [ ] External content sent to AI passes through `wrapUntrustedPromptSection`
+      or an equivalent boundary.
+- [ ] Privileged capabilities receive `aiTrustBoundary` when they consume an
+      untrusted source.
+- [ ] AI writes to `.env`, `.ssh`, `.git`, `private_context`, private keys, and
+      credential files remain blocked.
+- [ ] External URLs use an allowlist and HTTPS and reject embedded credentials.
+- [ ] Preview opens only a local `file:` URL or
+      `localhost`/`127.0.0.1`/`::1`.
+- [ ] Local processes are invoked with `shell: false` when using structured
+      arguments.
+- [ ] External MCP integrations protect persisted secrets and block physical
+      symlink escape.
+- [ ] Git/GitHub flows validate paths, branches, remotes, owners, and clone
+      destinations.
 
 ## GitHub
 
-- [ ] Revisar `git status --short --ignored`.
-- [ ] Revisar `git diff --check`.
-- [ ] Criar commit apenas depois de auditoria e testes.
-- [ ] Fazer push a partir do repositorio local.
-- [ ] Evitar edicoes diretas no GitHub Web, exceto correcao emergencial de documentacao.
+- [ ] Review `git status --short --ignored`.
+- [ ] Review `git diff --check`.
+- [ ] Create a commit only after audits and tests pass and the project owner
+      explicitly approves it.
+- [ ] Push only with explicit approval from the project owner.
+- [ ] Avoid direct GitHub Web edits except for emergency documentation fixes.
+- [ ] Verify the release title, tag, target branch, artifact signing status, checksums,
+      landing-page link, and update instructions before publishing.
 
-O repositorio publico deve conter codigo de produto, exemplos seguros e documentacao generica. Ele nao deve conter contexto de cliente, escopos privados de deploy, historico privado de usuario, caminhos absolutos da maquina local, artifacts gerados, testes temporarios focados, testes pulados ou marcadores de trabalho obsoleto.
+The public repository should contain product code, safe examples, and generic
+documentation. It must not contain client context, private deployment scopes,
+private user history, absolute local-machine paths, generated artifacts,
+temporary focused tests, skipped tests, or obsolete work markers.

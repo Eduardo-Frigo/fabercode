@@ -37,6 +37,7 @@ function response({ ok = true, status = 200, json = null, text = '', buffer = nu
   let exitCode = null;
 
   registerUpdateHandlers({
+    platform: 'darwin',
     app: {
       getAppPath: () => path.resolve(__dirname, '..'),
       getPath: (name) => (name === 'temp' ? tempDir : tempDir),
@@ -106,6 +107,64 @@ function response({ ok = true, status = 200, json = null, text = '', buffer = nu
   assert.strictEqual(exitCode, 0);
   assert.ok(audit.some((entry) => entry.type === 'app.update_download_start'));
   assert.strictEqual(fetchCalls.includes('https://example.com/Faber-Code-0.1.3-arm64.dmg'), false);
+
+  for (const unsupportedPlatform of ['win32', 'linux']) {
+    const unsupportedHandlers = {};
+    const unsupportedFetchCalls = [];
+    let unsupportedGetPathCalls = 0;
+    let unsupportedRelaunches = 0;
+    let unsupportedExits = 0;
+
+    registerUpdateHandlers({
+      platform: unsupportedPlatform,
+      app: {
+        getAppPath: () => path.resolve(__dirname, '..'),
+        getPath: () => {
+          unsupportedGetPathCalls += 1;
+          return tempDir;
+        },
+        getVersion: () => '0.1.2',
+        relaunch: () => {
+          unsupportedRelaunches += 1;
+        },
+        exit: () => {
+          unsupportedExits += 1;
+        },
+      },
+      dialog: {},
+      fetchFn: async (url) => {
+        unsupportedFetchCalls.push(String(url));
+        return response({ ok: false, status: 500 });
+      },
+      registerIpcHandler: (channel, handler) => {
+        unsupportedHandlers[channel] = handler;
+      },
+    });
+
+    const unsupportedCheck = await unsupportedHandlers['app:update:check']();
+    assert.deepStrictEqual(unsupportedCheck, {
+      ok: true,
+      available: false,
+      currentVersion: '0.1.2',
+      latestVersion: 'N/A',
+      downloadUrl: '',
+      reasonCode: 'UPDATE_PLATFORM_UNSUPPORTED',
+    });
+
+    const unsupportedInstall = await unsupportedHandlers['app:update:install'](
+      {},
+      { downloadUrl, installToken: 'must-not-be-used' }
+    );
+    assert.deepStrictEqual(unsupportedInstall, {
+      ok: false,
+      reasonCode: 'UPDATE_PLATFORM_UNSUPPORTED',
+      message: 'Atualizações automáticas estão disponíveis apenas no macOS.',
+    });
+    assert.strictEqual(unsupportedFetchCalls.length, 0);
+    assert.strictEqual(unsupportedGetPathCalls, 0);
+    assert.strictEqual(unsupportedRelaunches, 0);
+    assert.strictEqual(unsupportedExits, 0);
+  }
 
   fs.rmSync(tempDir, { recursive: true, force: true });
   console.log('update-handlers.test.js: ok');
