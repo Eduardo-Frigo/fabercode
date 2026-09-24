@@ -1,0 +1,48 @@
+name: Windows release candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Prepare private helper attestation key
+        shell: pwsh
+        env:
+          FABER_RELEASE_KEY: ${{ secrets.FABER_PORTABLE_ISOLATION_HELPER_RELEASE_PRIVATE_KEY_PKCS8_DER_BASE64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:FABER_RELEASE_KEY)) { throw 'Release key secret is missing.' }
+          $keyFile = Join-Path $env:RUNNER_TEMP 'faber-release-key.pkcs8.b64'
+          Set-Content -Path $keyFile -Value $env:FABER_RELEASE_KEY -Encoding utf8 -NoNewline
+          "FABER_PORTABLE_ISOLATION_HELPER_RELEASE_PRIVATE_KEY_FILE=$keyFile" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build Windows x64 and ARM64 installers
+        run: npm run dist:win
+      - name: Generate SHA-256 manifest
+        shell: pwsh
+        run: |
+          Get-ChildItem release -Filter '*.exe' | Sort-Object Name | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant(), $_.Name
+          } | Set-Content release/SHA256SUMS.txt -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        with:
+          name: faber-code-windows-${{ github.sha }}
+          path: |
+            release/*.exe
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30

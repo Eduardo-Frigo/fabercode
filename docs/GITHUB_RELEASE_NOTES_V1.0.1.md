@@ -21,6 +21,8 @@ Projects and locally saved settings remain in place. Pexels photos and videos st
 
 The landing page reads the latest published GitHub release, so it will expose v1.0.1 only after all six installers and `SHA256SUMS.txt` are published. The macOS installers must pass the Developer ID and notarization checks before publication. Windows and Linux installers require validation on their respective systems.
 
+**Code signing policy:** [read the current signature status and release approval process](../CODE_SIGNING_POLICY.md). Windows installers remain unsigned unless the SignPath Foundation application is accepted and this release is rebuilt and signed through the approved workflow.
+
 | System | x64 | ARM64 |
 | --- | --- | --- |
 | macOS | `Faber.Code-1.0.1-x64.dmg` | `Faber.Code-1.0.1-arm64.dmg` |

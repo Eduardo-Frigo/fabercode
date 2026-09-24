@@ -113,6 +113,13 @@ integration is a separate open project.
 
 Read [SECURITY.md](SECURITY.md) before publishing a fork or release.
 
+## Code signing policy
+
+Read the [Code signing policy](CODE_SIGNING_POLICY.md) for current signature
+status, release approval roles, the Windows build process, and privacy details.
+Windows installers are currently unsigned while the project applies to
+SignPath Foundation.
+
 ## Installation and development
 
 ### Desktop packages

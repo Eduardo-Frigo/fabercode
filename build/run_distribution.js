@@ -31,7 +31,8 @@ if (!keyFile || !path.isAbsolute(keyFile)) {
   throw new Error('Informe FABER_PORTABLE_ISOLATION_HELPER_RELEASE_PRIVATE_KEY_FILE.');
 }
 const keyStat = fs.lstatSync(keyFile);
-if (!keyStat.isFile() || keyStat.isSymbolicLink() || (keyStat.mode & 0o077) !== 0) {
+if (!keyStat.isFile() || keyStat.isSymbolicLink()
+  || (process.platform !== 'win32' && (keyStat.mode & 0o077) !== 0)) {
   throw new Error('A chave de distribuição precisa ser um arquivo privado (modo 0600).');
 }
 const encodedKey = fs.readFileSync(keyFile, 'utf8').trim();
