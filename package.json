@@ -1,7 +1,7 @@
 {
   "name": "localcode-studio",
   "productName": "Faber Code",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Local-first Electron workspace for AI-assisted project creation, editing, preview and delivery.",
   "main": "main.js",
   "scripts": {

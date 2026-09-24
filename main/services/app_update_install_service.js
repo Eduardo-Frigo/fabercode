@@ -121,7 +121,7 @@ rm -f "$0"
 function prepareWindowsUpdate(options) {
   const { app, downloadedFile, spawnProcess = spawn } = options;
   return {
-    start: () => startDetached(downloadedFile, ['/S'], app, spawnProcess),
+    start: () => startDetached(downloadedFile, ['--updated', '/S', '--force-run'], app, spawnProcess),
     cancel: () => {},
   };
 }

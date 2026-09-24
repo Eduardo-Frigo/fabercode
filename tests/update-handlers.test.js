@@ -3,18 +3,20 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { EventEmitter } = require('events');
 const { registerUpdateHandlers } = require('../main/ipc/update_handlers');
+const { prepareUpdateInstall } = require('../main/services/app_update_install_service');
 
-const releaseTag = 'v1.0.4';
+const releaseTag = 'v1.0.5';
 const installer = Buffer.from('verified installer bytes');
 const installerDigest = crypto.createHash('sha256').update(installer).digest('hex');
 const assetNames = {
-  'darwin:arm64': 'Faber.Code-1.0.4-arm64.dmg',
-  'darwin:x64': 'Faber.Code-1.0.4-x64.dmg',
-  'win32:arm64': 'Faber.Code-Setup-1.0.4-arm64.exe',
-  'win32:x64': 'Faber.Code-Setup-1.0.4-x64.exe',
-  'linux:arm64': 'Faber-Code-1.0.4-arm64.AppImage',
-  'linux:x64': 'Faber-Code-1.0.4-x86_64.AppImage',
+  'darwin:arm64': 'Faber.Code-1.0.5-arm64.dmg',
+  'darwin:x64': 'Faber.Code-1.0.5-x64.dmg',
+  'win32:arm64': 'Faber.Code-Setup-1.0.5-arm64.exe',
+  'win32:x64': 'Faber.Code-Setup-1.0.5-x64.exe',
+  'linux:arm64': 'Faber-Code-1.0.5-arm64.AppImage',
+  'linux:x64': 'Faber-Code-1.0.5-x86_64.AppImage',
 };
 
 function makeRelease(overrides = {}) {
@@ -79,7 +81,7 @@ function harness({ platform, architecture, currentVersion = '1.0.3', release = m
     } finally { test.cleanup(); }
   }
 
-  const same = harness({ platform: 'darwin', architecture: 'arm64', currentVersion: '1.0.4' });
+  const same = harness({ platform: 'darwin', architecture: 'arm64', currentVersion: '1.0.5' });
   try { assert.strictEqual((await same.handlers['app:update:check']()).available, false); }
   finally { same.cleanup(); }
   const missing = harness({ platform: 'linux', architecture: 'x64', release: makeRelease({ assets: [] }) });
@@ -101,5 +103,24 @@ function harness({ platform, architecture, currentVersion = '1.0.3', release = m
   const missingDigest = harness({ platform: 'darwin', architecture: 'arm64', release: missingDigestRelease });
   try { assert.strictEqual((await missingDigest.handlers['app:update:check']()).ok, false); }
   finally { missingDigest.cleanup(); }
+
+  let launched = null;
+  let exited = false;
+  const windows = await prepareUpdateInstall({
+    platform: 'win32', downloadedFile: 'Faber.Code-Setup-1.0.5-x64.exe',
+    app: { exit: () => { exited = true; } },
+    spawnProcess: (command, args) => {
+      launched = { command, args };
+      const child = new EventEmitter();
+      child.unref = () => {};
+      process.nextTick(() => child.emit('spawn'));
+      return child;
+    },
+  });
+  await windows.start();
+  assert.deepStrictEqual(launched, {
+    command: 'Faber.Code-Setup-1.0.5-x64.exe', args: ['--updated', '/S', '--force-run'],
+  });
+  assert.strictEqual(exited, true);
   console.log('update-handlers.test.js: ok');
 })().catch((error) => { console.error(error); process.exit(1); });
