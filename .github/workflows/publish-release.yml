@@ -1,0 +1,150 @@
+name: Publish Faber Code release
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mac:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    environment: release-signing
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+      - run: npm ci
+      - name: Prepare private helper attestation key
+        shell: bash
+        env:
+          FABER_RELEASE_KEY: ${{ secrets.FABER_PORTABLE_ISOLATION_HELPER_RELEASE_PRIVATE_KEY_PKCS8_DER_BASE64 }}
+        run: |
+          test -n "$FABER_RELEASE_KEY"
+          key_file="$RUNNER_TEMP/faber-release-key.pkcs8.b64"
+          printf '%s' "$FABER_RELEASE_KEY" > "$key_file"
+          chmod 600 "$key_file"
+          printf 'FABER_PORTABLE_ISOLATION_HELPER_RELEASE_PRIVATE_KEY_FILE=%s\n' "$key_file" >> "$GITHUB_ENV"
+      - run: npm run dist:mac:unsigned
+      - uses: actions/upload-artifact@v4
+        with:
+          name: faber-v104-mac
+          path: release/Faber Code-1.0.4-*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+  linux:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: release-signing
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+      - run: npm ci
+      - name: Prepare private helper attestation key
+        shell: bash
+        env:
+          FABER_RELEASE_KEY: ${{ secrets.FABER_PORTABLE_ISOLATION_HELPER_RELEASE_PRIVATE_KEY_PKCS8_DER_BASE64 }}
+        run: |
+          test -n "$FABER_RELEASE_KEY"
+          key_file="$RUNNER_TEMP/faber-release-key.pkcs8.b64"
+          printf '%s' "$FABER_RELEASE_KEY" > "$key_file"
+          chmod 600 "$key_file"
+          printf 'FABER_PORTABLE_ISOLATION_HELPER_RELEASE_PRIVATE_KEY_FILE=%s\n' "$key_file" >> "$GITHUB_ENV"
+      - run: npm run dist:linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: faber-v104-linux
+          path: release/Faber-Code-1.0.4-*.AppImage
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    environment: release-signing
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+      - run: npm ci
+      - name: Prepare private helper attestation key
+        shell: pwsh
+        env:
+          FABER_RELEASE_KEY: ${{ secrets.FABER_PORTABLE_ISOLATION_HELPER_RELEASE_PRIVATE_KEY_PKCS8_DER_BASE64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:FABER_RELEASE_KEY)) { throw 'Release key secret is missing.' }
+          $keyFile = Join-Path $env:RUNNER_TEMP 'faber-release-key.pkcs8.b64'
+          Set-Content -Path $keyFile -Value $env:FABER_RELEASE_KEY -Encoding utf8 -NoNewline
+          "FABER_PORTABLE_ISOLATION_HELPER_RELEASE_PRIVATE_KEY_FILE=$keyFile" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - run: npm run dist:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: faber-v104-windows
+          path: release/Faber Code-Setup-1.0.4-*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: [mac, linux, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: faber-v104-*
+          path: artifacts
+          merge-multiple: true
+      - name: Verify release assets and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-upload
+          mv 'artifacts/Faber Code-1.0.4-arm64.dmg' 'release-upload/Faber.Code-1.0.4-arm64.dmg'
+          mv 'artifacts/Faber Code-1.0.4-x64.dmg' 'release-upload/Faber.Code-1.0.4-x64.dmg'
+          mv 'artifacts/Faber Code-Setup-1.0.4-arm64.exe' 'release-upload/Faber.Code-Setup-1.0.4-arm64.exe'
+          mv 'artifacts/Faber Code-Setup-1.0.4-x64.exe' 'release-upload/Faber.Code-Setup-1.0.4-x64.exe'
+          mv 'artifacts/Faber-Code-1.0.4-arm64.AppImage' release-upload/
+          mv 'artifacts/Faber-Code-1.0.4-x86_64.AppImage' release-upload/
+          test "$(find release-upload -maxdepth 1 -type f | wc -l)" -eq 6
+          (cd release-upload && sha256sum Faber.Code-1.0.4-*.dmg Faber.Code-Setup-1.0.4-*.exe Faber-Code-1.0.4-*.AppImage > SHA256SUMS.txt)
+          (cd release-upload && sha256sum --check SHA256SUMS.txt)
+      - name: Upload and publish v1.0.4
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v1.0.4 >/dev/null 2>&1; then
+            gh release upload v1.0.4 release-upload/* --clobber
+            gh release edit v1.0.4 --draft=false --latest
+          else
+            gh release create v1.0.4 release-upload/* \
+              --target "$GITHUB_SHA" \
+              --title 'Faber Code v1.0.4 — in-app updates' \
+              --notes-file docs/GITHUB_RELEASE_NOTES_V1.0.4.md \
+              --latest
+          fi
