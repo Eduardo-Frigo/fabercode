@@ -40,6 +40,6 @@ The application and API changes are part of the same v1.0.0 update for every des
 | --- | --- | --- |
 | macOS | `Faber Code-1.0.0-x64.dmg` | `Faber Code-1.0.0-arm64.dmg` |
 | Windows | `Faber Code-Setup-1.0.0-x64.exe` | `Faber Code-Setup-1.0.0-arm64.exe` |
-| Linux | `Faber-Code-1.0.0-x64.AppImage` | `Faber-Code-1.0.0-arm64.AppImage` |
+| Linux | `Faber-Code-1.0.0-x86_64.AppImage` | `Faber-Code-1.0.0-arm64.AppImage` |
 
 The installers are not signed or notarized by the operating-system vendors, so the OS may show a trust warning. Verify the downloaded file against `SHA256SUMS.txt`. Manual installation is required for vendor-unsigned packages; the macOS automatic installer requires a vendor-signed package, and Windows/Linux do not use the DMG update path.
