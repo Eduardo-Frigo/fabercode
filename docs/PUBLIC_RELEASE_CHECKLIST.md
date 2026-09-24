@@ -32,6 +32,8 @@ repository on GitHub.
 
 - [ ] The release title, package version, tag, and update metadata use the same
       approved semantic version.
+- [ ] The release tag points to the exact commit on `main` used to build every
+      installer; no release is tagged from an older branch or commit.
 - [ ] The official landing-page URL is final, uses HTTPS, and returns a successful
       response.
 - [ ] No `TBD`, placeholder URL, temporary link, or draft-only instruction
@@ -39,6 +41,12 @@ repository on GitHub.
 - [ ] The concise GitHub release notes match the final technical release record.
 - [ ] Artifact signing and notarization status is stated accurately and does not
       imply platform-vendor trust that the artifacts do not have.
+- [ ] Every public macOS installer contains a Developer ID Application-signed
+      app with a stapled notarization ticket and passes Gatekeeper assessment.
+- [ ] Each macOS DMG has been downloaded and installed on a Mac without
+      removing quarantine or bypassing Gatekeeper.
+- [ ] Windows installers are checked for an Authenticode signature. If unsigned,
+      the release notes state that Windows may show a publisher warning.
 
 ## Publication security
 

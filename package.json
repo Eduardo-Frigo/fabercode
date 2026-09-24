@@ -1,7 +1,7 @@
 {
   "name": "localcode-studio",
   "productName": "Faber Code",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Local-first Electron workspace for AI-assisted project creation, editing, preview and delivery.",
   "main": "main.js",
   "scripts": {
@@ -137,6 +137,7 @@
     "test:portable-isolation-helper-private-transport": "node --unhandled-rejections=strict tests/portable-isolation-helper-launcher-contract.test.js && node --unhandled-rejections=strict tests/portable-isolation-helper-private-transport.test.js",
     "test:portable-isolation-helper-distribution": "node --unhandled-rejections=strict tests/portable-isolation-helper-distribution-verifier.test.js",
     "test:portable-isolation-helper-release": "node --unhandled-rejections=strict tests/portable-isolation-helper-release-attestation-builder.test.js && node --unhandled-rejections=strict tests/portable-isolation-helper-bundle-builder.test.js && node --unhandled-rejections=strict tests/portable-isolation-helper-after-pack.test.js",
+    "test:mac-release-gate": "node tests/mac-release-gate.test.js",
     "test:portable-isolation-helper-host": "node --unhandled-rejections=strict tests/portable-isolation-helper-utility-channel.test.js && node --unhandled-rejections=strict tests/portable-isolation-helper-host-launcher.test.js",
     "test:portable-isolation-helper-activation": "node --unhandled-rejections=strict tests/portable-isolation-helper-activation-runtime.test.js",
     "test:portable-isolation-helper-provider-adapter": "node --unhandled-rejections=strict tests/portable-isolation-helper-provider-adapter.test.js && node --unhandled-rejections=strict tests/portable-isolation-helper-provider-adapter-hardening.test.js",
@@ -242,7 +243,7 @@
     "test:architecture": "npm run test:harness-baseline && npm run test:capability-broker && npm run test:mock && npm run test:automata && npm run test:automata-contract-registry && npm run test:automata-contract-ledger && npm run test:automata-contract-ipc && npm run test:tools && npm run test:mcp-capability-gateway && npm run test:mcp-policy && npm run test:mcp-transports && npm run test:mcp-server-registry && npm run test:mcp-discovery-cache && npm run test:mcp-ipc && npm run test:mcp-external && npm run test:mcp-capability-adapter && npm run test:ai-trust-boundary && npm run test:security && npm run test:command-runner && npm run test:cortex-product-runtime-contract && npm run test:stack-registry && npm run test:project-scanner && npm run test:git-service && npm run test:github-integration && npm run test:platform-guidance && npm run test:deterministic-edit && npm run test:project-preview && npm run test:project-preview-diagnostic && npm run test:project-preview-runtime && npm run test:project-visual-viewport && npm run test:project-visual-capture && npm run test:project-visual-validation-runtime && npm run test:project-verification && npm run test:project-verified-execution && npm run test:local-diagnostics && npm run test:post-execution-quality && npm run test:ipc && npm run test:account-ipc && npm run test:preload-api-contract && npm run test:architecture-boundary && npm run test:runtime-module-contract && npm run test:ai && npm run test:platform-account && npm run test:postgres-user-store && npm run test:platform-media && npm run test:pexels-asset && npm run test:platform-backend && npm run test:runtime-settings && npm run test:runtime-status && npm run test:remote-clients && npm run test:rwkv-client && npm run test:provider-failure-service && npm run test:execution-intent && npm run test:orchestration-context-frame && npm run test:briefing-spec && npm run test:briefing-contract && npm run test:visual-briefing-semantic && npm run test:visual-product-coverage && npm run test:blueprint-icons && npm run test:project-blueprint && npm run test:product-orchestrator && npm run test:working-brief && npm run test:build-mode-router && npm run test:product-route-mode-contract && npm run test:cortex-build-mode-handlers && npm run test:product-contract-schemas && npm run test:product-trace-contract && npm run test:product-toolchain-contract && npm run test:artifact-quality && npm run test:memory-embedding && npm run test:memory-provenance && npm run test:memory-ledger && npm run test:memory-management && npm run test:knowledge-runtime && npm run test:knowledge-runtime-ipc && npm run test:cortex-memory-sync && npm run test:active-memory && npm run test:memory-adapter && npm run test:mempalace-ipc && npm run smoke:memory-private-rag && npm run test:render-runtime-state && npm run test:runtime-budget && npm run test:briefing-service && npm run test:render-pass-service && npm run test:validation-service && npm run test:repair-validation-service && npm run test:assistant-flow && npm run test:orchestration-state && npm run test:orchestration-ipc && npm run test:window-chrome-css && npm run test:project-terminal && npm run test:renderer-module-contract && npm run test:renderer-tutorial-project && npm run test:renderer-i18n && npm run test:renderer-hover-tooltips && npm run test:renderer-app-events && npm run test:renderer-app-state && npm run test:renderer-startup-preloader && npm run test:renderer-bootstrap-guard && npm run test:renderer-ui-appearance && npm run test:renderer-account-gate && npm run test:renderer-ai-settings && npm run test:renderer-chat-composer && npm run test:renderer-cortex && npm run test:renderer-inline-input-dialog && npm run test:renderer-ux-state && npm run test:renderer-job-progress && npm run test:renderer-workspace-layout && npm run test:renderer-automata-contracts && npm run test:renderer-project-tools && npm run test:renderer-project-sidebar && npm run test:renderer-project-state-modal && npm run test:renderer-terminal && npm run test:renderer-welcome-project-modal && npm run test:renderer-panel-layout && npm run test:renderer-file-editor && npm run test:renderer-file-tree",
     "audit:public": "node scripts/audit-public-safety.js",
     "audit:test-hygiene": "node scripts/audit-test-hygiene.js",
-    "audit:release": "npm run audit:public && npm run audit:test-hygiene",
+    "audit:release": "npm run audit:public && npm run audit:test-hygiene && npm run test:mac-release-gate",
     "db:platform:setup": "node scripts/setup-platform-database.js",
     "diagnose:openai": "electron scripts/diagnose-openai-api.js",
     "prepack": "npm run audit:release",
@@ -263,7 +264,7 @@
     "persona",
     "local-ai"
   ],
-  "author": "",
+  "author": "megaptera - Eduardo Frigo",
   "license": "Apache-2.0",
   "type": "commonjs",
   "engines": {
@@ -302,6 +303,9 @@
     "mac": {
       "target": "dir",
       "category": "public.app-category.developer-tools",
+      "forceCodeSigning": true,
+      "hardenedRuntime": true,
+      "notarize": true,
       "icon": "build/icon.png"
     },
     "dmg": {

@@ -107,6 +107,18 @@ const PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS = Object.freeze([
     publicKeyDigest:
       'sha256:d3b234500545d06a047c06cf31604b22e30ea2a6375c05dffe60781e2e1a8a07',
   }),
+  ...['darwin', 'win32', 'linux'].flatMap((platform) =>
+    ['x64', 'arm64'].map((architecture) => Object.freeze({
+      version: 'portable-isolation-helper-distribution-trusted-key.v1',
+      keyId: `faber-portable-helper-release-v1.0.1-${platform}-${architecture}`,
+      algorithm: 'ed25519',
+      platform,
+      architecture,
+      publicKeySpkiDerBase64:
+        'MCowBQYDK2VwAyEAjVuXwRHjEMqWI4rrQc1FKDtmkWV2Su9O3f7/++BicHk=',
+      publicKeyDigest:
+        'sha256:2e20f69b61b0d5ee7988a4ac3089fec92aee04024e6bd8a26df74b587cf7bd2d',
+    }))),
 ]);
 
 class PortableIsolationHelperReleaseTrustError extends Error {

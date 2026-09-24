@@ -39,6 +39,10 @@ GitHub, and only then publish or deploy after review.
 
 ## Essential public documents
 
+- [GITHUB_RELEASE_NOTES_V1.0.1.md](GITHUB_RELEASE_NOTES_V1.0.1.md):
+  maintenance release notes and macOS distribution requirements.
+- [GITHUB_RELEASE_NOTES_V1.0.0.md](GITHUB_RELEASE_NOTES_V1.0.0.md):
+  local access and personal Pexels API release notes.
 - [GITHUB_RELEASE_NOTES_V0.2.0.md](GITHUB_RELEASE_NOTES_V0.2.0.md): concise English
   copy for the Faber Code v0.2.0 GitHub Release.
 - [FABER_CODE_RELEASE_HARNESS_V2_2026-09-09.md](FABER_CODE_RELEASE_HARNESS_V2_2026-09-09.md):

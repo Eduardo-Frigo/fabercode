@@ -8,6 +8,10 @@ const { version } = require('../package.json');
 const {
   PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS,
 } = require('../main/security/portable_isolation_helper_release_trust');
+const {
+  assertMacReleasePrerequisites,
+  verifyMacReleaseArtifacts,
+} = require('./mac_release_gate');
 
 const targets = Object.freeze({
   mac: { platform: 'darwin', args: ['--mac', 'dmg'] },
@@ -20,6 +24,7 @@ if (!target || architectures.length === 0
   || architectures.some((architecture) => !['x64', 'arm64'].includes(architecture))) {
   throw new Error('Use: node build/run_distribution.js <mac|win|linux> <x64|arm64> [...]');
 }
+if (targetName === 'mac') assertMacReleasePrerequisites();
 
 const keyFile = process.env.FABER_PORTABLE_ISOLATION_HELPER_RELEASE_PRIVATE_KEY_FILE;
 if (!keyFile || !path.isAbsolute(keyFile)) {
@@ -77,4 +82,11 @@ for (const { architecture, keyId } of buildPlans) {
   });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status || 1);
+  if (targetName === 'mac') {
+    verifyMacReleaseArtifacts({
+      releaseDir: path.resolve(__dirname, '..', 'release'),
+      version,
+      architecture,
+    });
+  }
 }
