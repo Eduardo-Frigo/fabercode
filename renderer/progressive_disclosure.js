@@ -3622,6 +3622,7 @@
       elements.requirementsStatus.innerHTML = '';
       const title = doc.createElement('strong');
       title.textContent = requirementsState.ready ? translate('requirementsReady') : translate('requirementsMissing');
+      elements.requirementsStatus.classList.toggle('is-ready', requirementsState.ready);
       elements.requirementsStatus.appendChild(title);
       elements.requirementsList.innerHTML = '';
       (requirementsState.requirements || []).forEach((item) => {
@@ -3646,6 +3647,7 @@
         if (!item.installed && item.installUrl) {
           const button = doc.createElement('button');
           button.type = 'button';
+          button.className = 'btn btn-muted progressive-requirement-action';
           button.dataset.progressiveLink = item.installUrl;
           button.textContent = item.id === 'node' ? translate('installNode') : translate('installGit');
           row.appendChild(button);

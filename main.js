@@ -188,6 +188,7 @@ const {
   createCodexAppServerProductionClientActivation,
 } = require('./main/services/codex_app_server_production_client_activation');
 const { createCommandRunner } = require('./main/services/command_runner');
+const { buildDesktopToolPath } = require('./main/services/desktop_tool_path_service');
 const { createCortexRuntimeJobService } = require('./main/services/cortex_runtime_job_service');
 const { createCortexLearningPayloadService } = require('./main/services/cortex_learning_payload_service');
 const {
@@ -589,10 +590,19 @@ const {
   sanitizePositiveInt,
 } = runtimeProfileService;
 
+// Finder and Dock launches omit common Node.js install directories from PATH.
+// Share the corrected PATH with requirement checks, terminals, and project tools.
+function refreshDesktopToolPath() {
+  if (process.platform === 'darwin') {
+    process.env.PATH = buildDesktopToolPath({ env: process.env, fileSystem: fs, pathModule: path });
+  }
+}
+refreshDesktopToolPath();
 const commandRunner = createCommandRunner({ spawn });
 const { runCommand } = commandRunner;
 const hostRequirementsService = createHostRequirementsService({
   platform: process.platform,
+  refreshPath: refreshDesktopToolPath,
   runCommand,
 });
 const { getHostRequirements } = hostRequirementsService;

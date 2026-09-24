@@ -1,6 +1,7 @@
 function createHostRequirementsService(dependencies = {}) {
   const {
     platform = process.platform,
+    refreshPath = () => {},
     runCommand,
   } = dependencies;
 
@@ -59,6 +60,7 @@ function createHostRequirementsService(dependencies = {}) {
   }
 
   async function getHostRequirements() {
+    refreshPath();
     const requirements = await Promise.all([
       inspectCommand('node', 'node', ['--version']),
       inspectCommand('git', 'git', ['--version']),
