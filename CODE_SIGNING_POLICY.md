@@ -24,10 +24,11 @@ notarization. Linux packages have no SignPath or Apple signature.
 ## Build and approval
 
 The [Windows release candidate workflow](.github/workflows/windows-release-candidate.yml)
-builds both Windows architectures from `main` on GitHub Actions and publishes
-build artifacts with SHA-256 checksums. The private key used to attest Faber
-Code's portable isolation helper is held as a GitHub Actions secret and is not
-part of the source repository or release artifacts. SignPath signing, if
+is configured to build both Windows architectures from `main` on GitHub Actions
+and publish build artifacts with SHA-256 checksums. The private key used to
+attest Faber Code's portable isolation helper is stored as a GitHub Actions
+secret in the `release-signing` environment, restricted to `main`. This private
+key is not part of the source repository or release artifacts. SignPath signing, if
 granted, will be requested only for approved artifacts from this workflow.
 Each signing request requires a separate manual approval.
 

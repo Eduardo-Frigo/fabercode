@@ -10,6 +10,7 @@ jobs:
   build:
     if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
+    environment: release-signing
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
