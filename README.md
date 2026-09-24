@@ -112,6 +112,8 @@ integration is a separate open project.
 - Faber Code does not automatically commit, push, publish, or deploy changes.
 
 Read [SECURITY.md](SECURITY.md) before publishing a fork or release.
+The desktop app's [privacy policy](PRIVACY.md) explains local storage and
+user-configured network integrations.
 
 ## Code signing policy
 
@@ -130,15 +132,18 @@ Use the `:x64` or `:arm64` suffix to build one architecture. Before building,
 set `FABER_PORTABLE_ISOLATION_HELPER_RELEASE_PRIVATE_KEY_FILE` to an absolute
 path containing the private release key in PKCS#8 DER base64 form. The build
 checks that its public key matches the trusted key for every selected target.
-Public macOS packages also require an Apple Developer ID Application identity
-and notarization credentials. The build stops before packaging if either is
-missing, then verifies the Developer ID signature, stapled notarization ticket,
-Gatekeeper assessment, and DMG. Set one of the credential groups supported by
+The signed macOS build path requires an Apple Developer ID Application identity
+and notarization credentials. It stops before packaging if either is missing,
+then verifies the Developer ID signature, stapled notarization ticket,
+Gatekeeper assessment, and DMG. `npm run dist:mac:unsigned` explicitly builds
+both architectures without those credentials; macOS users must authorize the
+first launch themselves in Privacy & Security. Set one of the credential groups
+supported by
 `electron-builder`: `APPLE_API_KEY` / `APPLE_API_KEY_ID` /
 `APPLE_API_ISSUER`, `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` /
 `APPLE_TEAM_ID`, or `APPLE_KEYCHAIN_PROFILE`. Keep these credentials outside
 the repository. An ad hoc or self-signed certificate is not accepted by this
-release gate.
+signed release gate.
 The portable isolation helper supports these two architectures;
 32-bit builds are not supported. Electron 42 requires Windows 10 or newer and
 supported Linux distributions with compatible system libraries. AppImage does

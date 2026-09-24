@@ -252,6 +252,7 @@
     "dist:mac": "npm run audit:release && node build/run_distribution.js mac x64 arm64",
     "dist:mac:x64": "npm run audit:release && node build/run_distribution.js mac x64",
     "dist:mac:arm64": "npm run audit:release && node build/run_distribution.js mac arm64",
+    "dist:mac:unsigned": "npm run audit:release && node build/run_distribution.js mac-unsigned x64 arm64",
     "dist:win": "npm run audit:release && node build/run_distribution.js win x64 arm64",
     "dist:win:x64": "npm run audit:release && node build/run_distribution.js win x64",
     "dist:win:arm64": "npm run audit:release && node build/run_distribution.js win arm64",

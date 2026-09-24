@@ -17,9 +17,11 @@ publisher shown by the certificate would be SignPath Foundation, while Eduardo
 Frigo remains the project maintainer. Signed releases will explicitly identify
 the signed files and the source revision used to build them.
 
-The SignPath Foundation program concerns Windows code signing. macOS public
-distribution separately requires an Apple Developer ID certificate and Apple
-notarization. Linux packages have no SignPath or Apple signature.
+The SignPath Foundation program concerns Windows code signing. The current
+macOS installers have no Apple Developer ID signature or Apple notarization
+and require an explicit Gatekeeper override. Apple Silicon executables may
+carry an ad hoc linker signature, which is not a trusted developer signature.
+Linux AppImages have no platform code signature.
 
 ## Build and approval
 
@@ -44,4 +46,5 @@ information to other networked systems unless the user requests or configures
 an integration. Optional integrations can send relevant requests or project
 content to the provider selected by the user, including AI providers, Pexels,
 GitHub, and external MCP services. Each provider has its own privacy policy.
-See the [security policy](SECURITY.md) for handling of local secrets.
+See the [privacy policy](PRIVACY.md) for details and the
+[security policy](SECURITY.md) for handling of local secrets.

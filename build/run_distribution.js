@@ -15,6 +15,16 @@ const {
 
 const targets = Object.freeze({
   mac: { platform: 'darwin', args: ['--mac', 'dmg'] },
+  'mac-unsigned': {
+    platform: 'darwin',
+    args: [
+      '--mac', 'dmg',
+      '-c.mac.identity=null',
+      '-c.mac.forceCodeSigning=false',
+      '-c.mac.hardenedRuntime=false',
+      '-c.mac.notarize=false',
+    ],
+  },
   win: { platform: 'win32', args: ['--win', 'nsis'] },
   linux: { platform: 'linux', args: ['--linux', 'AppImage'] },
 });
@@ -22,7 +32,7 @@ const [targetName, ...architectures] = process.argv.slice(2);
 const target = targets[targetName];
 if (!target || architectures.length === 0
   || architectures.some((architecture) => !['x64', 'arm64'].includes(architecture))) {
-  throw new Error('Use: node build/run_distribution.js <mac|win|linux> <x64|arm64> [...]');
+  throw new Error('Use: node build/run_distribution.js <mac|mac-unsigned|win|linux> <x64|arm64> [...]');
 }
 if (targetName === 'mac') assertMacReleasePrerequisites();
 
@@ -89,5 +99,25 @@ for (const { architecture, keyId } of buildPlans) {
       version,
       architecture,
     });
+  }
+  if (targetName === 'mac-unsigned') {
+    const appDir = architecture === 'arm64' ? 'mac-arm64' : 'mac';
+    const appPath = path.resolve(__dirname, '..', 'release', appDir, 'Faber Code.app');
+    const dmgPath = path.resolve(__dirname, '..', 'release', `Faber Code-${version}-${architecture}.dmg`);
+    if (!fs.existsSync(appPath) || !fs.existsSync(dmgPath)) {
+      throw new Error(`Missing unsigned macOS ${architecture} app or DMG.`);
+    }
+    const signature = spawnSync('codesign', ['--display', '--verbose=4', appPath], { encoding: 'utf8' });
+    const signatureDetails = `${signature.stdout || ''}\n${signature.stderr || ''}`;
+    if (signature.error || (signature.status !== 0
+      && !signatureDetails.includes('code object is not signed at all'))
+      || (signature.status === 0
+      && (!signatureDetails.includes('Signature=adhoc')
+        || /Authority=|TeamIdentifier=(?!not set)/.test(signatureDetails)))) {
+      throw new Error(`macOS ${architecture} build unexpectedly has a trusted code signature.`);
+    }
+    const verify = spawnSync('hdiutil', ['verify', dmgPath], { stdio: 'inherit' });
+    if (verify.error) throw verify.error;
+    if (verify.status !== 0) process.exit(verify.status || 1);
   }
 }
