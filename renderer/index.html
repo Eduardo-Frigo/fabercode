@@ -25,11 +25,11 @@
         <div class="startup-preloader__bar"><span></span></div>
       </div>
     </div>
-    <section id="account-gate" class="account-gate" aria-label="Login obrigatório">
+    <section id="account-gate" class="account-gate hidden" aria-label="Preparando Faber Code" aria-hidden="true">
       <div class="account-gate__backdrop" aria-hidden="true"></div>
       <div class="account-gate__panel" role="dialog" aria-modal="true" aria-labelledby="account-gate-title">
-        <h1 id="account-gate-title" class="sr-only">Login Faber Code</h1>
-        <div id="account-gate-wizard" class="account-gate__wizard">
+        <h1 id="account-gate-title" class="sr-only">Preparando Faber Code</h1>
+        <div id="account-gate-wizard" class="account-gate__wizard hidden">
           <button id="account-gate-back-arrow" class="account-gate__back-arrow hidden" type="button" aria-label="Voltar">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <line x1="19" y1="12" x2="5" y2="12"></line>
@@ -943,17 +943,11 @@
               <strong>Aparência</strong>
               <span class="ai-settings-home-btn__desc">Tema claro/escuro, logos e tamanho da fonte dos painéis</span>
             </button>
-            <button id="ai-settings-open-account" type="button" class="ai-settings-home-btn">
-              <i class="ai-settings-home-btn__icon" aria-hidden="true">◎</i>
-              <small>Acesso</small>
-              <strong>Conta</strong>
-              <span class="ai-settings-home-btn__desc">Login com email, Google ou GitHub para liberar serviços de plataforma</span>
-            </button>
             <button id="ai-settings-open-apis" type="button" class="ai-settings-home-btn">
               <i class="ai-settings-home-btn__icon" aria-hidden="true">{ }</i>
               <small>Modelos</small>
               <strong>Configurar APIs</strong>
-              <span class="ai-settings-home-btn__desc">Veja chaves salvas, edite somente ao clicar em editar e adicione novos serviços</span>
+              <span class="ai-settings-home-btn__desc">Configure modelos de IA e sua chave Pexels pessoal para imagens e vídeos</span>
             </button>
             <button id="ai-settings-open-mcp" type="button" class="ai-settings-home-btn">
               <i class="ai-settings-home-btn__icon" aria-hidden="true">⌘</i>
@@ -1043,8 +1037,14 @@
           <div id="ai-settings-apis-panel" class="ai-settings-panel hidden">
             <div class="ai-settings-panel-head">
               <button id="ai-settings-back-home-apis" type="button" class="btn btn-muted">Voltar</button>
-              <span>APIs de IA</span>
+              <span>APIs e mídia</span>
             </div>
+
+            <p id="ai-settings-pexels-guide" class="ai-settings-help">
+              <span id="ai-settings-pexels-guide-intro">Para usar imagens e vídeos do Pexels, crie sua chave pessoal.</span>
+              <a id="ai-settings-pexels-guide-link" href="https://www.pexels.com/api/" target="_blank" rel="noopener noreferrer">Abrir a página da API Pexels</a>.
+              <span id="ai-settings-pexels-guide-after">Depois, configure Pexels abaixo, cole a chave e salve.</span>
+            </p>
 
             <p id="ai-settings-current" class="ai-settings-current">Nenhuma chave detectada ainda.</p>
 

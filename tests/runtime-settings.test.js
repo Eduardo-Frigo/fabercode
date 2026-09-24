@@ -37,7 +37,7 @@ function run() {
       platform: process.platform,
     });
     assert.strictEqual(mainRuntimeConfig.OPENAI_MODEL_BRAIN_ENV, 'gpt-5.6-sol');
-    assert.strictEqual(mainRuntimeConfig.FABER_LOCAL_UNAUTHENTICATED, false);
+    assert.strictEqual(mainRuntimeConfig.FABER_LOCAL_UNAUTHENTICATED, true);
 
     const localUnauthenticatedRuntimeConfig = createMainRuntimeConfig({
       cwd: tempRoot,
@@ -61,7 +61,31 @@ function run() {
       path,
       platform: process.platform,
     });
-    assert.strictEqual(packagedRuntimeConfig.FABER_LOCAL_UNAUTHENTICATED, false);
+    assert.strictEqual(packagedRuntimeConfig.FABER_LOCAL_UNAUTHENTICATED, true);
+
+    const explicitlyDisabledRuntimeConfig = createMainRuntimeConfig({
+      cwd: tempRoot,
+      dirname: path.join(__dirname, '..'),
+      env: { FABER_LOCAL_UNAUTHENTICATED: 'false' },
+      fs,
+      isPackaged: true,
+      normalizeAiProviderName,
+      path,
+      platform: process.platform,
+    });
+    assert.strictEqual(explicitlyDisabledRuntimeConfig.FABER_LOCAL_UNAUTHENTICATED, true);
+
+    const devDisabledRuntimeConfig = createMainRuntimeConfig({
+      cwd: tempRoot,
+      dirname: path.join(__dirname, '..'),
+      env: { FABER_LOCAL_UNAUTHENTICATED: 'false' },
+      fs,
+      isPackaged: false,
+      normalizeAiProviderName,
+      path,
+      platform: process.platform,
+    });
+    assert.strictEqual(devDisabledRuntimeConfig.FABER_LOCAL_UNAUTHENTICATED, false);
 
     for (const malformedValue of ['1', 'yes', ' true ', 'TRUE!']) {
       const malformedRuntimeConfig = createMainRuntimeConfig({

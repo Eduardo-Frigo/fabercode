@@ -41,6 +41,72 @@ const PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS = Object.freeze([
     publicKeyDigest:
       'sha256:b9eb3ea511240fca02b0ba4ee9c406e1ddc4a7d6a36634cce7da1664206d9ded',
   }),
+  Object.freeze({
+    version: 'portable-isolation-helper-distribution-trusted-key.v1',
+    keyId: 'faber-portable-helper-release-v1.0.0-darwin-x64',
+    algorithm: 'ed25519',
+    platform: 'darwin',
+    architecture: 'x64',
+    publicKeySpkiDerBase64:
+      'MCowBQYDK2VwAyEAyDKCQSRmni4vQHrqKb3xReeivCISgSi5QeQfhUwl774=',
+    publicKeyDigest:
+      'sha256:d3b234500545d06a047c06cf31604b22e30ea2a6375c05dffe60781e2e1a8a07',
+  }),
+  Object.freeze({
+    version: 'portable-isolation-helper-distribution-trusted-key.v1',
+    keyId: 'faber-portable-helper-release-v1.0.0-darwin-arm64',
+    algorithm: 'ed25519',
+    platform: 'darwin',
+    architecture: 'arm64',
+    publicKeySpkiDerBase64:
+      'MCowBQYDK2VwAyEAyDKCQSRmni4vQHrqKb3xReeivCISgSi5QeQfhUwl774=',
+    publicKeyDigest:
+      'sha256:d3b234500545d06a047c06cf31604b22e30ea2a6375c05dffe60781e2e1a8a07',
+  }),
+  Object.freeze({
+    version: 'portable-isolation-helper-distribution-trusted-key.v1',
+    keyId: 'faber-portable-helper-release-v1.0.0-win32-x64',
+    algorithm: 'ed25519',
+    platform: 'win32',
+    architecture: 'x64',
+    publicKeySpkiDerBase64:
+      'MCowBQYDK2VwAyEAyDKCQSRmni4vQHrqKb3xReeivCISgSi5QeQfhUwl774=',
+    publicKeyDigest:
+      'sha256:d3b234500545d06a047c06cf31604b22e30ea2a6375c05dffe60781e2e1a8a07',
+  }),
+  Object.freeze({
+    version: 'portable-isolation-helper-distribution-trusted-key.v1',
+    keyId: 'faber-portable-helper-release-v1.0.0-win32-arm64',
+    algorithm: 'ed25519',
+    platform: 'win32',
+    architecture: 'arm64',
+    publicKeySpkiDerBase64:
+      'MCowBQYDK2VwAyEAyDKCQSRmni4vQHrqKb3xReeivCISgSi5QeQfhUwl774=',
+    publicKeyDigest:
+      'sha256:d3b234500545d06a047c06cf31604b22e30ea2a6375c05dffe60781e2e1a8a07',
+  }),
+  Object.freeze({
+    version: 'portable-isolation-helper-distribution-trusted-key.v1',
+    keyId: 'faber-portable-helper-release-v1.0.0-linux-x64',
+    algorithm: 'ed25519',
+    platform: 'linux',
+    architecture: 'x64',
+    publicKeySpkiDerBase64:
+      'MCowBQYDK2VwAyEAyDKCQSRmni4vQHrqKb3xReeivCISgSi5QeQfhUwl774=',
+    publicKeyDigest:
+      'sha256:d3b234500545d06a047c06cf31604b22e30ea2a6375c05dffe60781e2e1a8a07',
+  }),
+  Object.freeze({
+    version: 'portable-isolation-helper-distribution-trusted-key.v1',
+    keyId: 'faber-portable-helper-release-v1.0.0-linux-arm64',
+    algorithm: 'ed25519',
+    platform: 'linux',
+    architecture: 'arm64',
+    publicKeySpkiDerBase64:
+      'MCowBQYDK2VwAyEAyDKCQSRmni4vQHrqKb3xReeivCISgSi5QeQfhUwl774=',
+    publicKeyDigest:
+      'sha256:d3b234500545d06a047c06cf31604b22e30ea2a6375c05dffe60781e2e1a8a07',
+  }),
 ]);
 
 class PortableIsolationHelperReleaseTrustError extends Error {

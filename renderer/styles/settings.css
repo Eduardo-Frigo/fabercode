@@ -444,6 +444,13 @@
   gap: 10px;
 }
 
+.ai-settings-api-editor.is-pexels label[for="ai-settings-editor-label"],
+.ai-settings-api-editor.is-pexels label[for="ai-settings-editor-model-preset"],
+.ai-settings-api-editor.is-pexels label[for="ai-settings-editor-model"],
+.ai-settings-api-editor.is-pexels label[for="ai-settings-editor-website"] {
+  display: none;
+}
+
 .ai-settings-model-catalog {
   display: flex;
   align-items: center;

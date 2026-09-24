@@ -1,7 +1,7 @@
 {
   "name": "localcode-studio",
   "productName": "Faber Code",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "Local-first Electron workspace for AI-assisted project creation, editing, preview and delivery.",
   "main": "main.js",
   "scripts": {
@@ -248,9 +248,15 @@
     "prepack": "npm run audit:release",
     "prepublishOnly": "npm run audit:release",
     "pack:mac": "npm run audit:release && electron-builder --mac dir",
-    "dist:mac": "npm run audit:release && electron-builder --mac dmg",
-    "dist:win": "npm run audit:release && electron-builder --win nsis",
-    "dist:linux": "npm run audit:release && electron-builder --linux AppImage"
+    "dist:mac": "npm run audit:release && node build/run_distribution.js mac x64 arm64",
+    "dist:mac:x64": "npm run audit:release && node build/run_distribution.js mac x64",
+    "dist:mac:arm64": "npm run audit:release && node build/run_distribution.js mac arm64",
+    "dist:win": "npm run audit:release && node build/run_distribution.js win x64 arm64",
+    "dist:win:x64": "npm run audit:release && node build/run_distribution.js win x64",
+    "dist:win:arm64": "npm run audit:release && node build/run_distribution.js win arm64",
+    "dist:linux": "npm run audit:release && node build/run_distribution.js linux x64 arm64",
+    "dist:linux:x64": "npm run audit:release && node build/run_distribution.js linux x64",
+    "dist:linux:arm64": "npm run audit:release && node build/run_distribution.js linux arm64"
   },
   "keywords": [
     "electron",
@@ -320,7 +326,7 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "artifactName": "Faber Code-Setup-${version}.${ext}"
+      "artifactName": "Faber Code-Setup-${version}-${arch}.${ext}"
     },
     "linux": {
       "target": "AppImage",

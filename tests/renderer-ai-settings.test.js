@@ -5,6 +5,8 @@ const vm = require('vm');
 
 const rendererDir = path.join(__dirname, '..', 'renderer');
 const indexSource = fs.readFileSync(path.join(rendererDir, 'index.html'), 'utf8');
+assert.match(indexSource, /id="ai-settings-pexels-guide-link" href="https:\/\/www\.pexels\.com\/api\/"/);
+assert.doesNotMatch(indexSource, /id="ai-settings-open-account"/);
 [
   'project-state-modal-close',
   'project-file-modal-close',
@@ -87,6 +89,36 @@ for (const item of sources) {
 
 const settings = sandbox.window.FaberAiSettings;
 assert.ok(settings, 'FaberAiSettings should be registered');
+
+const pexelsDraft = sandbox.window.FaberAiSettingsDraft.createAiSettingsDraft({
+  mediaAssets: { pexels: { hasKey: false, website: 'https://www.pexels.com/api/' } },
+  customApis: [],
+});
+const pexelsRow = sandbox.window.FaberAiSettingsDraft.buildAiSettingsApiRows({
+  draft: pexelsDraft,
+  translate: (key) => key,
+})
+  .find((row) => row.id === 'asset:pexels');
+assert.strictEqual(pexelsRow.editable, true);
+assert.strictEqual(pexelsRow.hasKey, false);
+assert.strictEqual(pexelsRow.keyLabel, 'pexelsOwnKeyRequired');
+assert.strictEqual(pexelsRow.website, 'https://www.pexels.com/api/');
+
+const unconfiguredPexelsRow = sandbox.window.FaberAiSettingsDraft.buildAiSettingsApiRows({
+  draft: sandbox.window.FaberAiSettingsDraft.createAiSettingsDraft({
+    mediaAssets: { pexels: { hasKey: false } },
+  }),
+  translate: (key) => key,
+}).find((row) => row.id === 'asset:pexels');
+assert.strictEqual(unconfiguredPexelsRow.keyLabel, 'pexelsOwnKeyRequired');
+assert.strictEqual(unconfiguredPexelsRow.subtitle, 'pexelsOwnKeySubtitle');
+const ownKeyPexelsRow = sandbox.window.FaberAiSettingsDraft.buildAiSettingsApiRows({
+  draft: sandbox.window.FaberAiSettingsDraft.createAiSettingsDraft({
+    mediaAssets: { pexels: { hasKey: true } },
+  }),
+  translate: (key) => key,
+}).find((row) => row.id === 'asset:pexels');
+assert.strictEqual(ownKeyPexelsRow.subtitle, 'pexelsOwnKeyActiveSubtitle');
 
 assert.strictEqual(settings.normalizeKnownProvider('OpenAI'), 'openai');
 assert.strictEqual(settings.normalizeKnownProvider('oai'), 'openai');

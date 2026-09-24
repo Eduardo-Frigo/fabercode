@@ -20,35 +20,12 @@ function sendHtml(response, statusCode, html) {
   response.end(html);
 }
 
-function readRequestJson(request, maxBytes = 1024 * 256) {
-  return new Promise((resolve, reject) => {
-    let raw = '';
-    request.on('data', (chunk) => {
-      raw += chunk.toString('utf8');
-      if (Buffer.byteLength(raw) > maxBytes) {
-        reject(new Error('Payload muito grande.'));
-        request.destroy();
-      }
-    });
-    request.on('end', () => {
-      if (!raw.trim()) return resolve({});
-      try {
-        resolve(JSON.parse(raw));
-      } catch {
-        reject(new Error('JSON invalido.'));
-      }
-    });
-    request.on('error', reject);
-  });
-}
-
 function createPlatformBackendService(dependencies = {}) {
   const {
     accountService,
     appendAuditEvent = () => {},
     host = '127.0.0.1',
     http = defaultHttp,
-    mediaService,
     onAuthCompleted = () => {},
     port = 37418,
     startRetryAttempts = 12,
@@ -109,18 +86,6 @@ function createPlatformBackendService(dependencies = {}) {
     }
     if (request.method === 'GET' && url.pathname === '/auth/github/callback') {
       return handleGithubCallback(url, response);
-    }
-    if (request.method === 'POST' && url.pathname === '/api/media/blueprint') {
-      const session = accountService.getCurrentSession();
-      if (!session) {
-        return sendJson(response, 401, {
-          ok: false,
-          message: 'Login necessario para usar midia de plataforma.',
-        });
-      }
-      const payload = await readRequestJson(request);
-      const media = await mediaService.resolveBlueprintMediaAssets(payload || {});
-      return sendJson(response, 200, { ok: true, media });
     }
     return sendJson(response, 404, { ok: false, message: 'Rota inexistente.' });
   }
@@ -199,5 +164,4 @@ function createPlatformBackendService(dependencies = {}) {
 module.exports = {
   buildLoginResultHtml,
   createPlatformBackendService,
-  readRequestJson,
 };

@@ -439,8 +439,6 @@ const {
   OPENAI_API_KEY,
   OPENAI_MODEL_BRAIN_ENV,
   PEXELS_API_KEY,
-  FABER_PLATFORM_PEXELS_API_KEY,
-  FABER_PLATFORM_MEDIA_ENDPOINT,
   FABER_DATABASE_URL,
   FABER_SESSION_SECRET,
   FABER_APP_BASE_URL,
@@ -1092,8 +1090,6 @@ const platformAccountService = createPlatformAccountService({
   githubClientSecret: GITHUB_CLIENT_SECRET,
   githubRedirectUri: GITHUB_REDIRECT_URI,
   githubScopes: GITHUB_SCOPES,
-  platformMediaEndpoint: FABER_PLATFORM_MEDIA_ENDPOINT,
-  pexelsApiKey: FABER_PLATFORM_PEXELS_API_KEY,
   beforeProductAccessContextChange: ({ reason }) => {
     const authorityCleanup = clearAssistantRuntimeAuthority(`account_${reason}`);
     if (!confirmedAgenticDeleteResult(authorityCleanup)) {
@@ -1152,27 +1148,18 @@ const platformAccountService = createPlatformAccountService({
 
 const pexelsAssetService = createPexelsAssetService({
   fetchFn: fetch,
-  getApiKey: () => {
-    if (platformAccountService.getCurrentSession()) {
-      const platformKey = platformAccountService.getPlatformPexelsApiKey();
-      if (platformKey) return platformKey;
-    }
-    return getEffectivePexelsApiKey();
-  },
+  getApiKey: () => getEffectivePexelsApiKey(),
 });
 
 const platformMediaService = createPlatformMediaService({
-  accountService: platformAccountService,
   getLocalPexelsApiKey: () => getEffectivePexelsApiKey(),
   localAssetService: pexelsAssetService,
-  platformMediaEndpoint: FABER_PLATFORM_MEDIA_ENDPOINT,
 });
 
 const platformBackendService = createPlatformBackendService({
   accountService: platformAccountService,
   appendAuditEvent: (...args) => appendAuditEvent(...args),
   host: FABER_BACKEND_HOST,
-  mediaService: platformMediaService,
   onAuthCompleted: () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();

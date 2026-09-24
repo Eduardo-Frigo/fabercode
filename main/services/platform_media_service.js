@@ -1,30 +1,20 @@
 function createPlatformMediaService(dependencies = {}) {
   const {
-    accountService = null,
-    fetchFn = typeof fetch === 'function' ? fetch : null,
     localAssetService = null,
     getLocalPexelsApiKey = () => '',
-    platformMediaEndpoint = '',
-    timeoutMs = 8000,
   } = dependencies;
 
-  function getCurrentSession() {
-    return accountService && typeof accountService.getCurrentSession === 'function'
-      ? accountService.getCurrentSession()
-      : null;
+  function getPexelsSource() {
+    const hasKey = Boolean(String(getLocalPexelsApiKey() || '').trim());
+    return {
+      source: hasKey ? 'local' : 'none',
+      hasKey,
+      requiresSignIn: false,
+      transport: hasKey ? 'local-key' : 'none',
+    };
   }
 
-  function getPlatformKey() {
-    return accountService && typeof accountService.getPlatformPexelsApiKey === 'function'
-      ? String(accountService.getPlatformPexelsApiKey() || '').trim()
-      : '';
-  }
-
-  function getPlatformEndpoint() {
-    return String(platformMediaEndpoint || '').trim();
-  }
-
-  function createEmptyResult({ status = 'missing_key', source = 'none', requiresSignIn = false } = {}) {
+  function createEmptyResult(status = 'missing_key', source = 'none') {
     return {
       provider: 'pexels',
       hero: null,
@@ -32,113 +22,30 @@ function createPlatformMediaService(dependencies = {}) {
       preference: 'photo',
       status,
       source,
-      requiresSignIn,
+      requiresSignIn: false,
     };
-  }
-
-  function getPexelsSource() {
-    const platformEndpoint = getPlatformEndpoint();
-    const platformKey = getPlatformKey();
-    const currentSession = getCurrentSession();
-    if (platformEndpoint && currentSession) {
-      return { source: 'platform', hasKey: true, requiresSignIn: false, transport: 'endpoint' };
-    }
-    if (platformKey && currentSession) {
-      return { source: 'platform', hasKey: true, requiresSignIn: false, transport: 'local-key' };
-    }
-
-    const localKey = String(getLocalPexelsApiKey() || '').trim();
-    if (localKey) return { source: 'local', hasKey: true, requiresSignIn: false, transport: 'local-key' };
-
-    return {
-      source: 'none',
-      hasKey: false,
-      requiresSignIn: Boolean((platformEndpoint || platformKey) && !currentSession),
-      transport: 'none',
-    };
-  }
-
-  async function resolveRemotePlatformMediaAssets(options = {}) {
-    const endpoint = getPlatformEndpoint();
-    const session = getCurrentSession();
-    const sessionToken = String(session && session.id ? session.id : '').trim();
-    if (!endpoint || typeof fetchFn !== 'function' || !sessionToken) return null;
-
-    const controller = typeof AbortController === 'function' ? new AbortController() : null;
-    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
-    try {
-      const response = await fetchFn(endpoint, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${sessionToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(options || {}),
-        signal: controller ? controller.signal : undefined,
-      });
-      if (!response || !response.ok || typeof response.json !== 'function') {
-        return createEmptyResult({ status: 'unavailable', source: 'platform', requiresSignIn: false });
-      }
-      const payload = await response.json();
-      const media = payload && payload.media && typeof payload.media === 'object' ? payload.media : payload;
-      if (!media || typeof media !== 'object') {
-        return createEmptyResult({ status: 'unavailable', source: 'platform', requiresSignIn: false });
-      }
-      return {
-        ...media,
-        provider: media.provider || 'pexels',
-        source: 'platform',
-        requiresSignIn: false,
-        transport: 'endpoint',
-      };
-    } catch {
-      return createEmptyResult({ status: 'unavailable', source: 'platform', requiresSignIn: false });
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
   }
 
   async function resolveBlueprintMediaAssets(options = {}) {
     const source = getPexelsSource();
-    if (!source.hasKey) {
-      return createEmptyResult({
-        status: 'missing_key',
-        source: source.source,
-        requiresSignIn: source.requiresSignIn,
-      });
-    }
-    if (source.transport === 'endpoint') {
-      const remoteAssets = await resolveRemotePlatformMediaAssets(options);
-      return remoteAssets || createEmptyResult({ status: 'unavailable', source: 'platform' });
-    }
+    if (!source.hasKey) return createEmptyResult('missing_key');
     if (!localAssetService || typeof localAssetService.resolveBlueprintMediaAssets !== 'function') {
-      return createEmptyResult({ status: 'unavailable', source: source.source });
+      return createEmptyResult('unavailable', source.source);
     }
     const assets = await localAssetService.resolveBlueprintMediaAssets(options);
     return {
       ...assets,
       source: source.source,
-      requiresSignIn: source.requiresSignIn,
+      requiresSignIn: false,
       transport: source.transport,
     };
   }
 
   function getStatus() {
-    const pexels = getPexelsSource();
-    return {
-      ok: true,
-      providers: {
-        pexels,
-      },
-    };
+    return { ok: true, providers: { pexels: getPexelsSource() } };
   }
 
-  return {
-    getStatus,
-    resolveBlueprintMediaAssets,
-  };
+  return { getStatus, resolveBlueprintMediaAssets };
 }
 
-module.exports = {
-  createPlatformMediaService,
-};
+module.exports = { createPlatformMediaService };

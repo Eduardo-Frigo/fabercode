@@ -346,6 +346,7 @@
     function closeEditor() {
       openAiCatalogRequestId += 1;
       if (elements.editor) elements.editor.classList.add('hidden');
+      if (elements.editor) elements.editor.classList.remove('is-pexels');
       if (elements.editorId) elements.editorId.value = '';
       if (elements.editorKind) elements.editorKind.value = '';
       if (elements.editorProvider) elements.editorProvider.value = '';
@@ -471,12 +472,18 @@
     function openEditorForRow(row) {
       if (!row) return;
       if (elements.editor) elements.editor.classList.remove('hidden');
+      if (elements.editor) elements.editor.classList.toggle('is-pexels', row.provider === 'pexels');
       if (elements.editorId) elements.editorId.value = row.id;
       if (elements.editorKind) elements.editorKind.value = row.kind;
       if (elements.editorProvider) elements.editorProvider.value = row.kind === 'custom' ? (row.providerName || row.title) : row.title;
       if (elements.editorLabel) elements.editorLabel.value = row.apiLabel || '';
       if (elements.editorModel) elements.editorModel.value = row.model || '';
       if (elements.editorKey) elements.editorKey.value = '';
+      if (elements.editorKey) {
+        elements.editorKey.placeholder = row.provider === 'pexels'
+          ? translate('pexelsKeyPlaceholder', 'Cole sua chave Pexels pessoal')
+          : translate('apiKeyPlaceholder', 'Cole a chave (deixe vazio para manter a atual)');
+      }
       if (elements.editorWebsite) elements.editorWebsite.value = row.website || '';
       if (elements.editorProvider) elements.editorProvider.disabled = row.kind === 'builtin' || row.kind === 'asset';
       renderModelPresetOptions(row);
@@ -557,6 +564,22 @@
       renderApiList();
       refreshCurrentLine();
       setHelpLink(draft.selectedProvider);
+    }
+
+    async function clearPexelsKeyDraft() {
+      if (!draft) return;
+      const confirmed = await window.faberConfirm(translate(
+        'removePexelsKeyConfirm',
+        'Remover sua chave Pexels salva?'
+      ));
+      if (!confirmed) return;
+      draft.pexels.keyPending = '';
+      draft.pexels.keyCleared = true;
+      draft.pexels.hasKey = false;
+      draft.pexels.keyMasked = '';
+      draft.pexels.keySource = 'none';
+      closeEditor();
+      renderApiList();
     }
 
     function createApiActionButton(label, className, onClick, disabled = false, dataset = null) {
@@ -666,6 +689,16 @@
           }, false, { aiSettingsAction: 'edit', provider: row.provider }));
         }
 
+        if (row.kind === 'asset' && row.provider === 'pexels' && !row.hasKey) {
+          const pexelsLink = document.createElement('a');
+          pexelsLink.className = 'btn btn-muted';
+          pexelsLink.href = providerDocsUrl('pexels');
+          pexelsLink.target = '_blank';
+          pexelsLink.rel = 'noopener noreferrer';
+          pexelsLink.textContent = translate('pexelsGuideLink');
+          actions.appendChild(pexelsLink);
+        }
+
         if (row.kind === 'custom' && row.customId) {
           actions.appendChild(createApiActionButton(translate('remove'), 'btn btn-danger', async () => {
             await removeCustomApiDraft(row.customId);
@@ -673,6 +706,11 @@
         } else if (row.kind === 'builtin' && (row.provider === 'openai' || row.provider === 'gemini' || row.provider === 'sambanova')) {
           actions.appendChild(createApiActionButton(translate('remove'), 'btn btn-danger', async () => {
             await clearBuiltinRemoteProviderDraft(row.provider);
+          }, false, { aiSettingsAction: 'remove', provider: row.provider }));
+        } else if (row.kind === 'asset' && row.provider === 'pexels'
+          && (draft.pexels.keySource === 'settings' || draft.pexels.keyPending)) {
+          actions.appendChild(createApiActionButton(translate('remove'), 'btn btn-danger', () => {
+            void clearPexelsKeyDraft();
           }, false, { aiSettingsAction: 'remove', provider: row.provider }));
         }
 

@@ -16,6 +16,7 @@ edit, run, inspect, repair, and validate projects within explicit authority and
 isolated workspaces.
 
 - [Faber Code v0.2.0 release notes](docs/GITHUB_RELEASE_NOTES_V0.2.0.md)
+- [Faber Code v1.0.0 release notes](docs/GITHUB_RELEASE_NOTES_V1.0.0.md)
 - [Complete Harness v2 technical release record](docs/FABER_CODE_RELEASE_HARNESS_V2_2026-09-09.md)
 - [Public release checklist](docs/PUBLIC_RELEASE_CHECKLIST.md)
 
@@ -112,6 +113,25 @@ integration is a separate open project.
 Read [SECURITY.md](SECURITY.md) before publishing a fork or release.
 
 ## Installation and development
+
+### Desktop packages
+
+`npm run dist:mac` builds separate x64 and ARM64 macOS packages.
+`npm run dist:win` and `npm run dist:linux` do the same for Windows and Linux.
+Use the `:x64` or `:arm64` suffix to build one architecture. Before building,
+set `FABER_PORTABLE_ISOLATION_HELPER_RELEASE_PRIVATE_KEY_FILE` to an absolute
+path containing the private release key in PKCS#8 DER base64 form. The build
+checks that its public key matches the trusted key for every selected target.
+The portable isolation helper supports these two architectures;
+32-bit builds are not supported. Electron 42 requires Windows 10 or newer and
+supported Linux distributions with compatible system libraries. AppImage does
+not guarantee support on every Linux release.
+
+The app opens without a Faber account or PostgreSQL. To use Pexels photos and
+videos, each user creates a personal key at https://www.pexels.com/api/ and
+enters it in Configurações → APIs → Pexels. The key is stored in local app
+settings and requests go directly from the desktop app to Pexels. Builds do
+not contain a shared Pexels key or use a Faber media proxy.
 
 Requirements:
 

@@ -26,8 +26,6 @@ function createMainRuntimeConfig({
   const OPENAI_API_KEY = env.OPENAI_API_KEY || '';
   const OPENAI_MODEL_BRAIN_ENV = env.OPENAI_MODEL_BRAIN || 'gpt-5.6-sol';
   const PEXELS_API_KEY = env.PEXELS_API_KEY || env.PEXELS_ACCESS_KEY || '';
-  const FABER_PLATFORM_PEXELS_API_KEY = env.FABER_PLATFORM_PEXELS_API_KEY || '';
-  const FABER_PLATFORM_MEDIA_ENDPOINT = env.FABER_PLATFORM_MEDIA_ENDPOINT || '';
   const FABER_DATABASE_URL = env.FABER_DATABASE_URL || env.DATABASE_URL || '';
   const FABER_SESSION_SECRET = env.FABER_SESSION_SECRET || env.SESSION_SECRET || '';
   const FABER_APP_BASE_URL = env.FABER_APP_BASE_URL || 'http://127.0.0.1:37418';
@@ -38,10 +36,11 @@ function createMainRuntimeConfig({
     env.FABER_POSTGRES_SSL_REJECT_UNAUTHORIZED || 'true'
   ).toLowerCase() !== 'false';
   const FABER_AUTH_DEV_CODES = String(env.FABER_AUTH_DEV_CODES || 'false').toLowerCase() === 'true';
-  const FABER_LOCAL_UNAUTHENTICATED = Boolean(
-    isPackaged === false
-    && String(env.FABER_LOCAL_UNAUTHENTICATED || 'false') === 'true'
-  );
+  // Packaged desktop builds always open locally, including after an update
+  // from an installation whose external .env disabled local access.
+  const FABER_LOCAL_UNAUTHENTICATED = isPackaged || String(
+    env.FABER_LOCAL_UNAUTHENTICATED || 'true'
+  ).toLowerCase() === 'true';
   const GOOGLE_CLIENT_ID = env.GOOGLE_CLIENT_ID || '';
   const GOOGLE_CLIENT_SECRET = env.GOOGLE_CLIENT_SECRET || '';
   const GOOGLE_REDIRECT_URI = env.GOOGLE_REDIRECT_URI || '';
@@ -285,8 +284,6 @@ function createMainRuntimeConfig({
     OPENAI_API_KEY,
     OPENAI_MODEL_BRAIN_ENV,
     PEXELS_API_KEY,
-    FABER_PLATFORM_PEXELS_API_KEY,
-    FABER_PLATFORM_MEDIA_ENDPOINT,
     FABER_DATABASE_URL,
     FABER_SESSION_SECRET,
     FABER_APP_BASE_URL,

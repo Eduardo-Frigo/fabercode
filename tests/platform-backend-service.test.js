@@ -37,20 +37,11 @@ async function run() {
       return { ok: true, session: currentSession };
     },
   };
-  const mediaService = {
-    resolveBlueprintMediaAssets: async (payload) => ({
-      provider: 'pexels',
-      hero: null,
-      query: payload.userMessage || '',
-      status: 'missing_key',
-    }),
-  };
   const completed = [];
   const service = createPlatformBackendService({
     accountService,
     appendAuditEvent: (type, payload) => audit.push({ type, payload }),
     host: '127.0.0.1',
-    mediaService,
     onAuthCompleted: (session) => completed.push(session),
     port: 0,
   });
@@ -65,12 +56,12 @@ async function run() {
   assert.strictEqual(healthJson.ok, true);
   assert.strictEqual(healthJson.service, 'faber-platform-backend');
 
-  const blockedMedia = await fetch(`${baseUrl}/api/media/blueprint`, {
+  const removedMediaRoute = await fetch(`${baseUrl}/api/media/blueprint`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ userMessage: 'site para advogado' }),
   });
-  assert.strictEqual(blockedMedia.status, 401);
+  assert.strictEqual(removedMediaRoute.status, 404);
 
   const callback = await fetch(`${baseUrl}/auth/google/callback?code=code-ok&state=state-ok`);
   assert.strictEqual(callback.status, 200);
@@ -96,15 +87,12 @@ async function run() {
   const accountStatusJson = await accountStatus.json();
   assert.strictEqual(accountStatusJson.signedIn, true);
 
-  const media = await fetch(`${baseUrl}/api/media/blueprint`, {
+  const mediaAfterLogin = await fetch(`${baseUrl}/api/media/blueprint`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ userMessage: 'site para advogado' }),
   });
-  assert.strictEqual(media.status, 200);
-  const mediaJson = await media.json();
-  assert.strictEqual(mediaJson.ok, true);
-  assert.strictEqual(mediaJson.media.query, 'site para advogado');
+  assert.strictEqual(mediaAfterLogin.status, 404);
 
   const stopped = await service.stop();
   assert.strictEqual(stopped.ok, true);
@@ -116,7 +104,6 @@ async function run() {
     accountService,
     appendAuditEvent: (type, payload) => retryAudit.push({ type, payload }),
     host: '127.0.0.1',
-    mediaService,
     port: occupiedPort,
     startRetryAttempts: 8,
     startRetryDelayMs: 20,

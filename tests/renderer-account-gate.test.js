@@ -8,13 +8,13 @@ const appSource = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'app.js
 
 assert.match(
   appSource,
-  /createAccountGateController\(\{[\s\S]*?requirePlatformMedia:\s*true,/,
-  'production bootstrap must require platform media before unlocking the account gate'
+  /createAccountGateController\(\{[\s\S]*?requirePlatformMedia:\s*false,/,
+  'production bootstrap must permit local use without a platform media account'
 );
 assert.doesNotMatch(
   appSource,
-  /createAccountGateController\(\{[\s\S]*?requirePlatformMedia:\s*false,/,
-  'the temporary platform-media bypass must not ship'
+  /createAccountGateController\(\{[\s\S]*?requirePlatformMedia:\s*true,/,
+  'platform media must not block access to the local desktop app'
 );
 const sandbox = { window: {} };
 sandbox.window.window = sandbox.window;
