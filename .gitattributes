@@ -1,0 +1,2 @@
+# The release attestation placeholder is compared byte-for-byte during packaging.
+main/portable_isolation_helper/distribution_attestation.json text eol=lf
