@@ -32,7 +32,7 @@ const DIGEST = /^sha256:[a-f0-9]{64}$/;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const SUPPORTED_PLATFORMS = new Set(['darwin', 'linux', 'win32']);
 const SUPPORTED_ARCHITECTURES = new Set(['arm64', 'x64']);
-const MAX_TRUSTED_KEYS = 24;
+const MAX_TRUSTED_KEYS = 64;
 const MAX_PUBLIC_KEY_BYTES = 1024;
 const MAX_RECEIPT_CACHE_ENTRIES = 32;
 const TRUSTED_KEY_INPUT_KEYS = Object.freeze([

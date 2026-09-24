@@ -172,7 +172,7 @@ async function expectCode(action, code) {
     );
     assert.strictEqual(PORTABLE_ISOLATION_HELPER_RELEASE_TRUST_STATE, 'configured');
     assert.ok(Object.isFrozen(PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS));
-    assert.strictEqual(PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS.length, 21);
+    assert.strictEqual(PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS.length, 27);
     assert.deepStrictEqual(
       PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS.map((key) =>
         `${key.keyId.split('-release-')[1].split('-')[0]}/${key.platform}/${key.architecture}`
@@ -188,6 +188,9 @@ async function expectCode(action, code) {
         'v1.0.2/darwin/arm64', 'v1.0.2/darwin/x64',
         'v1.0.2/linux/arm64', 'v1.0.2/linux/x64',
         'v1.0.2/win32/arm64', 'v1.0.2/win32/x64',
+        'v1.0.3/darwin/arm64', 'v1.0.3/darwin/x64',
+        'v1.0.3/linux/arm64', 'v1.0.3/linux/x64',
+        'v1.0.3/win32/arm64', 'v1.0.3/win32/x64',
       ]
     );
     const releaseKeyIds = new Set();
@@ -198,12 +201,12 @@ async function expectCode(action, code) {
         'portable-isolation-helper-distribution-trusted-key.v1'
       );
       assert.strictEqual(trustedKey.algorithm, 'ed25519');
-      assert.match(trustedKey.keyId, /^faber-portable-helper-release-v(?:0\.2\.0|1\.0\.[012])-/);
+      assert.match(trustedKey.keyId, /^faber-portable-helper-release-v(?:0\.2\.0|1\.0\.[0123])-/);
       assert.match(trustedKey.publicKeySpkiDerBase64, /^[A-Za-z0-9+/]+={0,2}$/);
       assert.match(trustedKey.publicKeyDigest, /^sha256:[a-f0-9]{64}$/);
       releaseKeyIds.add(trustedKey.keyId);
     }
-    assert.strictEqual(releaseKeyIds.size, 21);
+    assert.strictEqual(releaseKeyIds.size, 27);
     const releaseVerifier = createPortableIsolationHelperReleaseSignatureVerifier();
     assert.ok(Object.isFrozen(releaseVerifier));
 

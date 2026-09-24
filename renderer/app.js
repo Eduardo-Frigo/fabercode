@@ -1680,50 +1680,64 @@ async function setupAppUpdater() {
   const updateBtn = document.getElementById('btn-app-update');
   if (!updateContainer || !updateBtn) return;
 
+  const updateText = updateBtn.querySelector('.update-text');
+  const updateLabel = () => t('updateAvailable', 'Nova versão {version}')
+    .replace('{version}', updateBtn.dataset.version || '');
+  const resetButton = () => {
+    updateBtn.disabled = false;
+    if (updateText) updateText.textContent = updateLabel();
+  };
+
   updateBtn.addEventListener('click', async () => {
     if (updateBtn.disabled) return;
-    const confirm = await window.faberConfirm(t('updateInstallConfirm', 'Deseja baixar e instalar a atualização do Faber Code agora? A aplicação será reiniciada após a instalação.'));
+    const confirm = await window.faberConfirm(t('updateInstallConfirm', 'Abrir o download da nova versão? Depois de baixá-la, execute o instalador para concluir a atualização.'));
     if (!confirm) return;
 
     try {
       updateBtn.disabled = true;
-      const textSpan = updateBtn.querySelector('.update-text');
-      if (textSpan) textSpan.textContent = t('updateDownloading', 'Baixando...');
+      if (updateText) updateText.textContent = t('updateDownloading', 'Abrindo download...');
       const result = await window.localcodeApi.installUpdate({
         downloadUrl: updateBtn.dataset.downloadUrl || '',
         installToken: updateBtn.dataset.installToken || '',
       });
-      if (result && !result.ok) {
+      if (!result || !result.ok) {
         await window.faberAlert(
-          t('updateInstallError', 'Erro ao instalar atualização: {message}').replace('{message}', result.message || '')
+          t('updateInstallError', 'Não foi possível abrir o download: {message}')
+            .replace('{message}', (result && result.message) || '')
         );
-        updateBtn.disabled = false;
-        if (textSpan) textSpan.textContent = t('update', 'Atualizar');
+      } else {
+        await window.faberAlert(t('updateDownloadOpened', 'Download aberto no navegador. Execute o arquivo baixado para concluir a atualização.'));
       }
     } catch (err) {
       console.error(err);
       await window.faberAlert(t('updateProcessingFailed', 'Falha ao processar atualização.'));
-      updateBtn.disabled = false;
-      const textSpan = updateBtn.querySelector('.update-text');
-      if (textSpan) textSpan.textContent = t('update', 'Atualizar');
+    } finally {
+      resetButton();
     }
   });
 
-  try {
-    const result = await window.localcodeApi.checkForUpdates();
-    if (result && result.available) {
-      updateContainer.classList.remove('hidden');
-      updateBtn.dataset.version = result.latestVersion;
-      updateBtn.dataset.downloadUrl = result.downloadUrl;
-      updateBtn.dataset.installToken = result.installToken || '';
-    } else {
+  async function checkForUpdates() {
+    try {
+      const result = await window.localcodeApi.checkForUpdates();
+      if (result && result.available) {
+        updateBtn.dataset.version = result.latestVersion;
+        updateBtn.dataset.downloadUrl = result.downloadUrl;
+        updateBtn.dataset.installToken = result.installToken || '';
+        resetButton();
+        updateContainer.classList.remove('hidden');
+      } else {
+        updateContainer.classList.add('hidden');
+        updateBtn.dataset.installToken = '';
+      }
+    } catch (err) {
+      console.error('Erro ao verificar atualizações:', err);
       updateContainer.classList.add('hidden');
       updateBtn.dataset.installToken = '';
     }
-  } catch (err) {
-    console.error('Erro ao verificar atualizações:', err);
-    updateContainer.classList.add('hidden');
   }
+
+  await checkForUpdates();
+  window.setInterval(checkForUpdates, 60 * 60 * 1000);
 }
 
 async function bootstrap() {

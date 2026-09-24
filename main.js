@@ -7580,6 +7580,7 @@ app.whenReady().then(async () => {
     registerIpcHandler,
     app,
     dialog,
+    shell,
     appendAuditEvent,
   });
 
