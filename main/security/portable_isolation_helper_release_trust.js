@@ -119,7 +119,7 @@ const PORTABLE_ISOLATION_HELPER_RELEASE_TRUSTED_KEYS = Object.freeze([
       publicKeyDigest:
         'sha256:2e20f69b61b0d5ee7988a4ac3089fec92aee04024e6bd8a26df74b587cf7bd2d',
     }))),
-  ...['1.0.2', '1.0.3'].flatMap((releaseVersion) =>
+  ...['1.0.2', '1.0.3', '1.0.4'].flatMap((releaseVersion) =>
     ['darwin', 'win32', 'linux'].flatMap((platform) =>
       ['x64', 'arm64'].map((architecture) => Object.freeze({
       version: 'portable-isolation-helper-distribution-trusted-key.v1',

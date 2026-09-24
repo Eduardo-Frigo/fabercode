@@ -7579,8 +7579,6 @@ app.whenReady().then(async () => {
   registerUpdateHandlers({
     registerIpcHandler,
     app,
-    dialog,
-    shell,
     appendAuditEvent,
   });
 

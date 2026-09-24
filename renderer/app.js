@@ -1690,29 +1690,31 @@ async function setupAppUpdater() {
 
   updateBtn.addEventListener('click', async () => {
     if (updateBtn.disabled) return;
-    const confirm = await window.faberConfirm(t('updateInstallConfirm', 'Abrir o download da nova versão? Depois de baixá-la, execute o instalador para concluir a atualização.'));
+    const confirm = await window.faberConfirm(t('updateInstallConfirm', 'Baixar e instalar a nova versão agora? O Faber Code será reiniciado após a instalação.'));
     if (!confirm) return;
 
     try {
       updateBtn.disabled = true;
-      if (updateText) updateText.textContent = t('updateDownloading', 'Abrindo download...');
+      if (updateText) updateText.textContent = t('updateDownloading', 'Baixando e verificando...');
       const result = await window.localcodeApi.installUpdate({
         downloadUrl: updateBtn.dataset.downloadUrl || '',
         installToken: updateBtn.dataset.installToken || '',
       });
       if (!result || !result.ok) {
         await window.faberAlert(
-          t('updateInstallError', 'Não foi possível abrir o download: {message}')
+          t('updateInstallError', 'Não foi possível instalar a atualização: {message}')
             .replace('{message}', (result && result.message) || '')
         );
       } else {
-        await window.faberAlert(t('updateDownloadOpened', 'Download aberto no navegador. Execute o arquivo baixado para concluir a atualização.'));
+        updateBtn.dataset.installing = 'true';
+        if (updateText) updateText.textContent = t('updateInstalling', 'Instalando e reiniciando...');
+        return;
       }
     } catch (err) {
       console.error(err);
       await window.faberAlert(t('updateProcessingFailed', 'Falha ao processar atualização.'));
     } finally {
-      resetButton();
+      if (!updateBtn.dataset.installing) resetButton();
     }
   });
 

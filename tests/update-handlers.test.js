@@ -1,106 +1,105 @@
 const assert = require('assert');
-
+const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { registerUpdateHandlers } = require('../main/ipc/update_handlers');
 
-const releaseTag = 'v1.0.3';
+const releaseTag = 'v1.0.4';
+const installer = Buffer.from('verified installer bytes');
+const installerDigest = crypto.createHash('sha256').update(installer).digest('hex');
 const assetNames = {
-  'darwin:arm64': 'Faber.Code-1.0.3-arm64.dmg',
-  'darwin:x64': 'Faber.Code-1.0.3-x64.dmg',
-  'win32:arm64': 'Faber.Code-Setup-1.0.3-arm64.exe',
-  'win32:x64': 'Faber.Code-Setup-1.0.3-x64.exe',
-  'linux:arm64': 'Faber-Code-1.0.3-arm64.AppImage',
-  'linux:x64': 'Faber-Code-1.0.3-x86_64.AppImage',
+  'darwin:arm64': 'Faber.Code-1.0.4-arm64.dmg',
+  'darwin:x64': 'Faber.Code-1.0.4-x64.dmg',
+  'win32:arm64': 'Faber.Code-Setup-1.0.4-arm64.exe',
+  'win32:x64': 'Faber.Code-Setup-1.0.4-x64.exe',
+  'linux:arm64': 'Faber-Code-1.0.4-arm64.AppImage',
+  'linux:x64': 'Faber-Code-1.0.4-x86_64.AppImage',
 };
 
 function makeRelease(overrides = {}) {
-  return {
-    tag_name: releaseTag,
+  return { tag_name: releaseTag,
     assets: Object.values(assetNames).map((name) => ({
-      name,
-      size: 120 * 1024 * 1024,
-      browser_download_url: 'https://github.com/Eduardo-Frigo/fabercode/releases/download/' + releaseTag + '/' + name,
-    })),
-    ...overrides,
-  };
+      name, size: installer.length, digest: `sha256:${installerDigest}`,
+      browser_download_url: `https://github.com/Eduardo-Frigo/fabercode/releases/download/${releaseTag}/${name}`,
+    })), ...overrides };
 }
 
-function harness({ platform, architecture, currentVersion = '1.0.2', release = makeRelease() }) {
-  const handlers = {};
-  const opened = [];
-  const fetched = [];
-  const audit = [];
+function harness({ platform, architecture, currentVersion = '1.0.3', release = makeRelease(),
+  download = installer } = {}) {
+  const handlers = {}, fetched = [], audit = [], prepared = [], scheduled = [];
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'faber-update-test-'));
   registerUpdateHandlers({
-    platform,
-    architecture,
-    app: { getVersion: () => currentVersion },
-    shell: { openExternal: async (url) => { opened.push(url); } },
+    platform, architecture,
+    app: { getVersion: () => currentVersion, getPath: () => tempRoot },
     appendAuditEvent: (type, payload) => audit.push({ type, payload }),
     fetchFn: async (url) => {
       fetched.push(url);
-      return { ok: true, status: 200, json: async () => release };
+      if (url.includes('/releases/latest')) return { ok: true, status: 200, json: async () => release };
+      return { ok: true, status: 200, headers: { get: () => String(download.length) },
+        body: (async function* chunks() { yield download.subarray(0, 5); yield download.subarray(5); })() };
     },
+    prepareInstall: async (options) => {
+      prepared.push({ ...options, file: fs.readFileSync(options.downloadedFile) });
+      return { start: () => { prepared[prepared.length - 1].started = true; }, cancel: () => {} };
+    },
+    schedule: (callback) => { scheduled.push(callback); },
     registerIpcHandler: (channel, handler) => { handlers[channel] = handler; },
   });
-  return { handlers, opened, fetched, audit };
+  return { handlers, fetched, audit, prepared, scheduled,
+    cleanup: () => fs.rmSync(tempRoot, { recursive: true, force: true }) };
 }
 
 (async () => {
   for (const [platformArchitecture, assetName] of Object.entries(assetNames)) {
     const [platform, architecture] = platformArchitecture.split(':');
-    const { handlers, opened, fetched, audit } = harness({ platform, architecture });
-    const checked = await handlers['app:update:check']();
-    const expectedUrl = 'https://github.com/Eduardo-Frigo/fabercode/releases/download/' + releaseTag + '/' + assetName;
-
-    assert.strictEqual(checked.ok, true, platformArchitecture);
-    assert.strictEqual(checked.available, true, platformArchitecture);
-    assert.strictEqual(checked.currentVersion, '1.0.2');
-    assert.strictEqual(checked.latestVersion, releaseTag);
-    assert.strictEqual(checked.downloadUrl, expectedUrl);
-    assert.ok(checked.installToken);
-
-    const rejected = await handlers['app:update:install']({}, {
-      downloadUrl: 'https://example.com/unsafe-installer',
-      installToken: checked.installToken,
-    });
-    assert.strictEqual(rejected.ok, false);
-    assert.deepStrictEqual(opened, []);
-
-    const openedUpdate = await handlers['app:update:install']({}, {
-      downloadUrl: checked.downloadUrl,
-      installToken: checked.installToken,
-    });
-    assert.deepStrictEqual(openedUpdate, { ok: true, opened: true, downloadUrl: expectedUrl });
-    assert.deepStrictEqual(opened, [expectedUrl]);
-    assert.strictEqual(fetched.length, 1, 'The app must not silently download or execute the installer');
-    assert.ok(audit.some((entry) => entry.type === 'app.update_download_opened'));
+    const test = harness({ platform, architecture });
+    try {
+      const checked = await test.handlers['app:update:check']();
+      const expectedUrl = `https://github.com/Eduardo-Frigo/fabercode/releases/download/${releaseTag}/${assetName}`;
+      assert.strictEqual(checked.ok, true, platformArchitecture);
+      assert.strictEqual(checked.available, true, platformArchitecture);
+      assert.strictEqual(checked.downloadUrl, expectedUrl);
+      assert.ok(checked.installToken);
+      const rejected = await test.handlers['app:update:install']({}, {
+        downloadUrl: 'https://example.com/unsafe-installer', installToken: checked.installToken,
+      });
+      assert.strictEqual(rejected.ok, false);
+      assert.strictEqual(test.fetched.length, 1);
+      const installed = await test.handlers['app:update:install']({}, checked);
+      assert.deepStrictEqual(installed, { ok: true, installing: true, latestVersion: releaseTag });
+      assert.strictEqual(test.fetched[1], expectedUrl);
+      assert.deepStrictEqual(test.prepared[0].file, installer);
+      assert.strictEqual(test.prepared[0].platform, platform);
+      assert.strictEqual(test.prepared[0].architecture, architecture);
+      assert.strictEqual(test.scheduled.length, 1);
+      await test.scheduled[0]();
+      assert.strictEqual(test.prepared[0].started, true);
+      assert.ok(test.audit.some((entry) => entry.type === 'app.update_install_prepared'));
+    } finally { test.cleanup(); }
   }
 
-  const sameVersion = harness({ platform: 'darwin', architecture: 'arm64', currentVersion: '1.0.3' });
-  assert.deepStrictEqual(await sameVersion.handlers['app:update:check'](), {
-    ok: true,
-    available: false,
-    currentVersion: '1.0.3',
-    latestVersion: releaseTag,
-    downloadUrl: '',
-  });
-
-  const missingAsset = harness({
-    platform: 'linux',
-    architecture: 'x64',
-    release: makeRelease({ assets: [] }),
-  });
-  const missingResult = await missingAsset.handlers['app:update:check']();
-  assert.strictEqual(missingResult.ok, false);
-  assert.deepStrictEqual(missingAsset.opened, []);
-
+  const same = harness({ platform: 'darwin', architecture: 'arm64', currentVersion: '1.0.4' });
+  try { assert.strictEqual((await same.handlers['app:update:check']()).available, false); }
+  finally { same.cleanup(); }
+  const missing = harness({ platform: 'linux', architecture: 'x64', release: makeRelease({ assets: [] }) });
+  try { assert.strictEqual((await missing.handlers['app:update:check']()).ok, false); }
+  finally { missing.cleanup(); }
   const unsafeRelease = makeRelease();
-  unsafeRelease.assets[0].browser_download_url = 'https://example.com/Faber.Code-1.0.3-arm64.dmg';
-  const unsafeAsset = harness({ platform: 'darwin', architecture: 'arm64', release: unsafeRelease });
-  assert.strictEqual((await unsafeAsset.handlers['app:update:check']()).ok, false);
-  assert.deepStrictEqual(unsafeAsset.opened, []);
-
+  unsafeRelease.assets[0].browser_download_url = 'https://example.com/unsafe.dmg';
+  const unsafe = harness({ platform: 'darwin', architecture: 'arm64', release: unsafeRelease });
+  try { assert.strictEqual((await unsafe.handlers['app:update:check']()).ok, false); }
+  finally { unsafe.cleanup(); }
+  const corrupted = harness({ platform: 'darwin', architecture: 'arm64', download: Buffer.from('corrupted installer bytes') });
+  try {
+    const checked = await corrupted.handlers['app:update:check']();
+    assert.strictEqual((await corrupted.handlers['app:update:install']({}, checked)).ok, false);
+    assert.strictEqual(corrupted.prepared.length, 0);
+  } finally { corrupted.cleanup(); }
+  const missingDigestRelease = makeRelease();
+  delete missingDigestRelease.assets[0].digest;
+  const missingDigest = harness({ platform: 'darwin', architecture: 'arm64', release: missingDigestRelease });
+  try { assert.strictEqual((await missingDigest.handlers['app:update:check']()).ok, false); }
+  finally { missingDigest.cleanup(); }
   console.log('update-handlers.test.js: ok');
-})().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+})().catch((error) => { console.error(error); process.exit(1); });

@@ -1,4 +1,7 @@
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const { prepareUpdateInstall } = require('../services/app_update_install_service');
 
 const GITHUB_OWNER = 'Eduardo-Frigo';
 const GITHUB_REPO = 'fabercode';
@@ -10,18 +13,20 @@ function registerUpdateHandlers(dependencies = {}) {
   const {
     registerIpcHandler,
     app,
-    shell,
     appendAuditEvent = () => {},
     fetchFn = typeof fetch === 'function' ? fetch : null,
     platform = process.platform,
     architecture = process.arch,
+    prepareInstall = prepareUpdateInstall,
+    schedule = setTimeout,
   } = dependencies;
 
-  for (const [name, value] of Object.entries({ registerIpcHandler, app, shell, fetchFn })) {
+  for (const [name, value] of Object.entries({ registerIpcHandler, app, fetchFn, prepareInstall })) {
     if (!value) throw new Error(`Update IPC dependency missing: ${name}`);
   }
 
   let validatedUpdate = null;
+  let installInProgress = false;
 
   function sanitizeVersion(value) {
     const version = String(value || '').trim();
@@ -97,14 +102,17 @@ function registerUpdateHandlers(dependencies = {}) {
     if (!asset) throw new Error('Release mais recente nao possui instalador para este sistema e arquitetura.');
     const downloadUrl = validatedAssetUrl(asset, latestVersion);
     const assetSize = Number(asset.size);
-    if (!downloadUrl || !Number.isSafeInteger(assetSize) || assetSize <= 0 || assetSize > MAX_ASSET_BYTES) {
+    const digest = String(asset.digest || '');
+    if (!downloadUrl || !Number.isSafeInteger(assetSize) || assetSize <= 0 || assetSize > MAX_ASSET_BYTES
+      || !/^sha256:[a-f0-9]{64}$/.test(digest)) {
       throw new Error('Instalador de update invalido no release oficial.');
     }
 
     const token = validatedUpdate && validatedUpdate.downloadUrl === downloadUrl
       ? validatedUpdate.token
       : crypto.randomBytes(24).toString('base64url');
-    validatedUpdate = { downloadUrl, latestVersion, token, checkedAt: Date.now() };
+    validatedUpdate = { downloadUrl, latestVersion, token, checkedAt: Date.now(),
+      assetName: asset.name, assetSize, digest: digest.slice(7) };
     return {
       ok: true,
       available: true,
@@ -124,9 +132,45 @@ function registerUpdateHandlers(dependencies = {}) {
     }
   });
 
-  // Published installers are unsigned. Open the verified asset in the browser so
-  // the user can complete installation through the operating system's normal flow.
+  async function downloadVerifiedAsset(update, destination) {
+    const response = await fetchFn(update.downloadUrl, {
+      headers: { 'User-Agent': 'FaberCode-App-Updater' },
+    });
+    if (!response || !response.ok) throw new Error('Não foi possível baixar o instalador do GitHub.');
+    const length = Number(response.headers && response.headers.get('content-length'));
+    if (Number.isFinite(length) && length > MAX_ASSET_BYTES) throw new Error('Instalador excede o limite de tamanho.');
+
+    const digest = crypto.createHash('sha256');
+    let bytes = 0;
+    const output = await fs.promises.open(destination, 'wx', 0o600);
+    try {
+      const chunks = response.body && response.body[Symbol.asyncIterator]
+        ? response.body
+        : [Buffer.from(await response.arrayBuffer())];
+      for await (const part of chunks) {
+        const chunk = Buffer.from(part);
+        bytes += chunk.length;
+        if (bytes > MAX_ASSET_BYTES || bytes > update.assetSize) {
+          throw new Error('Tamanho do instalador não corresponde ao release.');
+        }
+        digest.update(chunk);
+        let offset = 0;
+        while (offset < chunk.length) {
+          const result = await output.write(chunk, offset, chunk.length - offset);
+          offset += result.bytesWritten;
+        }
+      }
+    } finally {
+      await output.close();
+    }
+    if (bytes !== update.assetSize || digest.digest('hex') !== update.digest) {
+      throw new Error('O instalador baixado não passou na verificação SHA-256.');
+    }
+  }
+
   registerIpcHandler('app:update:install', async (_, payload = {}) => {
+    if (installInProgress) return { ok: false, message: 'A atualização já está em andamento.' };
+    let tempDir = '';
     try {
       if (!validatedUpdate || Date.now() - validatedUpdate.checkedAt > UPDATE_TOKEN_TTL_MS) {
         await fetchLatestUpdateMetadata();
@@ -137,14 +181,37 @@ function registerUpdateHandlers(dependencies = {}) {
         || requestedUrl !== validatedUpdate.downloadUrl) {
         return { ok: false, message: 'Atualizacao nao validada. Verifique novamente.' };
       }
-      await shell.openExternal(validatedUpdate.downloadUrl);
-      appendAuditEvent('app.update_download_opened', {
+      installInProgress = true;
+      const update = validatedUpdate;
+      tempDir = fs.mkdtempSync(path.join(app.getPath('temp'), 'faber-update-'));
+      const downloadedFile = path.join(tempDir, update.assetName);
+      appendAuditEvent('app.update_download_start', {
+        latestVersion: update.latestVersion,
+        platform,
+        architecture,
+      });
+      await downloadVerifiedAsset(update, downloadedFile);
+      const prepared = await prepareInstall({ app, platform, architecture,
+        downloadedFile, latestVersion: update.latestVersion, tempDir });
+      appendAuditEvent('app.update_install_prepared', {
         latestVersion: validatedUpdate.latestVersion,
         platform,
         architecture,
       });
-      return { ok: true, opened: true, downloadUrl: validatedUpdate.downloadUrl };
+      schedule(async () => {
+        try {
+          await prepared.start();
+        } catch (error) {
+          installInProgress = false;
+          prepared.cancel();
+          fs.rmSync(tempDir, { recursive: true, force: true });
+          appendAuditEvent('app.update_install_failed', { message: error.message });
+        }
+      }, 250);
+      return { ok: true, installing: true, latestVersion: update.latestVersion };
     } catch (error) {
+      installInProgress = false;
+      if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
       appendAuditEvent('app.update_install_failed', { message: error.message });
       return { ok: false, message: error.message };
     }
