@@ -36,6 +36,8 @@ The application and API changes are part of the same v1.0.0 update for every des
 
 ## Distribution
 
+For Macs, x64 is the Intel version and ARM64 is the Apple Silicon version.
+
 | System | x64 | ARM64 |
 | --- | --- | --- |
 | macOS | `Faber.Code-1.0.0-x64.dmg` | `Faber.Code-1.0.0-arm64.dmg` |
